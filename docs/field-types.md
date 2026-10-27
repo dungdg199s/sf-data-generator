@@ -30,11 +30,11 @@ Option chung (registry tự thêm, generator không cần khai báo):
 | `date` | Date | `from`, `to` | `YYYY-MM-DD` |
 | `datetime` | Date/Time | `from`, `to` | ISO 8601 UTC |
 | `time` | Time | `from`, `to` (HH:MM), `stepMinutes` | `HH:MM:00.000Z` |
-| `lookup` | Lookup Relationship | `mode` (current, random, fixed), `ref` (Bản ghi cha), `ids`. Bản ghi cha phải ở phía trên (xem [workflow-schema.md](workflow-schema.md#phía-trên-bản-ghi-cha-của-lookup--master-detail)) | `{ "$ref": "acc#3" }` hoặc Id có sẵn |
+| `lookup` | Lookup Relationship | `mode` (current, random, fixed), `ref` (Bản ghi cha), `ids`, `referenceTo` (sObject mà field trỏ tới, điền khi Import từ org; lọc danh sách Bản ghi cha và cảnh báo khi chọn bước sinh sObject khác). Bản ghi cha phải ở phía trên (xem [workflow-schema.md](workflow-schema.md#phạm-vi-biến-analyzescope)) | `{ "$ref": "acc#3" }` hoặc Id có sẵn |
 | `masterdetail` | Master-Detail | như `lookup`; báo lỗi nếu chưa có bản ghi cha | như trên |
 | `geolocation` | Geolocation | `latMin`, `latMax`, `lngMin`, `lngMax`, `scale` | `{ latitude, longitude }` (khi insert tách thành `X__Latitude__s` / `X__Longitude__s`) |
-| `template` | (ghép giá trị) | `template` với `{{this.F}}`, `{{alias.F}}`, `{{loop.index}}` | chuỗi |
-| `constant` | (cố định) | `value` | chuỗi |
+| `template` | (ghép giá trị) | `template` (`vars: 'template'`, có bảng chọn biến) với `{{this.F}}`, `{{alias.F}}`, `{{loop.index}}`, `{{this.$n}}`, `{{alias.$n}}`. Mặc định `{{this.$n}}` (ra `1`, `2`, `3`…). Tham chiếu hỏng hoặc ngoài phạm vi là lỗi validate | chuỗi |
+| `constant` | (cố định) | `value` (không nhận biến; muốn ghép biến thì dùng Template) | chuỗi |
 
 Mốc thời gian (`from`/`to` của date/datetime) nhận `YYYY-MM-DD`, ISO đầy đủ, hoặc mốc tương đối:
 `today`, `now`, `-1y`, `+30d`, `-6m`, `+2w`, `-12h`. Cả lần chạy dùng chung một mốc "now".
@@ -46,6 +46,8 @@ export const myType = {
   type: 'mytype',            // khóa dùng trong workflow JSON
   label: 'My Type',          // hiển thị trong UI
   category: 'Text',          // nhóm trong dropdown (Text, Number, Choice, Date/Time, Relationship, Other)
+  valueType: 'string',       // kiểu giá trị (bảng chọn biến): string (mặc định), number, boolean, date, datetime, time, reference, object, any
+  members: undefined,        // chỉ với valueType 'object': [{ key, valueType, label }], ví dụ latitude/longitude của geolocation
   sfTypes: ['string'],       // các kiểu `describe` của Salesforce mà kiểu này tương ứng (tham khảo)
   nullable: true,            // false ⇒ không có option nullRatio
   uniqueable: false,         // true ⇒ có option unique
@@ -65,10 +67,20 @@ export const myType = {
 | `scope` | `{ current, all, vars }`: bản ghi hiện tại và toàn bộ bản ghi theo alias, biến lặp |
 | `fieldName` | Tên field (dùng trong thông báo lỗi) |
 | `fieldState` | Object riêng cho từng (bước, field), tồn tại suốt lần chạy (bộ đếm, tập giá trị unique) |
+| `n` | Số thứ tự của bản ghi đang sinh (`n` trong `alias#n`), cho `{{this.$n}}` |
 
 Lỗi do generator `throw` sẽ được executor gắn `nodeId` và `field` để UI chỉ ra đúng field.
 
 Các `kind` của option mà UI dựng được: `string`, `text`, `integer`, `number`, `boolean`, `select` (cần `choices`),
-`list`, `numberList`, `time`, `ref` (dropdown alias của bước Record dùng được ở vị trí này; các alias khác nằm trong nhóm "Không dùng được ở vị trí này", bị tắt, kèm lý do).
+`list`, `numberList`, `time`, `ref` (dropdown dựng từ `refChoices` của `shared/scope.js`: bước dùng được ở vị trí này, gần
+nhất trước, kèm `bản ghi cuối` / `có thể trống`; các bước khác nằm trong nhóm "Không dùng được ở đây", bị tắt, kèm lý do).
+Khóa thêm của option ([0005](design/0005-variable-picker.md)):
+
+- `vars: 'template' | 'path'`: option nhận biến. UI gắn bảng chọn biến (nút `{x}`, gõ `{{`, Ctrl+Space) và dải chip;
+  validate kiểm tra mọi tham chiếu trong option đó.
+- `accepts` (chỉ với `kind: 'ref'`, không bắt buộc): lọc nguồn theo cờ của `exposes`, ví dụ `{ "pool": true }`. Mặc định
+  là mọi nguồn có `lookupParent: true`.
+
+`GET /api/meta` trả thêm `syntax: { templateToken, valueTypes: [{ value, label }] }` (nhãn tiếng Việt của `valueType`).
 
 Thêm kiểu mới: xem skill `.claude/skills/add-field-type/SKILL.md`.

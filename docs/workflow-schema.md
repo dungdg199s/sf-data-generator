@@ -99,6 +99,25 @@ Danh mục nằm ở `server/workflow/nodes.js` và được `GET /api/meta` tr�
 `empty` = nhãn nút trong ô rỗng, `hint` = dòng gợi ý dưới nút) và `options`. Thứ tự trong `slots` là thứ tự đọc
 (Đúng trước Sai). Option có `summary: true` được dùng cho dòng tóm tắt chung trên thẻ của loại bước không có tóm tắt riêng.
 
+Từ [0005](design/0005-variable-picker.md), mỗi loại bước còn khai báo cách chạy các slot và biến nó cung cấp; phân tích
+phạm vi (`analyzeScope` trong `shared/scope.js`) chỉ đọc hai khóa này, không biết riêng về `loop` hay `branch`:
+
+| Khóa | Giá trị | Ý nghĩa |
+| --- | --- | --- |
+| `flow.kind` | `sequence`; `loop` (`body`: khóa slot lặp lại); `branch` (`alternatives`: các slot loại trừ nhau) | Cách các slot chạy. Loop có thêm hàm `minIterations(config)` (không gửi qua meta; trình duyệt dùng bản trong `shared/scope.js`) |
+| `exposes.kind` | `record`: `<tên>.<field>` là field của bản ghi hiện tại; `vars`: `<tên>.<key>` là biến rời | Loại nguồn biến |
+| `exposes.name` | `{ key, default?, fallback? }` | Tên trong đường dẫn: `config[key]`, rỗng thì `default`, rồi `id` nếu `fallback: "id"` (Record: `alias` hoặc `id`) |
+| `exposes.label` | chuỗi, `{ key }` hoặc `{ fromSource }` | Nhãn nhóm trong bảng chọn biến (Record: sObject; Lặp: "Vòng lặp 1–4 lần") |
+| `exposes.visibleIn` | `"downstream"` hoặc `{ "inside": "<slot>" }` | Thấy ở mọi bước chạy sau, hoặc chỉ bên trong slot đó |
+| `exposes.members` | `"fields"` (từ `config.fields`), `"select"` (danh sách tên field, cho Query của 0006), mảng cố định, `{ "fromSource": "<option>" }` | Biến con. Member có thể lồng (`members`) |
+| `exposes.builtins` | `[{ key, valueType, label }]`, key bắt đầu bằng `$` | Biến có sẵn, ví dụ `$n` của Record |
+| `exposes.current` | `last`, `picked`, `none` | `none`: không có bản ghi hiện tại (Query, 0006), `{{q.Field}}` là lỗi |
+| `exposes.pool` / `origin` / `lookupParent` / `open` | | Dùng cho Lookup "Ngẫu nhiên"/`pick.from`; `generated` (chưa có Id) hay `org`; có trong ô "Bản ghi cha" không; danh sách field chưa đầy đủ (field lạ chỉ là cảnh báo) |
+
+Option nhận biến khai báo `vars: "template"` (chèn `{{path}}`) hoặc `vars: "path"` (cả ô là một đường dẫn, như `left`).
+Option chọn một nguồn có `kind: "ref"` (thêm `accepts`, ví dụ `{ "pool": true }`, nếu không phải mọi bước cha đều hợp).
+Validate kiểm tra mọi option có hai khóa này; UI gắn bảng chọn biến theo `vars`.
+
 Field của bước record có dạng `{ "name": "<API name>", "type": "<field type>", "options": { ... } }`;
 xem [field-types.md](field-types.md). **Thứ tự field là thứ tự sinh**: `{{this.X}}` và Email theo tên
 chỉ thấy các field ở phía trên.
@@ -111,8 +130,8 @@ chỉ thấy các field ở phía trên.
   Biến lặp: `{{<alias>.index}}` (từ 1), `{{<alias>.index0}}` (từ 0), `{{<alias>.count}}`. Biến lặp chỉ có hiệu lực trong
   thân; vòng lồng nhau cùng alias thì vòng trong che vòng ngoài (UI tự đặt `loop2`, `loop3`… để tránh).
 - `branch`: luôn tính điều kiện (kể cả khi hai nhánh rỗng), chạy `slots.true` hoặc `slots.false`, rồi **đi tiếp bước kế**.
-  `chance` chọn nhánh Đúng với xác suất `probability`. `compare` so sánh `left` (một đường dẫn tham chiếu) với `right`
-  (giá trị cố định). Nếu cả hai là số thì so theo số, không thì so theo chuỗi.
+  `chance` chọn nhánh Đúng với xác suất `probability`. `compare` so sánh `left` (một đường dẫn tham chiếu; viết
+  `loop.index` hay `{{loop.index}}` đều được) với `right` (giá trị cố định). Nếu cả hai là số thì so theo số, không thì so theo chuỗi.
   Phép so sánh: `eq`, `neq`, `gt`, `gte`, `lt`, `lte`, `contains`, `empty`, `notEmpty`, `divisibleBy`.
 - Bản ghi đã sinh (`<alias>` hiện tại và danh sách mọi bản ghi của alias) dùng chung cho cả lần chạy; biến lặp theo phạm vi.
 - Thứ tự gọi `rng` giống executor version 1, nên workflow v1 chuyển sang v2 sinh đúng dữ liệu cũ với cùng seed, **trừ ở các
@@ -123,29 +142,63 @@ chỉ thấy các field ở phía trên.
 
 | Cú pháp | Giá trị |
 | --- | --- |
-| `this.Field` | Field đã sinh phía trên trong cùng bước (chỉ dùng trong template) |
-| `<alias>.Field` | Field của bản ghi hiện tại của bước record có alias đó |
-| `<loopAlias>.index` / `.index0` / `.count` | Biến lặp |
+| `this.Field` | Field đã sinh **phía trên** trong cùng bước (chỉ dùng trong template của bước Record) |
+| `this.$n` | Số thứ tự của bản ghi đang sinh: `n` trong `<alias>#n` (đếm theo alias, từ 1) |
+| `<alias>.Field` | Field của bản ghi hiện tại của bước record có alias đó. Field kiểu Geolocation có member con: `<alias>.Loc.latitude` |
+| `<alias>.$n` | `n` của bản ghi hiện tại của alias đó |
+| `<loopAlias>.index` / `.index0` / `.count` | Biến lặp (từ 1 / từ 0 / tổng số lần) |
 
+Template dùng `{{path}}` (regex `\{\{\s*([\w.$]+)\s*\}\}`, khai báo một lần ở `shared/scope.js` và gửi qua
+`meta.syntax.templateToken`). Field và biến lặp so khớp **có phân biệt hoa thường**, giống lúc chạy.
 Alias của bước record phải là duy nhất trên **cả cây** (kể cả bước đang tắt), không trùng tên biến lặp và không được là `this`.
 
-### "Phía trên": bản ghi cha của Lookup / Master-Detail
+### Phạm vi biến (`analyzeScope`)
 
-Field `lookup` / `masterdetail` với `mode` `current` hoặc `random` cần `ref` là alias của một bước Record **chạy trước**
-bước này. Trạng thái của alias tại một bước (tính trong `shared/scope.js`, dùng chung cho validate và dropdown
-"Bản ghi cha" trên UI):
+`analyzeScope(workflow, { nodeTypes, fieldTypes })` trong `shared/scope.js` là nguồn sự thật duy nhất cho câu hỏi "biến
+này dùng được ở đây không": validate trên server, ô "Bản ghi cha" của Lookup, bảng chọn biến và việc đổi tên trên trình
+duyệt đều gọi nó. Kết quả `{ partial, sources, at, refs }`:
+
+- `sources[<id bước>]`: nguồn biến (`kind`, `name`, `label`, `sobject`, `members` kèm `valueType`/`example`, các cờ của `exposes`).
+- `at[<id bước>]`: `visible` (gần nhất trước: vòng lặp trong cùng và bước ngay phía trên đứng đầu) và `hidden` kèm `reason`
+  và `note` tiếng Việt.
+- `refs[]`: mọi tham chiếu trong workflow (`nodeId`, `field`, `option`, `path`, `source`), kèm `code` khi có vấn đề.
+
+Trạng thái của một nguồn tại một bước:
 
 | Trạng thái | Nghĩa | Kết quả validate |
 | --- | --- | --- |
-| `always` | Bước đó đứng trước, trực tiếp trong một dãy đang bao bước này | Hợp lệ |
-| `last` | Bước đó nằm trong thân một Lặp đã chạy xong ở phía trên, và Lặp luôn chạy ≥ 1 lần (`fixed` với `count ≥ 1`, hoặc `range` với `min ≥ 1`). Giá trị là bản ghi của lần lặp cuối (`random`: một bản ghi bất kỳ đã sinh) | Hợp lệ |
-| `maybe` | Bước đó nằm trong một nhánh rẽ, hoặc trong một Lặp có thể chạy 0 lần, ở phía trên | Cảnh báo (Master-Detail: cảnh báo vì lần chạy có thể báo lỗi) |
-| `after` | Bước đó nằm sau bước này, hoặc chính là bước này | Lỗi |
-| `otherBranch` | Bước đó ở nhánh còn lại của một Rẽ nhánh đang bao bước này | Lỗi |
-| `disabled` | Bước đó, hoặc một khung bao nó, đang tắt | Lỗi |
+| `always` | Nguồn chạy trước, trực tiếp trong một dãy đang bao bước này; biến lặp của vòng lặp bao quanh | Hợp lệ |
+| `last` | Nguồn nằm trong thân một Lặp đã chạy xong ở phía trên, và Lặp luôn chạy ≥ 1 lần (`fixed` với `count ≥ 1`, hoặc `range` với `min ≥ 1`). Giá trị là bản ghi của lần lặp cuối (Lookup `random`: một bản ghi bất kỳ đã sinh) | Hợp lệ |
+| `maybe` | Nguồn nằm trong một nhánh rẽ, hoặc trong một Lặp có thể chạy 0 lần, ở phía trên | Cảnh báo |
+| `after` | Nguồn nằm sau bước này, hoặc chính là bước này | Lỗi |
+| `otherBranch` | Nguồn ở nhánh còn lại của một Rẽ nhánh đang bao bước này | Lỗi |
+| `outsideLoop` | Biến lặp của một vòng lặp không bao bước này | Lỗi |
+| `shadowed` | Biến lặp bị vòng lặp bên trong cùng tên che (tham chiếu trỏ tới vòng trong) | – |
+| `disabled` | Nguồn, hoặc một khung bao nó, đang tắt | Lỗi |
 
 Ví dụ: `Lặp{acc}` rồi `con` có `AccountId` = ngẫu nhiên trong các bản ghi của `acc`: `acc` là `last`, hợp lệ.
-Template `{{alias.X}}` chưa được kiểm tra theo bảng này (xem [0005](design/0005-variable-picker.md)).
+Bước tắt và bước con của nó không được kiểm tra (nhưng vẫn có `at` và `refs`, để đổi tên vẫn đi theo).
+
+Tham chiếu hỏng là **lỗi** (chặn Xem trước và Insert, HTTP 422 khi chạy), không còn âm thầm ra chuỗi rỗng. `code` của issue:
+
+| `code` | Mức | Khi nào |
+| --- | --- | --- |
+| `unknownName` | lỗi | Tên không phải alias của bước nào, cũng không phải biến lặp (Lookup: không có bước Record nào có alias đó) |
+| `unknownMember` | lỗi | Bước không có field đó; biến lặp không có key đó |
+| `wholeRecord` | lỗi | `{{acc}}` không có field |
+| `noTraversal` | lỗi | Đi tiếp qua field Lookup (`{{con.AccountId.Name}}`) |
+| `after`, `otherBranch`, `outsideLoop`, `disabled` | lỗi | Như bảng trạng thái |
+| `thisBelow`, `thisSelf`, `thisUnknown` | lỗi | `this.X` với X nằm dưới field đang sửa, là chính field đó, hoặc không có |
+| `thisOutsideRecord` | lỗi | `this` ngoài template của bước Record (ví dụ trong `left`) |
+| `selfAlias` | lỗi | Dùng alias của chính bước trong template của nó (phải dùng `this`) |
+| `noIdYet` | lỗi | `{{acc.Id}}` với bản ghi được sinh ra (chưa có Id trước khi insert) |
+| `noCurrent` | lỗi | Field của nguồn không có bản ghi hiện tại (`current: "none"`, Query của 0006) |
+| `maybe` | cảnh báo | Nguồn `maybe` (câu chữ nêu nguyên nhân: nhánh rẽ, hoặc vòng lặp "x" có thể chạy 0 lần; Master-Detail nói thêm cách sửa) |
+| `openMember` | cảnh báo | Field lạ của nguồn có `open: true` |
+| `unclosed` | cảnh báo | Template có `{{` không thành token, sẽ được giữ nguyên là chữ |
+| `wrongSobject` | cảnh báo | Lookup có `referenceTo` (điền khi Import từ org) nhưng bước cha sinh sObject khác |
+
+Câu thông báo đúng như bảng "Thông báo lỗi" của [0005](design/0005-variable-picker.md) (đổi "node" thành "bước").
 
 ## Kết quả `/api/run`
 
@@ -177,6 +230,9 @@ Template `{{alias.X}}` chưa được kiểm tra theo bảng này (xem [0005](de
 - `insert` chỉ có khi request gửi `target: { "kind": "org", "org": "<alias hoặc username>" }`.
 
 Lỗi validate trả về HTTP 422: `{ "error": "...", "issues": [{ "message", "nodeId", "field" }] }`.
+Issue về tham chiếu biến có thêm `code`, `path` (đường dẫn bị lỗi, ví dụ `acc.Nmae`), `option` (khóa option chứa nó, ví dụ
+`template`, `left`, `ref`) và có thể có `suggestion: { option, from, to }` (UI hiện nút "Sửa thành {{acc.Name}}").
+`POST /api/validate` trả `{ errors, warnings }` cùng dạng; phạm vi biến không gửi kèm vì trình duyệt tự tính bằng `shared/scope.js`.
 `nodeId` là id bước. `field` có dạng `alias`, `count`, … cho option của bước; `fields.<Name>` cho field của record;
 `slots.<key>` cho một ô bước con (ví dụ `slots.body`: vòng lặp chưa có bước nào). Lỗi không gắn với bước nào thì không
 có `nodeId`.

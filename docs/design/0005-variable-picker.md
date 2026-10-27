@@ -1,6 +1,6 @@
 # 0005 — Quét và chọn biến từ UI (variable picker)
 
-- **Trạng thái:** Đã duyệt (2026-10-27, xem [0007](0007-tong-hop-0003-0006.md))
+- **Trạng thái:** Đã làm (duyệt 2026-10-27, xem [0007](0007-tong-hop-0003-0006.md); làm theo thứ tự "0003 làm trước", xem [Đã làm](#đã-làm))
 - **Ngày:** 2026-10-27
 - **Liên quan:** [0001](0001-workflow-editor-ux.md) (inspector, đổi alias tự cập nhật),
   [0003](0003-process-mode.md) (chế độ Quy trình, JSON v2 dạng cây, `shared/`),
@@ -321,7 +321,7 @@ thường, hoặc tên cách tối đa 2 ký tự (Levenshtein). `certainty: las
 
 ## Thay đổi dữ liệu / API
 
-Mọi thay đổi dưới đây là **(dự kiến)**.
+Phần dưới là thiết kế lúc duyệt. Đã làm theo cột "0003 làm trước"; chỗ khác với thiết kế ghi ở [Đã làm](#đã-làm).
 
 ### 1. Ngữ nghĩa phạm vi (scope analysis)
 
@@ -875,4 +875,93 @@ nút "Biến" trên thẻ node của canvas để xem node đó cung cấp gì.
 
 ## Đã làm
 
-(Cập nhật khi code xong: commit hoặc PR, chỗ nào khác với thiết kế và vì sao.)
+Đợt 3 của [0007](0007-tong-hop-0003-0006.md), làm **sau** 0003 đợt A, nên theo cột "0003 làm trước" ở mục 1:
+`analyzeScope` nằm ở `shared/scope.js`, duyệt cây v2, trình duyệt tự gọi mỗi lần workflow đổi; `/api/validate` không trả
+`scope` và không có `client/js/validation.js`.
+
+Commit trên nhánh `claude/salesforce-data-generator-xt3u27`:
+
+| Commit | Nội dung |
+| --- | --- |
+| `a2d2fae` Add analyzeScope and validate variable references | Bước 1–4 của kế hoạch: `flow`/`exposes`, `minIterations`, `vars`, `valueType`, `meta.syntax`, `analyzeScope` thay `analyzeRecordScope`/`refState`/`recordChoices`, validate tham chiếu, `$n`, `left` nhận `{{ }}`, mặc định `{{this.$n}}` |
+| `34353bd` Rename references through the scope analysis | Bước 8 (phần `shared/`): `renameAlias` theo option có `vars`/`kind: 'ref'`, `setStepAlias` đổi biến lặp theo `refs`, `renameField` |
+| `b92f6b8` Keep referenceTo on imported Lookups… | Câu hỏi mở số 5 (0007: "Có") |
+| `b341d90` Add the variable picker to the inspector | Bước 6–8 ở client: `variables.js`, `var-picker.js`, `forms.js`, `inspector.js`, `ops.js`, `main.js`, CSS |
+| `5fb7ee2` Extend the smoke test with the variable picker flow | Bước 7–8: luồng 5b của smoke test |
+| (commit tài liệu) | Bước 9: `workflow-schema.md`, `field-types.md`, `architecture.md`, skill `add-node-type`/`add-field-type`, `CLAUDE.md` (dòng `shared/scope.js`), doc này, README |
+
+**Đã có:**
+
+- `shared/scope.js`: `analyzeScope(wf, { nodeTypes, fieldTypes })` → `{ partial, sources, at, refs }` đúng dạng mục 4;
+  `refChoices` (ô "Bản ghi cha", lọc theo `accepts`), `refsTo`, `referenceOptions` (mọi option có `vars`/`kind: 'ref'`
+  đang hiệu lực, theo `showIf` và mặc định), `tokenize`, `stripPath`, `closest` ("Ý bạn là": khớp bỏ qua hoa thường, hoặc
+  cách tối đa 2 ký tự, tên ngắn cần khớp gần hơn), `loopMinIterations`. Hợp đồng cho Query/Chọn bản ghi (`members:
+  "select"`, `{ fromSource }`, `current: "none"` → lỗi `noCurrent`, `$count`) đã có và được test bằng danh mục giả.
+- Server: `NODE_TYPES` có `flow`/`exposes`; `/api/meta` bỏ khóa là hàm và thêm `syntax`; generator có `valueType`
+  (geolocation có `members`); `referenceIssue` trong `schema.js` soạn câu lỗi theo `code`; issue có `code`, `path`,
+  `option`, `suggestion`. Validate Lookup `ref` dùng `analyzeScope` (không còn `refState`).
+- Lúc chạy: `{{this.$n}}`, `{{acc.$n}}` (lấy từ `ref`, không thêm khóa vào bản ghi, nên dữ liệu v1 → v2 vẫn giống từng byte),
+  `left` nhận `{{loop.index}}`. Không đụng rng.
+- Client: bảng chọn biến mở bằng `{x}`, Ctrl+Space, gõ `{{` (template), hoặc focus/bấm ô trống/↓ (path); nhóm theo bước
+  với ô icon `[data-type]`, badge `bản ghi cuối` / `có thể trống`, nhóm "Không dùng được ở đây" thu gọn; tìm kiếm (khớp đầu
+  chuỗi trước); tối đa 200 dòng mỗi nhóm; giá trị mẫu từ lần xem trước (xám nghiêng khi workflow đã đổi, `—` khi chưa có);
+  phím ↑↓/PgUp/PgDn/Home/End, Enter/Tab, Esc (chặn Esc toàn cục), Ctrl+Enter vẫn là Xem trước; ARIA combobox/listbox/
+  option/group. Chèn bằng `execCommand('insertText')` (dự phòng `setRangeText`), mỗi lần chèn một bước undo. Dải chip chỉ
+  đọc (viền trái màu nguồn, đỏ khi có issue cùng `nodeId`/`field`/`path`, xám nét đứt khi chưa khớp nguồn nào), bấm chip để
+  thay đúng token đó; dòng "Lần xem trước". Nút "Sửa thành …" dưới lỗi; bấm lỗi trong danh sách thì tự mở card field.
+  Đổi tên field (sự kiện `change`) kéo theo tham chiếu, có toast; xóa field hoặc bước đang được dùng có toast liệt kê chỗ hỏng.
+  Ô "Bản ghi cha" dựng từ `refChoices`; Import từ org tự chọn bản ghi cha trong danh sách dùng được.
+- Chế độ Quy trình: bảng chọn nằm trong inspector nên tự có, không thêm code ở `process.js` (badge lỗi và chip field trên
+  thẻ đã đọc `field` của issue).
+
+**Khác với thiết kế, và quyết định ở chỗ doc chưa rõ:**
+
+1. **Câu chữ trên cây v2.** "node" đổi thành "bước". Hai câu viết cho đồ thị v1 được viết lại: `after` → `… Kéo bước
+   "opp" lên phía trên, hoặc chọn biến khác.` (thay "Nối lại…"); `outsideLoop` → `{{loop.index}} chỉ dùng được bên trong
+   vòng lặp "loop". Kéo bước này vào trong vòng lặp "loop", hoặc bỏ biến này.` (slot `body` trên cây không có nhãn "lặp").
+2. **Lookup `ref`** giữ câu của 0003 cho `after`/`otherBranch`/`disabled`. `maybe` dùng câu mới của bảng (nêu nguyên
+   nhân: nhánh rẽ, hoặc `vòng lặp "x" có thể chạy 0 lần`; Master-Detail thêm cách sửa), nên test cũ "a parent that may not
+   have run…" được đổi thành "maybe-defined source is a warning; masterdetail wording" với câu mới. `unknownName` của
+   Lookup thêm "Ý bạn là" và cách sửa.
+3. **Câu bổ sung** cho trường hợp bảng không có: `thisUnknown` khi không có gợi ý (`Thêm field đó phía trên "Title" hoặc
+   chọn biến khác bằng {x}.`), `wholeRecord` của biến lặp (`{{loop}} là cả vòng lặp; hãy chọn một biến…`), `disabled` của
+   vòng lặp, `noCurrent` (Q3 của 0007: `"accs" là danh sách bản ghi đọc từ org, không có bản ghi hiện tại. Thêm bước Chọn
+   bản ghi…`), `wrongSobject` (cảnh báo của `referenceTo`).
+4. **Regex token** khai báo một lần ở `shared/scope.js` (`TEMPLATE_TOKEN_SOURCE`); `server/workflow/paths.js` export lại
+   thành `TEMPLATE_TOKEN` và `/api/meta` gửi nó. Lý do: `analyzeScope` ở `shared/` cần regex, mà `shared/` không import từ server.
+5. **`minIterations`** là hàm trong mục `loop` của `NODE_TYPES` (server) và trong bảng `MIN_ITERATIONS` của `shared/scope.js`
+   (trình duyệt, vì meta bỏ hàm). Giá trị ví dụ của biến lặp (`1…4`, `0…3`, `1–4`) và nhãn "Vòng lặp 1–4 lần" cũng tính
+   trong `shared/` (`VAR_EXAMPLES`), vì trình duyệt tự tính scope.
+6. **Bước tắt vẫn có `at`** (thêm `disabled: true`) và `refs` (cờ `disabled`). Doc nói bước tắt không có `at`; giữ lại để
+   ô "Bản ghi cha" và việc đổi tên vẫn đúng khi người dùng sửa một bước đang tắt. Validate vẫn bỏ qua chúng.
+7. **`partial` luôn `false`**, không có `MAX_SCOPE_CONTEXTS` và cảnh báo "quá phức tạp": trên cây, phân tích là một lượt
+   duyệt, không bùng nổ ngữ cảnh như đồ thị v1. `reachable`/`unchecked` không có (chỉ v1).
+8. `hidden` có cả chính bước đó (`after`, note `là chính bước này`); bảng chọn và `refChoices` bỏ nó ra.
+9. Issue có thêm `option` (khóa option chứa tham chiếu), để chip và nút "Sửa thành" khớp đúng option.
+10. Cảnh báo `unclosed` cũng áp dụng khi `{{` không thành token hợp lệ (ví dụ `{{ a b }}`), vì kết quả như nhau.
+11. **Đổi tên biến lặp:** thay vì chụp `scope.refs` lúc ô nhận focus, `setStepAlias` tạm đặt lại tên cũ (tên đang giữ
+    trong `memo`), chạy `analyzeScope` và chỉ đổi ở các option có tham chiếu trỏ về vòng lặp đó. Cùng kết quả, không phải
+    giữ trạng thái ở client. Không có danh mục (`catalog`) thì đổi cả thân vòng lặp như trước.
+12. Chế độ `path`: Ctrl+Space và nút `{x}` mở ô tìm kiếm; focus/bấm ô trống hoặc ↓ mở dạng combobox, lọc theo nội dung ô.
+13. **`referenceTo`** (câu hỏi mở số 5, 0007 chọn "Có"): option "Trỏ tới sObject" của Lookup/Master-Detail, hiện trong
+    form (không ẩn) để người dùng thấy và sửa được; Import từ org điền sẵn. Bước sai sObject chuyển sang nhóm "Không dùng
+    được ở đây"; nếu vẫn chọn thì validate cảnh báo `wrongSobject`.
+14. Nhóm `this` gồm `$n` và các field phía trên; field phía dưới nằm trong "Không dùng được ở đây" với câu
+    `this.X — nằm dưới field "Title", kéo lên để dùng`.
+15. Toast khi xóa bước dùng chữ "Bước" (theo 0003): `Đã xóa bước Record "acc". Bước "acc" đang được dùng ở 2 chỗ: con ›
+    Title, con › AccountId. Các chỗ đó sẽ báo lỗi cho tới khi sửa.`, kèm nút Hoàn tác như trước.
+
+**Test:** `test/scope.test.js` viết lại cho `analyzeScope` (API cũ đã bỏ; mọi hành vi cũ được test lại qua `refChoices`
+và trạng thái `at`), thêm các test của kế hoạch (trừ ba test chỉ dành cho đồ thị v1). `test/workflow.test.js` thêm test
+tham chiếu, `$n`, `left` nhận `{{ }}`, `referenceTo`; `test/workflow-tree.test.js` thêm test đổi tên; `test/server.test.js`
+mở rộng test meta; `test/generators.test.js` thêm `valueType` và mặc định template; `test/sf.test.js` kiểm tra
+`referenceTo`. `test/samples.test.js` vẫn khóa việc hai mẫu hợp lệ (không lỗi, không cảnh báo). Tổng: 130 test, đều qua.
+Smoke test có luồng 5b (mở bảng chọn, chèn, chip, tham chiếu hỏng có badge đỏ, sửa nhanh, đổi tên field): `SMOKE OK`.
+
+**Chưa làm / để sau:**
+
+- `pick.filterValue` (0006) chưa có, nên chưa khai báo `vars` cho nó; giá trị mẫu của Query/Chọn bản ghi chờ 0006.
+- `samples` theo bước khi chạy dạng stream (phụ thuộc 0004): hiện lấy bản ghi đầu tiên trong `records`.
+- Câu hỏi mở 3, 4 (`right` nhận biến, option số nhận biến): để design riêng, theo 0007.
+- Thử tay "hai vòng lặp cùng tên" của bước 8 được thay bằng test đơn vị (`setStepAlias with the catalogue renames only
+  references to that loop`).

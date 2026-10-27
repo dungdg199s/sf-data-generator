@@ -10,6 +10,8 @@ The UI renders field types and their options from `GET /api/meta`, so a new gene
 1. **Pick the module** in `server/generators/` by category (`text.js`, `number.js`, `choice.js`, `date.js`, `reference.js`, `misc.js`), or create a new module if none fits.
 2. **Write the generator object** following the contract in `docs/field-types.md`:
    - `type` (lowercase, no spaces — it is stored in saved workflows, never rename it), `label`, `category`, `sfTypes`.
+   - `valueType` (design 0005): `string` (default), `number`, `boolean`, `date`, `datetime`, `time`, `reference`, `object` (with `members: [{ key, valueType }]`, like geolocation) or `any`. It is the type label of `{{alias.Field}}` in the variable picker; `test/generators.test.js` checks it is known.
+   - An option that accepts variables declares `vars: 'template'` (or `'path'`): it gets the variable picker and its references are validated. A source-name option is `kind: 'ref'`.
    - `nullable: false` if Salesforce never stores null for this type; `uniqueable: true` if uniqueness makes sense.
    - `options` via `opt(key, labelVi, kind, default, { min, max, step, choices, help, showIf })`. Defaults must give valid data with zero configuration.
    - `generate(o, ctx)`: use `ctx.rng` for randomness and `ctx.now` for time. Respect Salesforce limits (length, precision/scale, REST value format). Throw `Error` with a Vietnamese message that says how to fix the config; the executor attaches `nodeId`/`field`.

@@ -14,7 +14,7 @@ Trình duyệt (client/)                         Server Node.js (server/)
 └──────────────────────────┘                   │ sf/cli.js ─► `sf` CLI máy local│
                                                │ sf/client.js ─► jsforce ─► SF  │
                                                └───────────────────────────────┘
-        └──────── shared/ (logic cây, migration v1, phạm vi bản ghi; dùng ở cả hai phía) ────────┘
+        └──────── shared/ (logic cây, migration v1, phạm vi biến; dùng ở cả hai phía) ────────┘
 ```
 
 1. Khi tải trang, UI gọi `GET /api/meta` để lấy danh sách field type, loại bước (kèm `slots`, `category`) và option schema
@@ -41,11 +41,13 @@ thư mục này ở `/shared/…` với cùng cách chặn path traversal như `
 
 | File | Trách nhiệm |
 | --- | --- |
-| `shared/workflow-tree.js` | Duyệt/tìm bước, chèn, di chuyển, xóa (bỏ vỏ), bọc, nhân bản (đổi alias nội bộ), đổi alias, quy tắc chèn mặc định, đích của Alt+↑/↓ |
+| `shared/workflow-tree.js` | Duyệt/tìm bước, chèn, di chuyển, xóa (bỏ vỏ), bọc, nhân bản (đổi alias nội bộ), đổi alias và tên field kéo theo tham chiếu (`renameAlias`, `setStepAlias`, `renameField`, theo mọi option có `vars`/`kind: 'ref'`), quy tắc chèn mặc định, đích của Alt+↑/↓ |
 | `shared/migrate-v1.js` | Chuyển workflow v1 (đồ thị) sang v2 (cây) và mô tả báo cáo chuyển đổi |
-| `shared/scope.js` | Phạm vi bản ghi cho Lookup `ref` (`always`/`last`/`maybe`/`after`/`otherBranch`/`disabled`). Bản tối thiểu; `analyzeScope` của [0005](design/0005-variable-picker.md) sẽ thay |
+| `shared/scope.js` | `analyzeScope(wf, catalog)` ([0005](design/0005-variable-picker.md)): nguồn biến, biến dùng được ở từng bước (`always`/`last`/`maybe`) và lý do bị ẩn (`after`/`otherBranch`/`outsideLoop`/`shadowed`/`disabled`), mọi tham chiếu đã phân giải; `refChoices` cho ô "Bản ghi cha"; regex token `{{…}}` (`TEMPLATE_TOKEN_SOURCE`) |
 
 Thứ tự slot được truyền vào qua tham số `slotKeys(type)`: server lấy từ `nodeTypeMap`, client lấy từ `state.meta`.
+`analyzeScope` nhận cả danh mục `{ nodeTypes, fieldTypes }` (server: `scopeCatalog()` trong `schema.js`; client:
+`state.meta`) và chỉ đọc `flow`/`exposes` của loại bước, không hard-code `loop`/`branch`.
 
 ## Quyết định thiết kế quan trọng
 
@@ -63,6 +65,9 @@ Thứ tự slot được truyền vào qua tham số `slotKeys(type)`: server l�
 - **Cây bước là mô hình chuẩn ([0003](design/0003-process-mode.md)).** Workflow JSON version 2 là `steps[]` lồng nhau
   qua `slots`; không có dây nối, node lơ lửng hay vòng. "Phía trên" là thứ tự đọc từ trên xuống, nên Lookup sau một
   vòng lặp hợp lệ. Version 1 vẫn được nhận và chuyển đổi, bản gốc không bị ghi đè.
+- **Phạm vi biến do một hàm thuần `analyzeScope` tính** ([0005](design/0005-variable-picker.md)), dùng chung cho validate
+  ở server và bảng chọn biến, ô "Bản ghi cha", đổi tên trên trình duyệt (tính lại mỗi lần workflow đổi, không qua mạng),
+  nên hai bên không thể lệch nhau. Tham chiếu vẫn lưu là chuỗi `{{alias.Field}}`; tham chiếu hỏng là lỗi chặn chạy.
 - **Lỗi validate luôn kèm `nodeId` (id bước) và `field`** để UI tô đỏ đúng chỗ (badge trên thẻ, viền đỏ ở field,
   ô bước con viền nét đứt với `slots.<key>`).
 
@@ -82,12 +87,14 @@ Migration v1 cũng giới hạn số bước nhân bản (`2 × số node + 50`)
 
 | File | Trách nhiệm |
 | --- | --- |
-| `client/js/store.js` | State duy nhất, undo/redo, autosave `localStorage` (`sfdg.workflow.v2`; `sfdg.workflow.v1` chỉ đọc), trạng thái thu gọn khung (`sfdg.collapsed`), phát sự kiện thay đổi |
+| `client/js/store.js` | State duy nhất, undo/redo, autosave `localStorage` (`sfdg.workflow.v2`; `sfdg.workflow.v1` chỉ đọc), trạng thái thu gọn khung (`sfdg.collapsed`), phát sự kiện thay đổi; `currentScope()` (kết quả `analyzeScope`, tính lại một lần mỗi phiên bản workflow) |
 | `client/js/process.js` | Chế độ Quy trình: thẻ bước, khung Lặp/Rẽ nhánh, nút "+", menu bước, kéo thả, bàn phím kiểu cây |
 | `client/js/ops.js` | Thao tác trên bước (thêm, xóa, nhân bản, tắt, bọc, bỏ vỏ, di chuyển) qua `shared/workflow-tree.js`, toast Hoàn tác |
 | `client/js/summary.js` | Câu tóm tắt trên thẻ và chip số liệu từ `stats.byStep` |
 | `client/js/inspector.js` | Cấu hình bước (nơi duy nhất sửa cấu hình), trình soạn field, import field từ org, đổi alias tự cập nhật tham chiếu; bottom sheet trên màn hình hẹp |
-| `client/js/forms.js` | Dựng form từ option schema (`showIf`, các `kind`) |
+| `client/js/forms.js` | Dựng form từ option schema (`showIf`, các `kind`); gắn bảng chọn biến cho option có `vars` |
+| `client/js/var-picker.js` | Bảng chọn biến (nút `{x}`, gõ `{{`, Ctrl+Space), tìm kiếm, phím tắt, ARIA, chèn bằng `execCommand('insertText')`; dải chip dưới ô và dòng "Lần xem trước" |
+| `client/js/variables.js` | Dữ liệu cho bảng chọn: nhóm biến theo bước từ `currentScope()` và meta (nhóm `this` dựng từ thứ tự field hiện tại), giá trị mẫu từ lần xem trước, chỗ đang dùng một biến (toast khi xóa/đổi tên) |
 | `client/js/results.js` | Bảng kết quả theo sObject, lỗi insert, tải JSON/CSV |
 | `client/js/main.js` | Khởi động, toolbar, phím tắt, validate trực tiếp, chạy/insert |
 | `client/js/theme.js` | Nút chuyển giao diện Sáng / Tối / Theo hệ thống: `data-theme` trên `<html>`, nhớ trong `sfdg.theme`; script thường trong `<head>` để áp dụng trước lần vẽ đầu |
