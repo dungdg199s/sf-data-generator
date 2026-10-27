@@ -1,6 +1,7 @@
 // Theme switch (docs/design/0008): "light" | "dark" | "system". A classic script loaded in <head>
 // so the stored theme applies before the first paint. "system" removes `data-theme` and lets
-// `prefers-color-scheme` decide (the CSS token blocks handle both).
+// `prefers-color-scheme` decide (the CSS token blocks handle both). Changes in another tab are
+// followed through the `storage` event.
 (() => {
   const KEY = 'sfdg.theme';
   const VALUES = ['light', 'dark', 'system'];
@@ -17,6 +18,15 @@
     else delete document.documentElement.dataset.theme;
   };
   apply(read());
+
+  // Another tab changed the theme (or cleared storage): follow it, and keep the select in sync.
+  window.addEventListener('storage', (e) => {
+    if (e.key !== KEY && e.key !== null) return;
+    const v = read();
+    apply(v);
+    const select = document.getElementById('theme-select');
+    if (select) select.value = v;
+  });
 
   document.addEventListener('DOMContentLoaded', () => {
     const select = document.getElementById('theme-select');

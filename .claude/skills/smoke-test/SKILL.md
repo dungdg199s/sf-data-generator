@@ -21,7 +21,9 @@ It starts the server on a random port 3900–3989 and drives headless Chromium t
    and adds a Record after `con`, which becomes selected; Alt+↑ moves it above `con`; Delete removes it
    and Ctrl+Z restores it in place.
 3. **Preview.** Ctrl+Enter fills the results table, the cards get "bản ghi" / "lần lặp" stat chips, the
-   summary shows the Account count, and the sample has no validation errors. Screenshot `smoke-1440.png`.
+   summary shows the Account count, and the sample has no validation errors. Scrolled, the sticky table
+   header sits right under the sticky tab row (no gap). The Record and Loop stripes (`border-left-color`)
+   differ from each other and from the unknown-type `[data-type]` fallback. Screenshot `smoke-1440.png`.
 4. **Alias rename.** Clearing the `acc` alias and typing `account` keeps focus in the input and the
    Lookup `ref` follows the rename (never lost on the empty value); undo restores `acc`.
 5. **Delete toast.** After Delete, the toast's "Hoàn tác" button disappears as soon as another edit
@@ -36,12 +38,15 @@ It starts the server on a random port 3900–3989 and drives headless Chromium t
    offers "Tải bản gốc (v1)"; after "Đồng ý" the node is shown as a disabled step.
 10. **Theme switch.** "Tối" sets `data-theme="dark"` on `<html>`, the dark background and
     `localStorage['sfdg.theme']`; it survives a reload; "Theo hệ thống" removes the attribute and the key
-    and the OS (light) scheme applies again.
+    and the OS (light) scheme applies again. A second tab of the same context follows both changes
+    (`storage` event: `data-theme` and the select value).
 11. **Narrow (390 px, touch).** No horizontal overflow (`smoke-390.png`); tapping a card opens the
     inspector bottom sheet (`smoke-390-sheet.png`) and "‹ Xong" closes it. Dark-scheme shot of the same
     page: `smoke-390-dark.png`.
 12. **Dark scheme (`colorScheme: 'dark'`, 1440 px).** The dark background applies without `data-theme`;
-    preview (`smoke-1440-dark.png`). With a mocked production org (`/api/orgs`), "⤒ Insert vào org" opens
+    "Sáng" overrides it (light background, `data-theme="light"`), still after a reload, and "Theo hệ
+    thống" returns to the dark background and clears the key. `/api/orgs/**` (describe) is answered 404 so
+    the mocked org never reaches the sf CLI; preview (`smoke-1440-dark.png`). With a mocked production org (`/api/orgs`), "⤒ Insert vào org" opens
     the confirmation with the production warning box and a solid red `.danger.solid` "Insert" button
     (`smoke-1440-dark-insert.png`); "Hủy" closes it. Any `/api/run` request with a `target` is aborted
     and fails the run, so the smoke test never writes to an org.

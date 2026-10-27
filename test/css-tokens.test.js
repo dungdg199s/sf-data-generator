@@ -1,5 +1,6 @@
 // Guards the design-token system of docs/ui-design-system.md (design doc 0008):
-// raw colours live only in the primitive block of client/css/app.css, every step type has its
+// raw colours live only in the primitive block of client/css/app.css (client/js, shared and index.html set
+// none), every step type has its
 // tokens, icon and [data-type] rule in both themes, and the semantic colour pairs keep WCAG AA
 // contrast when computed from the actual CSS values.
 import { test } from 'node:test';
@@ -65,23 +66,70 @@ test('inside the token block only primitives, shadows, backdrop and icons hold r
   }
 });
 
-test('client JS sets no colours (step colours come from [data-type] in CSS)', () => {
-  const dir = new URL('../client/js/', import.meta.url);
-  for (const f of fs.readdirSync(dir).filter((n) => n.endsWith('.js'))) {
-    const src = fs.readFileSync(new URL(f, dir), 'utf8');
-    for (const [re, what] of [
-      [/['"`]#[0-9a-fA-F]{3}(?:[0-9a-fA-F]{3}(?:[0-9a-fA-F]{2})?)?['"`]/, 'hex colour'],
-      [FUNC, 'colour function'],
-      [/var\(--(?:step|node|color|gray|blue|red|amber|green|teal|cyan|olive|violet|magenta)-/, 'colour token'],
-      [/NODE_COLORS/, 'NODE_COLORS'],
-      [/['"]--c['"]/, 'inline --c'],
-    ]) assert.ok(!re.test(src), `${what} in client/js/${f}`);
+const NAMED_WORDS = NAMED.source.match(/\(\?:([^)]+)\)\(\?!/)[1];
+// A colour property in a JS style object / assignment / setProperty with a named colour value.
+const STYLE_NAMED = new RegExp(
+  String.raw`(?:\b(?:color|background(?:Color)?|border(?:Top|Right|Bottom|Left)?(?:Color)?|outline(?:Color)?|fill|stroke|accentColor|caretColor)\s*[:=]|setProperty\(\s*['"][\w-]+['"]\s*,)\s*['"\x60][^'"\x60]*(?<![\w-])(?:${NAMED_WORDS})(?![\w-])`,
+  'i',
+);
+
+/** Colour problems in a client/shared JS source: [what, ...]. */
+function jsColourIssues(src) {
+  return [
+    [/['"`]#[0-9a-fA-F]{3}(?:[0-9a-fA-F]{3}(?:[0-9a-fA-F]{2})?)?['"`]/, 'hex colour'],
+    [FUNC, 'colour function'],
+    [/var\(--(?:step|node|color|gray|blue|red|amber|green|teal|cyan|olive|violet|magenta)-/, 'colour token'],
+    [/NODE_COLORS/, 'NODE_COLORS'],
+    [/['"]--c['"]/, 'inline --c'],
+    [STYLE_NAMED, 'named colour in a style'],
+  ].filter(([re]) => re.test(src)).map(([, what]) => what);
+}
+
+test('the JS colour scanner catches each kind of colour literal', () => {
+  for (const src of [
+    "h('div', { style: { color: 'red' } })", "el.style.backgroundColor = 'white';", "el.style.setProperty('border-color', 'black')",
+    "h('p', { style: { border: '1px solid tomato' } })", "const c = '#0b6bcb';", "x = 'rgb(1 2 3)'", "'var(--step-record)'",
+  ]) assert.notDeepEqual(jsColourIssues(src), [], `not caught: ${src}`);
+  for (const src of ["h('td', { style: { whiteSpace: 'normal' } })", "h('div', { class: 'red' })", "style: { width: '100%' }"]) {
+    assert.deepEqual(jsColourIssues(src), [], `false positive: ${src}`);
   }
+});
+
+test('client and shared JS set no colours (step colours come from [data-type] in CSS)', () => {
+  for (const sub of ['client/js/', 'shared/']) {
+    const dir = new URL(`../${sub}`, import.meta.url);
+    for (const f of fs.readdirSync(dir).filter((n) => n.endsWith('.js'))) {
+      assert.deepEqual(jsColourIssues(fs.readFileSync(new URL(f, dir), 'utf8')), [], `${sub}${f}`);
+    }
+  }
+});
+
+test('client/index.html has no inline styles or colour literals', () => {
+  const html = read('client/index.html');
+  assert.ok(!/<style[\s>]/i.test(html), '<style> block in index.html');
+  assert.ok(!/\sstyle\s*=/i.test(html), 'style="" attribute in index.html');
+  assert.ok(!/(?<![\w&-])#[0-9a-fA-F]{3,8}(?![\w-])/.test(html), 'hex colour in index.html');
+  assert.ok(!FUNC.test(html), 'colour function in index.html');
+  assert.ok(!/name=["']theme-color["']/i.test(html), 'meta theme-color with a hard-coded colour');
 });
 
 const LIGHT = blocks(TOKENS, ':root').find((b) => b['--color-bg']);
 const DARK_MEDIA = blocks(TOKENS, ':root:not([data-theme="light"])').find((b) => b['--color-bg']);
 const DARK_ATTR = blocks(TOKENS, ':root[data-theme="dark"]').find((b) => b['--color-bg']);
+
+test('every prefers-color-scheme dark block is :root:not([data-theme="light"]) inside the media query', () => {
+  // "Sáng" must win over a dark OS: the media block may only apply when data-theme is not "light".
+  const sel = ':root:not([data-theme="light"])';
+  const at = [];
+  for (let i = TOKENS.indexOf(sel); i !== -1; i = TOKENS.indexOf(sel, i + 1)) at.push(i);
+  assert.ok(at.length >= 2, 'expected the colour and the shadow dark blocks');
+  const OPEN = /@media \(prefers-color-scheme: dark\) \{\s*$/;
+  for (const i of at) assert.match(TOKENS.slice(0, i), OPEN, `${sel} at offset ${i} is not directly inside @media (prefers-color-scheme: dark)`);
+  const first = TOKENS.slice(at[0]);
+  assert.match(first, /^:root:not\(\[data-theme="light"\]\) \{[^}]*--color-bg:/, 'the first dark block must hold the colour tokens');
+  const medias = TOKENS.match(/@media \(prefers-color-scheme: dark\) \{/g) ?? [];
+  assert.equal(medias.length, at.length, 'a prefers-color-scheme: dark block without the :not([data-theme="light"]) guard');
+});
 
 test('light and dark themes define the same semantic tokens; both dark blocks are identical', () => {
   assert.ok(LIGHT && DARK_MEDIA && DARK_ATTR, 'missing a theme block');
@@ -110,6 +158,44 @@ test('every step type has tokens in both themes, an icon and a [data-type] rule'
     assert.equal(rule['--ico'], `var(--ico-${t})`);
   }
   assert.ok(blocks(COMPONENTS, '[data-type]')[0]?.['--ico'], 'fallback [data-type] rule for unknown types missing');
+});
+
+test('the [data-type] fallback rule comes before every typed rule (equal specificity: source order decides)', () => {
+  const fallback = COMPONENTS.search(/(?:^|\})\s*\[data-type\]\s*\{/);
+  assert.ok(fallback !== -1, 'fallback [data-type] rule missing');
+  for (const t of TYPES) {
+    const typed = COMPONENTS.indexOf(`[data-type="${t}"]`);
+    assert.ok(typed > fallback, `[data-type="${t}"] is before the fallback rule, so unknown-type colours would win`);
+  }
+});
+
+test('coloured buttons keep their own fill when pressed (button:active would turn them grey)', () => {
+  // `button:active:not(:disabled)` (0,2,1) beats `.step-card .badge` / `.toast-action`, so their hover rule must list :active too.
+  const rules = [...COMPONENTS.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((m) => ({ sels: m[1].split(',').map((x) => x.trim()), body: m[2] }));
+  for (const sel of ['.step-card .badge', '.start-card .badge', '.step-card .badge.warn', '.start-card .badge.warn', '.toast-action']) {
+    const active = rules.find((r) => r.sels.includes(`${sel}:active:not(:disabled)`));
+    assert.ok(active && /(?:^|;|\s)background\s*:/.test(active.body), `${sel}:active:not(:disabled) needs its own background`);
+    const hover = rules.find((r) => r.sels.includes(`${sel}:hover:not(:disabled)`));
+    assert.equal(active, hover, `${sel}: :hover and :active should share one rule`);
+  }
+});
+
+test('spacing (padding, margin, gap, outline-offset) uses the 4 px scale tokens', () => {
+  // Exempt, on purpose: the .sr-only idiom `margin: -1px`.
+  const EXEMPT = new Set(['margin: -1px']);
+  const PART = /^(?:0|auto|var\(--(?:space-[\d-]+|focus-offset(?:-card)?|canvas-tail)\)|calc\(-1 \* var\(--space-[\d-]+\)\))$/;
+  for (const { prop, value } of declarations(COMPONENTS)) {
+    if (!/^(?:(?:padding|margin)(?:-(?:top|right|bottom|left|inline|block)(?:-(?:start|end))?)?|gap|row-gap|column-gap|outline-offset)$/.test(prop)) continue;
+    const where = `${prop}: ${value}`;
+    if (EXEMPT.has(where)) continue;
+    const parts = value.match(/calc\([^)]*\)\)|var\([^)]*\)|\S+/g);
+    for (const part of parts) assert.match(part, PART, `off-scale spacing: ${where}`);
+  }
+  const scale = Object.fromEntries(declarations(TOKENS).filter((d) => /^--space-/.test(d.prop)).map((d) => [d.prop, d.value]));
+  for (const [name, v] of Object.entries(scale)) {
+    const px = Number(/^(\d+)px$/.exec(v)?.[1]);
+    assert.ok(px === 2 || px % 4 === 0, `${name}: ${v} is not on the 4 px scale (2 px is the only half step)`);
+  }
 });
 
 test('components use the type, radius, z-index and font tokens', () => {
@@ -177,6 +263,7 @@ const PAIRS = [
   ['accent-contrast', 'accent', 4.5], ['accent-contrast', 'accent-hover', 4.5], ['accent-text', 'surface', 4.5],
   ['accent-text', 'accent-subtle', 4.5], ['accent', 'surface', 3], ['accent', 'bg', 3], ['accent', 'accent-subtle', 3],
   ['focus-ring', 'surface', 3], ['focus-ring', 'bg', 3], ['focus-ring', 'accent-subtle', 3],
+  ['focus-ring-inverse', 'inverse-bg', 3],
   ['danger-contrast', 'danger', 4.5], ['danger-text', 'surface', 4.5], ['danger-text', 'danger-subtle', 4.5],
   ['text', 'danger-subtle', 4.5], ['danger', 'surface', 3], ['danger', 'bg', 3],
   ['warning-contrast', 'warning-fill', 4.5], ['warning-text', 'surface', 4.5], ['warning-text', 'warning-subtle', 4.5],

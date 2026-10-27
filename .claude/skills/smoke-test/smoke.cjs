@@ -4,16 +4,19 @@
 //      icon tile, no inline --c; NODE_COLORS is gone from the client (0008)
 //   2. "+" inside the inner loop body (menu rows typed + icons) → Record; Alt+↑ moves it; Delete then
 //      Ctrl+Z restores it
-//   3. Ctrl+Enter previews: results table and "bản ghi" / "lần lặp" stat chips on the cards
+//   3. Ctrl+Enter previews: results table (sticky header right under the tabs) and "bản ghi" / "lần lặp"
+//      stat chips on the cards; Record and Loop stripes differ from each other and the unknown-type fallback
 //   4. renaming an alias via "" keeps focus and Lookup refs follow
 //   5. "Hoàn tác" on the delete toast disappears after another edit
 //   6. a v1 autosave is migrated on load (toast) and the sfdg.workflow.v1 key is left untouched
 //   7. a malformed v2 autosave falls back to the sample without being overwritten
 //   8. a malformed v2 file is refused with a toast
 //   9. opening a v1 file with an unconnected node shows the migration report dialog
-//  10. theme switch: Tối / Theo hệ thống set or clear data-theme on <html> and survive a reload
+//  10. theme switch: Tối / Theo hệ thống set or clear data-theme on <html>, survive a reload and are
+//      followed by a second tab (storage event)
 //  11. narrow (390 px) layout renders, tapping a card opens the inspector bottom sheet
-//  12. dark colour scheme: sample + preview, and the Insert confirmation for a production org
+//  12. dark colour scheme: Sáng overrides it (also after reload), Theo hệ thống returns to dark; sample +
+//      preview, and the Insert confirmation for a production org
 //      (mocked /api/orgs; a run with a target is blocked) has a solid red "Insert" and the warning box
 // Usage: node .claude/skills/smoke-test/smoke.cjs [screenshotDir]
 // Needs Playwright with a Chromium build available (require('playwright')).
@@ -95,6 +98,19 @@ const V1_ORPHAN = {
     const untyped = await page.$$eval('.step, .start-card, #palette-items .palette-item', (els) =>
       els.filter((e) => !e.dataset.type || !e.querySelector('.ico-tile .ico') || e.style.getPropertyValue('--c')).length);
     check(untyped === 0, `${untyped} step/palette elements without data-type + .ico-tile (or with inline --c)`);
+    // Each type wins over the neutral [data-type] fallback (equal specificity: source order).
+    const stripes = await page.evaluate(() => {
+      const probe = document.createElement('div');
+      probe.dataset.type = 'no-such-type';
+      probe.className = 'step-card';
+      document.body.append(probe);
+      const fallback = getComputedStyle(probe).borderLeftColor;
+      probe.remove();
+      const of = (t) => getComputedStyle(document.querySelector(`.step[data-type="${t}"] > .step-card`)).borderLeftColor;
+      return { fallback, record: of('record'), loop: of('loop') };
+    });
+    check(stripes.record !== stripes.loop && ![stripes.record, stripes.loop].includes(stripes.fallback),
+      `type stripes not distinct from each other / the fallback (${JSON.stringify(stripes)})`);
     const storeSrc = await (await fetch(`${base}/js/store.js`)).text();
     check(!/NODE_COLORS/.test(storeSrc), 'NODE_COLORS is still in client/js/store.js');
     const countSteps = () => page.$$eval('.step-card:not(.start-card)', (n) => n.length);
@@ -130,6 +146,16 @@ const V1_ORPHAN = {
     const issues = await page.$$eval('.issue.error', (n) => n.map((x) => x.textContent));
     if (issues.length) errors.push(`validation errors on sample: ${issues.join(' | ')}`);
     if (!/Account: \d+/.test(summary)) errors.push('preview summary missing Account count');
+    // Sticky table header sits right under the sticky tab row (no gap) once the results are scrolled.
+    const stickyGap = await page.evaluate(() => {
+      const body = document.getElementById('results-body');
+      body.scrollTop = 120;
+      const gap = body.querySelector('table.data th').getBoundingClientRect().top - body.querySelector('.tabs').getBoundingClientRect().bottom;
+      const scrolled = body.scrollTop > 0;
+      body.scrollTop = 0;
+      return scrolled ? gap : 0;
+    });
+    check(Math.abs(stickyGap) < 0.5, `sticky table header is ${stickyGap}px away from the tab row`);
     console.log(`steps=${before + 1}`);
     console.log(`summary=${summary.trim()}`);
     if (outDir) await page.screenshot({ path: path.join(outDir, 'smoke-1440.png') });
@@ -200,9 +226,16 @@ const V1_ORPHAN = {
     // Theme switch: explicit theme overrides the OS scheme and survives a reload.
     const theme = () => page.evaluate(() => [document.documentElement.dataset.theme ?? '', getComputedStyle(document.body).backgroundColor, localStorage.getItem('sfdg.theme')]);
     check((await theme())[1] === BG.light, `light scheme: unexpected background ${(await theme())[1]}`);
+    const other = await ctx.newPage(); // a second tab follows theme changes through the storage event
+    other.on('pageerror', (e) => errors.push(`[tab 2] ${e}`));
+    await other.goto(base);
+    await other.waitForSelector('.step-card');
+    const otherTheme = () => other.evaluate(() => [document.documentElement.dataset.theme ?? '', document.getElementById('theme-select').value]);
     await page.selectOption('#theme-select', 'dark');
     let t = await theme();
     check(t[0] === 'dark' && t[1] === BG.dark && t[2] === 'dark', `"Tối" did not apply the dark theme (${t})`);
+    await other.waitForFunction(() => document.documentElement.dataset.theme === 'dark', null, { timeout: 2000 }).catch(() => {});
+    check(String(await otherTheme()) === 'dark,dark', `second tab did not follow "Tối" (${await otherTheme()})`);
     await page.reload();
     await page.waitForSelector('.step-card');
     t = await theme();
@@ -210,6 +243,8 @@ const V1_ORPHAN = {
     await page.selectOption('#theme-select', 'system');
     t = await theme();
     check(t[0] === '' && t[1] === BG.light && t[2] === null, `"Theo hệ thống" did not return to the OS scheme (${t})`);
+    await other.waitForFunction(() => !document.documentElement.dataset.theme, null, { timeout: 2000 }).catch(() => {});
+    check(String(await otherTheme()) === ',system', `second tab did not follow "Theo hệ thống" (${await otherTheme()})`);
     await ctx.close();
 
     // ---------- narrow ----------
@@ -243,6 +278,8 @@ const V1_ORPHAN = {
     d.on('pageerror', (e) => errors.push(`[dark] ${e}`));
     let insertSent = false;
     await d.route('**/api/orgs', (r) => r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(ORGS) }));
+    // The mocked org does not exist: never let sobjects/describe calls reach the real sf CLI.
+    await d.route('**/api/orgs/**', (r) => r.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ error: 'smoke: org giả lập' }) }));
     await d.route('**/api/run', (r) => {
       // Safety: a run with a target would write to an org. Never let it reach the server.
       if (r.request().postDataJSON()?.target) { insertSent = true; return r.abort(); }
@@ -254,6 +291,18 @@ const V1_ORPHAN = {
     await d.waitForSelector('.step-card[data-id="con"]');
     const darkBg = await d.evaluate(() => getComputedStyle(document.body).backgroundColor);
     check(darkBg === BG.dark, `dark scheme: unexpected background ${darkBg}`);
+    // "Sáng" overrides a dark OS, survives a reload, and "Theo hệ thống" returns to dark.
+    const dTheme = () => d.evaluate(() => [document.documentElement.dataset.theme ?? '', getComputedStyle(document.body).backgroundColor, localStorage.getItem('sfdg.theme')]);
+    await d.selectOption('#theme-select', 'light');
+    let dt = await dTheme();
+    check(dt[0] === 'light' && dt[1] === BG.light && dt[2] === 'light', `"Sáng" did not override the dark OS scheme (${dt})`);
+    await d.reload();
+    await d.waitForSelector('.step-card[data-id="con"]');
+    dt = await dTheme();
+    check(dt[0] === 'light' && dt[1] === BG.light && (await d.inputValue('#theme-select')) === 'light', `"Sáng" not kept after reload on a dark OS (${dt})`);
+    await d.selectOption('#theme-select', 'system');
+    dt = await dTheme();
+    check(dt[0] === '' && dt[1] === BG.dark && dt[2] === null, `"Theo hệ thống" did not return to the dark OS scheme (${dt})`);
     await d.keyboard.press('Control+Enter');
     await d.waitForSelector('table.data tbody tr');
     if (outDir) await d.screenshot({ path: path.join(outDir, 'smoke-1440-dark.png') });
