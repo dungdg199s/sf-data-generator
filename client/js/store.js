@@ -15,13 +15,6 @@ const COLLAPSED_MAX = 500;
 const HISTORY_LIMIT = 100;
 const COALESCE_MS = 800;
 
-export const NODE_COLORS = {
-  start: 'var(--node-start)',
-  record: 'var(--node-record)',
-  loop: 'var(--node-loop)',
-  branch: 'var(--node-branch)',
-};
-
 export function emptyWorkflow() {
   return { version: 2, name: 'Workflow mới', steps: [] };
 }

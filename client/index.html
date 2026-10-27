@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>SF Data Generator</title>
   <link rel="stylesheet" href="/css/app.css">
+  <script src="/js/theme.js"></script>
 </head>
 <body>
   <header class="topbar">
@@ -29,6 +30,14 @@
     </label>
     <button id="btn-preview" class="primary" title="Sinh dữ liệu và xem trước (Ctrl+Enter)">▶ Xem trước</button>
     <button id="btn-insert" class="danger" title="Sinh dữ liệu và insert vào org đã chọn">⤒ Insert vào org</button>
+    <label id="theme-field" class="field-inline" title="Giao diện sáng hoặc tối. &quot;Theo hệ thống&quot; dùng cài đặt của máy.">
+      <span class="sr-only">Giao diện</span>
+      <select id="theme-select">
+        <option value="system">Theo hệ thống</option>
+        <option value="light">Sáng</option>
+        <option value="dark">Tối</option>
+      </select>
+    </label>
   </header>
 
   <main class="layout">

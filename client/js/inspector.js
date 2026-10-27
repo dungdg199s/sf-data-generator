@@ -4,11 +4,11 @@
 // typing; structural edits (add/remove/reorder fields) use 'inspector-structure'.
 // On narrow screens the panel is a bottom sheet (.inspector.open) shown while a step is selected.
 
-import { h, toast } from './dom.js';
+import { h, toast, icoTile } from './dom.js';
 import { renderOptions } from './forms.js';
 import { api } from './api.js';
 import {
-  state, subscribe, select, updateWorkflow, stepById, nodeType, fieldType, suggestAlias, recordScope, slotKeys, NODE_COLORS,
+  state, subscribe, select, updateWorkflow, stepById, nodeType, fieldType, suggestAlias, recordScope, slotKeys,
 } from './store.js';
 import { setStepAlias } from '/shared/workflow-tree.js';
 import { recordChoices, HIDDEN_REASON } from '/shared/scope.js';
@@ -55,7 +55,7 @@ function renderWorkflow() {
   return h(
     'div',
     {},
-    h('div', { class: 'node-head' }, h('span', { class: 'dot', style: { background: NODE_COLORS.start } }), h('h2', {}, 'Bắt đầu')),
+    h('div', { class: 'node-head', 'data-type': 'start' }, icoTile(), h('h2', {}, 'Bắt đầu')),
     h('h3', {}, 'Bắt đầu nhanh'),
     h(
       'ol',
@@ -95,10 +95,10 @@ function renderStep(step) {
     {},
     h(
       'div',
-      { class: 'node-head' },
-      h('span', { class: 'dot', style: { background: NODE_COLORS[step.type] } }),
+      { class: 'node-head', 'data-type': step.type },
+      icoTile(),
       h('h2', {}, type?.label ?? step.type),
-      step.disabled ? h('span', { class: 'tag-off' }, 'Đã tắt') : null,
+      step.disabled ? h('span', { class: 'tag-off', title: 'Bước này đang tắt: không chạy và không được kiểm tra.' }, 'Đã tắt') : null,
       h('div', { class: 'spacer' }),
       h('button', { class: 'icon', title: step.disabled ? 'Bật bước (Ctrl+/)' : 'Tắt bước (Ctrl+/)', onclick: () => toggleDisabled(step.id) }, step.disabled ? '◉' : '⊘'),
       h('button', { class: 'icon', title: 'Nhân bản (Ctrl+D)', onclick: () => duplicateStep(step.id) }, '⧉'),

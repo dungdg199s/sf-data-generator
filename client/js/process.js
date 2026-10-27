@@ -7,9 +7,9 @@
 // selection and issue events only update classes and badges (decorate()), so focus and
 // scroll position survive.
 
-import { h } from './dom.js';
+import { h, icoTile } from './dom.js';
 import {
-  state, subscribe, select, nodeType, fieldType, slotKeys, locate, stepById, NODE_COLORS, setCollapsed, runKey,
+  state, subscribe, select, nodeType, fieldType, slotKeys, locate, stepById, setCollapsed, runKey,
 } from './store.js';
 import { allSteps, slotList, walkSteps } from '/shared/workflow-tree.js';
 import { stepSummary, stepAlias, statChip, stepLabel } from './summary.js';
@@ -97,10 +97,10 @@ function startCard() {
       role: 'treeitem',
       'aria-level': '1',
       tabindex: '-1',
-      style: { '--c': NODE_COLORS.start },
+      'data-type': 'start',
       onclick: () => select({ kind: 'workflow' }),
     },
-    h('span', { class: 'type' }, 'Bắt đầu'),
+    h('span', { class: 'type' }, icoTile(), 'Bắt đầu'),
     h('span', { class: 'sum' }, `${wf.name || 'Workflow'} · ≤ ${Number(max).toLocaleString('vi-VN')} bản ghi`),
     h('span', { class: 'badges' }),
   );
@@ -168,12 +168,12 @@ function renderStep(step, level, at) {
       },
     },
     h('span', { class: 'handle', title: 'Kéo để di chuyển (hoặc Alt+↑ / Alt+↓)', 'aria-hidden': 'true', onpointerdown: (e) => onHandleDown(e, step) }, '⠿'),
-    h('span', { class: 'type' }, type?.label ?? step.type),
+    h('span', { class: 'type' }, icoTile(), type?.label ?? step.type),
     alias ? h('span', { class: 'alias' }, alias) : null,
     h('span', { class: 'sum', title: summary }, summary),
     chip ? h('span', { class: `stat${stale ? ' stale' : ''}`, title: stale ? 'Số liệu của lần xem trước gần nhất; workflow đã đổi sau đó.' : 'Số liệu của lần xem trước gần nhất.' }, chip) : null,
     h('span', { class: 'badges' }),
-    step.disabled ? h('span', { class: 'tag-off' }, 'Đã tắt') : null,
+    step.disabled ? h('span', { class: 'tag-off', title: 'Bước này đang tắt: không chạy và không được kiểm tra. Ctrl+/ để bật lại.' }, 'Đã tắt') : null,
     h('button', { class: 'icon menu-btn', title: 'Thao tác với bước', 'aria-label': `Thao tác với bước ${stepLabel(step)}`, onclick: (e) => openStepMenu(e.currentTarget, step.id) }, '⋯'),
     container
       ? h('button', { class: 'icon toggle', title: collapsed ? 'Mở khung' : 'Thu gọn khung', 'aria-label': collapsed ? 'Mở khung' : 'Thu gọn khung', onclick: () => setCollapsed([step.id], !collapsed) }, collapsed ? '▸' : '▾')
@@ -192,7 +192,7 @@ function renderStep(step, level, at) {
 
   const el = h(
     'div',
-    { class: `step${container ? ' frame' : ''}${step.disabled ? ' disabled' : ''}${collapsed ? ' collapsed' : ''}`, 'data-step': step.id, style: { '--c': NODE_COLORS[step.type] ?? 'var(--accent)' } },
+    { class: `step${container ? ' frame' : ''}${step.disabled ? ' disabled' : ''}${collapsed ? ' collapsed' : ''}`, 'data-step': step.id, 'data-type': step.type },
     card,
   );
   if (showDetails) el.append(fieldChips(step));
@@ -437,7 +437,8 @@ function onOutside(e) {
 }
 
 /**
- * items: [{ group }] headers and [{ label, desc, kbd, disabled, title, danger, onSelect }].
+ * items: [{ group }] headers and [{ type, label, desc, kbd, disabled, title, danger, onSelect }].
+ * `type` (a step type) adds the type's icon tile.
  */
 function openPopup(anchor, { title, items, search = false }) {
   closePopup();
@@ -455,13 +456,14 @@ function openPopup(anchor, { title, items, search = false }) {
           const b = h('button', {
             class: `popup-item${it.danger ? ' danger' : ''}`,
             role: 'menuitem',
+            'data-type': it.type,
             disabled: it.disabled,
             title: it.title,
             onclick: () => {
               closePopup();
               it.onSelect();
             },
-          }, h('span', { class: 'pi-label' }, it.label), it.desc ? h('small', {}, it.desc) : null, it.kbd ? h('kbd', {}, it.kbd) : null);
+          }, h('span', { class: 'pi-label' }, it.type ? icoTile() : null, it.label), it.desc ? h('small', {}, it.desc) : null, it.kbd ? h('kbd', {}, it.kbd) : null);
           if (!it.disabled) buttons.push(b);
           return b;
         }),
@@ -506,10 +508,10 @@ function openAddMenu(anchor, target) {
     const inCat = types.filter((t) => t.category === cat.key);
     if (!inCat.length) continue;
     items.push({ group: cat.label });
-    for (const t of inCat) items.push({ label: t.label, desc: t.description.split('.')[0], onSelect: () => ops.addStep(t.type, target) });
+    for (const t of inCat) items.push({ type: t.type, label: t.label, desc: t.description.split('.')[0], onSelect: () => ops.addStep(t.type, target) });
   }
   const rest = types.filter((t) => !(state.meta.stepCategories ?? []).some((c) => c.key === t.category));
-  for (const t of rest) items.push({ label: t.label, desc: t.description.split('.')[0], onSelect: () => ops.addStep(t.type, target) });
+  for (const t of rest) items.push({ type: t.type, label: t.label, desc: t.description.split('.')[0], onSelect: () => ops.addStep(t.type, target) });
   openPopup(anchor, { title: 'Thêm bước', items, search: types.length > 6 });
 }
 

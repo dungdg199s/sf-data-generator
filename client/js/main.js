@@ -2,10 +2,10 @@
 // validation and runs.
 
 import { api } from './api.js';
-import { h, toast, download } from './dom.js';
+import { h, toast, download, icoTile } from './dom.js';
 import {
   state, emit, subscribe, updateWorkflow, replaceWorkflow, emptyWorkflow, loadPersisted, loadLegacy, persist,
-  undo, redo, select, stepById, runKey, saveCollapsed, backupBrokenAutosave, NODE_COLORS,
+  undo, redo, select, stepById, runKey, saveCollapsed, backupBrokenAutosave,
 } from './store.js';
 import { migrateV1, describeReport, reportIsEmpty } from '/shared/migrate-v1.js';
 import { malformedSteps } from '/shared/workflow-tree.js';
@@ -133,12 +133,13 @@ function renderPalette() {
       {
         class: 'palette-item',
         draggable: 'true',
-        style: { '--c': NODE_COLORS[t.type] },
+        'data-type': t.type,
         title: `${t.description}\nBấm để thêm sau bước đang chọn; kéo vào một dấu + để đặt đúng chỗ.`,
         onclick: () => ops.addStep(t.type),
         ondragstart: (e) => paletteDragStart(e, t.type),
         ondragend: paletteDragEnd,
       },
+      icoTile(),
       t.label,
       h('small', {}, t.description.split('.')[0]),
     );
@@ -339,6 +340,7 @@ function setIssues(issues) {
   const box = $('issues');
   const all = [...state.issues.errors.map((i) => ({ ...i, level: 'error' })), ...state.issues.warnings.map((i) => ({ ...i, level: 'warning' }))];
   box.hidden = !all.length;
+  box.classList.toggle('only-warnings', !state.issues.errors.length);
   box.replaceChildren(
     ...all.map((i) => {
       const step = i.nodeId ? stepById(i.nodeId) : null;
@@ -406,7 +408,7 @@ function confirmInsert(org, stats, seed) {
       stats
         ? h('p', {}, `Giống lần xem trước (seed ${seed}): `, Object.entries(stats.bySobject).map(([s, n]) => `${s} ${n}`).join(', '), '.')
         : h('p', { class: 'hint' }, 'Chưa có bản xem trước với seed cố định cho workflow này, nên dữ liệu insert sẽ khác dữ liệu đã xem. Nhập seed và Xem trước để biết chính xác.'),
-      h('div', { class: 'actions' }, h('button', { onclick: () => done(false) }, 'Hủy'), h('button', { class: 'danger', onclick: () => done(true) }, 'Insert')),
+      h('div', { class: 'actions' }, h('button', { onclick: () => done(false) }, 'Hủy'), h('button', { class: 'danger solid', onclick: () => done(true) }, 'Insert')),
     );
     modal.onclose = () => resolve(false);
     modal.showModal();

@@ -24,6 +24,14 @@ export function h(tag, attrs = {}, ...children) {
   return el;
 }
 
+/**
+ * Step-type icon tile (docs/ui-design-system.md §5, §6.1). Colour and icon come from the
+ * nearest `[data-type]` ancestor in CSS, so callers only set `data-type`.
+ */
+export function icoTile() {
+  return h('span', { class: 'ico-tile', 'aria-hidden': 'true' }, h('span', { class: 'ico' }));
+}
+
 let toastTimer;
 let toastGeneration = 0;
 /**

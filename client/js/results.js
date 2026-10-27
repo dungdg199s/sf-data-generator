@@ -56,7 +56,7 @@ function render() {
     'div',
     { class: 'tabs' },
     sobjects.map((s) => h('button', { class: s === activeTab ? 'active' : '', onclick: () => { activeTab = s; render(); } }, `${s} (${r.stats.bySobject[s]})`)),
-    r.insert?.errors.length ? h('button', { class: activeTab === '__errors' ? 'active' : '', onclick: () => { activeTab = '__errors'; render(); } }, `⚠ Lỗi insert (${r.insert.errors.length})`) : null,
+    r.insert?.errors.length ? h('button', { class: `tab-issues${activeTab === '__errors' ? ' active' : ''}`, onclick: () => { activeTab = '__errors'; render(); } }, `Lỗi insert (${r.insert.errors.length})`) : null,
   );
   body.replaceChildren(tabs, activeTab === '__errors' ? errorTable(r.insert.errors) : dataTable(r.records.filter((x) => x.sobject === activeTab), r.insert?.ids));
 }

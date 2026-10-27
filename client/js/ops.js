@@ -167,7 +167,7 @@ function confirmDeleteContainer(at, n) {
       { class: 'actions' },
       h('button', { onclick: close }, 'Hủy'),
       canUnwrap(step) ? h('button', { onclick: () => { close(); doRemove(locate(step.id), true); } }, `Chỉ xóa vỏ, giữ ${n} bước`) : null,
-      h('button', { class: 'danger', onclick: () => { close(); doRemove(locate(step.id), false); } }, 'Xóa tất cả'),
+      h('button', { class: 'danger solid', onclick: () => { close(); doRemove(locate(step.id), false); } }, 'Xóa tất cả'),
     ),
   );
   modal.onclose = null;
