@@ -1,6 +1,6 @@
 # 0005 — Quét và chọn biến từ UI (variable picker)
 
-- **Trạng thái:** Nháp
+- **Trạng thái:** Đã duyệt (2026-10-27, xem [0007](0007-tong-hop-0003-0006.md))
 - **Ngày:** 2026-10-27
 - **Liên quan:** [0001](0001-workflow-editor-ux.md) (inspector, đổi alias tự cập nhật),
   [0003](0003-process-mode.md) (chế độ Quy trình, JSON v2 dạng cây, `shared/`),
@@ -468,7 +468,7 @@ còn `flow.body`/`flow.alternatives` trỏ tới khóa slot.
 | `exposes.visibleIn` | `"downstream"` hoặc `{ "inside": "<khóa>" }` | Thấy ở mọi node chạy sau, hoặc chỉ bên trong `body`: chuỗi của cổng `body` (v1) hay slot `body` (v2). 0003 giữ nguyên tên `body`, `true`, `false` cho slot, nên khóa không phải đổi |
 | `exposes.members` | mảng cố định; `"fields"` (từ `config.fields` dạng `{name, type}`, kiểu theo generator); `"select"` (danh sách field của câu SELECT, server dùng `selectFields(config)` của 0006; `Owner.Name` thành member `Owner` có member con `Name`); `{ "fromSource": "<optionKey>" }` (lấy member của nguồn mà option đó trỏ tới) | Danh sách biến con, cho phép lồng (`members` trong member) |
 | `exposes.builtins` | mảng `{ key, valueType, label }`, key bắt đầu bằng `$` (API name của Salesforce không bao giờ có `$`) | Biến có sẵn, không phải field |
-| `exposes.current` | `"last"` (bản ghi vừa sinh), `"first"` (dòng đầu của kết quả), `"picked"` (bản ghi vừa chọn) | `<name>.<field>` đọc bản ghi nào. Bộ chọn ghi chú ở đầu nhóm khi khác `last` (`dòng đầu tiên`, `bản ghi vừa chọn`) |
+| `exposes.current` | `"last"` (bản ghi vừa sinh), `"picked"` (bản ghi vừa chọn), `"none"` (pool, không có bản ghi hiện tại; đã chốt ở 0007 Q3) | `<name>.<field>` đọc bản ghi nào. Bộ chọn ghi chú ở đầu nhóm khi khác `last` (`dòng đầu tiên`, `bản ghi vừa chọn`) |
 | `exposes.pool` | `true`/`false` | `scope.all[name]` có nghĩa: dùng được cho Lookup "Ngẫu nhiên" và làm `from` của node Chọn bản ghi |
 | `exposes.origin` | `"generated"`, `"org"`, hoặc `{ "fromSource": "<optionKey>" }` | `generated`: Lookup ra `{ $ref }`, chưa có `Id`. `org`: có `Id` thật |
 | `exposes.lookupParent` | `true`/`false` | Có hiện trong ô Node cha của Lookup không |
@@ -482,7 +482,7 @@ ra để test kiểm tra được.
 ```json
 { "type": "query", "flow": { "kind": "sequence", "next": "next" },
   "exposes": { "kind": "record", "name": { "key": "alias" }, "label": { "key": "sobject" }, "visibleIn": "downstream",
-               "members": "select", "current": "first", "pool": true, "origin": "org", "lookupParent": true,
+               "members": "select", "current": "none", "pool": true, "origin": "org", "lookupParent": true,
                "builtins": [{ "key": "$count", "valueType": "number", "label": "Số bản ghi đọc được" }] } }
 { "type": "pick", "flow": { "kind": "sequence", "next": "next" },
   "exposes": { "kind": "record", "name": { "key": "alias" }, "label": { "fromSource": "from" }, "visibleIn": "downstream",
@@ -847,7 +847,8 @@ Theo bảng contract-sync trong `.claude/agents/implementer.md`. Mỗi bước �
   - Validate và `analyzeScope` không phụ thuộc vào cách chạy.
 - **0006 (Query `query`, Chọn bản ghi `pick`).** Đã đối chiếu với bản nháp `0006-query-pick-nodes.md`:
   - Khai báo `flow`/`exposes` như mục 2:
-    - `query`: `members: "select"`, `current: "first"` (đúng ngữ nghĩa `{{accs.Name}}` = dòng đầu của 0006), `origin: "org"`.
+    - `query`: `members: "select"`, `current: "none"`, `origin: "org"`. Đã chốt ([0007](0007-tong-hop-0003-0006.md) Q3):
+      pool không có bản ghi hiện tại, `{{accs.Name}}` là lỗi chỉ người dùng thêm bước Chọn bản ghi.
     - `pick`: `members`/`origin`/`label` lấy theo `{ fromSource: "from" }`, `current: "picked"`.
   - `analyzeScope` vẫn thuần. Member của Query lấy từ `selectFields(config)` (`server/workflow/soql.js` của 0006). Kiểu
     là `any`, vì `config.fields` chỉ lưu tên. Không parse được hết SELECT thì `open: true`. Nếu `analyzeScope` ở `shared/`

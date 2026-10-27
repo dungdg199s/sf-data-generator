@@ -13,11 +13,11 @@ viết và cập nhật các file này theo skill `design-doc`; người viết 
 | --- | --- | --- |
 | [0001](0001-workflow-editor-ux.md) | Trải nghiệm trình soạn workflow (bản đầu) | Đã làm |
 | [0002](0002-jsforce-api.md) | Gọi API Salesforce bằng jsforce, sf CLI chỉ lấy token | Đã làm |
-| [0003](0003-process-mode.md) | Chế độ Quy trình (kiểu Power Automate), workflow JSON v2 dạng cây | Nháp |
-| [0004](0004-streaming-execution.md) | Chạy dạng luồng: nghiên cứu khả thi và thiết kế | Nháp |
-| [0005](0005-variable-picker.md) | Quét và chọn biến từ UI | Nháp |
-| [0006](0006-query-pick-nodes.md) | Node Query và Chọn bản ghi | Nháp |
-| [0007](0007-tong-hop-0003-0006.md) | Tổng hợp 0003–0006: mâu thuẫn, thứ tự triển khai, quyết định cần chốt | Nháp |
+| [0003](0003-process-mode.md) | Chế độ Quy trình (kiểu Power Automate), workflow JSON v2 dạng cây | Đã duyệt |
+| [0004](0004-streaming-execution.md) | Chạy dạng luồng: nghiên cứu khả thi và thiết kế | Đã duyệt |
+| [0005](0005-variable-picker.md) | Quét và chọn biến từ UI | Đã duyệt |
+| [0006](0006-query-pick-nodes.md) | Node Query và Chọn bản ghi | Đã duyệt |
+| [0007](0007-tong-hop-0003-0006.md) | Tổng hợp 0003–0006: mâu thuẫn, thứ tự triển khai, quyết định cần chốt | Đã duyệt |
 
 ## Nguyên tắc tiện dụng
 

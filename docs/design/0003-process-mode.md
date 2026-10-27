@@ -1,6 +1,6 @@
 # 0003 — Chế độ Quy trình (giống Power Automate) và mô hình workflow dạng cây
 
-- **Trạng thái:** Nháp
+- **Trạng thái:** Đã duyệt (2026-10-27, xem [0007](0007-tong-hop-0003-0006.md))
 - **Ngày:** 2026-10-27
 - **Liên quan:** [0001](0001-workflow-editor-ux.md), [workflow-schema.md](../workflow-schema.md), [architecture.md](../architecture.md).
   Viết song song với 0004 (chạy dạng stream), 0005 (chọn biến / "dynamic content"), 0006 (node Query, Pick random record).

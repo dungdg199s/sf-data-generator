@@ -1,6 +1,6 @@
 # 0006 — Node Query và Chọn bản ghi: dùng bản ghi có sẵn trong org
 
-- **Trạng thái:** Nháp
+- **Trạng thái:** Đã duyệt (2026-10-27, xem [0007](0007-tong-hop-0003-0006.md))
 - **Ngày:** 2026-10-27
 - **Liên quan:** [0001](0001-workflow-editor-ux.md) (việc tiếp theo "Lookup tới bản ghi có sẵn trong org bằng SOQL"),
   [0002](0002-jsforce-api.md) (`conn.query` đã có sẵn trong jsforce), [0003](0003-process-mode.md) (chế độ Quy trình, JSON v2),

@@ -1,6 +1,6 @@
 # 0004 — Chạy workflow dạng luồng (streaming): nghiên cứu khả thi và thiết kế
 
-- **Trạng thái:** Nháp
+- **Trạng thái:** Đã duyệt (2026-10-27, xem [0007](0007-tong-hop-0003-0006.md))
 - **Ngày:** 2026-10-27
 - **Liên quan:** [0001](0001-workflow-editor-ux.md), [0002](0002-jsforce-api.md), [0003](0003-process-mode.md) (chế độ
   process, JSON v2 dạng cây), [0005](0005-variable-picker.md) (bộ chọn biến, `exposes`),
