@@ -8,6 +8,9 @@
 //      stat chips on the cards; Record and Loop stripes differ from each other and the unknown-type fallback
 //   4. renaming an alias via "" keeps focus and Lookup refs follow
 //   5. "Hoàn tác" on the delete toast disappears after another edit
+//  5b. variable picker (0005): {x} + search + Enter inserts {{acc.Industry}}, "{{in" puts loop.index first,
+//      chips are coloured by source type, a misspelt field turns its chip red with an error badge on the card,
+//      "Sửa thành" fixes it, renaming the field updates the template
 //   6. a v1 autosave is migrated on load (toast) and the sfdg.workflow.v1 key is left untouched
 //   7. a malformed v2 autosave falls back to the sample without being overwritten
 //   8. a malformed v2 file is refused with a toast
@@ -180,6 +183,51 @@ const V1_ORPHAN = {
     await page.keyboard.press('Control+z');
     await page.keyboard.press('Control+z');
     await page.waitForFunction((n) => document.querySelectorAll('.step-card:not(.start-card)').length === n + 1, before);
+
+    // Variable picker (0005): open the Title options of "con", insert variables with {x} and "{{",
+    // see the chips, a misspelt field turns its chip red (error badge on the card) and "Sửa thành" fixes it.
+    await page.click('.step-card[data-id="con"] .type');
+    const title = '#inspector .field-card[data-field="fields.Title"]';
+    await page.click(`${title} .actions button[title="Tùy chọn"]`);
+    const tplInput = `${title} input[data-key="template"]`;
+    await page.waitForSelector(tplInput);
+    await page.fill(tplInput, '');
+    await page.click(`${title} .var-btn`);
+    await page.waitForSelector('.var-picker .vp-item');
+    check(await page.evaluate(() => document.activeElement?.classList.contains('var-search')), '{x} did not focus the picker search');
+    await page.keyboard.type('indu');
+    const activeAfterSearch = await page.$eval('.var-picker .vp-item.active', (el) => el.dataset.path).catch(() => null);
+    check(activeAfterSearch === 'acc.Industry', `"indu" did not highlight acc.Industry (${activeAfterSearch})`);
+    await page.keyboard.press('Enter');
+    check(!(await page.$('.var-picker')), 'picker still open after Enter');
+    check((await page.inputValue(tplInput)) === '{{acc.Industry}}', `insert gave ${await page.inputValue(tplInput)}`);
+    check(await page.evaluate((sel) => document.activeElement === document.querySelector(sel), tplInput), 'focus did not return to the template field');
+    check(await page.isVisible(`${title} .var-chip[data-path="acc.Industry"][data-type="record"]`), 'no record-coloured chip for acc.Industry');
+    await page.keyboard.type(' #{{');
+    await page.waitForSelector('.var-picker .vp-item');
+    await page.keyboard.type('in');
+    const firstIn = await page.$eval('.var-picker .vp-item.active', (el) => el.dataset.path);
+    check(firstIn === 'loop.index', `"{{in" should put loop.index first (${firstIn})`);
+    await page.keyboard.press('Enter');
+    check((await page.inputValue(tplInput)) === '{{acc.Industry}} #{{loop.index}}', `autocomplete gave ${await page.inputValue(tplInput)}`);
+    check(await page.isVisible(`${title} .var-chip[data-path="loop.index"][data-type="loop"]`), 'no loop-coloured chip for loop.index');
+    await page.keyboard.type(' {{acc.Nmae}}');
+    await page.waitForSelector(`${title} .var-chip.has-error[data-path="acc.Nmae"]`, { timeout: 3000 });
+    check(await page.isVisible('.step-card[data-id="con"].has-error'), 'card "con" has no error badge for the broken reference');
+    check(/Ý bạn là "Name"/.test(await page.textContent(`${title} .error-text`)), 'no "Ý bạn là" hint under the field');
+    await page.click(`${title} .fix-btn`);
+    await page.waitForFunction((sel) => document.querySelector(sel)?.value === '{{acc.Industry}} #{{loop.index}} {{acc.Name}}', tplInput, { timeout: 2000 }).catch(() => {});
+    check((await page.inputValue(tplInput)) === '{{acc.Industry}} #{{loop.index}} {{acc.Name}}', `"Sửa thành" gave ${await page.inputValue(tplInput)}`);
+    await page.waitForFunction(() => !document.querySelector('.step-card[data-id="con"].has-error'), null, { timeout: 3000 }).catch(() => {});
+    check(!(await page.$('.step-card[data-id="con"].has-error')), 'error badge stayed after the fix');
+    // Renaming a field moves {{acc.Industry}} along (on change), with a toast.
+    await page.click('.step-card[data-id="acc"] .type');
+    const industry = await page.$('#inspector .field-card[data-field="fields.Industry"] input[aria-label="Tên field"]');
+    await industry.fill('Industry__c');
+    await industry.press('Tab');
+    const followed = await page.evaluate(() => JSON.stringify(JSON.parse(localStorage.getItem('sfdg.workflow.v2'))).match(/"name":"Title","type":"template","options":\{"template":"([^"]*)"/)?.[1]);
+    check(followed === '{{acc.Industry__c}} #{{loop.index}} {{acc.Name}}', `field rename did not follow (${followed})`);
+    check(/Đã cập nhật 1 tham chiếu: acc.Industry → acc.Industry__c/.test(await page.textContent('#toast')), 'no rename toast');
 
     // Migration of a v1 autosave on load.
     const v1Text = JSON.stringify(V1_SAMPLE);

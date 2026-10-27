@@ -1,6 +1,6 @@
 ---
 name: smoke-test
-description: Launch sf-data-generator and verify the editor works in a real browser (load, sample workflow, editing, preview, migration, theme switch, dark mode, insert confirmation), plus API checks with curl. Use after any client/ or API change, or when asked to run or screenshot the app.
+description: Launch sf-data-generator and verify the editor works in a real browser (load, sample workflow, editing, preview, variable picker, migration, theme switch, dark mode, insert confirmation), plus API checks with curl. Use after any client/ or API change, or when asked to run or screenshot the app.
 ---
 
 # Smoke test
@@ -28,6 +28,13 @@ It starts the server on a random port 3900–3989 and drives headless Chromium t
    Lookup `ref` follows the rename (never lost on the empty value); undo restores `acc`.
 5. **Delete toast.** After Delete, the toast's "Hoàn tác" button disappears as soon as another edit
    (Ctrl+D) happens, so it can only undo the delete.
+5b. **Variable picker (design doc 0005).** On `con`, the Title card's options open; the template is
+   cleared, {x} opens the picker with the search focused, `indu` highlights `acc.Industry` and Enter
+   inserts `{{acc.Industry}}` (focus back in the field, a record-coloured chip under it). Typing ` #{{`
+   opens the list as autocomplete, `in` puts `loop.index` first, Enter inserts it (loop-coloured chip).
+   Typing `{{acc.Nmae}}` turns that chip red after validation, the `con` card gets the error badge and the
+   card shows "Ý bạn là "Name""; "Sửa thành …" fixes it and the badge goes. Renaming `Industry` to
+   `Industry__c` on `acc` (then Tab) updates the template and shows the "Đã cập nhật 1 tham chiếu" toast.
 6. **v1 autosave.** A `sfdg.workflow.v1` autosave is migrated on load (toast), `sfdg.workflow.v2` is
    written and the v1 key is left untouched.
 7. **Malformed v2 autosave.** The sample is shown with a recovery toast and a "Tải bản lưu" button; the
