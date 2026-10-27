@@ -393,6 +393,9 @@ Request thêm khóa tùy chọn `now` (số mili giây). Thiếu thì server dù
 
 - `plan` chỉ có khi target là org. Trong lượt chạy thử, client tự hiện `120 000/200 000`, vì tổng đã có từ bản xem trước
   vừa xác nhận. Server không cần thêm tham số.
+- `progress` (phase `generate`) và `done.result.stats` có thêm `byStep` theo hình dạng của 0003, khóa theo `node.id`:
+  `{ "<nodeId>": { "runs": 5, "records": 5 } }`. Lặp có thêm `iterations`, Rẽ nhánh có thêm `true` và `false`. Ví dụ
+  ở trên lược bớt khóa này cho gọn. Có từ v1, nên chip của 0003 dùng được ngay khi lên v2.
 - `done.result` có cùng hình dạng với JSON một cục hiện nay, cộng thêm: `now`, `stats.previewRows`, `stats.truncated`,
   `insert.errorsTotal`, `insert.errorGroups`, `insert.cancelled`, `insert.stopped`. Ở chế độ NDJSON, `records` và
   `insert.ids` chỉ chứa các dòng xem trước.
@@ -404,7 +407,7 @@ Request thêm khóa tùy chọn `now` (số mili giây). Thiếu thì server dù
 | Endpoint | Mô tả |
 | --- | --- |
 | `POST /api/runs/:runId/cancel` | Dừng lần chạy. Trả `{ "ok": true }`. Lần chạy đã xong hoặc không tồn tại thì trả 404 `Lần chạy này đã kết thúc.` Đóng kết nối của `/api/run` cũng làm lần chạy dừng sau lô hiện tại |
-| `POST /api/export` | Body `{ workflow, seed, now, format: "csv" \| "json", sobject? }`. Sinh lại và ghi thẳng ra response kèm `Content-Disposition: attachment`. `csv` bắt buộc có `sobject`, thiếu thì trả 400 `Chọn sObject cần tải CSV.` `json` là mảng bản ghi, mỗi bản ghi một dòng (46 MB thay vì 66 MB bản pretty) |
+| `POST /api/export` | Body `{ workflow, seed, now, format: "csv" \| "json", sobject? }`. Sinh lại và ghi thẳng ra response kèm `Content-Disposition: attachment`. `csv` bắt buộc có `sobject`, thiếu thì trả 400 `Chọn sObject cần tải CSV.` `json` là mảng bản ghi, mỗi bản ghi một dòng (46 MB thay vì 66 MB bản pretty). Workflow có node Query (0006): body có thêm `org` và `expectQueries` của lần chạy, server đọc trước qua cache như `/api/run`. Fingerprint khác thì trả 409 `Dữ liệu đọc từ org đã đổi so với lần chạy này. Bấm Xem trước lại rồi tải.` |
 
 ### `GET /api/meta` (dự kiến)
 
@@ -465,7 +468,8 @@ không đổi.
 | (a) Stream theo từng node (`Readable`/`Transform`/`Writable`, `pipeline`) | Đúng nghĩa "mỗi node input → xử lý → output" | Không hợp với Lặp/Rẽ nhánh/`current`. Cần join cho `done`. Phá tất định hoặc đổi dữ liệu của mọi seed cũ. Phải viết lại executor. Không có I/O để chồng nên không nhanh hơn | Không |
 | Checkbox "stream mode" (bật mới xử lý theo chunk) | Rủi ro cục bộ khi mới làm | Người dùng phải biết khi nào cần bật (vi phạm nguyên tắc 1). Hai đường code, hai bộ test. Không bật thì không có lợi ích nào | Không |
 | Tự chuyển sang luồng khi `count > N` hoặc target là org | Người dùng không phải chọn | Vẫn hai đường code. Ngưỡng N tùy ý, hành vi khó đoán | Không |
-| **(d) Dòng bản ghi (async generator) + sink + NDJSON, luôn bật** | Bộ nhớ phẳng (37,5 MB so với 117 MB), response 93 KB, có tiến độ, có Dừng, có dừng sớm, dữ liệu y hệt, sẵn sàng cho I/O của 0006 | Đổi API nội bộ (`runWorkflow` thành async). Insert xen kẽ giữa các sObject. Lượt chạy thử tốn thêm khoảng 1 % thời gian | **Có** |
+| **(d) Dòng bản ghi (generator đồng bộ) + sink + NDJSON, luôn bật** | Bộ nhớ phẳng (37,5 MB so với 117 MB), response 93 KB, có tiến độ, có Dừng, có dừng sớm, dữ liệu y hệt. `runWorkflow` giữ nguyên chữ ký nên khớp 0006 | Insert xen kẽ giữa các sObject. Lượt chạy thử tốn thêm khoảng 1 % thời gian | **Có** |
+| (d) nhưng executor là `async function*` ngay từ bây giờ | Sẵn cho node có I/O giữa lúc chạy | 0006 đã chọn đọc trước nên chưa cần. `runWorkflow` thành async, phải sửa mọi test và chỗ gọi. Lợi ích chỉ là giả định | Không (đường lui đã ghi ở mục Executor) |
 | (d) + Bulk API 2.0 ngay | Insert 200k nhanh hơn, ít lời gọi API | Kết quả không cam kết thứ tự, map `ref` cần External Id. Job bất đồng bộ phải poll. Phạm vi lớn | Không (design sau) |
 | Tiến độ bằng SSE (`EventSource`) | Trình duyệt tự kết nối lại | `EventSource` chỉ GET, không gửi được body workflow, nên server phải lưu workflow trước (có trạng thái). Kết nối lại có thể chạy trùng insert | Không, dùng NDJSON qua `fetch` |
 | Dừng bằng cách hủy `fetch` (`AbortController`) | Không cần endpoint | Client không nhận được tóm tắt cuối, nên không biết lô đang gửi có vào org không | Không. Dùng `/api/runs/:id/cancel`, và đóng kết nối chỉ là đường dự phòng |
@@ -478,13 +482,16 @@ Mỗi bước nhỏ, có test riêng, và `npm test` phải xanh sau mỗi bư�
 0. **Test golden trước khi refactor.** Thêm `test/stream.test.js` với test
    `golden: samples and random-lookup workflow give the same records as before streaming`. Test này lấy hash SHA-256 của
    `JSON.stringify(records)` với seed 42 và `NOW` cố định, cho hai mẫu trong `client/js/samples.js` và một workflow có
-   Lookup `random`. Hash được ghi lúc code còn chưa đổi.
-1. **Executor async generator.** Sửa `server/workflow/executor.js` (`createRun`, `records()`, `runWorkflow` async,
-   `scope.counts`, `signal`, `referencedAliases`, `columnsBySobject`) và `server/generators/reference.js` (chế độ `random`
-   dùng số đếm). Thêm `await` trong `test/workflow.test.js` và `test/server.test.js`. Test mới:
+   Lookup `random`. Hash được ghi lúc code còn chưa đổi. Nếu bước 0 của 0003 (`test/fixtures/run-v1.js`, bản chép đóng
+   băng của executor v1) đã có thì so với fixture đó thay cho hash.
+1. **Executor generator.** Sửa `server/workflow/executor.js` (`createRun`, `records()` dạng `function*`, `runWorkflow`
+   gom từ `records()` và thêm `now`, pool đếm `{ kind: 'generated', length, refAt }`, `referencedAliases`,
+   `columnsBySobject`, đếm `byStep`) và `server/generators/reference.js` (chế độ `random` rút chỉ số rồi gọi `refAt`).
+   Test hiện có giữ nguyên. Test mới:
+   - `byStep counts runs, records, loop iterations and branch sides`;
    - `records() yields the same sequence as runWorkflow`;
    - `records() twice with same seed and now is identical`;
-   - `abort signal stops between records with RunCancelled`;
+   - `stopping iteration early leaves no state behind` (gọi `return()` giữa chừng, chạy lại vẫn ra cùng chuỗi);
    - `maxRecords error still carries nodeId when streaming`;
    - `random lookup draws are unchanged` (golden).
 2. **Inserter theo window.** Sửa `server/sf/insert.js` (`createInserter`, `insertRecords` bọc lại, dừng sớm, `signal`,
@@ -496,8 +503,8 @@ Mỗi bước nhỏ, có test riêng, và `npm test` phải xanh sau mỗi bư�
    - `cancel waits for the in-flight batch and reports exact counts`;
    - `keepId limits retained Ids to referenced aliases and preview rows`;
    - `errors are capped at 1000 but groups count everything`.
-3. **Driver.** Thêm `server/run.js` (lượt 1/lượt 2, sink xem trước, throttle, nhường event loop, sổ đăng ký `runId`) và
-   `test/run.test.js`:
+3. **Driver.** Thêm `server/run.js` (lượt 1/lượt 2, sink xem trước, throttle, nhường event loop, sổ đăng ký `runId`,
+   gọi `invalidateOrg` của 0006 nếu đã có) và `test/run.test.js`:
    - `preview emits start, progress, done with first 200 rows per sObject`;
    - `org target: dry pass error emits error and never calls create`;
    - `org target emits plan before insert progress`;
@@ -558,26 +565,36 @@ Mỗi bước nhỏ, có test riêng, và `npm test` phải xanh sau mỗi bư�
 
 ### Phụ thuộc và giả định với các design song song
 
-- **0006 (Query, Chọn bản ghi ngẫu nhiên):**
-  - Executor là async generator, nên node Query có thể `await` I/O.
-  - Executor vẫn không import `server/sf/*`. Driver tiêm `ctx.query(soql)`.
-  - Giả định cần 0006 xác nhận: **kết quả query được ghi nhớ theo từng lần chạy**, khóa là câu SOQL sau khi thay biến.
-    Nhờ vậy lượt chạy thử và lượt insert thấy cùng một tập bản ghi, và lượt insert **không** thấy bản ghi do chính nó vừa
-    tạo.
-  - Executor luôn chạy tuần tự, nên "Chọn bản ghi ngẫu nhiên" dùng `ctx.rng` vẫn tất định.
-  - Nếu Query nằm trong vòng lặp với `WHERE` có biến, số lời gọi API có thể bằng số lượt lặp. 0006 nên đếm số lời gọi
-    này vào ước tính trong hộp xác nhận, hoặc cấm trường hợp đó.
-  - Nếu 0006 cần chọn ngẫu nhiên **bản ghi đã sinh** kèm field, executor phải giữ bản ghi của alias đó. Alias này biết
-    trước từ workflow, chi phí khoảng 450 B/bản ghi.
-- **0003 (chế độ process, có thể có JSON v2 dạng cây scope):**
+- **0006 (Query, Chọn bản ghi ngẫu nhiên)**, theo bản nháp hiện tại, dùng mô hình đọc trước:
+  - `prefetchQueries` chạy trước, rồi `runWorkflow(workflow, { seed, maxRecords, queryResults })` vẫn thuần và đồng bộ.
+    Doc này **giữ đúng chữ ký đó** và đặt bước đọc trước trước khi gửi header NDJSON.
+  - Lượt chạy thử và lượt insert dùng chung một `queryResults`, nên ra chuỗi bản ghi y hệt. Lượt insert không đọc lại org,
+    nên không thấy bản ghi do chính nó vừa tạo.
+  - `scope.all[alias]` của Query (mảng dòng, ≤ `maxQueryRows` = 2 000) **giữ nguyên**. Chỉ pool của alias **Record** đổi
+    thành đối tượng đếm `{ kind: 'generated', length, refAt }`. Cần 0006 xác nhận: Lookup "Ngẫu nhiên trong pool" phân
+    biệt hai loại pool bằng `kind` (hoặc `Array.isArray`), và cả hai cùng rút đúng một số `Math.floor(rng.next() * length)`.
+  - Node Chọn bản ghi chỉ lấy từ pool Query (`lookupTarget: "org"`), nên không cần giữ bản ghi đã sinh. Nếu sau này muốn
+    chọn từ bản ghi **đã sinh** kèm field, executor phải giữ bản ghi của alias đó (biết trước từ workflow), tốn khoảng
+    450 B/bản ghi.
+  - Hộp xác nhận: dòng "Đọc từ org, không ghi…" và điều kiện "cùng org" của 0006 được giữ nguyên. Doc này chỉ thêm các
+    dòng của mình (xem [Hộp xác nhận Insert](#hộp-xác-nhận-insert-luôn-có-số-bản-ghi)).
+  - `queryCache.invalidateOrg(org)` được gọi ở cuối driver, kể cả khi dừng giữa chừng.
+- **0003 (chế độ process, JSON v2 dạng cây):**
   - Hợp đồng của doc này nằm ở dòng bản ghi, nên không phụ thuộc đồ thị hay cây. Dòng bản ghi theo thứ tự sinh, cha
     trước con, mỗi bản ghi có `nodeId`.
-  - Nếu có v2, chỉ phần duyệt trong `records()` đổi. Sink, inserter, NDJSON và UI tiến độ giữ nguyên.
-  - Nếu chế độ process cần đếm theo bước, thêm `byNode` vào `progress` và `stats`. Chi phí không đáng kể, nhưng cần 0003
-    xác nhận tên khóa.
-- **0005 (bộ chọn biến):** Không xung đột, vì `/api/run` chỉ được thêm khóa. Cần lưu ý `scope.all` của executor từ nay
-  chỉ là số đếm, nên không có biến nào kiểu "mọi bản ghi đã sinh của alias kèm field". `exposes.kind: "pool"` mà 0005 giả
-  định cho Query của 0006 là bản ghi lấy từ org, nên không bị ảnh hưởng.
+  - 0003 đề xuất làm bước 1–3 của nó (hợp đồng v2, server, executor `runSteps`) trước. Khi đó bước 1 của doc này áp vào
+    `runSteps` thay cho `runChain`: đổi thành `function*` và `yield*` cho `slots`. Sink, inserter, NDJSON và UI tiến độ
+    giữ nguyên.
+  - **Cần 0003 cập nhật:** phần "Phụ thuộc" của 0003 đang ghi theo bản nháp trước của doc này (`async function*`). Từ bản
+    này, executor là **`function*` đồng bộ**, vì 0006 đã chọn đọc trước (xem mục Executor).
+  - **Nhận đề xuất `byStep` của 0003:** sự kiện `progress` và `stats` cuối có `byStep` đúng hình dạng `stats.byStep` của
+    0003 (xem [mục API](#post-apirun-dự-kiến)). `errorGroups[].nodeId` và `stopped.nodeId` để 0003 dựng badge lỗi trên
+    thẻ (việc sau của 0003).
+  - 0003 để nhánh song song ra ngoài phạm vi, vì executor phải chạy tuần tự để giữ tính tái lập theo seed. Doc này cũng
+    dựa trên giả định chạy tuần tự đó.
+- **0005 (bộ chọn biến):** Không xung đột, vì `/api/run` chỉ được thêm khóa. Pool của alias Record không còn giữ field
+  của từng bản ghi. 0005 đã coi `pool` là thứ chỉ dùng qua Lookup hoặc node Chọn bản ghi (biến có sẵn như `$count`), nên
+  đúng với thay đổi này. Nếu 0005 thêm `{{acc.$count}}` cho alias Record thì lấy `pool.length`.
 
 ## Đã làm
 

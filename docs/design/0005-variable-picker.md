@@ -2,9 +2,10 @@
 
 - **Trạng thái:** Nháp
 - **Ngày:** 2026-10-27
-- **Liên quan:** [0001](0001-workflow-editor-ux.md) (inspector, đổi alias tự cập nhật), 0003 (chế độ process, có thể có JSON v2),
-  0004 (chạy dạng streaming), [0006](0006-query-pick-nodes.md) (node Query và Chọn bản ghi), [workflow-schema.md](../workflow-schema.md),
-  [field-types.md](../field-types.md)
+- **Liên quan:** [0001](0001-workflow-editor-ux.md) (inspector, đổi alias tự cập nhật),
+  [0003](0003-process-mode.md) (chế độ Quy trình, JSON v2 dạng cây, `shared/`),
+  [0004](0004-streaming-execution.md) (chạy dạng stream), [0006](0006-query-pick-nodes.md) (node Query và Chọn bản ghi),
+  [workflow-schema.md](../workflow-schema.md), [field-types.md](../field-types.md)
 
 ## Vấn đề
 
@@ -32,9 +33,10 @@ bằng một cú bấm.
 - Mục tiêu:
   - Bộ chọn biến cho các ô nhận biến. Nó liệt kê đúng những gì dùng được tại node hoặc field đó, theo nhóm node và màu
     node, kèm kiểu và giá trị mẫu từ lần xem trước. Có tìm kiếm và dùng được hoàn toàn bằng bàn phím.
-  - Phân tích phạm vi biến (scope analysis) ở server. Đây là nguồn sự thật duy nhất cho cả bộ chọn và validate.
-  - Hợp đồng `exposes` và `flow` trong danh mục node: mỗi loại node tự khai báo nó cung cấp biến gì và các cổng của nó
-    chạy ra sao. 0003 và 0006 dựa vào hợp đồng này.
+  - Phân tích phạm vi biến (scope analysis) bằng **một** hàm thuần `analyzeScope`, chạy ở server và, nếu có thư mục
+    `shared/` của 0003, cả ở trình duyệt. Đây là nguồn sự thật duy nhất cho bộ chọn, validate và ô Node cha.
+  - Hợp đồng `exposes` và `flow` trong danh mục node: mỗi loại node tự khai báo nó cung cấp biến gì, và các cổng (v1)
+    hoặc slot (v2) của nó chạy ra sao. 0003 và 0006 dựa vào hợp đồng này.
   - Validate tham chiếu: biến không tồn tại hoặc ngoài phạm vi là **lỗi** (kèm "Ý bạn là…" và cách sửa). Biến có thể
     trống là **cảnh báo**.
   - Đổi tên hoặc xóa field, alias, biến lặp thì tham chiếu đi theo, hoặc người dùng được báo ngay là chỗ nào sẽ hỏng.
@@ -170,6 +172,8 @@ trạng thái: `task` chỉ được tạo ở một nhánh trước `con`, và 
 
 - Lấy từ **lần xem trước gần nhất** (`state.result.records`): bản ghi **đầu tiên** của node nguồn, `fields[key]`. `this.*`
   lấy bản ghi đầu tiên của chính node đang sửa. Client dựng `Map<nodeId, record>` một lần mỗi khi có kết quả mới.
+  - Với 0004 (stream), `records` chỉ có các dòng xem trước, và có thể thêm `samples` theo node (xem phần phụ thuộc).
+  - Với 0006, member của Query lấy từ `queries[].records[0]`.
 - Cách hiển thị:
   - chuỗi: cắt 24 ký tự, có ngoặc kép
   - số, boolean: in nguyên
@@ -300,14 +304,16 @@ tiền tố, và có `field: "left"`. Mọi issue tham chiếu đều có thêm 
 | (phân tích quá lớn) | cảnh báo | `Workflow quá phức tạp để kiểm tra hết phạm vi biến; một số lỗi về biến có thể không được báo.` (không có `nodeId`) |
 
 Field và biến lặp so khớp **có phân biệt hoa thường**, giống lúc chạy. Gợi ý "Ý bạn là" lấy tên khớp khi bỏ qua hoa
-thường, hoặc tên cách tối đa 2 ký tự (Levenshtein). Status `last` không sinh issue nào: giá trị lúc đó là xác định.
+thường, hoặc tên cách tối đa 2 ký tự (Levenshtein). `certainty: last` không sinh issue nào, vì giá trị lúc đó là xác
+định. Dòng `maybe` (biến lặp) chỉ có ở v1. Trên cây v2 không có node nào vừa ở trong vừa ở ngoài vòng lặp.
 
 ### Chế độ process (0003)
 
 - Bộ chọn là một thành phần độc lập, `client/js/var-picker.js`. Không đặt tên `picker.js`, vì 0006 đã dùng thuộc tính
-  `picker` của option cho các trợ giúp lấy dữ liệu từ org. `forms.js` gắn bộ chọn biến vào mọi option có `vars`. Thẻ step của
-  chế độ process chỉ cần dựng form bằng `renderOptions` (như inspector) với ctx `{ nodeId, fieldIndex }` là có bộ chọn,
-  không phải viết thêm gì.
+  `picker` của option cho các trợ giúp lấy dữ liệu từ org. `forms.js` gắn bộ chọn biến vào mọi option có `vars`.
+- Theo 0003, inspector là nơi **duy nhất** sửa cấu hình ở cả hai chế độ, và form vẫn dựng bằng `forms.js`. Vì vậy bộ chọn
+  tự có ở chế độ Quy trình, không phải viết thêm gì. Nếu sau này thẻ bước cho sửa trực tiếp, chỉ cần gọi `renderOptions`
+  với ctx `{ nodeId, fieldIndex }`.
 - Dữ liệu bộ chọn là `scope.at[id]` do `analyzeScope` tính, không phụ thuộc cách hiển thị. Chuyển qua lại giữa Sơ đồ và
   Quy trình thì danh sách biến vẫn y hệt, vì id bước giữ nguyên (0003 giữ `id` khi chuyển v1 sang v2).
 - Khi 0003 vào trước, câu chữ đổi "node" thành "bước" cho khớp chế độ Quy trình (ví dụ `bước "opp" chạy sau bước này…`).
@@ -401,7 +407,7 @@ Cả hai cách đều có:
 ### 2. Hợp đồng `flow` và `exposes` trong danh mục node
 
 `NODE_TYPES[].outputs` **đã là danh sách cổng ra** (canvas, schema và inspector đều đọc khóa này). Vì vậy hợp đồng biến
-dùng khóa mới `exposes`, không dùng lại `outputs`. Khi 0003 bỏ cổng, khóa `outputs` sẽ trống, nhưng vẫn giữ tên
+dùng khóa mới `exposes`, không dùng lại `outputs`. Khi 0003 bỏ cổng thì không còn khóa `outputs` nữa, nhưng vẫn giữ tên
 `exposes` để không lẫn với tài liệu và file v1 cũ.
 
 Thêm `flow` để nói rõ cổng (v1) hay slot (v2) nào chạy theo kiểu gì. Nhờ vậy `analyzeScope` dùng chung được cho mọi loại
@@ -804,26 +810,48 @@ Theo bảng contract-sync trong `.claude/agents/implementer.md`. Mỗi bước �
    field đã biết chính xác (chế độ builder, hoặc SOQL parse được), vì lúc chạy giá trị chắc chắn rỗng, giống field gõ sai
    ở node Record. Chỉ còn là cảnh báo `openMember` khi danh sách chưa đầy đủ (`FIELDS(...)`). Lời sửa dùng câu của 0006.
    Cần thống nhất một mức.
+9. **Thứ tự làm với 0003.** Đề xuất làm bước 1–3 của 0003 (định dạng v2, `shared/`) **trước**, giống 0003 đề xuất. Khi đó:
+   - `analyzeScope` chạy trên cây, đơn giản hơn nhiều so với thuật toán ngữ cảnh trên đồ thị.
+   - Nó nằm ở `shared/`, nên bộ chọn không bị trễ.
+   - Không cần `scope` trong `/api/validate`, cũng không cần `validation.js`.
+
+   Nếu cần bộ chọn sớm hơn thì làm 0005 trên v1. Phần thuật toán đồ thị (bước 2) sẽ bị viết lại khi 0003 vào; phần còn
+   lại (dạng `scope`, bộ chọn, validate, đổi tên) giữ nguyên.
 
 **Phụ thuộc và giả định với các design khác:**
 
-- **0003 (process mode):**
-  - Cần giữ `node.id` ổn định giữa hai chế độ và giữa v1/v2.
-  - Thẻ step cần dựng option bằng `renderOptions` với ctx `{ nodeId, fieldIndex }` thì có bộ chọn mà không phải viết thêm.
-  - Nếu JSON v2 là cây, 0003 cung cấp `buildFlow(v2)` cho `scope.js`, hoặc chuyển v2 về dạng đồ thị trước khi phân tích.
-    Ngữ nghĩa status giữ nguyên. Riêng `maybe` của biến lặp (node chạy cả trong lẫn ngoài body) không xảy ra được trong
-    mô hình cây.
-  - Giữ cú pháp `{{alias.Field}}`.
-- **0004 (streaming):**
-  - Giá trị mẫu cần **bản ghi đầu tiên của mỗi node** từ lần chạy gần nhất. Nếu client không còn giữ toàn bộ
-    `state.result.records`, 0004 cần giữ ít nhất `Map<nodeId, bản ghi đầu tiên>`, hoặc server gửi `samples` theo node.
-  - Validate và scope không phụ thuộc vào cách chạy.
+- **0003 (chế độ Quy trình, JSON v2 dạng cây).** Đã đối chiếu với bản nháp `0003-process-mode.md`:
+  - Hai bên khớp nhau ở các điểm: id bước giữ nguyên khi chuyển v1 sang v2; inspector và `forms.js` là nơi sửa cấu hình
+    duy nhất ở cả hai chế độ, nên bộ chọn biến tự có ở đó; `{{alias.Field}}` giữ nguyên; 0003 tự đặt tên biến lặp `loop2`.
+  - **`availableAt()` của 0003 và `analyzeScope` của 0005 là cùng một phân tích.** Đề xuất chỉ có `analyzeScope`, còn
+    `availableAt` là phần chiếu của nó. `certainty` dùng tên của 0003 (`always`/`maybe`/`disabled`) và thêm `last`.
+    Câu lỗi Lookup dùng câu của 0003 (`after`, `otherBranch`, `disabled`).
+  - **`slots` của 0003 cần thêm ngữ nghĩa.** Đó là `flow` của 0005: `body` lặp lại, `true`/`false` loại trừ nhau, và
+    `minIterations`. Nhờ vậy `shared/scope.js` không hard-code `loop`/`branch`. Hiện 0003 suy luận `always` từ
+    `fixed`/`range`; phần đó chuyển thành hàm `minIterations` của loại bước Lặp.
+  - **`outputs`:** 0003 bỏ cổng và giải phóng tên `outputs`. 0005 vẫn dùng `exposes` (không phụ thuộc thứ tự làm).
+  - `renameAlias` và `cloneSteps` (chuyển sang `shared/workflow-tree.js` trong 0003) cần duyệt option có `vars`/`kind: 'ref'`
+    lấy từ meta, và escape regex.
+  - Bước tắt (`disabled`) của 0003: không kiểm tra tham chiếu bên trong; nguồn tắt là ẩn `disabled`.
+  - `maybe` của biến lặp kiểu v1 (node chạy cả trong lẫn ngoài body) không còn trên cây. 0003 xử lý trường hợp này bằng
+    cách nhân bản khi chuyển đổi.
+- **0004 (chạy dạng stream).** Đã đối chiếu với bản nháp `0004-streaming-execution.md`:
+  - Không xung đột với `/api/run`. 0005 chỉ đọc kết quả chạy, không thêm khóa nào.
+  - **Cần thêm từ 0004:** ở chế độ NDJSON, `done.result.records` chỉ có 200 dòng đầu **mỗi sObject**. Nếu hai node cùng
+    sObject (ví dụ hai node Account), bản ghi đầu của node thứ hai có thể không nằm trong 200 dòng đó, nên bộ chọn và dòng
+    "Lần xem trước" sẽ không có giá trị mẫu. Đề xuất 0004 luôn đưa thêm bản ghi đầu tiên của mỗi `nodeId` vào dòng xem
+    trước, hoặc thêm `samples: { "<nodeId>": { ...fields } }` vào `done.result`. Nếu không có thì bộ chọn hiện `—`.
+  - 0004 bỏ field trong pool của alias Record (chỉ giữ `length`/`refAt`). 0005 chỉ đọc field của **bản ghi hiện tại**
+    (`scope.current`, vẫn giữ), còn `$n` lấy từ `ref`, nên không bị ảnh hưởng. `pool: true` trong `exposes` chỉ có nghĩa
+    là "dùng được cho Lookup Ngẫu nhiên và `pick.from`".
+  - Validate và `analyzeScope` không phụ thuộc vào cách chạy.
 - **0006 (Query `query`, Chọn bản ghi `pick`).** Đã đối chiếu với bản nháp `0006-query-pick-nodes.md`:
   - Khai báo `flow`/`exposes` như mục 2:
     - `query`: `members: "select"`, `current: "first"` (đúng ngữ nghĩa `{{accs.Name}}` = dòng đầu của 0006), `origin: "org"`.
     - `pick`: `members`/`origin`/`label` lấy theo `{ fromSource: "from" }`, `current: "picked"`.
   - `analyzeScope` vẫn thuần. Member của Query lấy từ `selectFields(config)` (`server/workflow/soql.js` của 0006). Kiểu
-    là `any`, vì `config.fields` chỉ lưu tên. Không parse được hết SELECT thì `open: true`.
+    là `any`, vì `config.fields` chỉ lưu tên. Không parse được hết SELECT thì `open: true`. Nếu `analyzeScope` ở `shared/`
+    thì `selectFields` cũng phải đặt ở `shared/`. Nó vốn là hàm thuần nên chỉ cần chuyển file.
   - **Trùng lặp với `derived` của 0006:**
     - `scope.sources[nodeId]` đã có `sobject`, danh sách field (`members`), và nguồn của `pick` (`fromSource`). Đề xuất
       0006 đọc `poolFields`/nhãn pool từ `scope.sources`.
