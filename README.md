@@ -1,6 +1,6 @@
 # SF Data Generator
 
-Công cụ sinh dữ liệu test đúng kiểu dữ liệu Salesforce. Bạn dựng workflow bằng node (Record, Lặp, Rẽ nhánh),
+Công cụ sinh dữ liệu test đúng kiểu dữ liệu Salesforce. Bạn dựng workflow bằng các bước (Record, Lặp, Rẽ nhánh) xếp từ trên xuống như Power Automate,
 xem trước dữ liệu, rồi insert vào org đã đăng nhập bằng Salesforce CLI.
 
 ## Yêu cầu
@@ -25,9 +25,13 @@ npm test
 
 ## Dùng nhanh
 
-1. Mở trang, chọn mẫu **Account + Contact** ở cột trái, hoặc chọn node **Bắt đầu** rồi bấm **Record** / **Lặp** để thêm và tự nối.
-2. Chọn node để cấu hình ở cột phải. Với node Record, bấm **Import từ org…** để lấy field có sẵn từ org.
+1. Mở trang, chọn mẫu **Account + Contact** ở cột trái, hoặc bấm **+ Thêm bước đầu tiên** / **Record** / **Lặp** ở cột trái.
+   Bước mới vào sau bước đang chọn, hoặc vào nhánh còn trống của khung Lặp / Rẽ nhánh đang chọn. Nút **+** giữa hai bước
+   chèn đúng chỗ đó; kéo tay cầm ⠿ (hoặc Alt+↑ / Alt+↓) để di chuyển.
+2. Chọn bước để cấu hình ở cột phải. Với bước Record, bấm **Import từ org…** để lấy field có sẵn từ org.
 3. **▶ Xem trước** (Ctrl+Enter) để sinh dữ liệu và xem bảng kết quả, tải JSON hoặc CSV.
 4. Bấm **📌 giữ seed** để lần chạy sau ra đúng dữ liệu đó, chọn org, rồi bấm **⤒ Insert vào org**.
+
+File workflow cũ (version 1, dạng sơ đồ nối dây) vẫn mở được: ứng dụng tự chuyển sang dạng các bước và giữ bản gốc.
 
 Tài liệu chi tiết ở [docs/](docs/README.md).

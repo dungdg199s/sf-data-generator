@@ -1,6 +1,6 @@
 # 0003 — Chế độ Quy trình (giống Power Automate) và mô hình workflow dạng cây
 
-- **Trạng thái:** Đã duyệt (2026-10-27, xem [0007](0007-tong-hop-0003-0006.md))
+- **Trạng thái:** Đã duyệt (2026-10-27, xem [0007](0007-tong-hop-0003-0006.md)). Đợt A đã làm; đợt B (Sơ đồ) chờ quyết định sau khi dùng thử.
 - **Ngày:** 2026-10-27
 - **Liên quan:** [0001](0001-workflow-editor-ux.md), [workflow-schema.md](../workflow-schema.md), [architecture.md](../architecture.md).
   Viết song song với 0004 (chạy dạng stream), 0005 (chọn biến / "dynamic content"), 0006 (node Query, Pick random record).
@@ -907,4 +907,45 @@ Quyết định cần người dùng chốt:
 
 ## Đã làm
 
-(Chưa làm.)
+### Đợt A (bước 0–5 và 7), 2026-10-27
+
+| Bước | Đã làm | File chính |
+| --- | --- | --- |
+| 0 | Executor v1 đóng băng, cùng bản v1 của hai mẫu và vài đồ thị có cấu trúc. Test viết và chạy qua **trước** khi sửa executor | `test/fixtures/run-v1.js`, `test/fixtures/v1-samples.js`, `test/fixtures/v1-cases.js`, `test/run-v1.test.js` |
+| 1 | Logic cây dùng chung và route tĩnh `/shared/` (chặn traversal) | `shared/workflow-tree.js`, `server/index.js`, `test/workflow-tree.test.js`, `test/server.test.js` |
+| 2 | Migration v1 → v2 theo đúng thuật toán ở trên, kèm `describeReport()` (câu tiếng Việt cho hộp thoại và cảnh báo server) | `shared/migrate-v1.js`, `test/migrate.test.js` |
+| 3 | Hợp đồng v2 ở server: `slots`/`category` thay `inputs`/`outputs`, bỏ `start`, `maxDepth`; validate cây với các câu lỗi mới; `runSteps` đệ quy, `disabled`, `stats.byStep`; nhận v1 kèm cảnh báo; nhãn "Bản ghi cha" | `server/workflow/{nodes,schema,executor}.js`, `shared/scope.js`, `server/generators/reference.js`, `test/workflow.test.js`, `test/scope.test.js` |
+| 4–5 | Client: store v2 (khóa `sfdg.workflow.v2`, `sfdg.collapsed`), `ops.js`, `summary.js`, chế độ Quy trình, hộp thoại chuyển đổi, phím tắt mới, inspector (bottom sheet trên màn hình hẹp), mẫu v2. `canvas.js` bị xóa | `client/js/{process,ops,summary,store,main,inspector,forms,dom,samples}.js`, `client/index.html`, `client/css/app.css`, `test/samples.test.js`, `.claude/skills/smoke-test/smoke.cjs` |
+| 7 | Tài liệu tham chiếu | `docs/workflow-schema.md` (v2 + mục version 1), `docs/architecture.md`, `docs/field-types.md`, `docs/org-connection.md`, `README.md` |
+
+Kiểm tra: `npm test` (mọi test qua, kể cả so sánh từng byte giữa `run-v1` và executor v2 trên hai mẫu và năm đồ thị có
+cấu trúc, với ba seed). Smoke test (`node .claude/skills/smoke-test/smoke.cjs`) chạy luồng của bước 5 và thêm: autosave
+v1 được chuyển (toast, khóa `sfdg.workflow.v1` còn nguyên), mở file v1 có node lơ lửng thì có hộp thoại báo cáo và
+nút "Tải bản gốc (v1)", màn hình 390 px không tràn ngang và mở được bottom sheet.
+
+Lỗi đã xác nhận trong [0007](0007-tong-hop-0003-0006.md) được sửa luôn: `Lặp{acc}` rồi Contact có Lookup ngẫu nhiên tới
+`acc` giờ hợp lệ (`last`); `renameAlias` escape alias trước khi tạo regex; đổi tên biến lặp chỉ đổi tham chiếu trong thân
+vòng lặp đó.
+
+Khác với thiết kế (và lý do):
+
+- **Phân tích phạm vi** nằm ở `shared/scope.js` (0005 đề xuất chỗ này khi 0003 làm trước), chỉ cho Lookup `ref`:
+  `analyzeRecordScope`, `refState`, `recordChoices`. Tên trạng thái theo 0005 (`always` thay cho `ok`; `after` /
+  `otherBranch` thay cho `notBefore`). Mọi câu hỏi "alias này dùng được ở đây không" (validate, dropdown, Import) đều đi qua
+  module này, để `analyzeScope` của 0005 thay thế một chỗ.
+- `stats.byStep.records` có ở mọi bước (với khung là số bản ghi sinh trong khung). `iterations` của Lặp là tổng N, kể cả
+  khi thân rỗng.
+- `/api/meta` có thêm `stepCategories` (nhãn nhóm `Dữ liệu` / `Điều khiển`), để client không hard-code nhãn.
+- `moveStep` nhận vị trí đích theo cây **trước khi** di chuyển (đúng thứ người dùng thấy khi thả); `neighbourTarget` trả
+  về cùng hệ tọa độ.
+- Nhân bản (Ctrl+D) dùng cùng quy tắc id với migration (`<id>_2`), không dùng id ngẫu nhiên.
+- `canvas.js` bị xóa thay vì ẩn (đợt B viết lại từ đầu). Chưa có nút Quy trình | Sơ đồ, phím M, `sfdg.view`.
+- `updateWorkflow` không tạo bước undo và không phát sự kiện khi thao tác không đổi gì (ví dụ di chuyển vào đúng chỗ cũ).
+- Thêm: phím ContextMenu / Shift+F10 mở menu `⋯` của bước đang chọn.
+- Test tương đương của bước 2 (cần executor cây) nằm trong commit của bước 3; bước 4 và 5 chung một commit vì view mới
+  và lõi client phụ thuộc nhau.
+
+Chưa làm trong đợt A: chế độ Sơ đồ và nút đổi chế độ (đợt B); ô tìm kiếm trong menu "+" chỉ hiện khi có hơn 6 loại bước
+(hiện có 3). `CLAUDE.md`, `.claude/agents/*.md` và `.claude/skills/*/SKILL.md` chưa sửa theo danh sách ở mục
+[Thay đổi cần làm ở tài liệu tham chiếu](#thay-đổi-cần-làm-ở-tài-liệu-tham-chiếu-dự-kiến-implementer-làm-cùng-code):
+đây là file cấu hình của agent, cần người dùng tự duyệt và áp dụng.

@@ -34,8 +34,8 @@ Nếu máy chưa cài `sf` thì `/api/orgs` trả 503 kèm thông báo; UI vẫn
 - Bỏ qua field không createable, formula, auto number, và các kiểu `id`, `address`, `base64`, ….
 - Gợi ý `mode` theo tên: `FirstName`, `LastName`, `*City`, `Name` (Account → company).
 - `required` = không nillable và không có giá trị mặc định khi tạo; UI chọn sẵn các field này khi import.
-- Lookup: master-detail nhận ra qua `relationshipOrder`. `ref` để trống; UI tự chọn node cha
-  nếu chỉ có một node record khớp `referenceTo`.
+- Lookup: master-detail nhận ra qua `relationshipOrder`. `ref` để trống; UI tự chọn bản ghi cha
+  nếu chỉ có một bước Record phía trên khớp `referenceTo`.
 
 ## Insert
 

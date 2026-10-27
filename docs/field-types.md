@@ -28,7 +28,7 @@ Option chung (registry tự thêm, generator không cần khai báo):
 | `date` | Date | `from`, `to` | `YYYY-MM-DD` |
 | `datetime` | Date/Time | `from`, `to` | ISO 8601 UTC |
 | `time` | Time | `from`, `to` (HH:MM), `stepMinutes` | `HH:MM:00.000Z` |
-| `lookup` | Lookup Relationship | `mode` (current, random, fixed), `ref`, `ids` | `{ "$ref": "acc#3" }` hoặc Id có sẵn |
+| `lookup` | Lookup Relationship | `mode` (current, random, fixed), `ref` (Bản ghi cha), `ids`. Bản ghi cha phải ở phía trên (xem [workflow-schema.md](workflow-schema.md#phía-trên-bản-ghi-cha-của-lookup--master-detail)) | `{ "$ref": "acc#3" }` hoặc Id có sẵn |
 | `masterdetail` | Master-Detail | như `lookup`; báo lỗi nếu chưa có bản ghi cha | như trên |
 | `geolocation` | Geolocation | `latMin`, `latMax`, `lngMin`, `lngMax`, `scale` | `{ latitude, longitude }` (khi insert tách thành `X__Latitude__s` / `X__Longitude__s`) |
 | `template` | (ghép giá trị) | `template` với `{{this.F}}`, `{{alias.F}}`, `{{loop.index}}` | chuỗi |
@@ -62,11 +62,11 @@ export const myType = {
 | `record` | Các field đã sinh phía trên trong cùng bản ghi |
 | `scope` | `{ current, all, vars }`: bản ghi hiện tại và toàn bộ bản ghi theo alias, biến lặp |
 | `fieldName` | Tên field (dùng trong thông báo lỗi) |
-| `fieldState` | Object riêng cho từng (node, field), tồn tại suốt lần chạy (bộ đếm, tập giá trị unique) |
+| `fieldState` | Object riêng cho từng (bước, field), tồn tại suốt lần chạy (bộ đếm, tập giá trị unique) |
 
 Lỗi do generator `throw` sẽ được executor gắn `nodeId` và `field` để UI chỉ ra đúng field.
 
 Các `kind` của option mà UI dựng được: `string`, `text`, `integer`, `number`, `boolean`, `select` (cần `choices`),
-`list`, `numberList`, `time`, `ref` (dropdown alias của node record).
+`list`, `numberList`, `time`, `ref` (dropdown alias của bước Record dùng được ở vị trí này; các alias khác nằm trong nhóm "Không dùng được ở vị trí này", bị tắt, kèm lý do).
 
 Thêm kiểu mới: xem skill `.claude/skills/add-field-type/SKILL.md`.

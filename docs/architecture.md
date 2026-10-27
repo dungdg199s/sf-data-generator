@@ -5,8 +5,8 @@
 ```
 Trình duyệt (client/)                         Server Node.js (server/)
 ┌──────────────────────────┐   GET /api/meta   ┌───────────────────────────────┐
-│ Canvas node + Inspector  │ ◄──────────────── │ generators/  (field types)    │
-│ (form sinh từ meta)      │                   │ workflow/nodes.js (node types)│
+│ Quy trình + Inspector    │ ◄──────────────── │ generators/  (field types)    │
+│ (form sinh từ meta)      │                   │ workflow/nodes.js (step types)│
 │                          │  POST /api/validate│                               │
 │ state.workflow (JSON)    │ ────────────────► │ workflow/schema.js            │
 │                          │  POST /api/run    │ workflow/executor.js          │
@@ -14,12 +14,14 @@ Trình duyệt (client/)                         Server Node.js (server/)
 └──────────────────────────┘                   │ sf/cli.js ─► `sf` CLI máy local│
                                                │ sf/client.js ─► jsforce ─► SF  │
                                                └───────────────────────────────┘
+        └──────── shared/ (logic cây, migration v1, phạm vi bản ghi; dùng ở cả hai phía) ────────┘
 ```
 
-1. Khi tải trang, UI gọi `GET /api/meta` để lấy danh sách field type, node type và option schema của từng loại.
+1. Khi tải trang, UI gọi `GET /api/meta` để lấy danh sách field type, loại bước (kèm `slots`, `category`) và option schema
+   của từng loại.
    UI **không hard-code** option nào: form trong inspector được dựng từ meta này (`client/js/forms.js`).
-2. Người dùng dựng workflow trên canvas. Mỗi lần sửa, UI gọi `POST /api/validate` (debounce 400 ms)
-   để hiện lỗi/cảnh báo gắn đúng node và field.
+2. Người dùng dựng các bước ở chế độ Quy trình (chế độ Sơ đồ là đợt B của [0003](design/0003-process-mode.md), chưa làm).
+   Mỗi lần sửa, UI gọi `POST /api/validate` (debounce 400 ms) để hiện lỗi/cảnh báo gắn đúng bước, field và ô bước con.
 3. Khi bấm **Xem trước** hoặc **Insert vào org**, UI gửi toàn bộ workflow JSON lên `POST /api/run`.
    Server validate lại, chạy executor, và nếu `target.kind === 'org'` thì insert.
 
@@ -28,9 +30,22 @@ Trình duyệt (client/)                         Server Node.js (server/)
 | Thư mục | Trách nhiệm | Ghi chú |
 | --- | --- | --- |
 | `server/generators/` | Mỗi kiểu field Salesforce một generator, tự khai báo option | Registry trong `index.js`; xử lý chung `nullRatio`/`unique` |
-| `server/workflow/` | Danh mục node, validate, chạy workflow | Executor là hàm thuần: không I/O, không gọi org |
+| `server/workflow/` | Danh mục loại bước, validate, chạy workflow | Executor là hàm thuần: không I/O, không gọi org. Nhận cả v1 (chuyển sang v2 trước) |
 | `server/sf/` | sf CLI (chỉ lấy token), jsforce connection, map describe → field, insert | Không lưu credential; token chỉ giữ trong bộ nhớ |
 | `server/random.js` | PRNG có seed (mulberry32) | Cùng workflow + seed ⇒ cùng dữ liệu |
+
+## Module dùng chung (`shared/`)
+
+Hàm thuần (không DOM, không I/O, không import ngoài `shared/`), chạy ở cả server (Node) lẫn trình duyệt. Server phục vụ
+thư mục này ở `/shared/…` với cùng cách chặn path traversal như `client/`.
+
+| File | Trách nhiệm |
+| --- | --- |
+| `shared/workflow-tree.js` | Duyệt/tìm bước, chèn, di chuyển, xóa (bỏ vỏ), bọc, nhân bản (đổi alias nội bộ), đổi alias, quy tắc chèn mặc định, đích của Alt+↑/↓ |
+| `shared/migrate-v1.js` | Chuyển workflow v1 (đồ thị) sang v2 (cây) và mô tả báo cáo chuyển đổi |
+| `shared/scope.js` | Phạm vi bản ghi cho Lookup `ref` (`always`/`last`/`maybe`/`after`/`otherBranch`/`disabled`). Bản tối thiểu; `analyzeScope` của [0005](design/0005-variable-picker.md) sẽ thay |
+
+Thứ tự slot được truyền vào qua tham số `slotKeys(type)`: server lấy từ `nodeTypeMap`, client lấy từ `state.meta`.
 
 ## Quyết định thiết kế quan trọng
 
@@ -45,7 +60,11 @@ Trình duyệt (client/)                         Server Node.js (server/)
   theo từng "đợt" (wave) để bản ghi cha luôn có Id trước bản ghi con.
 - **Điều kiện rẽ nhánh là dữ liệu có cấu trúc**, không phải chuỗi để `eval`, nên an toàn
   và UI có thể dựng bằng form.
-- **Lỗi validate luôn kèm `nodeId` và `field`** để UI tô đỏ đúng chỗ (badge trên node, viền đỏ ở field).
+- **Cây bước là mô hình chuẩn ([0003](design/0003-process-mode.md)).** Workflow JSON version 2 là `steps[]` lồng nhau
+  qua `slots`; không có dây nối, node lơ lửng hay vòng. "Phía trên" là thứ tự đọc từ trên xuống, nên Lookup sau một
+  vòng lặp hợp lệ. Version 1 vẫn được nhận và chuyển đổi, bản gốc không bị ghi đè.
+- **Lỗi validate luôn kèm `nodeId` (id bước) và `field`** để UI tô đỏ đúng chỗ (badge trên thẻ, viền đỏ ở field,
+  ô bước con viền nét đứt với `slots.<key>`).
 
 ## Giới hạn an toàn (`server/workflow/nodes.js` → `LIMITS`)
 
@@ -55,17 +74,24 @@ Trình duyệt (client/)                         Server Node.js (server/)
 | `maxRecordsHard` | 200 000 | Trần cứng, không vượt được |
 | `maxCountPerNode` | 100 000 | Số lần lặp / số bản ghi tối đa của một node |
 | `maxSteps` | 2 000 000 | Chặn workflow lặp lồng nhau chạy quá lâu |
+| `maxDepth` | 32 | Số cấp Lặp / Rẽ nhánh lồng nhau tối đa |
+
+Migration v1 cũng giới hạn số bước nhân bản (`2 × số node + 50`) để workflow hiểm hóc không làm treo trình duyệt.
 
 ## Client
 
 | File | Trách nhiệm |
 | --- | --- |
-| `client/js/store.js` | State duy nhất, undo/redo, autosave `localStorage`, phát sự kiện thay đổi |
-| `client/js/canvas.js` | Vẽ node/cạnh, kéo thả, nối cổng, pan/zoom, thêm node tự nối |
-| `client/js/inspector.js` | Cấu hình node, trình soạn field, import field từ org, đổi alias tự cập nhật tham chiếu |
+| `client/js/store.js` | State duy nhất, undo/redo, autosave `localStorage` (`sfdg.workflow.v2`; `sfdg.workflow.v1` chỉ đọc), trạng thái thu gọn khung (`sfdg.collapsed`), phát sự kiện thay đổi |
+| `client/js/process.js` | Chế độ Quy trình: thẻ bước, khung Lặp/Rẽ nhánh, nút "+", menu bước, kéo thả, bàn phím kiểu cây |
+| `client/js/ops.js` | Thao tác trên bước (thêm, xóa, nhân bản, tắt, bọc, bỏ vỏ, di chuyển) qua `shared/workflow-tree.js`, toast Hoàn tác |
+| `client/js/summary.js` | Câu tóm tắt trên thẻ và chip số liệu từ `stats.byStep` |
+| `client/js/inspector.js` | Cấu hình bước (nơi duy nhất sửa cấu hình), trình soạn field, import field từ org, đổi alias tự cập nhật tham chiếu; bottom sheet trên màn hình hẹp |
 | `client/js/forms.js` | Dựng form từ option schema (`showIf`, các `kind`) |
 | `client/js/results.js` | Bảng kết quả theo sObject, lỗi insert, tải JSON/CSV |
 | `client/js/main.js` | Khởi động, toolbar, phím tắt, validate trực tiếp, chạy/insert |
 
 Sự kiện của store có `source`: inspector bỏ qua thay đổi do chính nó tạo ra (`source: 'inspector'`)
 để không render lại và mất focus khi người dùng đang gõ. Thay đổi cấu trúc dùng `'inspector-structure'`.
+View Quy trình dựng lại DOM khi workflow đổi (giữ vị trí cuộn và focus); khi chỉ đổi lựa chọn hay lỗi thì chỉ cập nhật
+class và badge. Thu gọn/mở khung là trạng thái UI (`kind: 'view'`), không tạo bước undo.
