@@ -1,13 +1,20 @@
 // UI smoke test: starts the server, loads the editor ("Quy trình" view) in headless Chromium and
-// exercises the main flows; fails on any page error.
-//   1. load the "Account + Contact" sample
-//   2. "+" inside the inner loop body → Record; Alt+↑ moves it; Delete then Ctrl+Z restores it
-//   3. Ctrl+Enter previews: results table and a "bản ghi" stat chip on a card
-//   4. a v1 autosave is migrated on load (toast) and the sfdg.workflow.v1 key is left untouched
-//   5. opening a v1 file with an unconnected node shows the migration report dialog
-//   6. a malformed v2 autosave falls back to the sample without being overwritten; a malformed
-//      v2 file is refused with a toast; "Hoàn tác" on the delete toast disappears after another edit
-//   7. narrow (390 px) layout renders, tapping a card opens the inspector bottom sheet
+// exercises the main flows; fails on any page error. Flows (described in SKILL.md):
+//   1. load the "Account + Contact" sample; steps, Start card and palette items have data-type and an
+//      icon tile, no inline --c; NODE_COLORS is gone from the client (0008)
+//   2. "+" inside the inner loop body (menu rows typed + icons) → Record; Alt+↑ moves it; Delete then
+//      Ctrl+Z restores it
+//   3. Ctrl+Enter previews: results table and "bản ghi" / "lần lặp" stat chips on the cards
+//   4. renaming an alias via "" keeps focus and Lookup refs follow
+//   5. "Hoàn tác" on the delete toast disappears after another edit
+//   6. a v1 autosave is migrated on load (toast) and the sfdg.workflow.v1 key is left untouched
+//   7. a malformed v2 autosave falls back to the sample without being overwritten
+//   8. a malformed v2 file is refused with a toast
+//   9. opening a v1 file with an unconnected node shows the migration report dialog
+//  10. theme switch: Tối / Theo hệ thống set or clear data-theme on <html> and survive a reload
+//  11. narrow (390 px) layout renders, tapping a card opens the inspector bottom sheet
+//  12. dark colour scheme: sample + preview, and the Insert confirmation for a production org
+//      (mocked /api/orgs; a run with a target is blocked) has a solid red "Insert" and the warning box
 // Usage: node .claude/skills/smoke-test/smoke.cjs [screenshotDir]
 // Needs Playwright with a Chromium build available (require('playwright')).
 
@@ -40,6 +47,10 @@ async function waitForServer(url, ms = 8000) {
   }
   throw new Error('Server did not start');
 }
+
+// Body background of each theme (--color-bg: gray-50 / gray-950).
+const BG = { light: 'rgb(243, 245, 248)', dark: 'rgb(15, 18, 22)' };
+const ORGS = [{ alias: 'prod', username: 'admin@acme.com', isSandbox: false, isScratch: false, connectedStatus: 'Connected' }];
 
 const V1_SAMPLE = {
   version: 1,
@@ -80,12 +91,20 @@ const V1_ORPHAN = {
 
     await page.click('#sample-items .palette-item >> nth=0');
     await page.waitForSelector('.step-card[data-id="con"]');
+    // Step types are drawn from data-type + an icon tile (CSS), not from inline colours.
+    const untyped = await page.$$eval('.step, .start-card, #palette-items .palette-item', (els) =>
+      els.filter((e) => !e.dataset.type || !e.querySelector('.ico-tile .ico') || e.style.getPropertyValue('--c')).length);
+    check(untyped === 0, `${untyped} step/palette elements without data-type + .ico-tile (or with inline --c)`);
+    const storeSrc = await (await fetch(`${base}/js/store.js`)).text();
+    check(!/NODE_COLORS/.test(storeSrc), 'NODE_COLORS is still in client/js/store.js');
     const countSteps = () => page.$$eval('.step-card:not(.start-card)', (n) => n.length);
     const before = await countSteps();
 
     // "+" after "con" inside the inner loop body → Record.
     await page.click('.add-point[data-parent="loopCon"][data-slot="body"][data-index="1"] .add-btn');
-    await page.click('.popup .popup-item:has-text("Record")');
+    const menuTypes = await page.$$eval('.popup .popup-item', (n) => n.map((b) => (b.querySelector('.ico-tile') ? b.dataset.type : '-')));
+    check(menuTypes.length > 0 && menuTypes.every((t) => t && t !== '-'), `"+" menu rows without data-type/icon (${menuTypes.join(', ')})`);
+    await page.click('.popup .popup-item[data-type="record"]');
     await page.waitForFunction((n) => document.querySelectorAll('.step-card:not(.start-card)').length === n + 1, before);
     const firstInBody = () => page.$eval('.step[data-step="loopCon"] > .step-body .step-card', (c) => c.dataset.id);
     const added = await page.$eval('.step-card.selected', (c) => c.dataset.id);
@@ -177,6 +196,20 @@ const V1_ORPHAN = {
     check(await page.isVisible('dialog[open] button:has-text("Tải bản gốc (v1)")'), 'no "Tải bản gốc (v1)" button');
     await page.click('dialog[open] button:has-text("Đồng ý")');
     check(await page.isVisible('.step[data-step="o1"].disabled'), 'unconnected node is not shown disabled');
+
+    // Theme switch: explicit theme overrides the OS scheme and survives a reload.
+    const theme = () => page.evaluate(() => [document.documentElement.dataset.theme ?? '', getComputedStyle(document.body).backgroundColor, localStorage.getItem('sfdg.theme')]);
+    check((await theme())[1] === BG.light, `light scheme: unexpected background ${(await theme())[1]}`);
+    await page.selectOption('#theme-select', 'dark');
+    let t = await theme();
+    check(t[0] === 'dark' && t[1] === BG.dark && t[2] === 'dark', `"Tối" did not apply the dark theme (${t})`);
+    await page.reload();
+    await page.waitForSelector('.step-card');
+    t = await theme();
+    check(t[0] === 'dark' && t[1] === BG.dark && (await page.inputValue('#theme-select')) === 'dark', `dark theme not kept after reload (${t})`);
+    await page.selectOption('#theme-select', 'system');
+    t = await theme();
+    check(t[0] === '' && t[1] === BG.light && t[2] === null, `"Theo hệ thống" did not return to the OS scheme (${t})`);
     await ctx.close();
 
     // ---------- narrow ----------
@@ -197,7 +230,43 @@ const V1_ORPHAN = {
     if (outDir) await m.screenshot({ path: path.join(outDir, 'smoke-390-sheet.png') });
     await m.tap('#inspector .sheet-close');
     check(!(await m.$('#inspector.open')), '"‹ Xong" did not close the sheet');
+    if (outDir) {
+      await m.emulateMedia({ colorScheme: 'dark' });
+      await m.waitForTimeout(250); // sheet transition
+      await m.screenshot({ path: path.join(outDir, 'smoke-390-dark.png') });
+    }
     await narrow.close();
+
+    // ---------- dark scheme + insert confirmation ----------
+    const dark = await browser.newContext({ viewport: { width: 1440, height: 900 }, colorScheme: 'dark' });
+    const d = await dark.newPage();
+    d.on('pageerror', (e) => errors.push(`[dark] ${e}`));
+    let insertSent = false;
+    await d.route('**/api/orgs', (r) => r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(ORGS) }));
+    await d.route('**/api/run', (r) => {
+      // Safety: a run with a target would write to an org. Never let it reach the server.
+      if (r.request().postDataJSON()?.target) { insertSent = true; return r.abort(); }
+      return r.continue();
+    });
+    await d.goto(base);
+    await d.evaluate(() => localStorage.clear());
+    await d.reload();
+    await d.waitForSelector('.step-card[data-id="con"]');
+    const darkBg = await d.evaluate(() => getComputedStyle(document.body).backgroundColor);
+    check(darkBg === BG.dark, `dark scheme: unexpected background ${darkBg}`);
+    await d.keyboard.press('Control+Enter');
+    await d.waitForSelector('table.data tbody tr');
+    if (outDir) await d.screenshot({ path: path.join(outDir, 'smoke-1440-dark.png') });
+    await d.selectOption('#org-select', 'prod');
+    await d.click('#btn-insert');
+    await d.waitForSelector('dialog[open]');
+    check(await d.isVisible('dialog[open] .warn-box'), 'no production warning in the Insert confirmation');
+    check(await d.isVisible('dialog[open] .actions button.danger.solid:has-text("Insert")'), '"Insert" confirmation button is not .danger.solid');
+    if (outDir) await d.screenshot({ path: path.join(outDir, 'smoke-1440-dark-insert.png') });
+    await d.click('dialog[open] .actions button:has-text("Hủy")');
+    check(!(await d.$('dialog[open]')), '"Hủy" did not close the Insert confirmation');
+    check(!insertSent, 'an insert request was sent');
+    await dark.close();
   } catch (e) {
     errors.push(String(e));
   } finally {
