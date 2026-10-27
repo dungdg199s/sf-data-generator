@@ -12,6 +12,7 @@ function makeNumeric({ type, label, sfTypes, min, max, scale, extra = [] }) {
     type,
     label,
     category: 'Number',
+    valueType: 'number',
     sfTypes,
     uniqueable: true,
     options: [

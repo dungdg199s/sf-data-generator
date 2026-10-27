@@ -82,7 +82,7 @@ function renderControl(def, value, set, id, ctx) {
       const aliases = ctx.aliases ?? [];
       const usable = aliases.filter((a) => a.usable !== false);
       const other = aliases.filter((a) => a.usable === false);
-      const text = (a) => `${a.alias} (${a.sobject || '?'})${a.note ? ` · ${a.note}` : ''}`;
+      const text = (a) => `${a.alias} (${a.sobject || '?'})${a.note ? `${a.usable === false ? ' — ' : ' · '}${a.note}` : ''}`;
       const sel = h(
         'select',
         { id, onchange: (e) => set(e.target.value) },
@@ -91,7 +91,7 @@ function renderControl(def, value, set, id, ctx) {
         other.length
           ? h(
             'optgroup',
-            { label: 'Không dùng được ở vị trí này' },
+            { label: 'Không dùng được ở đây' },
             // The current value stays selectable so it is shown (and flagged by validation).
             other.map((a) => h('option', { value: a.alias, disabled: a.alias !== v, selected: a.alias === v, title: a.note || undefined }, text(a))),
           )

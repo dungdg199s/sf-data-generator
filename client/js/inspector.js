@@ -8,10 +8,10 @@ import { h, toast, icoTile } from './dom.js';
 import { renderOptions } from './forms.js';
 import { api } from './api.js';
 import {
-  state, subscribe, select, updateWorkflow, stepById, nodeType, fieldType, suggestAlias, recordScope, slotKeys,
+  state, subscribe, select, updateWorkflow, stepById, nodeType, fieldType, suggestAlias, currentScope, slotKeys,
 } from './store.js';
 import { setStepAlias } from '/shared/workflow-tree.js';
-import { recordChoices, HIDDEN_REASON } from '/shared/scope.js';
+import { refChoices } from '/shared/scope.js';
 import { deleteStep, duplicateStep, toggleDisabled } from './ops.js';
 
 let root;
@@ -137,13 +137,16 @@ function onStepOption(step, key, v, form) {
   // Card summary/alias changed; the process view re-renders, the inspector keeps focus.
 }
 
-/** Parent choices for Lookup "Bản ghi cha" at this step (usable first, nearest first). */
-function parentChoices(step) {
-  return recordChoices(recordScope(), step.id).map((c) => ({
-    alias: c.alias,
+/**
+ * Choices for a `kind: 'ref'` option at this step (Lookup "Bản ghi cha"): usable first, nearest
+ * first, then the others with the reason (shared/scope.js refChoices).
+ */
+function parentChoices(step, accepts) {
+  return refChoices(currentScope(), step.id, accepts).map((c) => ({
+    alias: c.name,
     sobject: c.sobject,
     usable: c.usable,
-    note: c.usable ? (c.state === 'maybe' ? 'có thể chưa có' : '') : HIDDEN_REASON[c.state] ?? '',
+    note: c.usable ? (c.certainty === 'maybe' ? 'có thể trống' : c.certainty === 'last' ? 'bản ghi cuối' : '') : c.note ?? '',
   }));
 }
 
@@ -318,7 +321,7 @@ function renderImportList(node, described, box, modal) {
         h('option', { value: '' }, '— bản ghi cha —'),
         usable.map((a) => h('option', { value: a.alias, selected: matches.length === 1 && matches[0].alias === a.alias }, `${a.alias} (${a.sobject})${a.note ? ` · ${a.note}` : ''}`)),
         other.length
-          ? h('optgroup', { label: 'Không dùng được ở vị trí này' }, other.map((a) => h('option', { value: a.alias, disabled: true, title: a.note }, `${a.alias} (${a.sobject}) · ${a.note}`)))
+          ? h('optgroup', { label: 'Không dùng được ở đây' }, other.map((a) => h('option', { value: a.alias, disabled: true, title: a.note }, `${a.alias} (${a.sobject}) — ${a.note}`)))
           : null,
       );
     }

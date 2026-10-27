@@ -6,15 +6,22 @@
 // Version 2 (tree of steps) is the current format. Version 1 (graph) is still accepted: it is
 // migrated with shared/migrate-v1.js first, and the conversion is reported as warnings.
 
-import { nodeTypeMap, slotKeys, CONDITION_OPS, LIMITS } from './nodes.js';
+import { NODE_TYPES, nodeTypeMap, CONDITION_OPS, LIMITS } from './nodes.js';
 import { getGenerator, describeGenerators } from '../generators/index.js';
 import { migrateV1, describeReport, reportNeedsReview } from '../../shared/migrate-v1.js';
-import { analyzeRecordScope, refState } from '../../shared/scope.js';
+import { analyzeScope, referenceOptions, hasUnclosed } from '../../shared/scope.js';
 
 const API_NAME = /^[A-Za-z][A-Za-z0-9_]*$/;
 const ALIAS = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const RESERVED_ALIASES = new Set(['this']);
 const REF_TYPES = new Set(['lookup', 'masterdetail']);
+
+let catalogCache = null;
+/** The catalogue analyzeScope reads, same shape as /api/meta. */
+export function scopeCatalog() {
+  catalogCache ??= { nodeTypes: NODE_TYPES, fieldTypes: describeGenerators() };
+  return catalogCache;
+}
 
 export const CURRENT_VERSION = 2;
 
@@ -39,8 +46,8 @@ export function prepareWorkflow(wf) {
   const errors = [];
   const warnings = [];
   let migration = null;
-  const err = (message, nodeId, field) => errors.push({ message, nodeId, field });
-  const warn = (message, nodeId, field) => warnings.push({ message, nodeId, field });
+  const err = (message, nodeId, field, extra) => errors.push({ message, nodeId, field, ...extra });
+  const warn = (message, nodeId, field, extra) => warnings.push({ message, nodeId, field, ...extra });
 
   if (!wf || typeof wf !== 'object' || Array.isArray(wf)) {
     err('Workflow phải là một object JSON.');
@@ -137,11 +144,12 @@ export function prepareWorkflow(wf) {
   }
 
   // Per-step config (turned-off steps are not checked: they do not run).
-  const scope = analyzeRecordScope(workflow, slotKeys);
+  const catalog = scopeCatalog();
+  const scope = analyzeScope(workflow, catalog);
   for (const { step, off } of steps) {
     if (off) continue;
     const c = step.config ?? {};
-    if (step.type === 'record') validateRecord(step, c, { err, warn, scope });
+    if (step.type === 'record') validateRecord(step, c, { err, warn });
     if (step.type === 'loop') {
       const mode = c.mode ?? 'fixed';
       const check = (key) => {
@@ -173,6 +181,30 @@ export function prepareWorkflow(wf) {
     }
   }
 
+  // Variable references (templates, branch `left`, Lookup `ref`): every option declaring `vars`
+  // or `kind: 'ref'` is checked against the scope analysis (design 0005).
+  {
+    const stepById = new Map(steps.map(({ step }) => [step.id, step]));
+    const seen = new Set();
+    for (const ref of scope.refs) {
+      if (ref.disabled || !ref.code) continue;
+      const key = `${ref.nodeId}|${ref.field}|${ref.path}|${ref.code}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const issue = referenceIssue(ref, scope, stepById.get(ref.nodeId));
+      if (!issue) continue;
+      (ref.level === 'warning' ? warn : err)(issue.message, ref.nodeId, ref.field, issue.extra);
+    }
+    for (const { step, off } of steps) {
+      if (off) continue;
+      for (const o of referenceOptions(step, catalog)) {
+        if (o.mode === 'template' && typeof o.value === 'string' && hasUnclosed(o.value)) {
+          warn(`${o.fieldName !== undefined ? `Field "${o.fieldName}": ` : ''}có "{{" chưa đóng bằng "}}" nên sẽ được giữ nguyên là chữ.`, step.id, o.field, { code: 'unclosed', option: o.option });
+        }
+      }
+    }
+  }
+
   return { workflow, errors, warnings, migration };
 }
 
@@ -187,7 +219,7 @@ export function insertBlockedReason(wf) {
   return 'Workflow version 1 này phải đổi cấu trúc khi chuyển sang version 2 (có bước được nhân bản hoặc bị cắt). Mở file trong trình soạn, kiểm tra hộp thoại chuyển đổi rồi bấm Lưu trước khi insert. Xem trước vẫn chạy được.';
 }
 
-function validateRecord(step, c, { err, warn, scope }) {
+function validateRecord(step, c, { err, warn }) {
   if (!c.sobject || !API_NAME.test(c.sobject)) err('Chưa nhập sObject hợp lệ (API name).', step.id, 'sobject');
   const count = c.count ?? 1;
   if (!Number.isInteger(Number(count)) || count < 1 || count > LIMITS.maxCountPerNode) {
@@ -212,34 +244,133 @@ function validateRecord(step, c, { err, warn, scope }) {
       err(`Field "${f.name}": kiểu "${f.type}" không được hỗ trợ.`, step.id, key);
       continue;
     }
-    if (REF_TYPES.has(f.type)) checkRef(step, f, key, { err, warn, scope });
+    if (REF_TYPES.has(f.type) && (f.options?.mode ?? 'current') !== 'fixed' && !f.options?.ref) {
+      err(`Field "${f.name}": chưa chọn bản ghi cha. Chọn một bước Record phía trên trong ô "Bản ghi cha".`, step.id, key);
+    }
   }
 }
 
-function checkRef(step, f, key, { err, warn, scope }) {
-  const mode = f.options?.mode ?? 'current';
-  const ref = f.options?.ref;
-  if (mode === 'fixed') return;
-  if (!ref) return err(`Field "${f.name}": chưa chọn bản ghi cha.`, step.id, key);
-  const { state } = refState(scope, step.id, ref);
-  switch (state) {
-    case 'unknown':
-      return err(`Field "${f.name}": không có bước Record nào có alias "${ref}".`, step.id, key);
-    case 'after':
-      return err(`Field "${f.name}": bước "${ref}" nằm sau bước này nên chưa có bản ghi khi chạy tới đây. Kéo bước "${ref}" lên phía trên hoặc chọn bản ghi cha khác.`, step.id, key);
-    case 'otherBranch':
-      return err(`Field "${f.name}": bước "${ref}" nằm ở nhánh còn lại của bước Rẽ nhánh phía trên nên không chạy cùng lượt với bước này. Đưa "${ref}" ra trước bước Rẽ nhánh hoặc chọn bản ghi cha khác.`, step.id, key);
-    case 'disabled':
-      return err(`Field "${f.name}": bước "${ref}" đang tắt. Bật lại bước đó (Ctrl+/) hoặc chọn bản ghi cha khác.`, step.id, key);
-    case 'maybe':
-      return warn(
-        f.type === 'masterdetail'
-          ? `Field "${f.name}": bước "${ref}" nằm trong một nhánh rẽ hoặc vòng lặp có thể không chạy, nên có lúc chưa có bản ghi cha và lần chạy sẽ báo lỗi. Đưa "${ref}" ra ngoài để nó luôn chạy trước.`
-          : `Field "${f.name}": bước "${ref}" nằm trong một nhánh rẽ hoặc vòng lặp có thể không chạy, nên có lúc field này sẽ trống.`,
-        step.id,
-        key,
-      );
-    default:
-      return undefined; // always / last
+// ---------- variable references (design 0005, "Thông báo lỗi và cảnh báo") ----------
+
+/**
+ * Issue for one problem reference found by analyzeScope: { message, extra: { code, path, option, suggestion? } }.
+ * Field options get the `Field "<Name>": ` prefix; step options (branch `left`) do not.
+ */
+export function referenceIssue(ref, scope, step) {
+  const src = ref.source !== undefined ? scope.sources[ref.source] : null;
+  const fieldName = ref.field.startsWith('fields.') ? ref.field.slice('fields.'.length) : null;
+  const prefix = fieldName !== null ? `Field "${fieldName}": ` : '';
+  const show = (p) => (ref.mode === 'template' ? `{{${p}}}` : p);
+  const s = src?.name ?? ref.name;
+  const what = src ? `${src.sobject ? ` (${src.sobject})` : ''}` : '';
+  const suggest = ref.suggestion ? ref.suggestion.to : null;
+  const firstField = (source) => source?.members.find((m) => !m.builtin)?.key ?? 'Name';
+  const isMD = fieldName !== null && (step?.config?.fields ?? []).find((f) => f?.name === fieldName)?.type === 'masterdetail';
+  let message;
+
+  if (ref.mode === 'ref') {
+    switch (ref.code) {
+      case 'unknownName':
+        message = `không có bước Record nào có alias "${ref.path}".${suggest ? ` Ý bạn là "${suggest}"?` : ''} Chọn bản ghi cha trong danh sách "Bản ghi cha".`;
+        break;
+      case 'after':
+        message = `bước "${s}" nằm sau bước này nên chưa có bản ghi khi chạy tới đây. Kéo bước "${s}" lên phía trên hoặc chọn bản ghi cha khác.`;
+        break;
+      case 'otherBranch':
+        message = `bước "${s}" nằm ở nhánh còn lại của bước Rẽ nhánh phía trên nên không chạy cùng lượt với bước này. Đưa "${s}" ra trước bước Rẽ nhánh hoặc chọn bản ghi cha khác.`;
+        break;
+      case 'disabled':
+        message = `bước "${s}" đang tắt. Bật lại bước đó (Ctrl+/) hoặc chọn bản ghi cha khác.`;
+        break;
+      case 'maybe':
+        message = maybeMessage(ref, s, true, isMD);
+        break;
+      default:
+        return null;
+    }
+  } else {
+    switch (ref.code) {
+      case 'unknownName':
+        message = `không có biến "${ref.name}" (không phải alias của bước Record nào, cũng không phải tên biến lặp).${suggest ? ` Ý bạn là "${suggest.split('.')[0]}"?` : ''} Bấm {x} để chọn biến có sẵn.`;
+        break;
+      case 'unknownMember':
+        if (src?.kind === 'vars') {
+          message = `biến lặp "${s}" chỉ có ${src.members.map((m) => m.key).join(', ')}; không có "${ref.missing ?? ref.member}".`;
+        } else if (src?.origin === 'org' || src?.nodeType === 'query') {
+          message = `Query "${s}" không lấy field "${ref.missing}". Thêm ${ref.missing} vào "Field cần lấy" của bước Query.`;
+        } else if (ref.viaThis) {
+          message = `bước này không có field "${ref.missing}". Chọn field khác bằng {x}.`;
+        } else {
+          const hint = suggest ? suggest.split('.').slice(1).join('.') : null;
+          message = `bước "${s}"${what} không có field "${ref.missing}".${hint ? ` Ý bạn là "${hint}"?` : ''} Thêm field đó vào bước "${s}" hoặc chọn field khác bằng {x}.`;
+        }
+        break;
+      case 'wholeRecord':
+        message = src?.kind === 'vars'
+          ? `${show(s)} là cả vòng lặp; hãy chọn một biến, ví dụ ${show(`${s}.index`)}.`
+          : `${show(ref.name)} là cả bản ghi; hãy chọn một field, ví dụ ${show(`${ref.name}.${ref.viaThis ? firstField(src) : firstField(src)}`)}.`;
+        break;
+      case 'noTraversal': {
+        const parent = ref.traversalRef ? scope.sources[Object.keys(scope.sources).find((id) => scope.sources[id].name === ref.traversalRef)] : null;
+        const p = parent?.name ?? ref.traversalRef ?? 'acc';
+        message = `không đi tiếp qua field Lookup "${ref.traversal}" được. Dùng thẳng alias của bước cha, ví dụ ${show(`${p}.${firstField(parent)}`)}.`;
+        break;
+      }
+      case 'after':
+        message = `bước "${s}" chạy sau bước này nên chưa có giá trị khi chạy tới đây. Kéo bước "${s}" lên phía trên, hoặc chọn biến khác.`;
+        break;
+      case 'otherBranch':
+        message = `bước "${s}" nằm ở nhánh còn lại của Rẽ nhánh phía trên nên không chạy cùng lượt với bước này. Đưa "${s}" ra trước Rẽ nhánh, hoặc chọn biến khác.`;
+        break;
+      case 'disabled':
+        message = src?.kind === 'vars'
+          ? `vòng lặp "${s}" đang tắt. Bật lại bước đó (Ctrl+/) hoặc chọn biến khác.`
+          : `bước "${s}" đang tắt. Bật lại bước đó (Ctrl+/) hoặc chọn biến khác.`;
+        break;
+      case 'outsideLoop':
+        message = `${show(ref.path)} chỉ dùng được bên trong vòng lặp "${s}". Kéo bước này vào trong vòng lặp "${s}", hoặc bỏ biến này.`;
+        break;
+      case 'thisBelow':
+        message = `${show(ref.path)} chỉ thấy field phía trên. Kéo field "${ref.member.split('.')[0]}" lên trên "${fieldName}" (nút ↑).`;
+        break;
+      case 'thisUnknown': {
+        const hint = suggest ? suggest.split('.')[1] : null;
+        message = `bước này không có field "${ref.member.split('.')[0]}".${hint ? ` Ý bạn là "${hint}"?` : ` Thêm field đó phía trên "${fieldName}" hoặc chọn biến khác bằng {x}.`}`;
+        break;
+      }
+      case 'thisSelf':
+        message = `template không thể dùng chính field "${fieldName}".`;
+        break;
+      case 'thisOutsideRecord':
+        message = `"this" chỉ dùng trong template của bước Record. Ở đây hãy chọn alias của bước, ví dụ acc.Industry.`;
+        break;
+      case 'selfAlias':
+        message = `đang ở trong bước "${s}", hãy dùng ${show(`this.${ref.member || firstField(src)}`)} thay cho ${show(ref.path)} (${s}.* ở đây là bản ghi trước đó của chính bước này).`;
+        break;
+      case 'noIdYet':
+        message = `"${s}" là bản ghi được sinh ra nên chưa có Id trước khi insert. Muốn nối bản ghi con với "${s}" thì dùng field Lookup; {{${s}.Id}} chỉ có với bản ghi đọc từ org (Query, Chọn bản ghi).`;
+        break;
+      case 'noCurrent':
+        message = `"${s}" là danh sách bản ghi đọc từ org, không có bản ghi hiện tại. Thêm bước Chọn bản ghi lấy từ "${s}" rồi dùng alias của bước đó.`;
+        break;
+      case 'openMember':
+        message = `chưa chắc "${s}" có field "${ref.missing}" (danh sách field chưa đầy đủ); kiểm tra lại câu truy vấn.`;
+        break;
+      case 'maybe':
+        message = maybeMessage(ref, s, false, false);
+        break;
+      default:
+        return null;
+    }
   }
+  const extra = { code: ref.code, path: ref.path, option: ref.option };
+  if (ref.suggestion) extra.suggestion = ref.suggestion;
+  return { message: prefix + message, extra };
+}
+
+function maybeMessage(ref, s, isLookup, isMD) {
+  if (ref.why?.loop) {
+    return `vòng lặp "${ref.why.loop}" có thể chạy 0 lần nên "${s}" có thể chưa có bản ghi.${isMD ? ' Master-Detail sẽ báo lỗi khi chạy; đặt "Ít nhất" ≥ 1.' : ''}`;
+  }
+  return `"${s}" chỉ được tạo trên một số nhánh trước khi tới đây, nên có thể chưa có (${isLookup ? 'field này trống' : 'giá trị trống'}, hoặc là bản ghi của lần lặp trước). Đặt bước này ngay sau "${s}" nếu cần luôn có giá trị.${isMD ? ' Master-Detail sẽ báo lỗi khi chạy nếu chưa có bản ghi cha.' : ''}`;
 }

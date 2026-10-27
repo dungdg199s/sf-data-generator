@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { generateValue, listGenerators, describeGenerators } from '../server/generators/index.js';
+import { generateValue, listGenerators, describeGenerators, VALUE_TYPES } from '../server/generators/index.js';
 import { createRandom } from '../server/random.js';
 import { parseBound } from '../server/generators/date.js';
 import { NOW } from './helpers.js';
@@ -83,4 +83,16 @@ test('autonumber counts per field state', () => {
   const f = { name: 'A', type: 'autonumber', options: { displayFormat: 'INV-{000}', startingNumber: 5 } };
   assert.equal(generateValue(f, ctx), 'INV-005');
   assert.equal(generateValue(f, ctx), 'INV-006');
+});
+
+test('every generator declares a known valueType', () => {
+  const known = new Set(VALUE_TYPES.map((v) => v.value));
+  for (const g of describeGenerators()) assert.ok(known.has(g.valueType), `${g.type}: ${g.valueType}`);
+  const byType = Object.fromEntries(describeGenerators().map((g) => [g.type, g.valueType]));
+  assert.deepEqual([byType.number, byType.checkbox, byType.date, byType.lookup, byType.geolocation, byType.text], ['number', 'boolean', 'date', 'reference', 'object', 'string']);
+});
+
+test('template default {{this.$n}} gives the record number', () => {
+  assert.equal(gen('template', {}, { n: 7 }), '7');
+  assert.equal(gen('template', { template: 'x{{ this.$n }}y' }, { n: 2 }), 'x2y');
 });

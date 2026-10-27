@@ -37,6 +37,19 @@ test('GET /api/meta lists field types and step types with slots and categories',
   assert.equal(meta.limits.maxDepth, 32);
   const ref = meta.fieldTypes.find((f) => f.type === 'lookup').options.find((o) => o.key === 'ref');
   assert.equal(ref.label, 'Bản ghi cha (alias)');
+  // Variables (0005): every step type says how its slots run; record and loop expose variables.
+  assert.deepEqual(meta.nodeTypes.map((n) => n.flow.kind), ['sequence', 'loop', 'branch']);
+  assert.deepEqual(meta.nodeTypes.map((n) => n.exposes?.kind ?? null), ['record', 'vars', null]);
+  assert.ok(meta.nodeTypes.every((n) => Object.values(n).every((v) => typeof v !== 'function')));
+  assert.ok(!('minIterations' in meta.nodeTypes[1]), 'function keys are not served');
+  const re = new RegExp(meta.syntax.templateToken, 'g');
+  assert.deepEqual([...'{{acc.Name}} {{this.$n}}'.matchAll(re)].map((m) => m[1]), ['acc.Name', 'this.$n']);
+  assert.ok(meta.syntax.valueTypes.some((v) => v.value === 'number' && v.label === 'Số'));
+  const template = meta.fieldTypes.find((f) => f.type === 'template').options.find((o) => o.key === 'template');
+  assert.deepEqual([template.vars, template.default], ['template', '{{this.$n}}']);
+  assert.equal(meta.nodeTypes[2].options.find((o) => o.key === 'left').vars, 'path');
+  assert.equal(meta.fieldTypes.find((f) => f.type === 'currency').valueType, 'number');
+  assert.deepEqual(meta.fieldTypes.find((f) => f.type === 'geolocation').members.map((m) => m.key), ['latitude', 'longitude']);
 });
 
 test('POST /api/run returns records; invalid workflow returns 422 with issues', async () => {

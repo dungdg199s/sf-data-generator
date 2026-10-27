@@ -40,6 +40,7 @@ export const date = {
   type: 'date',
   label: 'Date',
   category: 'Date/Time',
+  valueType: 'date',
   sfTypes: ['date'],
   options: [
     opt('from', 'Từ', 'string', '-1y', { help: RANGE_HELP }),
@@ -54,6 +55,7 @@ export const datetime = {
   type: 'datetime',
   label: 'Date/Time',
   category: 'Date/Time',
+  valueType: 'datetime',
   sfTypes: ['datetime'],
   options: [
     opt('from', 'Từ', 'string', '-1y', { help: RANGE_HELP }),
@@ -69,6 +71,7 @@ export const time = {
   type: 'time',
   label: 'Time',
   category: 'Date/Time',
+  valueType: 'time',
   sfTypes: ['time'],
   options: [
     opt('from', 'Từ (HH:MM)', 'time', '08:00'),

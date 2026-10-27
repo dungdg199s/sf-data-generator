@@ -4,6 +4,7 @@ export const checkbox = {
   type: 'checkbox',
   label: 'Checkbox',
   category: 'Choice',
+  valueType: 'boolean',
   sfTypes: ['boolean'],
   nullable: false, // Salesforce checkboxes are never null.
   options: [opt('trueProbability', 'Xác suất true (0–1)', 'number', 0.5, { min: 0, max: 1, step: 0.05 })],

@@ -15,6 +15,7 @@ function makeReference(type, label, nullable) {
     type,
     label,
     category: 'Relationship',
+    valueType: 'reference',
     sfTypes: type === 'lookup' ? ['reference'] : [],
     nullable,
     options: [

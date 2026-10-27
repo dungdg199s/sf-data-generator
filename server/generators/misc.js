@@ -1,10 +1,15 @@
 import { opt, roundTo } from './common.js';
-import { resolvePath } from '../workflow/paths.js';
+import { resolvePath, TEMPLATE_TOKEN } from '../workflow/paths.js';
 
 export const geolocation = {
   type: 'geolocation',
   label: 'Geolocation',
   category: 'Other',
+  valueType: 'object',
+  members: [
+    { key: 'latitude', valueType: 'number', label: 'Vĩ độ' },
+    { key: 'longitude', valueType: 'number', label: 'Kinh độ' },
+  ],
   sfTypes: ['location'],
   options: [
     opt('latMin', 'Vĩ độ nhỏ nhất', 'number', -90, { min: -90, max: 90 }),
@@ -29,13 +34,14 @@ export const template = {
   sfTypes: [],
   uniqueable: true,
   options: [
-    opt('template', 'Mẫu', 'string', '{{this.LastName}} - {{loop.index}}', {
-      help: '{{this.Field}} = field đã sinh trong bước này, {{alias.Field}} = bước Record phía trên, {{loop.index}} = vòng lặp hiện tại (bắt đầu từ 1).',
+    opt('template', 'Mẫu', 'string', '{{this.$n}}', {
+      vars: 'template',
+      help: 'Bấm {x} hoặc gõ {{ để chèn biến. Ví dụ {{this.FirstName}}, {{acc.Name}}, {{loop.index}}, {{this.$n}}.',
     }),
   ],
-  generate(o, { scope, record }) {
-    return o.template.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (_, path) => {
-      const v = resolvePath(path, scope, record);
+  generate(o, { scope, record, n }) {
+    return String(o.template).replace(new RegExp(TEMPLATE_TOKEN, 'g'), (_, path) => {
+      const v = resolvePath(path, scope, record, { n });
       if (v === undefined || v === null) return '';
       if (typeof v === 'object' && v.$ref) return v.$ref;
       return String(v);
@@ -48,7 +54,7 @@ export const constant = {
   label: 'Giá trị cố định',
   category: 'Other',
   sfTypes: [],
-  options: [opt('value', 'Giá trị', 'string', '')],
+  options: [opt('value', 'Giá trị', 'string', '', { help: 'Luôn đúng giá trị này. Muốn ghép biến? Đổi kiểu sang Template.' })],
   generate(o) {
     return o.value;
   },

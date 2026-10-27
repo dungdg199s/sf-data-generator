@@ -3,7 +3,7 @@
 // for edits it made itself (keeps input focus while typing in the inspector).
 
 import { findStep, collectAliases, allSteps } from '/shared/workflow-tree.js';
-import { analyzeRecordScope } from '/shared/scope.js';
+import { analyzeScope } from '/shared/scope.js';
 
 const STORAGE_KEY = 'sfdg.workflow.v2';
 // Autosave of the old graph editor. Read once for migration, never written or removed.
@@ -202,9 +202,17 @@ export function selectedStep() {
   return state.selection?.kind === 'step' ? stepById(state.selection.id) : null;
 }
 
-/** Record scope (which aliases are usable where), see shared/scope.js. */
-export function recordScope() {
-  return analyzeRecordScope(state.workflow, slotKeys);
+let scopeCache = { revision: -1, workflow: null, scope: null };
+/**
+ * Variable scope of the current workflow (shared/scope.js analyzeScope, the same analysis the
+ * server validates with): sources, what each step can use, and every reference. Recomputed
+ * lazily once per workflow revision.
+ */
+export function currentScope() {
+  if (scopeCache.revision !== revision || scopeCache.workflow !== state.workflow) {
+    scopeCache = { revision, workflow: state.workflow, scope: analyzeScope(state.workflow, state.meta) };
+  }
+  return scopeCache.scope;
 }
 
 /** Suggest a short unique alias from an sObject name: Account → acc, My_Thing__c → mything. */

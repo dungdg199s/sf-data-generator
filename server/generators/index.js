@@ -47,19 +47,35 @@ export function listGenerators() {
   return GENERATORS;
 }
 
+/** Kinds of value a field or variable holds (meta.syntax.valueTypes; design 0005). */
+export const VALUE_TYPES = [
+  { value: 'string', label: 'Chuỗi' },
+  { value: 'number', label: 'Số' },
+  { value: 'boolean', label: 'Đúng/Sai' },
+  { value: 'date', label: 'Ngày' },
+  { value: 'datetime', label: 'Ngày giờ' },
+  { value: 'time', label: 'Giờ' },
+  { value: 'reference', label: 'Tham chiếu' },
+  { value: 'object', label: 'Đối tượng' },
+  { value: 'any', label: 'Từ org' },
+];
+
 /** Serializable description for the UI: types, categories and option schemas. */
 export function describeGenerators() {
   return GENERATORS.map((g) => ({
     type: g.type,
     label: g.label,
     category: g.category,
+    valueType: g.valueType ?? 'string',
+    ...(g.members ? { members: g.members } : {}),
     options: allOptions(g),
   }));
 }
 
 /**
  * Generate one field value.
- * ctx: { rng, now, scope, record, fieldName, fieldState }
+ * ctx: { rng, now, scope, record, fieldName, fieldState, n }
+ *   n is the number of the record being generated (`n` in alias#n, for {{this.$n}}).
  *   fieldState is a per-(node, field) object that persists for the whole run
  *   (used for uniqueness sets and counters).
  */

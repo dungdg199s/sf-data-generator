@@ -1,47 +1,163 @@
+// Design 0005: analyzeScope (shared/scope.js), the single scope analysis used by validation,
+// the Lookup "Bản ghi cha" dropdown, the variable picker and rename propagation.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { analyzeRecordScope, refState, recordChoices, loopMinIterations } from '../shared/scope.js';
-import { slotKeys } from '../server/workflow/nodes.js';
+import { analyzeScope, refChoices, refsTo, loopMinIterations, tokenize, stripPath, hasUnclosed, closest } from '../shared/scope.js';
+import { scopeCatalog } from '../server/workflow/schema.js';
+import { NODE_TYPES } from '../server/workflow/nodes.js';
+import { describeGenerators } from '../server/generators/index.js';
 import { wf, record, loop, branch } from './helpers.js';
 
-const r = (id, alias = id) => record(id, 'Account', alias);
+const catalog = scopeCatalog();
+const r = (id, alias = id, fields = []) => record(id, 'Account', alias, fields);
+const tpl = (name, template) => ({ name, type: 'template', options: { template } });
+const scopeOf = (w) => analyzeScope(w, catalog);
+const nameOf = (scope, id) => scope.sources[id].name;
+/** "name:certainty" for visible, "name:-reason" for hidden, at `id`. */
+const view = (scope, id) => [
+  ...scope.at[id].visible.map((v) => `${nameOf(scope, v.source)}:${v.certainty}`),
+  ...scope.at[id].hidden.map((v) => `${nameOf(scope, v.source)}:-${v.reason}`),
+];
+const stateOf = (scope, id, source) => view(scope, id).find((x) => x.startsWith(`${nameOf(scope, source)}:`))?.split(':')[1];
 
-test('scope: always / last / maybe / after / otherBranch / disabled', () => {
+test('scope: upstream record and enclosing loop vars are visible in the loop body, nearest first', () => {
+  const w = wf([loop('loopAcc', { count: 5, alias: 'i' }, [r('acc', 'acc'), loop('loopCon', { mode: 'range', min: 1, max: 4 }, [r('con', 'con')])])]);
+  const scope = scopeOf(w);
+  assert.deepEqual(scope.at.con.visible.map((v) => v.source), ['loopCon', 'acc', 'loopAcc']);
+  assert.ok(scope.at.con.visible.every((v) => v.certainty === 'always'));
+  assert.deepEqual(view(scope, 'acc'), ['i:always', 'acc:-after', 'loop:-outsideLoop', 'con:-after']);
+  assert.equal(scope.at.acc.hidden[0].note, 'là chính bước này');
+  assert.equal(scope.at.acc.hidden.find((h) => h.source === 'loopCon').note, 'chỉ có bên trong vòng lặp "loop"');
+  assert.equal(scope.partial, false);
+  // Sources carry what the picker shows: members with value types, builtins, loop examples.
+  const acc = scope.sources.acc;
+  assert.equal(acc.kind, 'record');
+  assert.equal(acc.sobject, 'Account');
+  assert.deepEqual(acc.members.map((m) => m.key), ['$n']);
+  assert.equal(acc.members[0].example, '1, 2, 3…');
+  assert.equal(scope.sources.loopCon.label, 'Vòng lặp 1–4 lần');
+  assert.deepEqual(scope.sources.loopCon.members.map((m) => `${m.key}=${m.example}`), ['index=1…4', 'index0=0…3', 'count=1–4']);
+  assert.deepEqual(scope.sources.loopAcc.members.map((m) => m.example), ['1…5', '0…4', '5']);
+});
+
+test('scope: record created in one branch is maybe after the branch; the other branch sees it as otherBranch', () => {
+  const w = wf([branch('b', {}, [r('yes'), r('useYes')], [r('no')]), r('after')]);
+  const scope = scopeOf(w);
+  assert.equal(stateOf(scope, 'useYes', 'yes'), 'always');
+  assert.equal(stateOf(scope, 'no', 'yes'), '-otherBranch');
+  assert.equal(stateOf(scope, 'after', 'yes'), 'maybe');
+  assert.equal(scope.at.after.visible.find((v) => v.source === 'yes').note, 'chỉ được tạo ở một số nhánh phía trên');
+});
+
+test('scope: record created in a finished loop body is last; maybe when the loop can run 0 times', () => {
   const w = wf([
-    r('top'),
-    loop('l', { count: 2 }, [r('inLoop'), r('beforeUse')]),
-    loop('z', { mode: 'range', min: 0, max: 2 }, [r('zeroLoop')]),
-    branch('b', {}, [r('yes'), r('useYes')], [r('no')]),
-    { ...r('off'), disabled: true },
+    loop('l', { count: 2 }, [r('inLoop')]),
+    loop('z', { mode: 'range', min: 0, max: 2, alias: 'zl' }, [r('zeroLoop')]),
+    loop('f', { count: 0, alias: 'fl' }, [r('never')]),
     r('use'),
-    r('later'),
   ]);
-  const scope = analyzeRecordScope(w, slotKeys);
-  const at = (id, alias) => refState(scope, id, alias).state;
-  assert.equal(at('use', 'top'), 'always');
-  assert.equal(at('use', 'inLoop'), 'last');
-  assert.equal(at('beforeUse', 'inLoop'), 'always');
-  assert.equal(at('inLoop', 'beforeUse'), 'after');
-  assert.equal(at('use', 'zeroLoop'), 'maybe');
-  assert.equal(at('use', 'yes'), 'maybe');
-  assert.equal(at('useYes', 'yes'), 'always');
-  assert.equal(at('no', 'yes'), 'otherBranch');
-  assert.equal(at('use', 'off'), 'disabled');
-  assert.equal(at('use', 'later'), 'after');
-  assert.equal(at('use', 'use'), 'after');
-  assert.equal(at('use', 'nope'), 'unknown');
+  const scope = scopeOf(w);
+  assert.equal(stateOf(scope, 'use', 'inLoop'), 'last');
+  assert.equal(stateOf(scope, 'use', 'zeroLoop'), 'maybe');
+  assert.equal(stateOf(scope, 'use', 'never'), 'maybe');
+  assert.equal(scope.at.use.visible.find((v) => v.source === 'zeroLoop').note, 'vòng lặp "zl" có thể chạy 0 lần');
+  assert.equal(scope.at.use.visible.find((v) => v.source === 'inLoop').note, 'bản ghi cuối');
 });
 
-test('scope: recordChoices lists usable aliases nearest first, then the rest with a reason', () => {
-  const w = wf([r('a'), r('b'), r('here'), r('c')]);
-  const choices = recordChoices(analyzeRecordScope(w, slotKeys), 'here');
-  assert.deepEqual(choices.map((c) => `${c.alias}:${c.usable ? c.state : `-${c.state}`}`), ['b:always', 'a:always', 'c:-after']);
+test('scope: loop var after the loop is hidden as outsideLoop', () => {
+  const w = wf([loop('l', { count: 2, alias: 'i' }, [r('a')]), r('b', 'b', [tpl('T', '{{i.index}}')])]);
+  const scope = scopeOf(w);
+  assert.equal(stateOf(scope, 'b', 'l'), '-outsideLoop');
+  const ref = scope.refs.find((x) => x.nodeId === 'b');
+  assert.deepEqual([ref.source, ref.code, ref.field, ref.option, ref.path], ['l', 'outsideLoop', 'fields.T', 'template', 'i.index']);
 });
 
-test('scope: loopMinIterations', () => {
+test('scope: nested loops with the same alias, inner shadows outer', () => {
+  const w = wf([loop('outer', { count: 2 }, [loop('inner', { count: 3 }, [r('a', 'a', [tpl('T', '{{loop.index}}')])]), r('b', 'b', [tpl('T', '{{loop.count}}')])])]);
+  const scope = scopeOf(w);
+  assert.deepEqual(view(scope, 'a').filter((x) => x.startsWith('loop:')), ['loop:always', 'loop:-shadowed']);
+  assert.equal(scope.at.a.visible[0].source, 'inner');
+  assert.equal(scope.at.a.hidden.find((h) => h.source === 'outer').reason, 'shadowed');
+  const [ra, rb] = ['a', 'b'].map((id) => scope.refs.find((x) => x.nodeId === id));
+  assert.equal(ra.source, 'inner');
+  assert.equal(rb.source, 'outer');
+  assert.equal(ra.code ?? null, null);
+  assert.deepEqual(refsTo(scope, 'inner').map((x) => x.nodeId), ['a']);
+});
+
+test('scope: disabled step is hidden as disabled and its own references are flagged disabled', () => {
+  const w = wf([{ ...r('off', 'off', [tpl('T', '{{nope.X}}')]), disabled: true }, { ...loop('dl', { count: 2, alias: 'dv' }, [r('inside', 'inside', [tpl('T', '{{dv.index}}')])]), disabled: true }, r('use', 'use', [tpl('T', '{{off.$n}}')])]);
+  const scope = scopeOf(w);
+  assert.equal(stateOf(scope, 'use', 'off'), '-disabled');
+  assert.equal(stateOf(scope, 'use', 'inside'), '-disabled');
+  assert.equal(stateOf(scope, 'use', 'dl'), '-disabled');
+  assert.equal(scope.at.off.disabled, true);
+  assert.equal(scope.refs.find((x) => x.nodeId === 'use').code, 'disabled');
+  assert.ok(scope.refs.filter((x) => x.nodeId !== 'use').every((x) => x.disabled));
+  // Inside a turned-off loop the variable still resolves (rename keeps working there).
+  assert.equal(scope.refs.find((x) => x.nodeId === 'inside').source, 'dl');
+});
+
+test('scope: this.* sees fields above, $n, and reports below / self / unknown', () => {
+  const fields = [{ name: 'FirstName', type: 'text' }, tpl('Title', '{{this.FirstName}} {{this.$n}} {{this.Email}} {{this.Title}} {{this.Frstname}}'), { name: 'Email', type: 'email' }];
+  const scope = scopeOf(wf([r('c', 'con', fields)]));
+  const codes = scope.refs.map((x) => `${x.path}:${x.code ?? 'ok'}`);
+  assert.deepEqual(codes, ['this.FirstName:ok', 'this.$n:ok', 'this.Email:thisBelow', 'this.Title:thisSelf', 'this.Frstname:thisUnknown']);
+  assert.equal(scope.refs[4].suggestion.to, 'this.FirstName');
+});
+
+test('scope: query and pick sources expose select fields and fromSource members (contract for 0006)', () => {
+  // 0006 is not built yet: a catalogue with the declared exposes of Query / Chọn bản ghi.
+  const query = {
+    type: 'query', slots: [], flow: { kind: 'sequence' }, options: [{ key: 'alias', kind: 'string' }, { key: 'sobject', kind: 'string' }],
+    exposes: { kind: 'record', name: { key: 'alias' }, label: { key: 'sobject' }, visibleIn: 'downstream', members: 'select', current: 'none', pool: true, origin: 'org', lookupParent: true, builtins: [{ key: '$count', valueType: 'number', label: 'Số bản ghi đọc được' }] },
+  };
+  const pick = {
+    type: 'pick', slots: [], flow: { kind: 'sequence' }, options: [{ key: 'alias', kind: 'string' }, { key: 'from', kind: 'ref', accepts: { pool: true } }],
+    exposes: { kind: 'record', name: { key: 'alias' }, label: { fromSource: 'from' }, visibleIn: 'downstream', members: { fromSource: 'from' }, current: 'picked', pool: true, origin: { fromSource: 'from' }, lookupParent: true },
+  };
+  const cat = { nodeTypes: [...NODE_TYPES, query, pick], fieldTypes: describeGenerators() };
+  const w = wf([
+    { id: 'q', type: 'query', config: { alias: 'accs', sobject: 'Account', fields: ['Name', 'Owner.Name'] } },
+    { id: 'p', type: 'pick', config: { alias: 'a', from: 'accs' } },
+    r('c', 'con', [tpl('T', '{{accs.Name}} {{accs.$count}} {{a.Name}} {{a.Owner.Name}} {{a.Id}} {{a.Industry}}')]),
+  ]);
+  const scope = analyzeScope(w, cat);
+  assert.deepEqual(scope.sources.q.members.map((m) => m.key), ['Id', 'Name', 'Owner', '$count']);
+  assert.deepEqual(scope.sources.q.members[2].members.map((m) => m.key), ['Name']);
+  assert.equal(scope.sources.q.current, 'none');
+  assert.equal(scope.sources.p.label, 'Account');
+  assert.equal(scope.sources.p.origin, 'org');
+  assert.deepEqual(scope.sources.p.members.map((m) => m.key), ['Id', 'Name', 'Owner']);
+  const codes = scope.refs.map((x) => `${x.path}:${x.code ?? 'ok'}`);
+  assert.deepEqual(codes, ['accs:ok', 'accs.Name:noCurrent', 'accs.$count:ok', 'a.Name:ok', 'a.Owner.Name:ok', 'a.Id:ok', 'a.Industry:unknownMember']);
+  // pick.from only lists pools; Lookup lists lookup parents.
+  assert.deepEqual(refChoices(scope, 'c', { pool: true }).filter((x) => x.usable).map((x) => x.name), ['a', 'accs']);
+});
+
+test('scope: refChoices lists usable parents nearest first, then the rest with a reason', () => {
+  const w = wf([r('a'), loop('l', { count: 1 }, [r('b')]), r('here', 'here', [{ name: 'P', type: 'lookup', options: { ref: 'b' } }]), r('c')]);
+  const scope = scopeOf(w);
+  const choices = refChoices(scope, 'here');
+  assert.deepEqual(choices.map((c) => `${c.name}:${c.usable ? c.certainty : `-${c.reason}`}:${c.note}`), ['b:last:bản ghi cuối', 'a:always:', 'c:-after:chạy sau bước này']);
+  assert.deepEqual(scope.refs.map((x) => `${x.field}:${x.mode}:${x.source}:${x.certainty}`), ['fields.P:ref:b:last']);
+  // A mode 'fixed' Lookup has no ref to check (the option is hidden).
+  const fixed = scopeOf(wf([r('x', 'x', [{ name: 'P', type: 'lookup', options: { mode: 'fixed', ref: 'zzz', ids: ['001'] } }])]));
+  assert.deepEqual(fixed.refs, []);
+});
+
+test('scope: helpers — loopMinIterations, tokenize, stripPath, hasUnclosed, closest', () => {
   assert.equal(loopMinIterations({ count: 3 }), 3);
   assert.equal(loopMinIterations({ count: 0 }), 0);
   assert.equal(loopMinIterations({}), 0);
   assert.equal(loopMinIterations({ mode: 'range', min: 0, max: 4 }), 0);
   assert.equal(loopMinIterations({ mode: 'range', max: 4 }), 1);
+  assert.deepEqual(tokenize('{{acc.Industry}} contact #{{ loop.index }}').map((p) => p.kind === 'token' ? `[${p.path}]` : p.text), ['[acc.Industry]', ' contact #', '[loop.index]']);
+  assert.equal(stripPath(' {{ loop.index }} '), 'loop.index');
+  assert.equal(stripPath('acc.Name'), 'acc.Name');
+  assert.equal(hasUnclosed('a {{acc.Name'), true);
+  assert.equal(hasUnclosed('{{acc.Name}} b'), false);
+  assert.equal(closest('acco', ['acc', 'con']), 'acc');
+  assert.equal(closest('name', ['Name', 'Nam']), 'Name');
+  assert.equal(closest('i', ['z']), null);
 });

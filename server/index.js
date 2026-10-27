@@ -8,8 +8,9 @@ import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { describeGenerators } from './generators/index.js';
-import { NODE_TYPES, STEP_CATEGORIES, LIMITS } from './workflow/nodes.js';
+import { describeGenerators, VALUE_TYPES } from './generators/index.js';
+import { serializableNodeTypes, STEP_CATEGORIES, LIMITS } from './workflow/nodes.js';
+import { TEMPLATE_TOKEN } from './workflow/paths.js';
 import { validateWorkflow, insertBlockedReason, WorkflowError } from './workflow/schema.js';
 import { runWorkflow } from './workflow/executor.js';
 import { createSfCli } from './sf/cli.js';
@@ -35,7 +36,17 @@ export function createApp({ cli = createSfCli(), client } = {}) {
   const sfClient = client ?? createSfClient({ cli });
 
   const routes = [
-    ['GET', /^\/api\/meta$/, () => ({ fieldTypes: describeGenerators(), nodeTypes: NODE_TYPES, stepCategories: STEP_CATEGORIES, limits: LIMITS })],
+    [
+      'GET',
+      /^\/api\/meta$/,
+      () => ({
+        fieldTypes: describeGenerators(),
+        nodeTypes: serializableNodeTypes(),
+        stepCategories: STEP_CATEGORIES,
+        limits: LIMITS,
+        syntax: { templateToken: TEMPLATE_TOKEN, valueTypes: VALUE_TYPES },
+      }),
+    ],
     ['POST', /^\/api\/validate$/, (_m, body) => validateWorkflow(body?.workflow)],
     [
       'POST',

@@ -4,7 +4,8 @@
 // Execution model (workflow JSON version 2, a tree of steps; v1 input is migrated first):
 // - A sequence of steps runs top to bottom. A step with `disabled: true` is skipped together
 //   with everything inside it, without drawing from the rng.
-// - record: generates `count` records, each becoming scope.current[alias].
+// - record: generates `count` records, each becoming scope.current[alias]; `n` (alias#n) is
+//   passed to generators for {{this.$n}}.
 // - loop: draws N (rng.int for `range`, even when the body is empty, as v1 did), runs
 //   slots.body N times with a loop variable, then the next step.
 // - branch: always evaluates its condition, runs slots.true or slots.false, then the next step.
@@ -62,6 +63,7 @@ export function runWorkflow(input, opts = {}) {
           record: fields,
           fieldName: field.name,
           fieldState: fieldStates.get(key),
+          n,
         });
       } catch (e) {
         if (e instanceof WorkflowError) throw e;
