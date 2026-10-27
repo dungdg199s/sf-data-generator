@@ -1,6 +1,6 @@
 # 0008 — Hệ thống thiết kế UI: bảng màu, trạng thái và kiểu dáng thống nhất
 
-- **Trạng thái:** Nháp
+- **Trạng thái:** Đã duyệt (2026-10-27)
 - **Ngày:** 2026-10-27
 - **Liên quan:** [0003](0003-process-mode.md) (chế độ Quy trình), [0005](0005-variable-picker.md) (chip biến),
   [0006](0006-query-pick-nodes.md) (node Query và Chọn bản ghi), tài liệu tham chiếu
@@ -255,6 +255,19 @@ Không có thay đổi contract (bảng trong `.claude/agents/implementer.md` ch
    khi mù màu đỏ (ΔE 2.6), nhưng khác hình. Có muốn đổi icon/hue khi làm 0006 không?
 5. **Cỡ chữ nhỏ nhất 12 px** (thay 11 px) làm chip và badge cao thêm khoảng 2 px. Chấp nhận?
 6. Danh sách lỗi nổi đè thẻ cuối: tách thành design doc bố cục riêng?
+
+## Đã chốt (2026-10-27)
+
+Người dùng giao cho chọn theo đề xuất:
+
+1. Record chuyển sang xanh ngọc; màu nhấn giữ xanh dương.
+2. Có nút chuyển sáng/tối/theo hệ thống trên thanh trên (dùng `data-theme`, nhớ trong `localStorage`).
+3. Mới / Mở… / Lưu / ↶ / ↷ thành nút không viền (ghost) để "Xem trước" nổi bật.
+4. Giữ màu ô liu cho Chọn bản ghi; luôn kèm icon và nhãn nên không dựa vào màu.
+5. Cỡ chữ nhỏ nhất 12 px.
+6. Danh sách lỗi che thẻ cuối: tách design doc bố cục riêng, không làm trong 0008.
+
+Thứ tự: làm 0008 trước 0005, để chip biến của 0005 dùng luôn token mới.
 
 ## Đã làm
 

@@ -18,7 +18,7 @@ viết và cập nhật các file này theo skill `design-doc`; người viết 
 | [0005](0005-variable-picker.md) | Quét và chọn biến từ UI | Đã duyệt |
 | [0006](0006-query-pick-nodes.md) | Node Query và Chọn bản ghi | Đã duyệt |
 | [0007](0007-tong-hop-0003-0006.md) | Tổng hợp 0003–0006: mâu thuẫn, thứ tự triển khai, quyết định cần chốt | Đã duyệt |
-| [0008](0008-ui-design-system.md) | Chuẩn hoá bảng màu và phong cách UI (design system) | Nháp |
+| [0008](0008-ui-design-system.md) | Chuẩn hoá bảng màu và phong cách UI (design system) | Đã duyệt |
 
 ## Nguyên tắc tiện dụng
 
