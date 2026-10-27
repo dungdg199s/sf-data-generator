@@ -11,7 +11,7 @@ export const STRUCTURED = {
   // 1: merge after a branch, inside a loop, then continue after the loop.
   mergeAfterBranch: W(
     [{ id: 'l', type: 'loop', config: { count: 20 } }, { id: 'b', type: 'branch', config: { probability: 0.3 } }, rec('a', 'Account', 'a'), rec('x', 'Lead', 'x'), rec('y', 'Task', 'y')],
-    [E('start', 'l'), E('l', 'b', 'body'), E('b', 'a', 'true'), E('a', 'x'), E('b', 'x', 'false'), E('x', 'y'), E('l', 'y', 'done')],
+    [E('start', 'l'), E('l', 'b', 'body'), E('b', 'a', 'true'), E('a', 'x'), E('b', 'x', 'false'), E('l', 'y', 'done')],
   ),
   // 2: nested merge.
   nestedBranchMerge: W(
