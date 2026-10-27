@@ -197,7 +197,7 @@ chọn đúng node làm "neo" và không phải nghĩ tới cổng. Thay vì bư
 
 ### Thẻ bước
 
-Mỗi bước là một thẻ rộng tối đa 560 px, căn giữa, viền trái 4 px theo màu loại bước (`NODE_COLORS`). Hàng đầu thẻ:
+Mỗi bước là một thẻ rộng tối đa 560 px, căn giữa, viền trái 4 px theo màu loại bước (`--step-<type>` qua luật `[data-type]`, xem [0008](0008-ui-design-system.md)). Hàng đầu thẻ:
 
 ```
 [⠿] Record  acc   Account × 1 · 5 field ………  [12 bản ghi] [2] [Đã tắt] [⋯] [▸]
@@ -252,7 +252,7 @@ Mỗi bước là một thẻ rộng tối đa 560 px, căn giữa, viền trái
 - Khung có cùng hàng đầu như thẻ thường. Thân có nền nhạt theo màu loại bước
   (`color-mix(in srgb, var(--c) 6%, var(--panel))`), viền trái 4 px, lề trong 12 px.
 - **Lặp** có một ô con (slot `body`), không có nhãn. Ô rỗng hiện nút `+ Thêm bước vào vòng lặp`.
-- **Rẽ nhánh** có hai cột cạnh nhau. Nhãn cột lấy từ meta: **Đúng** (màu `--ok`) và **Sai** (màu `--danger`).
+- **Rẽ nhánh** có hai cột cạnh nhau. Nhãn cột lấy từ meta: **✓ Đúng** và **✗ Sai**, cùng màu chữ Rẽ nhánh `--step-branch-text` (theo [0008](0008-ui-design-system.md): xanh lá/đỏ chỉ dành cho trạng thái, "Sai" không phải lỗi).
   Cột rỗng hiện nút `+ Thêm bước`; riêng cột Sai có thêm dòng nhỏ `Để trống: không làm gì`.
   Cột dùng `grid-template-columns: repeat(auto-fit, minmax(280px, 1fr))`, nên khi khung hẹp hơn khoảng 590 px thì hai cột
   tự xếp chồng (Đúng trên, Sai dưới). Rẽ nhánh lồng nhau nhiều cấp không làm vỡ bố cục.

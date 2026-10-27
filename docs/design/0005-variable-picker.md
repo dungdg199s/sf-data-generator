@@ -150,7 +150,7 @@ trạng thái: `task` chỉ được tạo ở một nhánh trước `con`, và 
 └──────────────────────────────────────────────────────────┘
 ```
 
-- **Nhóm** theo node. Đầu nhóm có chấm màu `NODE_COLORS[nodeType]`, tên biến (`acc`, monospace), nhãn (`label` server
+- **Nhóm** theo node. Đầu nhóm có ô icon của loại node (`data-type` + `icoTile()`, màu `--step-<type>` theo [0008](0008-ui-design-system.md)), tên biến (`acc`, monospace), nhãn (`label` server
   trả về: sObject, hoặc "Vòng lặp 1–4 lần"), và badge trạng thái nếu có:
   - `bản ghi cuối` (`certainty: last`). Tooltip: `Tạo trong vòng lặp đã kết thúc: giá trị là bản ghi của lần lặp cuối. Lookup "Ngẫu nhiên" sẽ chọn trong tất cả.`
   - `có thể trống` (`certainty: maybe`). Tooltip là `note` do `analyzeScope` trả về, ví dụ `vòng lặp "loopAcc" có thể chạy 0 lần`.
@@ -765,7 +765,7 @@ Theo bảng contract-sync trong `.claude/agents/implementer.md`. Mỗi bước �
    - Kiểm tra: smoke test hiện có vẫn qua.
 7. **Bộ chọn.**
    - `client/js/var-picker.js` (mới): popup, tìm kiếm, phím tắt, ARIA, chèn bằng `execCommand('insertText')`, dải chip.
-   - `client/css/app.css`: `.var-input`, `.var-picker`, `.var-chip` (sáng và tối, dùng màu `--node-*`).
+   - `client/css/app.css`: `.var-input`, `.var-picker`, `.var-chip` (chỉ dùng token của [0008](0008-ui-design-system.md): màu nguồn qua `[data-type]` → `--c`/`--c-text`, chip lỗi `--color-danger*`; quy tắc ở `docs/ui-design-system.md` §6.9).
    - `client/js/forms.js`: gắn bộ chọn cho option có `vars`; dựng `kind: 'ref'` từ scope.
    - `client/js/inspector.js`: truyền ctx `{ nodeId, fieldIndex }` vào `renderOptions` (cả option của node); Import từ org
      tự chọn node cha theo nguồn dùng được.

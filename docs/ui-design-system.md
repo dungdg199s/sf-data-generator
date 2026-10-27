@@ -4,8 +4,6 @@ Nguồn sự thật duy nhất về hình thức của trình soạn: màu, ch�
 phần. Các custom property ở đầu `client/css/app.css` phải khớp 1:1 với tài liệu này. Thiết kế và lý do nằm ở
 [design/0008-ui-design-system.md](design/0008-ui-design-system.md).
 
-> Trạng thái: **Nháp** (theo 0008). Khi `app.css` đã chuyển sang token, bỏ dòng này.
-
 ## 1. Nguyên tắc
 
 1. **Một màu, một nghĩa.** Có ba bộ màu. Hai bộ bất kỳ không bao giờ dùng chung một màu:
@@ -183,8 +181,9 @@ Ký tự Unicode đang dùng (`⋯ ▸ ▾ ⠿ ↶ ↷ ⟳ ▶ ⤒ +`) giữ ngu
 ```
 
 JS chỉ đặt `data-type="<step.type>"` lên `.step`, `.start-card`, `.palette-item`, `.popup-item` (menu thêm bước), tiêu đề
-inspector và chip biến, rồi chèn `<span class="ico-tile" aria-hidden="true"><span class="ico"></span></span>`. Không còn
-bảng màu `NODE_COLORS` trong JS.
+inspector (`.node-head`) và chip biến, rồi chèn `<span class="ico-tile" aria-hidden="true"><span class="ico"></span></span>`
+bằng `icoTile()` (`client/js/dom.js`). Không còn bảng màu `NODE_COLORS` trong JS. Một luật chung `[data-type]` đứng trước
+các luật riêng để loại chưa biết rơi về màu trung tính và icon `info`.
 
 ### 6.2 Nút
 
@@ -197,7 +196,8 @@ bảng màu `NODE_COLORS` trong JS.
 | Nguy hiểm (xác nhận cuối) | `.danger.solid` (hoặc `dialog .actions .danger`) | "Insert" trong hộp xác nhận, "Xóa" khung có bước con | nền `danger`, chữ `danger-contrast`, 600 | nền `danger-hover` | như hover | như trên | như vô hiệu chung |
 | Link | `.link` | "📌 giữ seed" | chữ `accent-text`, 600, không nền | gạch chân | — | như trên | chữ `text-disabled` |
 
-Cao 32 px (`--control-h-md`), nhỏ 28 px. Padding ngang 12 px, nút icon tối thiểu 32×32 px. Hover **không** dùng viền accent
+Cao 32 px (`--control-h-md`), nhỏ 28 px. Padding ngang 12 px (nút ghost của thanh công cụ: 8 px, để thanh trên vừa một
+hàng ở 1440 px), nút icon tối thiểu 32×32 px. Hover **không** dùng viền accent
 (viền accent dành cho chọn/focus).
 
 ### 6.3 Ô nhập, select, textarea
@@ -294,7 +294,7 @@ Màn hình hẹp (≤ 900 px): palette là hàng nút ngang gồm ô icon + tên
 | Thành phần | Quy tắc |
 | --- | --- |
 | Tab | Không viền khung. Mặc định chữ `text-muted`. Đang mở: chữ `accent-text` 600 + gạch dưới 2 px `accent`. Hàng tab có đường `border` bên dưới |
-| Tab "⚠ Lỗi insert (n)" | Như tab, thêm icon ▲ màu `warning` |
+| Tab "Lỗi insert (n)" (`.tab-issues`) | Như tab, thêm icon ▲ màu `warning` (icon SVG thay ký tự ⚠) |
 | Bảng | Chữ 12 px, `tabular-nums`, viền `border`, đầu bảng nền `surface-sunken` 600, hàng hover nền `surface-sunken` |
 | Ô `ref` (`acc#1`, `→ acc#1`) | Mono, màu `--step-record-text` (là tham chiếu tới bản ghi, không phải link) |
 | `null` | `—` màu `text-muted` |
@@ -308,7 +308,7 @@ Màn hình hẹp (≤ 900 px): palette là hàng nút ngang gồm ô icon + tên
 | Hộp xác nhận Insert | Nút cuối "Insert" là **nguy hiểm đặc** (`.danger.solid`), "Hủy" là nút phụ |
 | Hộp cảnh báo (`.warn-box`) | Nền `warning-subtle`, viền 1 px `warning` + viền trái 4 px, icon ▲ màu `warning-text`, chữ `text`, bo 6 px |
 | Toast | Nền `inverse-bg`, chữ `inverse-text`, bo 6 px, `shadow-2`, `--z-toast`. Nút trong toast viền `currentColor` |
-| Danh sách lỗi (`.issues`) | Nền `surface-raised`, `shadow-2`, viền trái 4 px `danger` (hoặc `warning` nếu chỉ có cảnh báo). Mỗi dòng có icon ⊗ đỏ hoặc ▲ hổ phách (khác **hình**, không chỉ khác màu) |
+| Danh sách lỗi (`.issues`) | Nền `surface-raised`, `shadow-2`, viền trái 4 px `danger` (hoặc `warning` nếu chỉ có cảnh báo, class `.only-warnings`). Mỗi dòng có icon ⊗ đỏ hoặc ▲ hổ phách (khác **hình**, không chỉ khác màu) |
 
 ### 6.12 Trạng thái rỗng
 
@@ -332,7 +332,7 @@ Màn hình hẹp (≤ 900 px): palette là hàng nút ngang gồm ô icon + tên
 
 ### 8.1 Tương phản (WCAG 2.2 AA)
 
-Chữ ≥ 4.5:1; nét giao diện (viền ô nhập, vòng focus, sọc, icon, viền lỗi) ≥ 3:1. Tính bằng script trong design doc 0008.
+Chữ ≥ 4.5:1; nét giao diện (viền ô nhập, vòng focus, sọc, icon, viền lỗi) ≥ 3:1. Tính bằng script trong design doc 0008; `test/css-tokens.test.js` tính lại mọi cặp dưới đây (và 6 cặp mỗi loại bước) từ giá trị thật trong `app.css` (giải `var()` và `color-mix(in srgb)`), nên đổi token mà làm hỏng tương phản thì test đỏ.
 **77 cặp, 0 cặp không đạt ở cả hai theme.** Thấp nhất: sáng `focus-ring`/`bg` 3.40, `border-control`/`surface-sunken`
 3.48; tối `border-control`/`surface-raised` 3.39.
 
@@ -404,7 +404,11 @@ Với người mù màu đỏ–lục, vài cặp chỉ còn khác về độ s�
 ### 8.3 Khác
 
 - Vùng bấm ≥ 24×24 px (badge 22×24 kèm khoảng cách 4 px; "+" 22 px có vùng bấm 34 px). Nút trên thẻ 32×32 px.
-- Theme theo `prefers-color-scheme`. Có sẵn `:root[data-theme="light|dark"]` để ghi đè (chưa có nút chuyển, xem 0008).
+- Theme mặc định theo `prefers-color-scheme`. Ô chọn **Giao diện** cuối thanh trên (`#theme-select`: Theo hệ thống / Sáng / Tối)
+  đặt `data-theme="light|dark"` trên `<html>` (Theo hệ thống thì bỏ thuộc tính) và nhớ trong `localStorage['sfdg.theme']`
+  (bọc `try/catch`, chế độ riêng tư thì chỉ nhớ tới khi tải lại). `client/js/theme.js` là script thường trong `<head>` nên
+  theme áp dụng trước lần vẽ đầu, không nháy màu. Nhãn "Giao diện" chỉ cho trình đọc màn hình; màn hình hẹp đưa ô chọn lên
+  cùng hàng với thanh công cụ.
 - `prefers-reduced-motion: reduce`: thời lượng 0 ms, không animation chớp.
 - Icon `aria-hidden`; mọi badge có `title`/`aria-label` bằng chữ ("2 lỗi — bấm để xem").
 

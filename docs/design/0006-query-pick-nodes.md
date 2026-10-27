@@ -108,7 +108,7 @@ Mỗi vòng lặp chọn một Account. Contact và Opportunity của vòng đó
 - Hai mục mới nằm ngay sau **Record** (theo thứ tự của `NODE_TYPES`):
   - **Query (đọc org)**, dòng nhỏ: "Đọc bản ghi có sẵn trong org bằng SOQL, chỉ đọc"
   - **Chọn bản ghi**, dòng nhỏ: "Chọn một bản ghi từ pool làm bản ghi hiện tại"
-- Màu: `--node-query: #0f766e` (xanh mòng két), `--node-pick: #b4235a` (hồng sẫm), có biến thể cho theme tối.
+- Màu và icon: dùng token có sẵn của [0008](0008-ui-design-system.md): `--step-query` (cyan `#057da0` / tối `#54c1e3`, icon trụ dữ liệu + kính lúp `--ico-query`) và `--step-pick` (olive `#656902` / tối `#b4d35c`, icon hồng tâm `--ico-pick`). Không dùng `#0f766e` (gần màu thành công) hay `#b4235a` (gần màu lỗi).
 - Bấm **Query**: config lấy mặc định từ option. Alias gợi ý lấy `alias` của preset nếu có, nếu không thì dùng
   `suggestAlias(sobject)` + `s` (`accs`, `cons`). Trùng thì thêm số (`accs2`).
 - Bấm **Chọn bản ghi**:
@@ -813,7 +813,7 @@ Theo bảng đồng bộ hợp đồng trong `.claude/agents/implementer.md` và
    Test `test/sf.test.js`: `insertRecords sends existing Ids as-is in the first wave`.
 8. **Phần dữ liệu ở client**:
    - `client/js/api.js`: `run` nhận `org`, `refreshQueries`, `expectQueries`; thêm `sobjects(org, { for })` và `fields(org, name)`.
-   - `client/js/store.js`: `NODE_COLORS`; `poolAliases()` thay cho `recordAliases()`; `suggestPoolAlias`/`suggestPickAlias`;
+   - `client/js/store.js`: `poolAliases()` thay cho `recordAliases()`; `suggestPoolAlias`/`suggestPickAlias`;
      `state.derived`, `state.lastRunOrg`.
    - `client/js/main.js`: gửi `org`/`expectQueries`; Ctrl+Shift+Enter; các dòng mới trong hộp xác nhận; xử lý 409 (chọn node
      từ `issues`).
@@ -825,7 +825,7 @@ Theo bảng đồng bộ hợp đồng trong `.claude/agents/implementer.md` và
      - `renameAlias`: cập nhật thêm `from` và `filterValue`.
      - Import: lựa chọn "＋ … có sẵn trong org" và chèn Query sau Bắt đầu.
    - `client/js/results.js`: tab `↓ alias`, chip tóm tắt, "⟳ Đọc lại".
-   - `client/css/app.css`: `--node-query`, `--node-pick` (sáng và tối).
+   - `client/css/app.css`: không cần màu mới; token `--step-query*`, `--step-pick*`, icon `--ico-query`/`--ico-pick` và luật `[data-type="query"|"pick"]` đã có từ 0008 (`test/css-tokens.test.js` kiểm cả hai).
 10. **Mẫu**: trong `client/js/samples.js` thêm mẫu "Contact cho Account có sẵn" (Query → Lặp → Chọn bản ghi → Contact). Khi
     chưa có org, mẫu này xem trước bằng bản ghi mẫu.
 11. **Smoke test** (skill `smoke-test`), làm khi chưa có org:

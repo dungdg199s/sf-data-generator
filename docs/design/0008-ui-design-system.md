@@ -1,6 +1,6 @@
 # 0008 — Hệ thống thiết kế UI: bảng màu, trạng thái và kiểu dáng thống nhất
 
-- **Trạng thái:** Đã duyệt (2026-10-27)
+- **Trạng thái:** Đã làm (2026-10-27)
 - **Ngày:** 2026-10-27
 - **Liên quan:** [0003](0003-process-mode.md) (chế độ Quy trình), [0005](0005-variable-picker.md) (chip biến),
   [0006](0006-query-pick-nodes.md) (node Query và Chọn bản ghi), tài liệu tham chiếu
@@ -76,7 +76,7 @@ Script chụp là `shots.cjs` cùng thư mục.
   - Token hai lớp bằng CSS custom property, không thêm dependency, không web font. Có test chặn màu viết thẳng.
 - Ngoài phạm vi:
   - Đổi bố cục (vị trí panel, danh sách lỗi đè thẻ, topbar xuống 4 dòng ở 390 px): ghi nhận, để design doc khác.
-  - Nút chuyển theme trong UI (CSS có sẵn chỗ cho `data-theme`, xem Câu hỏi mở).
+  - ~~Nút chuyển theme trong UI~~: đã đưa vào phạm vi theo "Đã chốt" mục 2.
   - Thay các ký tự `⋯ ▸ ▾ ⠿ ↶ ↷ ⟳` bằng SVG.
   - Thay đổi workflow JSON hoặc API.
 
@@ -271,4 +271,50 @@ Thứ tự: làm 0008 trước 0005, để chip biến của 0005 dùng luôn to
 
 ## Đã làm
 
-(Chưa làm.)
+Làm hết 9 bước của kế hoạch (2026-10-27), không đổi workflow JSON, API hay dependency, không web font.
+
+- **Token và thành phần (bước 1–6).** `client/css/app.css` mở đầu bằng khối token (primitive, ngữ nghĩa sáng, hai khối tối
+  giống hệt nhau cho `prefers-color-scheme` và `:root[data-theme="dark"]`, thang đo, icon mask), kết thúc ở
+  `/* ===== end tokens ===== */`. Phần dưới chỉ dùng token ngữ nghĩa, theo §6 của `docs/ui-design-system.md`: trạng thái thẻ
+  (chọn, focus hở 3 px, lỗi ⊗, cảnh báo ▲ nền vàng chữ tối, tắt bằng nét đứt + tag `⏻ Đã tắt`, số liệu cũ nét đứt nghiêng,
+  kéo/thả), nút theo mức (thanh công cụ ghost, hover nền trung tính, vô hiệu không opacity, `.danger.solid` cho "Insert"
+  trong hộp xác nhận và "Xóa tất cả" khung có bước con), nhãn "✓ Đúng / ✗ Sai" màu Rẽ nhánh, ô `ref` màu chữ Record, tab gạch
+  dưới, danh sách lỗi có icon. Cỡ chữ nhỏ nhất 12 px.
+- **`data-type` + ô icon (bước 2).** `.step`, `.start-card`, `.palette-item`, `.popup-item` (menu "+") và `.node-head` của
+  inspector có `data-type` và `icoTile()` (helper mới trong `client/js/dom.js`). Bỏ `NODE_COLORS`, inline `--c` và `.dot`.
+- **Nút chuyển giao diện (Đã chốt 2).** Ô chọn Theo hệ thống / Sáng / Tối cuối thanh trên; `client/js/theme.js` (script
+  thường trong `<head>`, áp dụng trước lần vẽ đầu) đặt hoặc bỏ `data-theme` trên `<html>` và nhớ trong
+  `localStorage['sfdg.theme']` (có `try/catch`).
+- **Test (bước 7).** `test/css-tokens.test.js` (9 test): không màu viết thẳng sau dòng `end tokens`; trong khối token chỉ
+  primitive, bóng, backdrop và icon có giá trị thô; `client/js/*.js` không đặt màu; sáng/tối cùng tập token; mỗi loại
+  (`NODE_TYPES` + `start` + `query`/`pick` dự kiến) có 4 token ở cả hai theme, `--ico-<type>` và luật `[data-type]`; cỡ chữ,
+  font, độ đậm, bo góc, z-index dùng token; bảng primitive trong `ui-design-system.md` §2 khớp 1:1 với CSS; và (mục e) tính
+  lại tương phản 74 cặp mỗi theme (38 cặp §8.1 + 6 cặp × 6 loại) từ giá trị thật trong CSS.
+- **Smoke (bước 8).** `smoke.cjs` kiểm thêm `data-type`/ô icon trên thẻ, palette, menu "+"; không còn `NODE_COLORS`; nút
+  chuyển giao diện (Tối, giữ sau tải lại, Theo hệ thống); chạy theme tối và hộp xác nhận Insert cho org production giả lập
+  (nút đỏ đặc, hộp cảnh báo; request có `target` bị chặn). Ảnh mới `smoke-1440-dark.png`, `smoke-1440-dark-insert.png`,
+  `smoke-390-dark.png`. `SKILL.md` mô tả đủ 12 luồng, gồm các luồng thêm ở đợt sửa review 0003.
+- **Tài liệu (bước 9).** Bỏ dòng "Nháp" ở `ui-design-system.md` và bổ sung (nút chuyển giao diện §8.3, `icoTile()` §6.1,
+  `.tab-issues`, `.only-warnings`, padding thanh công cụ). Sửa dòng màu ở 0003 (sọc và nhãn Đúng/Sai), 0005 (nhóm và
+  `.var-chip`), 0006 (Query/Chọn bản ghi dùng `--step-query`/`--step-pick` có sẵn). Skill `add-node-type` có bước token +
+  icon + `[data-type]`.
+
+Khác với kế hoạch:
+
+- Bước 1–6 làm trong một lượt (một commit) nên không có giai đoạn alias tên cũ (`--bg`, `--node-*`…).
+- Bỏ 8 primitive không dùng có trong `tokens.css` của phiên thiết kế nhưng không có trong bảng §2 (`blue-800`, `red-800`,
+  `amber-100/600/700`, `green-100/500/800`), để CSS khớp 1:1 với tài liệu.
+- Để thanh trên vẫn một hàng ở 1440 px khi có thêm ô chọn giao diện: ô tên workflow 220 → 180 px, `#org-select` tối đa
+  220 px (nhãn "alias — username" dài), nút ghost thanh công cụ padding 8 px. Ở ≤ 900 px ô chọn giao diện lên cùng hàng
+  với Mới/Mở…/Lưu nên thanh trên vẫn 4 hàng như trước.
+- Tab "⚠ Lỗi insert" bỏ ký tự ⚠, dùng icon ▲ SVG (`.tab-issues`). Thẻ "Bước lỗi" (mục không phải bước trong file) dùng nền
+  `danger-subtle` + viền nét đứt `danger`. Đang kéo: cả thẻ và thân khung mờ 0.5 + nét đứt.
+
+Kiểm chứng: `npm test` 104/104 qua; `node .claude/skills/smoke-test/smoke.cjs` SMOKE OK (~3.5–4.5 s). Tương phản tính từ
+CSS cuối: 148 cặp, 0 cặp không đạt; 38 cặp của bảng §8.1 khớp từng số (2 chữ số thập phân). Thấp nhất: sáng
+`focus-ring`/`bg` 3.40, tối `border-control`/`surface-raised` 3.39. Ảnh trước/sau của app thật (sáng/tối × 1440/390) nằm ở
+scratchpad, không commit: `/tmp/claude-0/-home-user-sf-data-generator/fa9ad77c-1d8e-553a-9b3f-45d89b2dd244/scratchpad/ui-impl/{before,after}/`.
+
+Còn lại (ngoài phạm vi 0008): danh sách lỗi nổi đè thẻ cuối (Đã chốt 6, cần design doc bố cục); thanh trên 4 hàng và thanh
+Kết quả xuống dòng ở 390 px; các ký tự `⋯ ▸ ▾ ⠿ ↶ ↷ ⟳` chưa thành SVG; CSS `.var-chip` sẽ làm cùng 0005; Query/Chọn bản ghi
+(0006) chỉ cần đặt `data-type`.

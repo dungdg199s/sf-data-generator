@@ -90,6 +90,9 @@ Migration v1 cũng giới hạn số bước nhân bản (`2 × số node + 50`)
 | `client/js/forms.js` | Dựng form từ option schema (`showIf`, các `kind`) |
 | `client/js/results.js` | Bảng kết quả theo sObject, lỗi insert, tải JSON/CSV |
 | `client/js/main.js` | Khởi động, toolbar, phím tắt, validate trực tiếp, chạy/insert |
+| `client/js/theme.js` | Nút chuyển giao diện Sáng / Tối / Theo hệ thống: `data-theme` trên `<html>`, nhớ trong `sfdg.theme`; script thường trong `<head>` để áp dụng trước lần vẽ đầu |
+| `client/js/dom.js` | Helper DOM `h()`, toast, tải file, `icoTile()` (ô icon loại bước) |
+| `client/css/app.css` | Khối token (primitive, sáng/tối, thang đo, icon) rồi tới thành phần; màu và icon loại bước chỉ ở luật `[data-type]`. Quy tắc: `docs/ui-design-system.md` |
 
 Sự kiện của store có `source`: inspector bỏ qua thay đổi do chính nó tạo ra (`source: 'inspector'`)
 để không render lại và mất focus khi người dùng đang gõ. Thay đổi cấu trúc dùng `'inspector-structure'`.
