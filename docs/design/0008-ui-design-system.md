@@ -315,6 +315,36 @@ CSS cuối: 148 cặp, 0 cặp không đạt; 38 cặp của bảng §8.1 khớp
 `focus-ring`/`bg` 3.40, tối `border-control`/`surface-raised` 3.39. Ảnh trước/sau của app thật (sáng/tối × 1440/390) nằm ở
 scratchpad, không commit: `/tmp/claude-0/-home-user-sf-data-generator/fa9ad77c-1d8e-553a-9b3f-45d89b2dd244/scratchpad/ui-impl/{before,after}/`.
 
+### Sửa sau review (2026-10-27)
+
+1. **Vòng focus trên toast (theme tối 2.09:1).** Token mới `--color-focus-ring-inverse` (sáng blue-400, tối blue-600) cho
+   `.toast-action:focus-visible`: 6.32 / 4.38. Cặp `focus-ring-inverse`/`inverse-bg` vào `PAIRS` và bảng §8.1 (39 cặp).
+2. **"Sáng" trên máy để tối.** Smoke (ngữ cảnh tối): chọn Sáng → nền sáng, tải lại vẫn sáng, Theo hệ thống → nền tối và
+   xoá khoá. Test: mọi khối `:root:not([data-theme="light"])` nằm ngay trong `@media (prefers-color-scheme: dark)`, khối
+   đầu chứa token màu, không có khối `prefers-color-scheme: dark` nào thiếu điều kiện đó.
+3. **Thứ tự luật `[data-type]`.** Test: luật dự phòng đứng trước mọi luật có loại. Smoke: sọc trái Record ≠ Lặp, cả hai ≠
+   màu dự phòng (đo trên một phần tử thử `data-type` lạ).
+4. **Nhấn badge / "Hoàn tác" bằng bàn phím.** `:active` cùng luật với `:hover` cho `.badge`, `.badge.warn`,
+   `.toast-action`, nên `button:active` không phủ nền xám lên chữ trắng. Có test.
+5. **Đầu bảng dính hở 5 px.** `--tabs-h` (4 + 32 + 1 px) trên `.results-body`; hàng tab cao đúng `--tabs-h`, `th` dính ở
+   `top: var(--tabs-h)`. Smoke đo khoảng hở sau khi cuộn (phải 0).
+6. **Chip số liệu trên bước tắt** (nền `surface-hover` trùng `bg-disabled`): trong `.step.disabled` chip có nền `surface`
+   và viền `border-strong` (chip cũ nét đứt giữ nguyên).
+7. **Khoảng cách lệch thang.** `gap: 3px` → `--space-1`, tay nắm `6px 0` → `--space-1 0`, `margin-top: 2px` và
+   `outline-offset: 2px` của ô con → `--space-0-5`, đáy canvas 160 px → `--canvas-tail`. Focus thẻ bước hở
+   `--focus-offset-card` = `ring-w + focus-offset` = 4 px (ngoài vòng chọn 2 px, chừa 2 px). Test kiểm mọi `padding*`,
+   `margin*`, `gap`, `outline-offset`; ngoại lệ duy nhất `margin: -1px` của `.sr-only` (ghi ở §4 tài liệu).
+8. **Quét màu viết thẳng** thêm `shared/*.js`, `client/index.html` (không `<style>`, `style=""`, hex, hàm màu, meta
+   theme-color) và tên màu trong style object / `.style.x =` / `setProperty`; có test tự kiểm bộ quét (bắt đúng, không bắt
+   nhầm).
+9. **Đồng bộ giữa các tab.** `theme.js` nghe sự kiện `storage` (khoá `sfdg.theme` hoặc `localStorage.clear()`): áp dụng
+   theme và cập nhật ô chọn. Smoke mở tab thứ hai và kiểm cả Tối lẫn Theo hệ thống.
+10. **Thêm an toàn:** smoke tối trả 404 cho `/api/orgs/**` (describe) của org giả lập.
+
+Kiểm chứng sau sửa: `npm test` 110/110 qua (`css-tokens.test.js` 15 test); smoke SMOKE OK (~4–4.5 s). Đã thử làm hỏng
+lại từng chỗ (gap 3 px, focus-ring-inverse blue-400 ở tối, bỏ `:not([data-theme="light"])`, chuyển luật dự phòng xuống
+dưới, `top: 42px`, bỏ listener `storage`): test hoặc smoke tương ứng đều đỏ.
+
 Còn lại (ngoài phạm vi 0008): danh sách lỗi nổi đè thẻ cuối (Đã chốt 6, cần design doc bố cục); thanh trên 4 hàng và thanh
 Kết quả xuống dòng ở 390 px; các ký tự `⋯ ▸ ▾ ⠿ ↶ ↷ ⟳` chưa thành SVG; CSS `.var-chip` sẽ làm cùng 0005; Query/Chọn bản ghi
 (0006) chỉ cần đặt `data-type`.

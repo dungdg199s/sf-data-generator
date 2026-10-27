@@ -9,7 +9,7 @@ phần. Các custom property ở đầu `client/css/app.css` phải khớp 1:1 v
 1. **Một màu, một nghĩa.** Có ba bộ màu. Hai bộ bất kỳ không bao giờ dùng chung một màu:
    | Bộ | Nghĩa | Token | Dùng ở đâu |
    | --- | --- | --- | --- |
-   | Tương tác | Bấm được, đang chọn, đang focus | `--color-accent*`, `--color-focus-ring` | Nút chính, link, vòng chọn, vòng focus, tab đang mở, điểm thả |
+   | Tương tác | Bấm được, đang chọn, đang focus | `--color-accent*`, `--color-focus-ring*` | Nút chính, link, vòng chọn, vòng focus, tab đang mở, điểm thả |
    | Trạng thái | Lỗi, cảnh báo, thành công | `--color-danger*`, `--color-warning*`, `--color-success*` | Badge, viền lỗi/cảnh báo, chữ thông báo, hộp cảnh báo. **Luôn có icon kèm theo** |
    | Loại | Loại bước (và nguồn biến) | `--step-<type>*` | Sọc trái 4 px, ô icon, nền thân khung, chip biến. **Không dùng cho trạng thái** |
    Mọi thứ còn lại (nền, panel, viền, chữ, chip số liệu, chip field) dùng màu **trung tính** (`gray`).
@@ -76,6 +76,7 @@ Trong CSS, tên là `--color-<tên>` (trừ nhóm loại bước là `--step-*`)
 | `--color-accent-text` | blue-700 `#1554b8` | blue-200 | Link, nút link, tab đang mở, "+ Thêm bước đầu tiên" |
 | `--color-accent-contrast` | gray-0 | gray-950 | Chữ trên nền accent (tối: chữ tối trên xanh sáng) |
 | `--color-focus-ring` | blue-500 `#3a81f6` | blue-400 | Vòng focus bàn phím |
+| `--color-focus-ring-inverse` | blue-400 | blue-600 | Vòng focus trên nền `inverse-bg` (nút "Hoàn tác" trong toast). Vòng thường chỉ đạt 2.09:1 trên toast tối |
 
 ### 3.3 Trạng thái
 
@@ -133,7 +134,8 @@ loại của bước có alias đó (Record, Query, Chọn bản ghi), biến l�
 | | `--text-xl` | 1.286rem = 18 px | Tiêu đề hộp thoại |
 | Độ đậm | `--weight-regular/medium/semibold` | 400 / 500 / 600 | Chữ / nút, nhãn form / tên loại, tiêu đề, badge |
 | Dòng | `--leading-tight/normal` | 1.25 / 1.45 | Tiêu đề / chữ thường |
-| Khoảng cách | `--space-0-5/1/2/3/4/6/8` | 2 / 4 / 8 / 12 / 16 / 24 / 32 px | padding, gap, margin |
+| Khoảng cách | `--space-0-5/1/2/3/4/6/8` | 2 / 4 / 8 / 12 / 16 / 24 / 32 px | padding, gap, margin. `test/css-tokens.test.js` bắt mọi `padding*`, `margin*`, `gap`, `outline-offset` dùng token này (hoặc `0`, `auto`, `calc(-1 * var(--space-n))`, `--focus-offset*`, `--canvas-tail`). Ngoại lệ duy nhất: `margin: -1px` của `.sr-only` |
+| | `--canvas-tail` | 160 px | Khoảng trống dưới thẻ cuối trên canvas, để cuộn thẻ cuối lên trên danh sách lỗi |
 | Bo góc | `--radius-sm` | 4 px | Alias trên thẻ, chip biến |
 | | `--radius-md` | 6 px | Nút, ô nhập, field card, ô icon, cột nhánh |
 | | `--radius-lg` | 10 px | Thẻ bước, khung, popup, danh sách lỗi |
@@ -142,6 +144,7 @@ loại của bước có alias đó (Record, Query, Chọn bản ghi), biến l�
 | Kích thước | `--control-h-sm` / `--control-h-md` | 28 / 32 px | Nút nhỏ (view tools, toast) / nút và ô nhập thường |
 | | `--hit-min` | 24 px | Vùng bấm nhỏ nhất (chip, badge, link). Màn hình cảm ứng: 44 px |
 | | `--stripe-w`, `--ring-w`, `--focus-offset` | 4 / 2 / 2 px | Sọc loại, vòng chọn/focus, khoảng hở focus |
+| | `--focus-offset-card` | `ring-w + focus-offset` = 4 px | Khoảng hở focus của thẻ bước: nằm ngoài vòng chọn 2 px, chừa 2 px trống nên focus và chọn không dính vào nhau |
 | Đổ bóng | `--shadow-1` | `0 1px 2px rgb(16 24 40 / .08), 0 1px 3px rgb(16 24 40 / .06)` (tối: `0 1px 2px rgb(0 0 0 / .5)`) | Thẻ bước |
 | | `--shadow-2` | `0 4px 12px rgb(16 24 40 / .14)` (tối `.55`) | Popup, danh sách lỗi, toast |
 | | `--shadow-3` | `0 12px 32px rgb(16 24 40 / .22)` (tối `.65`) | Hộp thoại, bottom sheet, bóng khi kéo |
@@ -222,7 +225,7 @@ bo 10 px, sọc trái 4 px `--c`, nền `surface-raised`, viền 1 px `border`, 
 | Mặc định | viền `border` | sọc + ô icon màu loại | — |
 | Hover | viền `border-strong` | hiện tay nắm ⠿ | — |
 | Đang chọn | vòng ngoài 2 px `accent` (box-shadow) | nền `accent-subtle` | tay nắm hiện |
-| Focus bàn phím | thêm outline 2 px `focus-ring`, **hở 3 px** (khác vòng chọn sát thẻ) | — | — |
+| Focus bàn phím | thêm outline 2 px `focus-ring`, **hở 4 px** (`--focus-offset-card`, ngoài vòng chọn sát thẻ) | — | — |
 | Lỗi | viền 2 px `danger` (viền + bóng trong) | badge `⊗ n` nền `danger` | sọc loại giữ nguyên |
 | Cảnh báo (không có lỗi) | viền 1 px `warning` | badge `▲ n` nền `warning-fill`, chữ tối | — |
 | Đang chọn + lỗi | vòng ngoài `accent`, viền trong `danger` | nền `accent-subtle` | badge |
@@ -230,11 +233,13 @@ bo 10 px, sọc trái 4 px `--c`, nền `surface-raised`, viền 1 px `border`, 
 | Nguồn đang kéo | opacity 0.5 | viền nét đứt, không bóng | — |
 | Chớp khi nhảy tới | nền `accent-subtle-strong` → `surface-raised` trong 0.6 s | — | Giảm chuyển động: giữ nền, không animation |
 
-Badge là nút: cao 22 px, rộng tối thiểu 24 px, icon 13 px + số, 12 px, 600. Tag "Đã tắt": viền `border-strong`, chữ
+Badge là nút: cao 22 px, rộng tối thiểu 24 px, icon 13 px + số, 12 px, 600. Hover và nhấn (`:active`, kể cả bằng bàn phím) cùng
+nền đậm hơn (`danger-hover` / `warning`), không về nền xám của nút thường. Tag "Đã tắt": viền `border-strong`, chữ
 `text-muted`, icon `off`.
 
 **Chip số liệu** (`.stat`): nền `surface-hover`, chữ `text`, 12 px, số dạng `tabular-nums`. Cũ (`.stale`): nền trong suốt,
-viền nét đứt `border-strong`, chữ `text-muted` nghiêng. Không dùng màu accent, vì chip này không bấm được và không phải
+viền nét đứt `border-strong`, chữ `text-muted` nghiêng. Trên thẻ "Đã tắt" (nền `bg-disabled` trùng `surface-hover`) chip có
+nền `surface` và viền `border-strong` để không chìm. Không dùng màu accent, vì chip này không bấm được và không phải
 trạng thái chọn.
 
 ### 6.5 Khung (Lặp, Rẽ nhánh) và ô con
@@ -295,7 +300,7 @@ Màn hình hẹp (≤ 900 px): palette là hàng nút ngang gồm ô icon + tên
 | --- | --- |
 | Tab | Không viền khung. Mặc định chữ `text-muted`. Đang mở: chữ `accent-text` 600 + gạch dưới 2 px `accent`. Hàng tab có đường `border` bên dưới |
 | Tab "Lỗi insert (n)" (`.tab-issues`) | Như tab, thêm icon ▲ màu `warning` (icon SVG thay ký tự ⚠) |
-| Bảng | Chữ 12 px, `tabular-nums`, viền `border`, đầu bảng nền `surface-sunken` 600, hàng hover nền `surface-sunken` |
+| Bảng | Chữ 12 px, `tabular-nums`, viền `border`, đầu bảng nền `surface-sunken` 600, hàng hover nền `surface-sunken`. Hàng tab và đầu bảng dính khi cuộn; đầu bảng dính ngay dưới hàng tab (`top: var(--tabs-h)`, = 4 + 32 + 1 px, không hở) |
 | Ô `ref` (`acc#1`, `→ acc#1`) | Mono, màu `--step-record-text` (là tham chiếu tới bản ghi, không phải link) |
 | `null` | `—` màu `text-muted` |
 | Kết quả insert | `insert 17` màu `success-text`, `lỗi 2` màu `danger-text` |
@@ -307,7 +312,7 @@ Màn hình hẹp (≤ 900 px): palette là hàng nút ngang gồm ô icon + tên
 | Hộp thoại | Nền `surface-raised`, viền `border`, bo 14 px, padding 24 px, `shadow-3`, backdrop `--color-backdrop`. Tiêu đề 18 px 600. Nút: phụ bên trái, chính/nguy hiểm bên phải |
 | Hộp xác nhận Insert | Nút cuối "Insert" là **nguy hiểm đặc** (`.danger.solid`), "Hủy" là nút phụ |
 | Hộp cảnh báo (`.warn-box`) | Nền `warning-subtle`, viền 1 px `warning` + viền trái 4 px, icon ▲ màu `warning-text`, chữ `text`, bo 6 px |
-| Toast | Nền `inverse-bg`, chữ `inverse-text`, bo 6 px, `shadow-2`, `--z-toast`. Nút trong toast viền `currentColor` |
+| Toast | Nền `inverse-bg`, chữ `inverse-text`, bo 6 px, `shadow-2`, `--z-toast`. Nút trong toast viền `currentColor`, nhấn không đổi nền, vòng focus `focus-ring-inverse` |
 | Danh sách lỗi (`.issues`) | Nền `surface-raised`, `shadow-2`, viền trái 4 px `danger` (hoặc `warning` nếu chỉ có cảnh báo, class `.only-warnings`). Mỗi dòng có icon ⊗ đỏ hoặc ▲ hổ phách (khác **hình**, không chỉ khác màu) |
 
 ### 6.12 Trạng thái rỗng
@@ -333,7 +338,7 @@ Màn hình hẹp (≤ 900 px): palette là hàng nút ngang gồm ô icon + tên
 ### 8.1 Tương phản (WCAG 2.2 AA)
 
 Chữ ≥ 4.5:1; nét giao diện (viền ô nhập, vòng focus, sọc, icon, viền lỗi) ≥ 3:1. Tính bằng script trong design doc 0008; `test/css-tokens.test.js` tính lại mọi cặp dưới đây (và 6 cặp mỗi loại bước) từ giá trị thật trong `app.css` (giải `var()` và `color-mix(in srgb)`), nên đổi token mà làm hỏng tương phản thì test đỏ.
-**77 cặp, 0 cặp không đạt ở cả hai theme.** Thấp nhất: sáng `focus-ring`/`bg` 3.40, `border-control`/`surface-sunken`
+**75 cặp mỗi theme (39 cặp trong bảng + 6 cặp × 6 loại bước), 0 cặp không đạt ở cả hai theme.** Thấp nhất: sáng `focus-ring`/`bg` 3.40, `border-control`/`surface-sunken`
 3.48; tối `border-control`/`surface-raised` 3.39.
 
 | Chữ/nét | Nền | Dùng cho | Ngưỡng | Sáng | Tối |
@@ -358,6 +363,7 @@ Chữ ≥ 4.5:1; nét giao diện (viền ô nhập, vòng focus, sọc, icon, v
 | `--color-focus-ring` | `--color-surface` | Vòng focus | 3 | 3.72 | 6.99 |
 | `--color-focus-ring` | `--color-bg` | Vòng focus trên canvas | 3 | 3.40 | 7.51 |
 | `--color-focus-ring` | `--color-accent-subtle` | Vòng focus quanh thẻ đang chọn | 3 | 3.42 | 5.03 |
+| `--color-focus-ring-inverse` | `--color-inverse-bg` | Vòng focus nút trong toast | 3 | 6.32 | 4.38 |
 | `--color-danger-contrast` | `--color-danger` | Badge lỗi, nút Insert | 4.5 | 5.57 | 7.02 |
 | `--color-danger-text` | `--color-surface` | Chữ lỗi | 4.5 | 7.43 | 11.94 |
 | `--color-danger-text` | `--color-danger-subtle` | Chữ trên chip lỗi | 4.5 | 6.80 | 8.39 |
@@ -407,7 +413,8 @@ Với người mù màu đỏ–lục, vài cặp chỉ còn khác về độ s�
 - Theme mặc định theo `prefers-color-scheme`. Ô chọn **Giao diện** cuối thanh trên (`#theme-select`: Theo hệ thống / Sáng / Tối)
   đặt `data-theme="light|dark"` trên `<html>` (Theo hệ thống thì bỏ thuộc tính) và nhớ trong `localStorage['sfdg.theme']`
   (bọc `try/catch`, chế độ riêng tư thì chỉ nhớ tới khi tải lại). `client/js/theme.js` là script thường trong `<head>` nên
-  theme áp dụng trước lần vẽ đầu, không nháy màu. Nhãn "Giao diện" chỉ cho trình đọc màn hình; màn hình hẹp đưa ô chọn lên
+  theme áp dụng trước lần vẽ đầu, không nháy màu. Đổi theme ở một tab thì các tab khác đang mở theo luôn (sự kiện `storage`, ô chọn cũng
+  cập nhật). Nhãn "Giao diện" chỉ cho trình đọc màn hình; màn hình hẹp đưa ô chọn lên
   cùng hàng với thanh công cụ.
 - `prefers-reduced-motion: reduce`: thời lượng 0 ms, không animation chớp.
 - Icon `aria-hidden`; mọi badge có `title`/`aria-label` bằng chữ ("2 lỗi — bấm để xem").
