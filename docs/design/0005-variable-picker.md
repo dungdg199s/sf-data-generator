@@ -150,8 +150,8 @@ trạng thái: `task` chỉ được tạo ở một nhánh trước `con`, và 
 
 - **Nhóm** theo node. Đầu nhóm có chấm màu `NODE_COLORS[nodeType]`, tên biến (`acc`, monospace), nhãn (`label` server
   trả về: sObject, hoặc "Vòng lặp 1–4 lần"), và badge trạng thái nếu có:
-  - `bản ghi cuối` (status `last`). Tooltip: `Tạo trong vòng lặp đã kết thúc: giá trị là bản ghi của lần lặp cuối. Lookup "Ngẫu nhiên" sẽ chọn trong tất cả.`
-  - `có thể trống` (status `maybe`). Tooltip là `note` do server trả về, ví dụ `vòng lặp "loopAcc" có thể chạy 0 lần`.
+  - `bản ghi cuối` (`certainty: last`). Tooltip: `Tạo trong vòng lặp đã kết thúc: giá trị là bản ghi của lần lặp cuối. Lookup "Ngẫu nhiên" sẽ chọn trong tất cả.`
+  - `có thể trống` (`certainty: maybe`). Tooltip là `note` do `analyzeScope` trả về, ví dụ `vòng lặp "loopAcc" có thể chạy 0 lần`.
 - **Thứ tự:**
   1. `this`: field **phía trên** ô đang sửa, và `$n`.
   2. Các nguồn dùng được, theo thứ tự server trả về (gần nhất trước, nên vòng lặp trong cùng và node Record ngay trước
@@ -280,8 +280,10 @@ tiền tố, và có `field: "left"`. Mọi issue tham chiếu đều có thêm 
 | `unknownMember` (biến lặp) | lỗi | `Field "Title": biến lặp "loop" chỉ có index, index0, count; không có "idx".` |
 | `wholeRecord` | lỗi | `Field "Title": {{acc}} là cả bản ghi; hãy chọn một field, ví dụ {{acc.Name}}.` |
 | `noTraversal` | lỗi | `Field "Title": không đi tiếp qua field Lookup "AccountId" được. Dùng thẳng alias của node cha, ví dụ {{acc.Name}}.` (chỉ khi member là `reference` không có member con; `{{accs.Owner.Name}}` của Query vẫn hợp lệ vì `Owner` có member con) |
-| `notBefore` | lỗi | `Field "Title": node "opp" chưa chạy tới lúc này (nó nằm sau node này hoặc ở nhánh khác). Nối lại để "opp" đứng trước, hoặc chọn biến khác.` |
-| `notBefore` (Lookup `ref`) | lỗi | `Field "AccountId": node "acc" phải nằm phía trước node này trong workflow (hiện nó chạy sau hoặc ở nhánh khác).` (giữ cụm "phía trước" như câu hiện tại) |
+| `after` | lỗi | `Field "Title": node "opp" chạy sau node này nên chưa có giá trị khi chạy tới đây. Nối lại để "opp" đứng trước, hoặc chọn biến khác.` |
+| `otherBranch` | lỗi | `Field "Title": node "task" nằm ở nhánh còn lại của Rẽ nhánh phía trên nên không chạy cùng lượt với node này. Đưa "task" ra trước Rẽ nhánh, hoặc chọn biến khác.` |
+| `after` (Lookup `ref`) | lỗi | `Field "AccountId": node "acc" phải nằm phía trước node này trong workflow.` (giữ đúng câu hiện tại cho v1; khi 0003 vào thì dùng câu của 0003 "bước "acc" nằm sau bước này nên chưa có bản ghi khi chạy tới đây…", và câu `otherBranch` của 0003 cho Lookup) |
+| `disabled` (v2) | lỗi | Câu của 0003: `Field "Title": bước "acc" đang tắt. Bật lại bước đó (Ctrl+/) hoặc chọn biến khác.` |
 | `outsideLoop` | lỗi | `Field "Title": {{loop.index}} chỉ dùng được bên trong nhánh "lặp" của vòng lặp "loop". Kéo node này vào nhánh "lặp", hoặc bỏ biến này.` |
 | `thisBelow` | lỗi | `Field "Title": {{this.Email}} chỉ thấy field phía trên. Kéo field "Email" lên trên "Title" (nút ↑).` |
 | `thisUnknown` | lỗi | `Field "Title": node này không có field "LastNam". Ý bạn là "LastName"?` |
@@ -306,8 +308,10 @@ thường, hoặc tên cách tối đa 2 ký tự (Levenshtein). Status `last` k
   `picker` của option cho các trợ giúp lấy dữ liệu từ org. `forms.js` gắn bộ chọn biến vào mọi option có `vars`. Thẻ step của
   chế độ process chỉ cần dựng form bằng `renderOptions` (như inspector) với ctx `{ nodeId, fieldIndex }` là có bộ chọn,
   không phải viết thêm gì.
-- Dữ liệu bộ chọn là `scope.at[nodeId]` do server tính, không phụ thuộc cách hiển thị. Chuyển qua lại giữa canvas và
-  process thì danh sách biến vẫn y hệt, miễn là `node.id` không đổi giữa hai chế độ.
+- Dữ liệu bộ chọn là `scope.at[id]` do `analyzeScope` tính, không phụ thuộc cách hiển thị. Chuyển qua lại giữa Sơ đồ và
+  Quy trình thì danh sách biến vẫn y hệt, vì id bước giữ nguyên (0003 giữ `id` khi chuyển v1 sang v2).
+- Khi 0003 vào trước, câu chữ đổi "node" thành "bước" cho khớp chế độ Quy trình (ví dụ `bước "opp" chạy sau bước này…`).
+  Mã lỗi (`code`) giữ nguyên.
 
 ## Thay đổi dữ liệu / API
 
@@ -315,60 +319,97 @@ Mọi thay đổi dưới đây là **(dự kiến)**.
 
 ### 1. Ngữ nghĩa phạm vi (scope analysis)
 
-Hàm thuần `analyzeScope(workflow)` trong `server/workflow/scope.js` (mới), không gọi org. `validateWorkflow` gọi hàm này,
-và `/api/validate` trả kết quả về cho UI.
+Hàm thuần `analyzeScope(workflow, catalog)` → `{ partial, sources, at, refs }`:
 
-**Nguồn biến (source):** mỗi node có loại khai báo `exposes`. Khóa của nguồn là `node.id`, ổn định khi đổi alias. Tên
-dùng trong đường dẫn là `config[exposes.name.key]`; trống thì lấy `exposes.name.default`, rồi đến `node.id`. Record dùng
+- Không gọi org.
+- Không import gì chỉ có ở server. `catalog` là `{ nodeTypes, fieldTypes }`: server truyền danh mục của nó, client truyền
+  `state.meta`.
+- Đây là **nguồn sự thật duy nhất** cho phạm vi biến. Validate, ô Node cha, Import từ org và bộ chọn biến đều dùng nó.
+- Hàm này là bản mở rộng của `availableAt()` mà 0003 đề xuất. Nên chỉ có **một** hàm: `availableAt(wf, id)` chỉ là
+  `analyzeScope(wf).at[id].visible` lọc lấy nguồn bản ghi.
+
+Đặt ở đâu tùy vào thứ tự làm với 0003 (người dùng chọn, Câu hỏi mở số 9):
+
+| Thứ tự | File | Client lấy dữ liệu bằng cách | Thuật toán |
+| --- | --- | --- | --- |
+| **0003 làm trước (đề xuất, giống 0003 đề xuất)** | `shared/scope.js`, cạnh `shared/workflow-tree.js` | Gọi trực tiếp mỗi lần workflow đổi, không qua mạng, không bị trễ | Duyệt cây v2 (đơn giản). Server chuyển v1 sang v2 trước khi validate, nên không phải xử lý đồ thị |
+| 0005 làm trước | `server/workflow/scope.js` | `/api/validate` trả kèm `scope` (mục 4); mở bộ chọn khi còn lượt validate đang chờ thì gọi validate ngay | Duyệt đồ thị v1 theo ngữ cảnh (bên dưới). 0003 sau này viết lại trên cây và chuyển sang `shared/`, test ngữ nghĩa giữ nguyên |
+
+Dạng dữ liệu `scope` (mục 4) **giống nhau** ở cả hai cách, nên code bộ chọn không phụ thuộc vào cách nào được chọn.
+
+**Nguồn biến (source):** mỗi node hoặc bước có loại khai báo `exposes`. Khóa của nguồn là `id`, ổn định khi đổi alias.
+Tên dùng trong đường dẫn là `config[exposes.name.key]`; trống thì lấy `exposes.name.default`, rồi đến `id`. Record dùng
 `alias || id`, giống executor.
 
-**Trạng thái của một nguồn tại một node** (xét mọi cách chạy có thể tới node đó):
+**Độ chắc chắn (`certainty`) của một nguồn tại một node/bước.** Dùng đúng tên của 0003 (`always`, `maybe`, `disabled`)
+và thêm `last`:
 
-| Status | Nghĩa | Ví dụ |
+| `certainty` / lý do ẩn | Nghĩa | Ví dụ |
 | --- | --- | --- |
-| `ok` | Trên **mọi** đường chạy tới đây, nguồn đã chạy trước, ở cùng ngữ cảnh hoặc ngữ cảnh bao ngoài | `acc` dùng trong `con`, `acc` nằm trước trong cùng body |
-| `last` | Luôn có, nhưng được tạo trong body của một vòng lặp **đã kết thúc**: giá trị là bản ghi của lần lặp cuối | Loop{acc} → xong → `con` dùng `acc` |
-| `maybe` | Chỉ có trên **một số** đường chạy | Tạo ở một nhánh rồi gộp lại; vòng lặp có thể chạy 0 lần (`count: 0`, `min: 0`); node chạy cả trong lẫn ngoài body |
-| ẩn `notBefore` | Không đường chạy nào có nguồn này trước node | Nguồn nằm sau, hoặc ở nhánh khác |
-| ẩn `outsideLoop` | Biến lặp của vòng lặp mà body không chứa node này | `{{i.index}}` sau nhánh `xong` |
+| `always` | Trên **mọi** đường chạy tới đây, nguồn đã chạy trước, ở cùng ngữ cảnh hoặc ngữ cảnh bao ngoài | `acc` dùng trong `con`; `acc` nằm trước trong cùng body |
+| `last` | Luôn có, nhưng được tạo trong body của một vòng lặp **đã kết thúc**: giá trị là bản ghi của lần lặp cuối. Chỗ nào chỉ biết `always`/`maybe` (như `availableAt` của 0003) thì coi là `always` | Lặp{acc}, sau đó `con` dùng `acc` |
+| `maybe` | Chỉ có trên **một số** đường chạy | Tạo ở một nhánh; vòng lặp có thể chạy 0 lần (`count: 0`, `min: 0`); (chỉ v1) node chạy cả trong lẫn ngoài body |
+| ẩn `after` | Nguồn chạy sau node này, hoặc là chính node này (khi tham chiếu bằng alias) | `opp` nối sau `con` |
+| ẩn `otherBranch` | Nguồn nằm ở nhánh còn lại của một Rẽ nhánh đang bao node này | `task` ở nhánh Đúng, dùng ở nhánh Sai |
+| ẩn `outsideLoop` | Biến lặp của vòng lặp mà body không chứa node này | `{{i.index}}` sau khi vòng `i` đã xong |
 | ẩn `shadowed` | Biến lặp bị vòng trong cùng tên che | Hai vòng lồng nhau cùng tên `loop` |
-| ẩn `thisBelow` | Field của chính node, nằm dưới ô đang sửa. Bộ chọn tự tính từ thứ tự field; validate tính ở server | `this.Birthdate` khi sửa `Title` |
+| ẩn `disabled` (v2) | Nguồn, hoặc một khung bao nó, đang tắt (`disabled: true` của 0003) | – |
+| ẩn `thisBelow` | Field của chính node, nằm dưới ô đang sửa. Bộ chọn tự tính từ thứ tự field; validate tính bằng `analyzeScope` | `this.Birthdate` khi sửa `Title` |
 
-Một tham chiếu tới nguồn có status `maybe` chỉ là cảnh báo, vì lúc chạy vẫn ra giá trị (có thể trống). Tham chiếu tới
-nguồn ẩn là lỗi, vì lúc chạy luôn trống hoặc sai.
+Tham chiếu tới nguồn `maybe` chỉ là cảnh báo, vì lúc chạy vẫn ra giá trị (có thể trống). Tham chiếu tới nguồn ẩn là lỗi,
+vì lúc chạy luôn trống hoặc sai.
 
-**Thuật toán** (đa thức, dựa trên `flow` của từng loại node, không hard-code `loop`/`branch` trong `scope.js`):
+**Thuật toán trên cây v2** (khi 0003 làm trước). Duyệt đệ quy theo thứ tự đọc, mang theo trạng thái `S`:
+
+- Bước có `exposes.visibleIn: "downstream"`: sau bước đó, `S + {nguồn: always}`.
+- Khung `flow.kind: "loop"`: thân chạy với `S + {biến lặp: always}`. Sau khung, nguồn mới tạo trong thân thành `last`;
+  nếu `minIterations(config) === 0` thì thành `maybe`.
+- Khung `flow.kind: "branch"`: mỗi slot trong `alternatives` chạy với `S`. Sau khung, nguồn chỉ có ở một nhánh thành
+  `maybe`. Nguồn ở nhánh này là `otherBranch` đối với nhánh kia.
+- Bước tắt và bước con của nó không kiểm tra tham chiếu (giống 0003). Nguồn tắt thì `disabled`.
+
+**Thuật toán trên đồ thị v1** (khi 0005 làm trước). Đa thức, chỉ dựa trên `flow`, không hard-code `loop`/`branch`:
 
 1. *Ngữ cảnh* là ngăn xếp các vòng lặp đang chạy body. Ngữ cảnh gốc là `[]`. Trong một ngữ cảnh, đi theo mọi cổng trừ
    cổng `flow.body`. Xử lý node theo thứ tự topo (đồ thị không có vòng). `IN(node)` là phép gộp (join) các `OUT` của node
    đứng trước trong cùng ngữ cảnh.
 2. Hàm chuyển trạng thái:
-   - Node có `exposes.visibleIn: "downstream"`: `OUT = IN + {nguồn: ok}`.
+   - Node có `exposes.visibleIn: "downstream"`: `OUT = IN + {nguồn: always}`.
    - `flow.kind: "branch"`: mỗi cổng trong `alternatives` nhận `IN`.
    - `flow.kind: "loop"`:
-     - Body chạy trong ngữ cảnh mới `stack + [loopId]`, với `IN + {biến lặp: ok}`. Kết quả body `B` là phép gộp trạng thái
-       ở mọi điểm kết thúc của chuỗi body.
-     - Sau vòng lặp, đi theo cổng `after`, với biến lặp trả về như cũ. Nguồn mới tạo trong body có status `ok` thì thành
+     - Body chạy trong ngữ cảnh mới `stack + [loopId]`, với `IN + {biến lặp: always}`. Kết quả body `B` là phép gộp trạng
+       thái ở mọi điểm kết thúc của chuỗi body.
+     - Sau vòng lặp, đi theo cổng `after`, với biến lặp trả về như cũ. Nguồn mới tạo trong body có `always` thì thành
        `last`. Nếu `minIterations(config) === 0` thì gộp thêm với `IN`, khi đó nguồn mới thành `maybe`.
    - Điểm kết thúc (cổng cần đi tiếp không có cạnh): trạng thái tại đó góp vào kết quả của ngữ cảnh.
-3. Phép gộp: có ở cả hai phía thì lấy mức xấu hơn (`ok` < `last` < `maybe`); chỉ có ở một phía thì `maybe`. Biến lặp
+3. Phép gộp: có ở cả hai phía thì lấy mức xấu hơn (`always` < `last` < `maybe`); chỉ có ở một phía thì `maybe`. Biến lặp
    gộp theo tên: cùng vòng lặp nguồn thì giữ, khác vòng hoặc thiếu ở một phía thì `maybe`.
 4. `at[node]` là phép gộp `IN(node)` qua **mọi** ngữ cảnh chạm tới node.
-   - `visible` sắp theo chỉ số topo của node nguồn giảm dần, nên gần nhất đứng trước.
-   - Nguồn còn lại vào `hidden`, kèm `reason`.
-   - Node không tới được từ Bắt đầu: `reachable: false`, mọi nguồn (trừ chính nó) nằm trong `visible` với status
-     `unchecked`.
+   - Nguồn ẩn: tới được node này từ nguồn thì là `after`, không thì `otherBranch`.
+   - Node không tới được từ Bắt đầu: `reachable: false`, mọi nguồn (trừ chính nó) nằm trong `visible` với
+     `certainty: "unchecked"`.
 5. Giới hạn an toàn: tối đa `MAX_SCOPE_CONTEXTS = 1000` ngữ cảnh. Vượt giới hạn thì dừng, đặt `partial: true`, các node
    chưa xét coi như `unchecked`, và thêm cảnh báo "Workflow quá phức tạp…".
 
-Thuật toán cũng thay `isAncestor` khi kiểm tra Lookup `ref`. Kết quả là ít lỗi hơn hiện nay: Loop{acc} → xong →
-Loop{con: `AccountId` random từ `acc`} trở thành hợp lệ (status `last`), và lúc chạy cũng đúng là như vậy.
+Cả hai cách đều có:
+
+- `visible` sắp **gần nhất trước**: vòng lặp trong cùng và node hoặc bước ngay phía trên đứng đầu.
+- Kiểm tra Lookup `ref` dùng kết quả này thay cho `isAncestor`. Kết quả là ít lỗi hơn hiện nay: Lặp{acc}, sau đó
+  Lặp{con: `AccountId` random từ `acc`} trở thành hợp lệ (`last`), và lúc chạy cũng đúng là như vậy. 0003 nêu cùng kết
+  luận này cho mô hình cây.
 
 ### 2. Hợp đồng `flow` và `exposes` trong danh mục node
 
 `NODE_TYPES[].outputs` **đã là danh sách cổng ra** (canvas, schema và inspector đều đọc khóa này). Vì vậy hợp đồng biến
-dùng khóa mới `exposes`, không dùng lại `outputs`. Thêm `flow` để nói rõ cổng nào chạy theo kiểu gì, nhờ vậy `scope.js`
-dùng chung được cho mọi loại node, kể cả node mới của 0006.
+dùng khóa mới `exposes`, không dùng lại `outputs`. Khi 0003 bỏ cổng, khóa `outputs` sẽ trống, nhưng vẫn giữ tên
+`exposes` để không lẫn với tài liệu và file v1 cũ.
+
+Thêm `flow` để nói rõ cổng (v1) hay slot (v2) nào chạy theo kiểu gì. Nhờ vậy `analyzeScope` dùng chung được cho mọi loại
+node, kể cả node mới của 0006. `slots` của 0003 chỉ nói *có* những slot nào, không nói slot nào lặp lại, slot nào loại trừ
+nhau; `flow` bổ sung phần đó.
+
+Ví dụ dưới là danh mục v1 (vẫn còn `outputs`). Trên v2, `flow.next`/`flow.after` bỏ đi vì thứ tự trên xuống đã ngầm định,
+còn `flow.body`/`flow.alternatives` trỏ tới khóa slot.
 
 ```json
 {
@@ -399,7 +440,7 @@ dùng chung được cho mọi loại node, kể cả node mới của 0006.
     "kind": "vars",
     "name": { "key": "alias", "default": "loop" },
     "label": "Vòng lặp",
-    "visibleIn": { "port": "body" },
+    "visibleIn": { "inside": "body" },
     "members": [
       { "key": "index", "valueType": "number", "label": "Lần lặp hiện tại (từ 1)" },
       { "key": "index0", "valueType": "number", "label": "Lần lặp hiện tại (từ 0)" },
@@ -414,11 +455,11 @@ dùng chung được cho mọi loại node, kể cả node mới của 0006.
 
 | Khóa | Giá trị | Ý nghĩa |
 | --- | --- | --- |
-| `flow.kind` | `sequence` (`next`), `branch` (`alternatives`), `loop` (`body`, `after`) | Cách các cổng chạy. Loop có thêm hàm `minIterations(config)` chỉ ở server (không gửi qua meta) |
+| `flow.kind` | `sequence` (`next`), `branch` (`alternatives`), `loop` (`body`, `after`) | Cách các cổng (v1) hoặc slot (v2) chạy. Loop có thêm hàm `minIterations(config)`, không gửi qua meta. Nếu `analyzeScope` ở `shared/` thì hàm này cũng nằm ở `shared/`, vì client cũng cần |
 | `exposes.kind` | `record`: `<name>.<field>` là field của bản ghi hiện tại. `vars`: `<name>.<key>` là biến rời | Bộ chọn và validate xử lý theo loại |
 | `exposes.name` | `{ key, default?, fallback? }` | Tên trong đường dẫn lấy từ option nào |
 | `exposes.label` | chuỗi, hoặc `{ key }` (lấy từ option, ví dụ `sobject`) | Nhãn đầu nhóm trong bộ chọn |
-| `exposes.visibleIn` | `"downstream"` hoặc `{ "port": "<cổng>" }` | Thấy ở mọi node chạy sau, hoặc chỉ trong chuỗi của một cổng (body) |
+| `exposes.visibleIn` | `"downstream"` hoặc `{ "inside": "<khóa>" }` | Thấy ở mọi node chạy sau, hoặc chỉ bên trong `body`: chuỗi của cổng `body` (v1) hay slot `body` (v2). 0003 giữ nguyên tên `body`, `true`, `false` cho slot, nên khóa không phải đổi |
 | `exposes.members` | mảng cố định; `"fields"` (từ `config.fields` dạng `{name, type}`, kiểu theo generator); `"select"` (danh sách field của câu SELECT, server dùng `selectFields(config)` của 0006; `Owner.Name` thành member `Owner` có member con `Name`); `{ "fromSource": "<optionKey>" }` (lấy member của nguồn mà option đó trỏ tới) | Danh sách biến con, cho phép lồng (`members` trong member) |
 | `exposes.builtins` | mảng `{ key, valueType, label }`, key bắt đầu bằng `$` (API name của Salesforce không bao giờ có `$`) | Biến có sẵn, không phải field |
 | `exposes.current` | `"last"` (bản ghi vừa sinh), `"first"` (dòng đầu của kết quả), `"picked"` (bản ghi vừa chọn) | `<name>.<field>` đọc bản ghi nào. Bộ chọn ghi chú ở đầu nhóm khi khác `last` (`dòng đầu tiên`, `bản ghi vừa chọn`) |
@@ -483,7 +524,13 @@ nên có `valueType: "any"` (nhãn "Từ org"). `Id` luôn có trong danh sách,
   Regex token chỉ khai báo một lần, ở `server/workflow/paths.js` (`TEMPLATE_TOKEN`). Template generator, validate và
   client (dải chip, nhận biết `{{`) cùng dùng nó. Regex mới có thêm ký tự `$` so với hiện nay.
 
-### 4. `POST /api/validate`: thêm `scope`, issue có thêm khóa
+### 4. Dạng dữ liệu `scope` và issue mới (`POST /api/validate`)
+
+Issue có thêm khóa `code`, `path`, `suggestion`, áp dụng cho cả hai thứ tự làm. Object `scope` là kết quả của
+`analyzeScope`:
+
+- 0005 làm trước: `/api/validate` trả kèm `scope`.
+- 0003 làm trước: client tự gọi `shared/scope.js`, `/api/validate` không cần trả `scope`.
 
 ```json
 {
@@ -511,42 +558,44 @@ nên có `valueType: "any"` (nhãn "Từ org"). `Id` luôn có trong danh sách,
         "reachable": true,
         "self": "con",
         "visible": [
-          { "source": "loopCon", "status": "ok" },
-          { "source": "acc", "status": "ok" },
-          { "source": "loopAcc", "status": "ok" }
+          { "source": "loopCon", "certainty": "always" },
+          { "source": "acc", "certainty": "always" },
+          { "source": "loopAcc", "certainty": "always" }
         ],
         "hidden": []
       },
       "acc": {
         "reachable": true, "self": "acc",
-        "visible": [{ "source": "loopAcc", "status": "ok" }],
+        "visible": [{ "source": "loopAcc", "certainty": "always" }],
         "hidden": [
-          { "source": "con", "reason": "notBefore", "note": "chạy sau node này" },
+          { "source": "con", "reason": "after", "note": "chạy sau node này" },
           { "source": "loopCon", "reason": "outsideLoop", "note": "chỉ có trong nhánh \"lặp\" của vòng lặp \"loop\"" }
         ]
       }
     },
     "refs": [
-      { "nodeId": "con", "field": "fields.Title", "option": "template", "path": "acc.Industry", "source": "acc", "member": "Industry", "status": "ok" },
-      { "nodeId": "con", "field": "fields.Title", "option": "template", "path": "loop.index", "source": "loopCon", "member": "index", "status": "ok" },
-      { "nodeId": "con", "field": "fields.AccountId", "option": "ref", "path": "acc", "source": "acc", "status": "ok" }
+      { "nodeId": "con", "field": "fields.Title", "option": "template", "path": "acc.Industry", "source": "acc", "member": "Industry", "certainty": "always" },
+      { "nodeId": "con", "field": "fields.Title", "option": "template", "path": "loop.index", "source": "loopCon", "member": "index", "certainty": "always" },
+      { "nodeId": "con", "field": "fields.AccountId", "option": "ref", "path": "acc", "source": "acc", "certainty": "always" }
     ]
   }
 }
 ```
 
-- `sources` dùng `node.id` làm khóa. Mỗi field chỉ xuất hiện một lần, `at` chỉ chứa tham chiếu tới nguồn, nên kích thước
+- `sources` dùng `id` làm khóa. Mỗi field chỉ xuất hiện một lần, `at` chỉ chứa tham chiếu tới nguồn, nên kích thước
   tăng theo (số node × số nguồn) chứ không theo (số node × số field). Gửi kèm mỗi lần validate được (400 ms một lần, qua localhost).
-- `note` là câu tiếng Việt do server soạn, để client không phải tự viết câu cho từng lý do.
+- `note` là câu tiếng Việt do `analyzeScope` soạn, để code giao diện không phải tự viết câu cho từng lý do.
+- `reachable` và `certainty: "unchecked"` chỉ có ở v1. Trên cây v2 bước nào cũng tới được; bước tắt thì không có `at`.
 - Nhóm `this` trong bộ chọn do client dựng từ `node.config.fields` **hiện tại** (field phía trên ô đang sửa), kiểu lấy từ
-  `meta.fieldTypes[].valueType`, để không bị trễ ngay sau khi thêm hoặc kéo field. Server vẫn là nơi quyết định lỗi `this*`.
-- Khi mở bộ chọn mà còn lượt validate đang chờ debounce, client gọi validate **ngay** và vẽ lại danh sách khi có kết quả,
-  giữ nguyên dòng đang chọn theo `path`.
+  `meta.fieldTypes[].valueType`, để không bị trễ ngay sau khi thêm hoặc kéo field. `analyzeScope` vẫn là nơi quyết định lỗi `this*`.
+- (Chỉ khi 0005 làm trước.) Khi mở bộ chọn mà còn lượt validate đang chờ debounce, client gọi validate **ngay** và vẽ lại
+  danh sách khi có kết quả, giữ nguyên dòng đang chọn theo `path`.
 - `/api/run` không đổi. Executor bỏ qua `scope`.
 
 ### 5. Workflow JSON
 
-**Không đổi cấu trúc, vẫn `version: 1`.** Tham chiếu vẫn là chuỗi `{{path}}` như trước:
+**0005 không đổi cấu trúc workflow**, ở cả `version: 1` lẫn `version: 2` của 0003 (0003 chép nguyên `config` khi chuyển,
+nên chuỗi template và `left` không đổi). Tham chiếu vẫn là chuỗi `{{path}}` như trước:
 
 ```json
 { "name": "Title", "type": "template", "options": { "template": "{{acc.Industry}} contact #{{loop.index}}" } }
@@ -559,7 +608,7 @@ Bổ sung (tương thích ngược):
 | Biến có sẵn `$n` | – | `{{this.$n}}`, `{{acc.$n}}` = `n` trong `acc#n` (đếm theo alias, từ 1). Executor truyền `n` vào ctx, `resolvePath` xử lý key bắt đầu bằng `$` |
 | `left` của Branch có `{{ }}` | `"{{loop.index}}"` không bao giờ khớp | `resolvePath` bỏ `{{ }}` và khoảng trắng bao ngoài, nên `"{{loop.index}}"` giống `"loop.index"`. Bộ chọn luôn ghi dạng không ngoặc |
 | Validate template và `left` | Không kiểm tra | Lỗi và cảnh báo như bảng trên |
-| Validate Lookup `ref` | `isAncestor` theo cạnh nối | Theo scope: chấp nhận thêm node tạo trong body đã xong (`last`), cảnh báo `maybe` |
+| Validate Lookup `ref` | `isAncestor` theo cạnh nối | Theo `analyzeScope`: chấp nhận thêm node tạo trong body đã xong (`last`); `maybe` là cảnh báo |
 
 Ảnh hưởng tới workflow đã lưu:
 
@@ -568,8 +617,9 @@ Bổ sung (tương thích ngược):
 - Field Template **không lưu** `options.template` (vẫn dùng mặc định) sẽ ra dữ liệu khác vì mặc định đổi. Client lưu
   option rỗng `{}` khi đổi kiểu field, nên trường hợp này có thật.
 - Hai mẫu có sẵn (`client/js/samples.js`) vẫn hợp lệ. Có test khóa điều này.
-- Ghi chú về JSON v2 (0003): nếu có v2 thì giữ nguyên cú pháp `{{alias.Field}}`. `scope.js` chỉ đọc qua `buildFlow(workflow)`
-  (nút, cổng, cạnh). Khi v2 là cây, chỉ cần viết thêm `buildFlow` cho v2.
+- Với v2 (0003): giữ nguyên cú pháp `{{alias.Field}}`. Khi 0003 chuyển v1 sang v2 và **nhân bản** một node (alias mới
+  `con` → `con2`), `cloneSteps` của 0003 đổi theo các tham chiếu nội bộ. Hàm này cần duyệt option có `vars`/`kind: 'ref'`
+  lấy từ meta, giống `renameAlias` ở mục "Đổi tên và xóa".
 
 ### 6. Tài liệu tham chiếu cần cập nhật khi làm (dự kiến)
 
@@ -577,7 +627,7 @@ Người viết doc này không sửa trực tiếp các file dưới đây, the
 
 - `docs/workflow-schema.md`:
   - Bảng "Đường dẫn tham chiếu": thêm `$n`, quy tắc phạm vi (chỉ thấy nguồn đã chạy trước; biến lặp chỉ trong body),
-    status `last`/`maybe`.
+    `certainty` `always`/`last`/`maybe`.
   - `left` nhận `{{ }}`.
   - Quy tắc Lookup mới.
   - Phản hồi `/api/validate` có `scope`; issue có `code`, `path`, `suggestion`.
@@ -587,9 +637,9 @@ Người viết doc này không sửa trực tiếp các file dưới đây, the
   - Hợp đồng generator thêm `valueType`/`members`.
   - Định dạng option thêm `vars`, `accepts`.
 - `docs/architecture.md`:
-  - `server/workflow/scope.js`.
-  - Client: `var-picker.js`, `variables.js`, `validation.js`.
-  - Quyết định "phạm vi biến tính ở server, gửi kèm validate".
+  - `shared/scope.js` (hoặc `server/workflow/scope.js`, tùy thứ tự làm).
+  - Client: `var-picker.js`, `variables.js`, và `validation.js` (chỉ khi 0005 làm trước).
+  - Quyết định "phạm vi biến do **một** hàm thuần `analyzeScope` tính, dùng cho cả validate lẫn bộ chọn".
 - `.claude/skills/add-node-type/SKILL.md`: thêm bước khai báo `flow` và `exposes`.
 - `.claude/skills/add-field-type/SKILL.md`: thêm bước khai báo `valueType`.
 - `docs/design/README.md`: thêm dòng 0005 với trạng thái `Nháp`. Người điều phối thêm.
@@ -609,9 +659,10 @@ Người viết doc này không sửa trực tiếp các file dưới đây, the
   Xóa thứ đang được dùng thì có toast liệt kê chỗ hỏng. Mỗi lần chèn hoặc sửa là một bước undo.
 - [x] 6. Lấy thông tin từ org thay vì bắt gõ. Danh sách field và kiểu lấy từ workflow, vốn import từ describe. Không cần
   gọi org khi mở bộ chọn. (Lọc node cha theo `referenceTo` của describe: xem Câu hỏi mở số 5.)
-- [x] 7. Một nguồn sự thật. Phạm vi, regex token, `valueType` và nhãn đều ở server. UI bật bộ chọn theo `vars` và
-  `kind: 'ref'`. Node mới (0006) chỉ cần khai báo `flow`/`exposes`. Ngoại lệ có chủ đích: nhóm `this` dựng ở client từ
-  thứ tự field hiện tại, vì quy tắc chỉ là "field phía trên"; server vẫn quyết định lỗi.
+- [x] 7. Một nguồn sự thật. Phạm vi do **một** hàm `analyzeScope` tính (ở server, hoặc ở `shared/` nếu 0003 làm trước),
+  và cũng thay `availableAt` của 0003. Regex token, `valueType` và nhãn khai báo ở server, gửi qua meta. UI bật bộ chọn
+  theo `vars` và `kind: 'ref'`. Node mới (0006) chỉ cần khai báo `flow`/`exposes`. Ngoại lệ có chủ đích: nhóm `this`
+  dựng ở client từ thứ tự field hiện tại, vì quy tắc chỉ là "field phía trên"; `analyzeScope` vẫn quyết định lỗi.
 - [x] 8. Giải thích tại chỗ. Help mới cho `template` và `left`. Dòng xám "Không dùng được ở đây" ghi lý do. Badge `bản
   ghi cuối`/`có thể trống` có tooltip. Có câu hướng dẫn khi bộ chọn trống.
 - [x] 9. An toàn khi lỡ tay. Phân tích có trần `MAX_SCOPE_CONTEXTS`. Danh sách mỗi nhóm tối đa 200 dòng. Escape regex khi
@@ -621,9 +672,10 @@ Người viết doc này không sửa trực tiếp các file dưới đây, the
 
 | Phương án | Ưu | Nhược | Chọn? |
 | --- | --- | --- | --- |
-| **Phạm vi tính ở server (`scope.js`), gửi kèm `/api/validate`** | Một chỗ tính cho cả lỗi lẫn bộ chọn, nên không lệch nhau. Không phải cho trình duyệt tải code server | Dữ liệu có thể trễ ≤ 400 ms; khắc phục bằng cách validate ngay khi mở bộ chọn | **Có** |
+| **Một hàm thuần `analyzeScope(wf, catalog)`, đặt ở `shared/` khi 0003 đã có thư mục này** | Bộ chọn mở tức thì, không trễ; validate và bộ chọn dùng đúng một code; khớp hướng `shared/` của 0003 | Phải test chạy được trên cả Node lẫn trình duyệt (0003 đã có cùng yêu cầu) | **Có**, nếu 0003 làm trước |
+| **Cùng hàm đó đặt ở server (`server/workflow/scope.js`), gửi kèm `/api/validate`** | Không cần thư mục `shared/`; một chỗ tính cho cả lỗi lẫn bộ chọn | Dữ liệu có thể trễ ≤ 400 ms; khắc phục bằng cách validate ngay khi mở bộ chọn | **Có**, nếu 0005 làm trước |
 | `POST /api/scope` riêng, gọi mỗi lần mở bộ chọn | Dữ liệu luôn mới | Phân tích hai lần (validate và scope); trễ mỗi lần mở; thêm một endpoint | Không |
-| Module dùng chung chạy cả ở client và server | Mở tức thì, không cần mạng | Phải phục vụ thư mục `server/` hoặc `shared/` ra trình duyệt; client phải có đủ danh mục generator; phải test trên hai môi trường | Không |
+| Để `availableAt` (0003) và `analyzeScope` (0005) là hai hàm riêng | Mỗi doc tự làm phần của mình | Hai định nghĩa "phía trước" sẽ lệch nhau (đúng loại lỗi `isAncestor` đang có) | Không: `availableAt` là phần chiếu của `analyzeScope` |
 | **Giữ chuỗi `{{alias.Field}}` trong JSON** | Tương thích v1, đọc và sửa tay được, executor không đổi; đổi tên đã có cơ chế cập nhật | Đổi tên phải sửa chuỗi (đã xử lý ở client và được validate kiểm lại) | **Có** |
 | Token có cấu trúc `{ "$var": { "node": "<id>", "path": [...] } }` hoặc `{{#<nodeId>.Name}}` | Không hỏng khi đổi tên | Phá v1, cần migration; JSON khó đọc; executor, validate, CSV và docs đều phải đổi | Không |
 | **Ô chữ thô và dải chip bên dưới** | Copy/paste, undo gốc và bộ gõ tiếng Việt (Telex/VNI qua IME) đều ổn; chip cho dễ đọc và chỉ đúng lỗi | Chip nằm ngoài ô, không ở ngay giữa chữ | **Có** |
@@ -655,16 +707,22 @@ Theo bảng contract-sync trong `.claude/agents/implementer.md`. Mỗi bước �
      - `test/server.test.js` mở rộng 'GET /api/meta lists field and node types': mọi node có `flow`; record và loop có
        `exposes`; không có khóa hàm; `new RegExp(meta.syntax.templateToken)` dựng được.
      - `test/generators.test.js` thêm 'every generator declares a known valueType'.
-2. **`server/workflow/scope.js`.** Gồm `buildFlow(wf)`, `buildSources(wf)`, `analyzeScope(wf)` → `{ partial, sources, at }`,
-   và `collectRefs(wf, analysis)` → `refs`. Test trong `test/scope.test.js` (mới):
-   - 'scope: upstream record and enclosing loop vars are visible in the loop body'
-   - 'scope: record created in one branch is maybe after the merge'
-   - 'scope: record created in a finished loop body is last; maybe when the loop can run 0 times'
-   - 'scope: loop var after done is hidden as outsideLoop'
-   - 'scope: node reachable inside and outside a loop sees the loop var as maybe'
-   - 'scope: nested loops with the same alias, inner shadows outer'
-   - 'scope: unreachable node gets unchecked sources'
-   - 'scope: context cap sets partial instead of hanging'
+2. **`analyzeScope`.**
+   - File: `shared/scope.js` nếu bước 1–3 của 0003 đã xong; nếu chưa thì `server/workflow/scope.js`.
+   - Gồm `buildSources(wf, catalog)`, `analyzeScope(wf, catalog)` → `{ partial, sources, at, refs }`.
+   - Khi ở `shared/`: `availableAt()` của 0003 gọi lại hàm này.
+   - Test trong `test/scope.test.js` (mới). Các test chung cho cả cây lẫn đồ thị:
+     - 'scope: upstream record and enclosing loop vars are visible in the loop body'
+     - 'scope: record created in one branch is maybe after the branch; the other branch sees it as otherBranch'
+     - 'scope: record created in a finished loop body is last; maybe when the loop can run 0 times'
+     - 'scope: loop var after the loop is hidden as outsideLoop'
+     - 'scope: nested loops with the same alias, inner shadows outer'
+     - 'scope: query and pick sources expose select fields and fromSource members' (khi 0006 đã có)
+   - Chỉ cho đồ thị v1:
+     - 'scope: node reachable inside and outside a loop sees the loop var as maybe'
+     - 'scope: unreachable node gets unchecked sources'
+     - 'scope: context cap sets partial instead of hanging'
+   - Chỉ cho cây v2: 'scope: disabled step is hidden as disabled and its own references are not checked'.
 3. **Validate theo scope.** `server/workflow/schema.js`:
    - Kiểm tra mọi option có `vars`, và `kind: 'ref'` thay cho `isAncestor`.
    - Message theo bảng ở trên; `code`, `path`, `suggestion`. Validate trả thêm `scope`.
@@ -685,12 +743,13 @@ Theo bảng contract-sync trong `.claude/agents/implementer.md`. Mỗi bước �
      - 'template: {{this.$n}} and {{acc.$n}} follow alias#n'
      - 'branch: left accepts {{loop.index}}'
      - 'every generator produces a value with default options' vẫn qua.
-5. **API.** `/api/validate` trả `scope`. Test 'POST /api/validate returns scope with visible sources per node' trong
-   `test/server.test.js`.
+5. **API** (chỉ khi `analyzeScope` ở server). `/api/validate` trả `scope`. Test 'POST /api/validate returns scope with
+   visible sources per node' trong `test/server.test.js`.
 6. **Dữ liệu ở client.**
-   - `client/js/validation.js` (mới): chuyển `validateNow`/`setIssues` ra khỏi `main.js` để tránh import vòng; thêm
-     `flushValidation()`.
-   - `client/js/store.js`: `state.scope`.
+   - `client/js/store.js`: `state.scope`. Khi ở `shared/` thì tính lại mỗi lần sự kiện `workflow` xảy ra (cùng nhịp với
+     validate) bằng `analyzeScope(state.workflow, state.meta)`. Nếu không thì lấy từ kết quả validate.
+   - Chỉ khi ở server: `client/js/validation.js` (mới) chuyển `validateNow`/`setIssues` ra khỏi `main.js` để tránh import
+     vòng, và thêm `flushValidation()`.
    - `client/js/variables.js` (mới):
      - `tokenize(text)` dùng `meta.syntax.templateToken`
      - `groupsFor(nodeId, fieldIndex, mode)`
@@ -709,8 +768,8 @@ Theo bảng contract-sync trong `.claude/agents/implementer.md`. Mỗi bước �
      - bấm {x}, gõ `indu`, Enter, rồi kiểm tra ô chứa `{{acc.Industry}}`
      - gõ `{{` thì popup hiện
      - không có lỗi trang
-8. **Đổi tên và xóa.** `client/js/inspector.js`:
-   - `renameAlias`: escape regex, duyệt option có `vars`, đổi biến lặp theo `scope.refs`.
+8. **Đổi tên và xóa.** `client/js/inspector.js`. Riêng `renameAlias` nằm ở `shared/workflow-tree.js` nếu 0003 đã chuyển nó sang đó.
+   - `renameAlias`: escape regex, duyệt option có `vars` và `kind: 'ref'`, đổi biến lặp theo `scope.refs`.
    - Đổi tên field khi `change`.
    - Toast khi xóa field hoặc node đang được dùng.
    - Bấm lỗi thì tự mở card.
@@ -739,7 +798,7 @@ Theo bảng contract-sync trong `.claude/agents/implementer.md`. Mỗi bước �
 5. **Lưu `referenceTo` từ describe vào option của Lookup** để dropdown Node cha chỉ hiện nguồn đúng sObject và cảnh báo
    khi chọn sai sObject? Cần thêm một option (ẩn) vào generator Lookup.
 6. **Tự đặt tên biến lặp không trùng** (`loop`, `loop2`…) khi thêm node Lặp, để vòng lồng nhau không che nhau như hiện
-   nay. Thay đổi nhỏ trong `addNode`.
+   nay. 0003 đã đề xuất việc này cho chế độ Quy trình. Nếu 0003 không được duyệt thì làm trong `addNode` của `canvas.js`.
 7. **Phím tắt:** giữ Ctrl+Space (quen thuộc, nhưng bị chiếm trên macOS) hay đổi sang phím khác?
 8. **Template dùng field mà Query không lấy.** 0006 để là *cảnh báo*. 0005 đề xuất *lỗi* `unknownMember` khi danh sách
    field đã biết chính xác (chế độ builder, hoặc SOQL parse được), vì lúc chạy giá trị chắc chắn rỗng, giống field gõ sai
@@ -775,7 +834,7 @@ Theo bảng contract-sync trong `.claude/agents/implementer.md`. Mỗi bước �
   - **Đổi alias:** 0006 thêm cập nhật `from` và `filterValue`. Với 0005, việc này tự có, vì `renameAlias` duyệt mọi option
     `kind: 'ref'` và mọi option có `vars`. Điều kiện: `pick.filterValue` khai báo `vars: 'template'`.
   - **Cảnh báo "Template dùng field không lấy" và "Pool không ở phía trước"** của 0006 nên dùng chung phân tích của
-    `scope.js` (mã `unknownMember`/`notBefore`) thay vì kiểm tra riêng. Mức lỗi: Câu hỏi mở số 8.
+    `analyzeScope` (mã `unknownMember`/`after`/`otherBranch`) thay vì kiểm tra riêng. Mức lỗi: Câu hỏi mở số 8.
   - **`{{acc.Id}}`:** có với nguồn `origin: "org"`. Với bản ghi sinh ra thì là lỗi `noIdYet`.
   - Lookup tới nguồn `origin: "org"` sinh Id thật (0006 làm, qua cờ `existing`).
   - **Giá trị mẫu** của member Query lấy từ `queries[].records[0]` trong kết quả `/api/run` (0006). Với `pick` thì lấy từ

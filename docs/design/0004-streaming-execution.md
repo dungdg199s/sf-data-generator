@@ -2,8 +2,9 @@
 
 - **Trạng thái:** Nháp
 - **Ngày:** 2026-10-27
-- **Liên quan:** [0001](0001-workflow-editor-ux.md), [0002](0002-jsforce-api.md), 0003 (chế độ process, có thể có JSON v2),
-  [0005](0005-variable-picker.md) (bộ chọn biến, `exposes`), 0006 (node Query và Chọn bản ghi ngẫu nhiên),
+- **Liên quan:** [0001](0001-workflow-editor-ux.md), [0002](0002-jsforce-api.md), [0003](0003-process-mode.md) (chế độ
+  process, JSON v2 dạng cây), [0005](0005-variable-picker.md) (bộ chọn biến, `exposes`),
+  [0006](0006-query-pick-nodes.md) (node Query và Chọn bản ghi ngẫu nhiên, mô hình đọc trước),
   [architecture.md](../architecture.md), [workflow-schema.md](../workflow-schema.md), [org-connection.md](../org-connection.md)
 
 ## Vấn đề
@@ -32,7 +33,8 @@ Hiện tại người dùng gặp các vấn đề sau với workflow lớn, ví
   - Khi chạy có tiến độ theo sObject và có nút **Dừng**. Lỗi sinh dữ liệu phải hiện ra **trước khi** ghi bản ghi đầu tiên vào org.
   - Lỗi insert hàng loạt thì dừng sớm và gom nhóm, thay vì spam org.
   - Cùng seed thì ra cùng dữ liệu, kể cả giữa lần xem trước và lần insert.
-  - Executor dùng được cho node cần I/O bất đồng bộ (Query của 0006).
+  - Khớp với mô hình "đọc trước rồi chạy executor thuần" của 0006. Nếu sau này có node cần I/O giữa lúc chạy, phải đổi
+    được sang async generator mà không thiết kế lại (chi phí đo được là 0–3 %).
 - Ngoài phạm vi:
   - Bulk API 2.0. Kết quả của Bulk API 2.0 không được tài liệu cam kết theo thứ tự dòng, nên muốn map về `ref` phải có
     External Id. Việc này cần design riêng.
@@ -70,7 +72,7 @@ có thêm Opportunity với Lookup `random` tới `acc`, và pool `random` lúc 
 | Thời gian sinh | 4,3 s (1,1 s), khoảng 22 µs/bản ghi | Như nhau: generator 4,3 s, async generator 3,8–4,8 s, `Readable.from` + `Writable` 4,2 s |
 | Chi phí của async generator đệ quy thật | — | 0–3 %, nằm trong sai số |
 | Event loop bị chặn liền một mạch | 4 193 ms (1 315 ms) | ≤ 160 ms (≈ 60 ms) khi nhường event loop mỗi 1 000 bản ghi |
-| Trường hợp xấu nhất: không có bản ghi nào cho tới khi chạm `maxSteps` (2 triệu bước) | 571 ms | 571 ms (chấp nhận được, executor kiểm tra lệnh dừng mỗi 10 000 bước) |
+| Trường hợp xấu nhất: không có bản ghi nào cho tới khi chạm `maxSteps` (2 triệu bước) | 571 ms | 571 ms (chấp nhận được; đây cũng là độ trễ tối đa của nút Dừng) |
 | Heap sống lúc cao nhất khi sinh + insert (client giả) | 116,7 MB (29,9 MB) | 65,7 MB (16,8 MB) nếu giữ mọi Id. **37,5 MB (9,9 MB)** nếu chỉ giữ Id của alias được Lookup trỏ tới |
 | Heap mà mảng `records` giữ lại | 85,5 MB, khoảng 450 B/bản ghi | 0,5 MB |
 | Body `/api/run` | 46,3 MB, stringify 2,6 s (11,5 MB, 0,23 s) | **93 KB** (200 dòng đầu mỗi sObject) |
@@ -112,15 +114,15 @@ insert nhanh hơn là Bulk API hoặc gửi song song, cả hai đều ngoài ph
 
 | Ràng buộc | (a) Stream theo từng node | (b) Dòng bản ghi + sink |
 | --- | --- | --- |
-| Executor đồng bộ, duyệt theo chiều sâu, lặp lồng nhau (`runChain` đệ quy) | Phải viết lại thành mạng Transform. Thứ chảy giữa các node là "lượt chạy" mang snapshot của scope, không phải bản ghi. `done` của Lặp phải chờ mọi lượt trong `body` xong, nên cần cơ chế join | Giữ nguyên thuật toán, `records.push(rec)` thành `yield rec`, đệ quy bằng `yield*` |
+| Executor đồng bộ, duyệt theo chiều sâu, lặp lồng nhau (`runChain` đệ quy) | Phải viết lại thành mạng Transform. Thứ chảy giữa các node là "lượt chạy" mang snapshot của scope, không phải bản ghi. `done` của Lặp phải chờ mọi lượt trong `body` xong, nên cần cơ chế join | Giữ nguyên thuật toán, vẫn đồng bộ (`function*`). `records.push(rec)` thành `yield rec`, đệ quy bằng `yield*` |
 | Lookup `{ $ref }` cần Id thật của cha trước khi gửi con | Sink cuối phải tự sắp lại | Executor luôn sinh cha trước con. Window 2 000 rồi wave: cha ở window trước đã có Id, cha cùng window được gửi ở wave trước |
-| Lookup `random` chọn trong **mọi** bản ghi đã sinh của alias | "Đã sinh tới lúc này" phụ thuộc buffer và lịch chạy, nên không tất định | `scope.all[alias]` chỉ cần **số đếm** `n`. `rng.pick(list)` và `alias#(floor(next()·n)+1)` rút cùng một số ngẫu nhiên, đã kiểm chứng giống từng byte |
+| Lookup `random` chọn trong **mọi** bản ghi đã sinh của alias | "Đã sinh tới lúc này" phụ thuộc buffer và lịch chạy, nên không tất định | Pool của alias Record chỉ cần **số đếm** `n`. `rng.pick(list)` và `alias#(floor(next()·n)+1)` rút cùng một số ngẫu nhiên, đã kiểm chứng giống từng byte. Pool dòng Query của 0006 vẫn là mảng (≤ 2 000 dòng) |
 | `unique` và counter (`fieldState`) theo từng (node, field) | State dùng chung giữa các stream chạy xen nhau | Không đổi: state sống trong một lần chạy |
 | Tất định theo seed (thứ tự gọi `ctx.rng`) | Thứ tự gọi RNG đổi theo `highWaterMark` và lịch chạy. Muốn tất định thì phải cho mỗi node một RNG riêng, và khi đó **mọi seed người dùng đã ghim sẽ ra dữ liệu khác** | Giữ nguyên thứ tự. Sink không gọi RNG. Chạy lần 2 cùng seed và `now` thì ra chuỗi y hệt |
-| `LIMITS` (`maxRecords`, `maxSteps`) | Phải đếm chung qua nhiều stream | Như cũ. Thêm kiểm tra `signal.aborted` mỗi 10 000 bước |
+| `LIMITS` (`maxRecords`, `maxSteps`) | Phải đếm chung qua nhiều stream | Như cũ. Dừng thì driver thôi gọi `next()` |
 | Xem trước dạng bảng | — | Sink xem trước giữ 200 dòng đầu mỗi sObject. Bảng hiện cũng chỉ vẽ 200 dòng (`PREVIEW_ROWS`) |
 | Lỗi mang `nodeId`/`field` | Lỗi nảy ra bất đồng bộ trong stream nào thì gắn node đó, nhưng khó nói "chưa ghi gì vào org" | Như cũ (`WorkflowError`), gửi qua sự kiện `error`. Lượt chạy thử bắt lỗi trước khi ghi (xem bên dưới) |
-| Query (0006) cần I/O giữa lúc chạy | Tự nhiên | Executor là **async generator**, `await` I/O tuần tự. Chi phí đo được 0–3 % |
+| Query (0006) đọc org | Tự nhiên nếu đọc giữa lúc chạy | 0006 đọc **trước** khi chạy (`prefetchQueries`), executor chỉ đọc `opts.queryResults`. Lượt chạy thử và lượt insert dùng chung `queryResults` nên ra chuỗi y hệt. Nếu sau này cần I/O giữa lúc chạy thì đổi sang `async function*`, chi phí đo được 0–3 % |
 
 ### 4. Stream theo node có hợp với Lặp/Rẽ nhánh không? Backpressure có ích ở đâu?
 
@@ -134,9 +136,9 @@ Backpressure chỉ có ý nghĩa giữa một bên nhanh và một bên chậm:
 
 - Giữa các node: **không có I/O**. Sinh dữ liệu là việc CPU thuần, khoảng 22 µs/bản ghi, nên không có gì để cân bằng.
   Object-mode stream đo được nhanh ngang vòng `for` (4,2 s so với 4,3 s), nhưng cũng không đem lại gì.
-- Giữa dòng bản ghi và org: **có**. Lời gọi API chậm hơn việc sinh khoảng 1 000 lần. Async generator cho ta backpressure
-  miễn phí: sink `await client.create(...)` thì generator tự dừng, và bộ nhớ chỉ giữ một window. Không cần đến
-  `stream.Readable`.
+- Giữa dòng bản ghi và org: **có**. Lời gọi API chậm hơn việc sinh khoảng 1 000 lần. Generator theo kiểu kéo cho ta
+  backpressure miễn phí: driver chỉ gọi `next()` sau khi `await client.create(...)` xong, nên generator tự dừng và bộ nhớ
+  chỉ giữ một window. Không cần đến `stream.Readable`.
 - Giữa server và trình duyệt: chỉ có vài sự kiện tiến độ mỗi giây (đã throttle 250 ms). Khi tải file thì xử lý
   `drain` của `res`.
 
@@ -148,8 +150,8 @@ Backpressure chỉ có ý nghĩa giữa một bên nhanh và một bên chậm:
   hệt, tốc độ như nhau, bộ nhớ thấp hơn. Checkbox chỉ bắt người dùng hiểu khái niệm nội bộ và nhân đôi đường code
   (vi phạm nguyên tắc 1 và 7). **Luôn chạy dạng luồng.** Người dùng chỉ thấy kết quả: có tiến độ, có nút Dừng, bảng xem
   trước ghi "Hiển thị 200/160 000 dòng đầu" như hiện nay.
-- **Làm (d) = (b) + (c), theo từng phần.** Bên trong là dòng bản ghi từ async generator, cộng các sink xem trước, insert
-  và tải file, cộng NDJSON tiến độ. Kèm ba điểm an toàn mà streaming đem lại:
+- **Làm (d) = (b) + (c), theo từng phần.** Bên trong là dòng bản ghi từ một generator đồng bộ (`runWorkflow` vẫn đồng
+  bộ như cũ), cộng các sink xem trước, insert và tải file, cộng NDJSON tiến độ. Kèm ba điểm an toàn mà streaming đem lại:
   1. **Lượt chạy thử trước khi ghi.** Sinh hết một lượt chỉ để đếm, tốn 4–5 s cho 200k, tức khoảng 1 % thời gian insert.
      Lượt này bắt lỗi `unique`, `maxRecords`, thiếu cha trước khi ghi bản ghi đầu tiên, giữ đúng cam kết hiện tại là
      "sinh xong mới insert", và cho tổng số chính xác để vẽ thanh tiến độ.
@@ -170,9 +172,12 @@ Backpressure chỉ có ý nghĩa giữa một bên nhanh và một bên chậm:
 Tổng cộng **2 thao tác**. Hiện nay cần 4 thao tác (nhập seed, Xem trước, Insert, xác nhận) mới chắc dữ liệu insert giống
 dữ liệu đã xem. Nếu không nhập seed, hộp xác nhận hiện nay không nói được sẽ insert bao nhiêu bản ghi.
 
-**Luồng B, xem trước rồi insert:** Ctrl+Enter (1), xem bảng; **Insert** (1) mở xác nhận ngay vì workflow và seed khớp lần
-xem trước, không chạy lại; xác nhận (1). Insert dùng đúng `seed` và `now` của lần xem trước, nên ra đúng dữ liệu đó, kể
-cả field ngày tương đối như `today`, `-1y`.
+**Luồng B, xem trước rồi insert:** Ctrl+Enter (1), xem bảng; **Insert** (1) mở xác nhận ngay vì workflow, seed và org khớp
+lần xem trước, không chạy lại; xác nhận (1). Điều kiện "cùng org" lấy theo 0006 (`state.lastRunOrg === state.org`). Insert
+dùng đúng `seed` và `now` của lần xem trước, nên ra đúng dữ liệu đó, kể cả field ngày tương đối như `today`, `-1y`.
+
+Xem trước tự động ở luồng A gửi kèm org đang chọn, để node Query của 0006 đọc đúng org sẽ insert và có fingerprint cho
+bước insert.
 
 **Trường hợp lỗi:**
 
@@ -214,7 +219,8 @@ Không thêm option, checkbox hay cài đặt nào. Mọi thay đổi nằm ở 
 - Tiến độ được throttle 250 ms ở server, nên UI không bị giật.
 - Khi đang chạy, **Xem trước** và **Insert** bị khóa. Nếu bấm Ctrl+Enter thì hiện toast
   `Đang chạy. Bấm "Dừng" nếu muốn chạy lại.`
-- Khi đang insert, gắn `beforeunload` (`event.preventDefault()`), nên trình duyệt hiện hộp hỏi rời trang mặc định của nó.
+- Khi đang insert, gắn `beforeunload` (`event.preventDefault()` và `event.returnValue = ''`), nên trình duyệt hiện hộp
+  hỏi rời trang mặc định của nó. Gỡ listener khi lần chạy kết thúc.
 
 ### Khi xong
 
@@ -253,10 +259,14 @@ Org: dev-sb (me@example.com)
 [warn-box nếu production: "Org này không phải sandbox hay scratch org. Kiểm tra kỹ trước khi insert dữ liệu test."]
 Sẽ tạo 200 000 bản ghi: Account 40 000, Contact 160 000.
 Giống hệt bản xem trước (seed 42).
+[nếu có node Query (0006): "Đọc từ org, không ghi: Account 200 (accs, đọc lúc 10:32)." và câu cảnh báo dữ liệu đọc đã đổi của 0006]
 Khoảng 1 000 lời gọi API (200 bản ghi mỗi lời gọi), tính vào giới hạn API 24 giờ của org.
 Có thể bấm "Dừng" bất cứ lúc nào; bản ghi đã insert không tự xóa.
                                              [Hủy]  [Insert 200 000 bản ghi]
 ```
+
+Dòng của 0006 giữ đúng câu chữ trong doc 0006. Doc này chỉ thêm dòng số bản ghi theo sObject, dòng số lời gọi API, dòng
+Dừng và nhãn nút có số bản ghi.
 
 - Nút xác nhận ghi kèm số bản ghi (`Insert 200 000 bản ghi`) để khó bấm nhầm.
 - Số lời gọi API ước tính bằng `Σ ceil(n_sObject / 200)`. Thực tế có thể nhiều hơn khoảng 10 % do window.
@@ -265,9 +275,10 @@ Có thể bấm "Dừng" bất cứ lúc nào; bản ghi đã insert không tự
 ## Thiết kế phía server
 
 ```
-POST /api/run ── createRun(workflow, {seed, now})  ← validate; lỗi → 422 như cũ (chưa gửi header)
+POST /api/run ── validate → 422 · prefetchQueries (0006) → 409/502   ← đều trước khi gửi header, HTTP như cũ
                    │
-                   ├─ run.records()  async generator THUẦN (không I/O, không timer)
+                   ├─ createRun(workflow, {seed, now, queryResults})
+                   ├─ run.records()  generator ĐỒNG BỘ, THUẦN (không I/O, không timer)
                    │     yield { ref, sobject, alias, nodeId, fields } theo đúng thứ tự hiện tại
                    │
 server/run.js (driver) ── nhường event loop mỗi 1 000 bản ghi · throttle tiến độ 250 ms · signal
@@ -282,25 +293,31 @@ POST /api/export ── createRun → run.records() → CSV/JSON ghi thẳng ra 
 ### Executor (`server/workflow/executor.js`)
 
 ```js
-export function createRun(workflow, { seed, now, maxRecords, signal } = {}) // validate, throw WorkflowError
+export function createRun(workflow, { seed, now, maxRecords, queryResults } = {}) // validate, throw WorkflowError
 // → { seed, now, maxRecords, warnings, referencedAliases, columnsBySobject, records }
-//   records(): AsyncGenerator<Record>  mỗi lần gọi là một lần chạy mới (RNG, unique, counter mới)
-export async function runWorkflow(workflow, opts) // gom hết như cũ, cho test và chế độ JSON
+//   records(): Generator<Record>  mỗi lần gọi là một lần chạy mới (RNG, unique, counter mới)
+export function runWorkflow(workflow, opts) // vẫn ĐỒNG BỘ: gom records() như cũ, cho test và chế độ JSON
 // → { seed, now, records, warnings, stats }
 ```
 
-- Giữ nguyên thuật toán duyệt. `runChain` thành `async function*` và dùng `yield*` cho body của vòng lặp. Không chạy song
-  song nhánh hay lượt lặp nào. Executor vẫn **thuần**: không I/O, không timer. Việc nhường event loop do driver làm.
-- `scope.all[alias]` (mảng bản ghi) đổi thành `scope.counts[alias]` (số). Ở `server/generators/reference.js`, chế độ
-  `random` trả `{ $ref: \`${ref}#${Math.floor(rng.next() * n) + 1}\` }`. Phép rút này giống `rng.pick` (đã kiểm chứng).
-  `current` không đổi.
-- `referencedAliases`: tập alias mà một field `lookup`/`masterdetail` (mode ≠ `fixed`) trỏ tới. Inserter chỉ giữ Id của
-  các alias này, cộng Id của các dòng xem trước.
+- Giữ nguyên thuật toán duyệt. `runChain` thành `function*` và dùng `yield*` cho body của vòng lặp. Không chạy song song
+  nhánh hay lượt lặp nào. Executor vẫn **thuần**: không I/O, không timer. Việc nhường event loop do driver làm.
+- `runWorkflow` **vẫn đồng bộ** và giữ hình dạng kết quả, chỉ thêm `now`. Nhờ vậy test hiện có và chữ ký
+  `runWorkflow(workflow, { seed, maxRecords, queryResults })` mà 0006 dùng đều không đổi.
+- **Dừng:** driver chỉ cần thôi gọi `next()` và gọi `return()` trên generator, nên executor không cần `signal`. Trường hợp
+  xấu nhất (không sinh bản ghi nào cho tới `maxSteps`) thì nút Dừng trễ tối đa khoảng 0,6 s (đo được 571 ms).
+- **Pool của alias Record** trong `scope.all` đổi từ mảng bản ghi thành đối tượng chỉ đếm
+  `{ kind: 'generated', length, refAt(i) }`, với `refAt(i)` = `alias#(i+1)`. Pool dòng Query của 0006 vẫn là mảng dòng.
+  Ở `server/generators/reference.js`, chế độ `random` lấy `i = Math.floor(rng.next() * pool.length)` rồi trả
+  `{ $ref: pool.refAt(i) }` (pool sinh ra) hoặc Id của dòng thứ `i` (pool Query, theo 0006). Phép rút này giống
+  `rng.pick` (đã kiểm chứng). `length = 0` thì không rút số nào, giống `rng.pick([])`. `current` không đổi.
+- `referencedAliases`: tập alias Record mà một field `lookup`/`masterdetail` (mode ≠ `fixed`) trỏ tới. Inserter chỉ giữ Id
+  của các alias này, cộng Id của các dòng xem trước.
 - `columnsBySobject`: cột CSV theo thứ tự node và field trong workflow. Khác hàm `toCsv` hiện tại (thứ tự xuất hiện) ở
   chỗ không phụ thuộc bản ghi.
-- Kiểm tra `signal?.aborted` giữa các bản ghi và mỗi 10 000 bước. Khi bị dừng thì ném `RunCancelled` (không phải
-  `WorkflowError`).
-- `runWorkflow` thành **async**. Test hiện có phải thêm `await`, còn hình dạng kết quả giữ nguyên và thêm `now`.
+- Nếu sau này có node cần I/O giữa lúc chạy, đổi `function*` thành `async function*` và các vòng tiêu thụ thành
+  `for await`. Prototype đo được chi phí 0–3 % và ra đầu ra giống hệt, nhưng đổi như vậy sẽ làm `runWorkflow` thành
+  async, nên chưa làm ở doc này.
 
 ### Inserter (`server/sf/insert.js`)
 
@@ -328,11 +345,15 @@ export async function insertRecords(client, target, records, opts) // giữ API 
 export async function executeRun({ run, target, sfClient, signal, emit, collect = false })
 ```
 
+- `server/index.js` làm validate và `prefetchQueries` (0006) **trước** khi gọi hàm này, rồi tạo `run` với `queryResults`.
+  Vì vậy lỗi 422, 409 (dữ liệu Query đã đổi) và 502 vẫn là HTTP status thường, và lượt 1 cùng lượt 2 dùng chung một
+  `queryResults`.
 - Lượt 1 (xem trước, hoặc chạy thử khi target là org): đếm `total`/`bySobject`, giữ `previewRows` dòng đầu mỗi sObject,
   phát `progress` (phase `generate`). Với `collect: true` (chế độ JSON cũ) thì giữ mọi bản ghi.
 - Target org: phát `plan` (tổng chính xác, ước tính số lời gọi), rồi lượt 2 đẩy `run.records()` mới vào inserter và phát
-  `progress` (phase `insert`) sau mỗi lô, đã throttle.
-- Nhường event loop (`await new Promise(setImmediate)`) mỗi 1 000 bản ghi.
+  `progress` (phase `insert`) sau mỗi lô, đã throttle. Xong (kể cả khi dừng giữa chừng) thì gọi
+  `queryCache.invalidateOrg(org)` như 0006 yêu cầu.
+- Nhường event loop (`await new Promise(setImmediate)`) mỗi 1 000 bản ghi. Khi `signal` bị hủy thì thôi gọi `next()`.
 - Sổ đăng ký lần chạy: `Map<runId, AbortController>` trong bộ nhớ, xóa khi chạy xong. `runId` là chuỗi ngẫu nhiên ngắn,
   không lộ gì.
 - Các hằng nội bộ (không đưa ra meta): `INSERT_WINDOW = 2000`, `FAIL_FAST_BATCHES = 3`, `MAX_ERRORS_REPORTED = 1000`,
@@ -357,7 +378,8 @@ Request thêm khóa tùy chọn `now` (số mili giây). Thiếu thì server dù
 - Header **`Accept: application/x-ndjson`** → response là luồng NDJSON (`Content-Type: application/x-ndjson`,
   `Cache-Control: no-cache`, gửi header ngay). Không có header này → JSON một cục như hiện nay (đủ `records`, `ids`,
   `errors`). Chế độ này giữ cho script và test, kết quả thêm `now`.
-- Lỗi validate vẫn là **HTTP 422** JSON như cũ, vì được phát hiện trước khi gửi header.
+- Lỗi validate vẫn là **HTTP 422** JSON như cũ, vì được phát hiện trước khi gửi header. Lỗi của bước đọc trước (0006:
+  409 khi dữ liệu Query đã đổi, 502 khi Salesforce lỗi) cũng vậy.
 - Mỗi dòng là một sự kiện:
 
 ```json
@@ -369,8 +391,8 @@ Request thêm khóa tùy chọn `now` (số mili giây). Thiếu thì server dù
 {"type":"error","error":"Workflow chưa hợp lệ.","issues":[{"message":"Field AccountNumber: không tạo được giá trị duy nhất…","nodeId":"acc","field":"fields.AccountNumber"}],"insert":null}
 ```
 
-- `plan` chỉ có khi target là org. `progress` với `phase: "generate"` của lượt chạy thử có thêm `total` nếu client gửi
-  `expectedTotal` (lấy từ bản xem trước).
+- `plan` chỉ có khi target là org. Trong lượt chạy thử, client tự hiện `120 000/200 000`, vì tổng đã có từ bản xem trước
+  vừa xác nhận. Server không cần thêm tham số.
 - `done.result` có cùng hình dạng với JSON một cục hiện nay, cộng thêm: `now`, `stats.previewRows`, `stats.truncated`,
   `insert.errorsTotal`, `insert.errorGroups`, `insert.cancelled`, `insert.stopped`. Ở chế độ NDJSON, `records` và
   `insert.ids` chỉ chứa các dòng xem trước.
@@ -405,11 +427,11 @@ không đổi.
   - thứ tự insert xen kẽ giữa các sObject theo window.
 - `docs/architecture.md`:
   - sơ đồ luồng mới (dòng bản ghi + sink);
-  - executor là async generator nhưng vẫn thuần;
+  - executor là generator đồng bộ, vẫn thuần;
   - `server/run.js`;
   - `previewRows` trong bảng `LIMITS`.
-- `CLAUDE.md` (mục Architecture): executor "yields records from an async generator; `server/run.js` drives preview, insert
-  and export sinks".
+- `CLAUDE.md` (mục Architecture): executor "yields records from a synchronous generator (`createRun().records()`);
+  `server/run.js` drives the preview, insert and export sinks, so memory does not grow with the record count".
 - `docs/field-types.md`: Lookup `random` chọn đều trong `alias#1…alias#n`, ý nghĩa không đổi. Ghi chú bộ nhớ của `unique`
   (khoảng 165 B/giá trị).
 

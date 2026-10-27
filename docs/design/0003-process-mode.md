@@ -81,7 +81,8 @@ nên gần như chưa có workflow nào như vậy. Dù vậy vẫn phải mở 
 - Mọi thao tác (chèn, di chuyển, xóa, bọc) là thao tác trên mảng, viết một lần và test được bằng `node:test`.
 - Validate đơn giản hơn và **đúng hơn**: "phía trước" = chạy trước theo thứ tự trên-xuống, nên mẫu "Lặp Account rồi
   Contact ngẫu nhiên" hết bị báo lỗi. Cả nhóm lỗi về dây (vòng, cổng hai dây, node lơ lửng, thiếu Bắt đầu) biến mất.
-- 0005 cần biết "tại bước này có những biến nào". Trên cây đó là một lần duyệt tổ tiên; trên đồ thị phải phân tích dominator.
+- 0005 cần biết "tại bước này có những biến nào". Bản nháp 0005 phải dựng phân tích luồng dữ liệu trên đồ thị: ngữ cảnh
+  vòng lặp, thứ tự topo, phép gộp ở điểm kết thúc, trần 1 000 ngữ cảnh. Trên cây, việc đó chỉ là một lần duyệt từ trên xuống.
 - Giá phải trả: đổi định dạng file (cần migration); Sơ đồ mất kéo dây và đặt vị trí tự do; server, executor, gần như mọi
   file client đều phải sửa.
 
@@ -367,12 +368,14 @@ Menu `⋯` của một bước:
 - Phần còn lại của inspector giữ nguyên: nhân bản, xóa, form option, trình soạn field, Import từ org.
   Bỏ phần "Cạnh nối" vì không còn cạnh.
 - Thêm cho inspector:
-  - Dropdown **Bản ghi cha** (`kind: 'ref'`) chỉ cho chọn alias **dùng được ở vị trí này**. Các alias khác nằm trong nhóm
-    `Không dùng được ở vị trí này` và bị tắt, có `title` nói lý do (nằm phía dưới / ở nhánh khác / đang tắt).
-  - Import từ org tự chọn bản ghi cha chỉ trong các alias dùng được, ưu tiên alias luôn chạy trước.
+  - Dropdown **Bản ghi cha** (`kind: 'ref'`) chỉ cho chọn alias **dùng được ở vị trí này**, theo kết quả phân tích phạm vi
+    `scope.at[stepId]` của 0005. Các alias khác nằm trong nhóm `Không dùng được ở vị trí này` và bị tắt, có `title` nói
+    lý do (nằm phía dưới / ở nhánh khác / đang tắt).
+  - Import từ org tự chọn bản ghi cha chỉ trong các alias dùng được (0005 cũng đề xuất như vậy).
   - Esc trong một ô nhập của inspector thì rời ô và đưa focus về thẻ đang chọn, để tiếp tục dùng phím mũi tên.
-- Chỗ cho 0005: nút hoặc ô chọn biến là một control của `forms.js`, nên tự có trong inspector ở cả hai chế độ. Nếu sau này
-  sửa trong thẻ thì cũng dùng chung. Danh sách biến lấy từ `availableAt()` (mục [Module dùng chung](#module-dùng-chung-shared)).
+- Chỗ cho 0005: bộ chọn biến (`client/js/var-picker.js` của 0005) được `forms.js` gắn vào mọi option có `vars`, nên tự có
+  trong inspector ở cả hai chế độ. Nếu sau này sửa trong thẻ thì thẻ chỉ cần gọi `renderOptions` với ctx
+  `{ nodeId, fieldIndex }` như 0005 yêu cầu.
 
 ### Bàn phím
 
@@ -562,13 +565,18 @@ file v1 (client chuyển đổi), và server vẫn nhận v1 qua API (mục [API
 - `branch`: luôn tính điều kiện (kể cả khi hai nhánh rỗng, như v1), chạy `slots.true` hoặc `slots.false`, rồi
   **đi tiếp bước kế**. Đây là khác biệt về cách hiểu so với v1 ("nhánh không nối thì kết thúc chuỗi"). Migration giữ đúng
   hành vi cũ vì nó chỉ đặt bước ra sau khung khi bước đó là điểm gộp của **cả hai** nhánh.
-- **"Phía trước"** (cho lookup, và cho 0005): bước D *dùng được* tại bước S nếu D đứng trước S theo thứ tự đọc
-  (trên xuống, Đúng trước Sai) **và** D không nằm ở nhánh còn lại của một Rẽ nhánh đang bao S.
-  - `always`: D là phần tử trực tiếp của một dãy đang bao S và đứng trước S. Hoặc D nằm sâu hơn, nhưng mọi khung giữa đường
-    đi đều là Lặp chắc chắn chạy ít nhất một lần (`fixed` với `count ≥ 1`, hoặc `range` với `min ≥ 1`).
+- **"Phía trước"** (cho lookup và bộ chọn biến). Dùng đúng bảng trạng thái của 0005 (`ok`, `last`, `maybe`, ẩn
+  `notBefore`), chỉ thêm `disabled`. Trên cây, các trạng thái này tính được bằng một lần duyệt. Bước D dùng được tại
+  bước S nếu D đứng trước S theo thứ tự đọc (trên xuống, Đúng trước Sai) **và** D không nằm ở nhánh còn lại của một
+  Rẽ nhánh đang bao S.
+  - `ok`: D là phần tử trực tiếp của một dãy đang bao S và đứng trước S.
+  - `last`: D nằm trong thân một Lặp đã chạy xong ở phía trên, và mọi Lặp trên đường đi chắc chắn chạy ít nhất một lần
+    (`fixed` với `count ≥ 1`, hoặc `range` với `min ≥ 1`). Giá trị là bản ghi của lần lặp cuối.
   - `maybe`: D nằm trong một nhánh rẽ, hoặc trong một Lặp có thể chạy 0 lần, ở phía trên S.
-  - `disabled`: D, hoặc một khung bao D, đang tắt.
-  - Ví dụ `Lặp{acc}` rồi `con → acc (random)`: `acc` là `always` vì vòng chạy 5 lần, nên hết lỗi.
+  - ẩn `notBefore`: D nằm sau S, là chính S, hoặc nằm ở nhánh còn lại.
+  - `disabled` (mới): D, hoặc một khung bao D, đang tắt.
+  - Ví dụ `Lặp{acc}` rồi `con → acc (random)`: `acc` là `last`, nên hết lỗi.
+  - Trạng thái `maybe` của biến lặp mà 0005 mô tả ("node chạy cả trong lẫn ngoài body") không thể xảy ra trên cây.
 - `stats.byStep` (mới) trong kết quả `/api/run`, dùng cho chip số liệu:
   `{ "<stepId>": { "runs": 5, "records": 5 } }`. Lặp có thêm `iterations`, Rẽ nhánh có thêm `true` và `false`
   (số lần đi mỗi nhánh).
@@ -590,7 +598,14 @@ file v1 (client chuyển đổi), và server vẫn nhận v1 qua API (mục [API
 
 - `slots[].empty` là nhãn nút trong ô rỗng (mặc định `Thêm bước`). `slots[].hint` là dòng nhỏ dưới nút đó. Thứ tự trong
   mảng `slots` là thứ tự đọc (Đúng trước Sai), và là thứ tự mà quy tắc chèn mặc định dùng.
-- Bỏ `start`, `inputs`, `outputs` (cổng). Lưu ý: cái tên `outputs` sẽ được giải phóng, xem câu hỏi về 0005.
+- Bỏ `start`, `inputs`, `outputs` (cổng).
+- Hợp đồng `flow` / `exposes` của 0005 giữ nguyên ý nghĩa, chỉ đổi phần nói về cổng:
+  - `flow` của `record`/`query`/`pick` là `{ "kind": "sequence" }`, bỏ `next`.
+  - `flow` của `loop` là `{ "kind": "loop", "body": "body" }`, bỏ `after`, vì "sau vòng lặp" là bước kế trong dãy.
+  - `flow` của `branch` là `{ "kind": "branch", "alternatives": ["true", "false"] }`. Ở v2, đây là **key slot**, không
+    phải tên cổng.
+  - `exposes.visibleIn: { "port": "body" }` đổi thành `{ "slot": "body" }`.
+  - `slots` (0003) lo phần hiển thị (key, nhãn, thứ tự); `flow` (0005) lo cách các slot chạy.
 - `category`: `data` hoặc `control`. Menu "+" và cột trái nhóm theo `category`, nhãn nhóm `Dữ liệu` / `Điều khiển`.
 - Option có `summary: true` được dùng cho tóm tắt chung trên thẻ của loại bước mới. Record, Lặp và Rẽ nhánh vẫn giữ câu
   tóm tắt riêng (chuyển từ `canvas.js` sang `client/js/summary.js`).
@@ -631,6 +646,15 @@ Mới hoặc đổi (`nodeId` luôn là id bước; cột `field` là giá trị
 | cảnh báo | `fields.X` | Lookup: `Field "X": bước "acc" nằm trong một nhánh rẽ hoặc vòng lặp có thể không chạy, nên có lúc field này sẽ trống.` |
 | cảnh báo | `fields.X` | Master-Detail: `Field "X": bước "acc" nằm trong một nhánh rẽ hoặc vòng lặp có thể không chạy, nên có lúc chưa có bản ghi cha và lần chạy sẽ báo lỗi. Đưa "acc" ra ngoài để nó luôn chạy trước.` |
 
+Năm dòng `fields.X` cuối là **đề xuất cho các mã của 0005**:
+
+- Câu `notBefore` hiện tại của 0005 (`… phải nằm phía trước node này trong workflow (hiện nó chạy sau hoặc ở nhánh khác).`)
+  được tách làm hai câu, vì trên cây biết chính xác lý do.
+- Thêm mã `disabled`.
+- Đổi chữ "node" thành "bước" (câu hỏi 5).
+- Câu `maybe` dùng cho Lookup `ref`. Câu `maybe` cho biến trong template vẫn theo 0005.
+- Nếu 0005 chưa làm thì 0003 chỉ cần phần phân tích cho Lookup `ref`, viết đúng theo hợp đồng trạng thái ở trên.
+
 Các quy tắc khác:
 
 - Bước đang tắt và bước con của nó: **không** kiểm tra cấu hình. Alias vẫn phải duy nhất trên toàn cây, kể cả bước tắt,
@@ -664,11 +688,15 @@ thuần, không DOM, không I/O, và nhận thứ tự slot qua tham số `slotK
 | `wrapStep(wf, id, container)` | Bọc trong Lặp / Rẽ nhánh |
 | `cloneSteps(steps, takenAliases)` | Ctrl+D và migration (id mới, alias mới bên trong bản sao, tham chiếu nội bộ đổi theo) |
 | `renameAlias(wf, from, to)` | Đổi alias (chuyển từ `inspector.js`) |
-| `availableAt(wf, id, slotKeys)` → `[{ alias, kind: 'record' \| 'loop', stepId, sobject, certainty }]` | Validate lookup, dropdown bản ghi cha, Import từ org, chọn biến của 0005 |
 | `defaultInsertTarget(wf, selectedId, slotKeys)` | Quy tắc chèn mặc định |
 | `neighbourTarget(wf, id, dir, collapsed, slotKeys)` | Alt+↑/↓ |
+| `toFlowGraph(wf, slotKeys)` → `{ nodes, edges }` | Chỉ cần nếu `scope.js` của 0005 đã viết trên đồ thị trước: đổi cây về đồ thị để phân tích. Mỗi bước nối sang bước kế; đuôi của mọi nhánh (kể cả nhánh rỗng, nhánh lồng) nối sang bước sau khung. Đây là `buildFlow(v2)` mà 0005 yêu cầu |
 
 `shared/migrate-v1.js` chứa `migrateV1(wf)` → `{ workflow, report }`.
+
+Phân tích phạm vi (`analyzeScope`, `scope.at`) **thuộc 0005**, đặt ở `server/workflow/scope.js` và trả về qua
+`/api/validate`. Nếu 0003 làm trước thì 0005 viết thẳng trên cây; nếu 0005 làm trước thì 0003 thêm `toFlowGraph`.
+Như vậy chỉ có một bản phân tích phạm vi.
 
 ### Chuyển v1 → v2 (migration)
 
@@ -725,7 +753,7 @@ Kết quả chạy thử nguyên mẫu (seed 7, cùng `now`):
   - Bảng Node: cột "Cổng ra" đổi thành "Bước con (`slots`)", bỏ dòng `start`.
   - "Ngữ nghĩa khi chạy": thay ba ý "Mỗi cổng ra nối tối đa một node…", "Không được tạo vòng…" và "Nhánh không nối thì…"
     bằng ngữ nghĩa dãy / thân Lặp / Rẽ nhánh đi tiếp / `disabled`.
-  - "Đường dẫn tham chiếu": thêm định nghĩa "phía trước" (`always` / `maybe`).
+  - "Đường dẫn tham chiếu": thêm định nghĩa "phía trước" theo trạng thái `ok` / `last` / `maybe` / `disabled`.
   - Quy ước `field`: thêm `slots.<key>`. Kết quả: thêm `stats.byStep`.
   - Thêm mục "Version 1 (cũ) và chuyển đổi" tóm tắt định dạng v1 và quy tắc migration.
 - `docs/architecture.md`:
@@ -791,10 +819,10 @@ Khối lượng ước khoảng +2 000 / −700 dòng, trong khi codebase hiện
 | # | Việc | File | Kiểm tra | Ước lượng | Rủi ro |
 | --- | --- | --- | --- | --- | --- |
 | 0 | Đóng băng executor v1 để so sánh | `test/fixtures/run-v1.js` (chép logic `runChain` hiện tại, không validate) | Test "run-v1 khớp runWorkflow hiện tại trên 2 mẫu", chạy **trước** khi sửa executor | 0.25 | Thấp |
-| 1 | Logic cây dùng chung + route tĩnh `/shared/` | `shared/workflow-tree.js`, `server/index.js` | `test/workflow-tree.test.js`: chèn/di chuyển/xóa/bọc/bỏ vỏ/nhân bản (đổi alias nội bộ)/`renameAlias`/`availableAt` (`always`, `maybe`, nhánh khác, tắt)/`defaultInsertTarget`/`neighbourTarget` vào-ra khung. `test/server.test.js`: `/shared/workflow-tree.js` trả 200, traversal bị chặn | 1 | Thấp |
+| 1 | Logic cây dùng chung + route tĩnh `/shared/` | `shared/workflow-tree.js`, `server/index.js` | `test/workflow-tree.test.js`: chèn/di chuyển/xóa/bọc/bỏ vỏ/nhân bản (đổi alias nội bộ)/`renameAlias`/`defaultInsertTarget`/`neighbourTarget` vào-ra khung; `toFlowGraph` nếu 0005 đã có. `test/server.test.js`: `/shared/workflow-tree.js` trả 200, traversal bị chặn | 1 | Thấp |
 | 2 | Migration | `shared/migrate-v1.js` | `test/migrate.test.js`: (i) 2 mẫu và các ca có cấu trúc chạy bằng `run-v1` và executor v2 cho bản ghi giống hệt; (ii) dạng 4–6 nhân bản đúng và báo cáo đúng; (iii) node lơ lửng bị tắt ở cuối; (iv) vòng, cổng hai dây, dây hỏng; (v) giới hạn nhân bản; (vi) v2 vào thì ra nguyên | 1 | **Trung bình**: thuật toán điểm gộp |
-| 3 | Server theo hợp đồng v2 | `server/workflow/nodes.js` (`slots`, `category`, `summary`, bỏ `start`/`inputs`/`outputs`, `maxDepth`), `schema.js` (validate cây, quy tắc "phía trước", câu lỗi mới), `executor.js` (`runSteps` đệ quy, `disabled`, `stats.byStep`), `server/index.js` (nhận v1), `server/generators/reference.js` (nhãn "Bản ghi cha") | `test/workflow.test.js` viết lại bằng helper v2 (`loop(id, cfg, body)`, `branch(id, cfg, yes, no)`) và thêm ca: đi tiếp sau Rẽ nhánh; `Lặp{acc}` rồi `con → acc random` hợp lệ; tham chiếu nhánh khác thì lỗi; `maybe` thì cảnh báo; bước tắt bị bỏ qua và tham chiếu tới nó thì lỗi; quá 32 cấp; lỗi `slots.x` có `field`. `test/server.test.js`: danh sách meta là `record, loop, branch`; `/api/run` với v1 chạy được và có cảnh báo chuyển đổi; có `stats.byStep` | 1 | Trung bình |
-| 4 | Lõi client | `client/js/store.js` (v2 rỗng, khóa mới, `selection` loại `step`/`workflow`, `collapsed`, `view`, `runKey` theo `steps`), `client/js/ops.js` (mới: bọc hàm `shared/` vào `updateWorkflow`/`select`, toast Hoàn tác), `client/js/summary.js` (mới: `nodeSummary` + tóm tắt chung + chip số liệu), `main.js` (migrate khi boot và mở file, hộp thoại báo cáo, phím tắt mới), `inspector.js` (bỏ `renderEdge`, chọn workflow, `ref` theo `availableAt`, Import tự chọn cha, Esc về thẻ), `forms.js` (`ref` có nhóm tắt), `dom.js` (toast có nút), `samples.js` (viết lại v2), `index.html` (ẩn canvas) | `npm test`; mở trang với `localStorage` có mẫu v1 thì thấy toast chuyển đổi, `sfdg.workflow.v1` còn nguyên; mở file v1 có node lơ lửng thì thấy hộp thoại báo cáo | 1–1.5 | Trung bình: nhiều chỗ chạm, dễ hỏng giữ focus |
+| 3 | Server theo hợp đồng v2 | `server/workflow/nodes.js` (`slots`, `category`, `summary`, bỏ `start`/`inputs`/`outputs`, `maxDepth`), `schema.js` (validate cây, câu lỗi mới; quy tắc "phía trước" qua `scope.js` của 0005, hoặc bản tối thiểu cho Lookup `ref` nếu 0005 chưa có), `executor.js` (`runSteps` đệ quy, `disabled`, `stats.byStep`), `server/index.js` (nhận v1), `server/generators/reference.js` (nhãn "Bản ghi cha") | `test/workflow.test.js` viết lại bằng helper v2 (`loop(id, cfg, body)`, `branch(id, cfg, yes, no)`) và thêm ca: đi tiếp sau Rẽ nhánh; `Lặp{acc}` rồi `con → acc random` hợp lệ; tham chiếu nhánh khác thì lỗi; `maybe` thì cảnh báo; bước tắt bị bỏ qua và tham chiếu tới nó thì lỗi; quá 32 cấp; lỗi `slots.x` có `field`. `test/server.test.js`: danh sách meta là `record, loop, branch`; `/api/run` với v1 chạy được và có cảnh báo chuyển đổi; có `stats.byStep` | 1 | Trung bình |
+| 4 | Lõi client | `client/js/store.js` (v2 rỗng, khóa mới, `selection` loại `step`/`workflow`, `collapsed`, `view`, `runKey` theo `steps`), `client/js/ops.js` (mới: bọc hàm `shared/` vào `updateWorkflow`/`select`, toast Hoàn tác), `client/js/summary.js` (mới: `nodeSummary` + tóm tắt chung + chip số liệu), `main.js` (migrate khi boot và mở file, hộp thoại báo cáo, phím tắt mới), `inspector.js` (bỏ `renderEdge`, chọn workflow, `ref` theo `scope.at`, Import tự chọn cha, Esc về thẻ), `forms.js` (`ref` có nhóm tắt), `dom.js` (toast có nút), `samples.js` (viết lại v2), `index.html` (ẩn canvas) | `npm test`; mở trang với `localStorage` có mẫu v1 thì thấy toast chuyển đổi, `sfdg.workflow.v1` còn nguyên; mở file v1 có node lơ lửng thì thấy hộp thoại báo cáo | 1–1.5 | Trung bình: nhiều chỗ chạm, dễ hỏng giữ focus |
 | 5 | Chế độ Quy trình | `client/js/process.js` (mới), `client/css/app.css`, `client/index.html` | `smoke.cjs` cập nhật: chờ `.step-card`; nạp mẫu; bấm "+" trong thân Lặp → Record; Alt+↑; Delete rồi Ctrl+Z; Ctrl+Enter thì có `table.data` và chip `bản ghi`; không lỗi trang; vẫn dưới 10 s. Chụp màn hình rộng 1440 và hẹp 390 | 2–3 | Trung bình: kéo thả, bàn phím |
 | 6 | Chế độ Sơ đồ (đợt B) | `client/js/layout.js` (mới, hàm thuần), `client/js/canvas.js` (viết lại), `index.html` (nút Quy trình/Sơ đồ, phím M) | `test/layout.test.js` (node:test import thẳng `client/js/layout.js`): kích thước dãy, Lặp, Rẽ nhánh lồng nhau, không chồng thẻ. Smoke: chọn bước, đổi sang Sơ đồ, bước vẫn được chọn và nằm trong khung nhìn | 1.5 | Trung bình |
 | 7 | Tài liệu và file agent | Danh sách ở mục [Thay đổi cần làm ở tài liệu tham chiếu](#thay-đổi-cần-làm-ở-tài-liệu-tham-chiếu-dự-kiến-implementer-làm-cùng-code), phần "Đã làm" của doc này | Reviewer đối chiếu tài liệu với code | 0.5 | Thấp |
@@ -821,36 +849,49 @@ Quyết định cần người dùng chốt:
 4. **"Tắt bước" (`disabled`, Ctrl+/) thành tính năng chung?** Migration cần nó cho node lơ lửng. Đề xuất: có, vì nó cũng tiện
   để tạm bỏ Task mà không xóa.
 5. **Gọi là "bước" thay vì "node" trên UI?** Đề xuất: có, trong mọi câu chữ mới và sửa. Code giữ `nodeId`/`type`.
-6. **Thứ tự với 0004–0006:** đề xuất làm bước 1–3 của 0003 trước, rồi 0004/0005/0006 viết trên v2. Nếu một trong số đó vào
-  trước thì phần executor/schema của nó phải chuyển sang cây ở bước 3.
+6. **Thứ tự với 0004–0006.** Bản nháp 0005 và 0006 đều giữ `version: 1` và viết trên đồ thị (0005: `scope.js` theo
+   `flow`; 0006: pre-fetch "mỗi node Query đến được từ Bắt đầu"). Đề xuất: làm bước 1–3 của 0003 trước, rồi
+   0004/0005/0006 viết trên v2. Như vậy `scope.js` duyệt cây (đơn giản hơn nhiều), và không phải viết `toFlowGraph`.
+   Nếu 0005 hoặc 0006 vào trước thì ở bước 3, phần schema/executor của chúng phải chuyển sang cây, và bước 1 thêm `toFlowGraph`.
 7. **Server nhận v1 tới bao giờ?** Đề xuất: mãi mãi, vì chỉ là một lời gọi `migrateV1`.
 8. Giữ nhãn **"Rẽ nhánh"** hay đổi thành **"Điều kiện"** như Power Automate? Đề xuất: giữ "Rẽ nhánh", vì `label` đã nằm ở
    server và đổi lúc nào cũng được.
 
 ### Phụ thuộc và giả định về 0004–0006
 
-- **0004 (stream):**
-  - Giả định executor dạng stream chạy trên cây v2, ví dụ generator đệ quy `function* runSteps(steps, scope)` với
-    `yield*` cho thân. Nó không dựa vào `edges`.
-  - Tiến độ theo bước dùng cùng khóa `stepId` và cùng hình dạng `stats.byStep`, để chip số liệu trên thẻ cập nhật trực
-    tiếp lúc chạy.
-  - Nếu 0004 muốn "stream mode" kiểu luồng dữ liệu (bước nhận bản ghi từ bước trên và biến đổi) thì đó là ngữ nghĩa khác
-    với luồng điều khiển của cây, và cần thống nhất riêng. Dãy bước vẫn cho "bước trước" rõ ràng nếu cần.
-  - Determinism: thứ tự gọi `rng` phải giữ như mục ngữ nghĩa.
-- **0005 (chọn biến):**
-  - Giả định bộ chọn là một control của `forms.js` (kind mới, hoặc nút "Chèn biến" cho `string`/`text`/`template`), nên
-    dùng được trong inspector ở cả hai chế độ và trong thẻ nếu sau này sửa inline.
-  - Danh sách biến tại một bước lấy từ `availableAt()` ở `shared/workflow-tree.js` (0003 định nghĩa). 0005 mở rộng thêm
-    field của từng loại bước. Biến `maybe` nên được đánh dấu "có thể trống".
-  - **Trùng tên:** meta v1 đang dùng `outputs` cho cổng ra. Đề xuất 0005 đặt tên khác (`provides` hoặc `variables`).
-    Nếu 0005 muốn giữ `outputs` thì phải làm sau bước 3 của 0003, lúc `outputs` (cổng) đã bị bỏ.
-- **0006 (Query, Pick random record):**
-  - Giả định đây là bước thường (`slots: []`, `category: 'data'`), có alias như Record, và tóm tắt bằng option
-    `summary: true`. View Quy trình và Sơ đồ không phải sửa gì.
+- **0004 (stream)**, đã đối chiếu với bản nháp `0004-streaming-execution.md`:
+  - 0004 giữ thuật toán duyệt và `version: 1`. Nó đổi `runChain` thành `async function*` với `yield*` cho thân vòng lặp,
+    và bỏ checkbox "stream mode" (luôn chạy dạng luồng). Như vậy không có ngữ nghĩa luồng dữ liệu nào xung đột với cây.
+  - Trên v2, phần đó chỉ là `async function* runSteps(steps, scope)` lặp qua mảng, `yield*` cho `slots`. Hai design cùng
+    viết lại `executor.js`, nên làm lần lượt (câu hỏi 6). Ai làm sau thì chuyển phần kia sang.
+  - Đề xuất 0004 thêm `byStep` (cùng hình dạng `stats.byStep` ở trên) vào sự kiện `progress` và vào `stats` cuối, để chip
+    số liệu trên thẻ cập nhật trực tiếp khi chạy. `errorGroups[].nodeId` và `stopped.nodeId` của 0004 có thể hiện thành
+    badge `3 lỗi insert` trên thẻ (việc sau).
+  - Determinism: thứ tự gọi `rng` của v2 giữ như mục [Ngữ nghĩa khi chạy](#ngữ-nghĩa-khi-chạy-dự-kiến). 0004 cũng giữ
+    nguyên thứ tự đó.
+- **0005 (chọn biến)**, đã đối chiếu với bản nháp `0005-variable-picker.md`:
+  - 0005 dùng khóa mới `exposes` + `flow`, không dùng `outputs`, nên không trùng tên. Ở v2, `flow` bỏ `next`/`after`,
+    `alternatives`/`body` là key slot, và `exposes.visibleIn: { port }` đổi thành `{ slot }` (mục Danh mục loại bước).
+  - Phân tích phạm vi là `analyzeScope` / `scope.at` của 0005, ở server. 0003 không làm bản thứ hai. Trạng thái
+    `ok`/`last`/`maybe`/`notBefore` giữ nguyên, 0003 chỉ thêm `disabled`.
+  - 0005 cần `node.id` ổn định giữa hai chế độ và giữa v1/v2. Đã đáp ứng: migration giữ id, chỉ bản sao mới có id `_2`.
+  - Thẻ dùng `renderOptions` với ctx `{ nodeId, fieldIndex }` nếu sau này sửa inline. Bản này sửa trong inspector, nên
+    bộ chọn đã có sẵn.
+  - Hai bên trùng một đề xuất: tự đặt biến lặp `loop2`, … (câu hỏi 6 của 0005). Nên làm một lần trong `ops.js`.
+  - Câu lỗi `notBefore`: đề xuất tách làm hai câu, thêm `disabled`, và dùng chữ "bước" (mục Validate v2).
+  - Giá trị mẫu của 0005 cần "bản ghi đầu tiên của mỗi node". Việc này không đổi với 0003.
+- **0006 (Query `query`, Chọn bản ghi `pick`)**, đã đối chiếu với bản nháp `0006-query-pick-nodes.md`:
+  - Hai loại này là bước thường: v2 thêm `slots: []`, `category: 'data'`. 0006 đã nhận cờ `needsOrg: true`, nên thẻ hiện
+    `Chưa chọn org: dùng bản ghi mẫu`. View Quy trình và Sơ đồ không phải sửa gì.
+  - Tóm tắt trên thẻ: 0006 sẽ viết vào `client/js/summary.js` (thay `nodeSummary` trong `canvas.js`), hoặc đánh dấu option
+    `summary: true`.
+  - Pre-fetch ở v2: mọi bước `query` **không tắt**, theo thứ tự đọc, thay cho "đến được từ Bắt đầu".
+  - "Import từ org" chèn Query "ngay sau Bắt đầu": ở v2 là `insertStep(wf, { parentId: null, slot: null, index: 0 }, …)`.
+    Câu "Nên đặt Query ngay sau Bắt đầu" vẫn đúng, vì thẻ Bắt đầu vẫn hiện ở đầu cả hai chế độ.
+  - Kiểm tra "Pool không ở phía trước" dùng chung phân tích phạm vi (như 0005 đề xuất).
   - Nếu cần "mỗi bản ghi của truy vấn" thì nên là một `mode` mới của Lặp (ví dụ `each` với `source: <alias>`), không phải
     loại khung mới. Dù vậy view vẫn hỗ trợ khung bất kỳ có `slots` khai báo trong meta: 1 slot là thân, từ 2 slot là các cột.
-  - Query cần org khi chạy, trong khi executor là hàm thuần. Đề xuất meta có cờ `needsOrg: true` để thẻ hiện
-    `Cần chọn org`, và lỗi "chưa chọn org" gắn `nodeId` của bước Query.
+  - Kết quả `/api/run` của 0006 có thêm `queries[]`. Chip số liệu của thẻ Query có thể hiện `200 bản ghi đọc từ org`.
 
 ### Việc tiếp theo (không làm trong bản này)
 
