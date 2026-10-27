@@ -1,4 +1,5 @@
-// HTTP entry point: JSON API under /api, static client from /client. No framework on purpose.
+// HTTP entry point: JSON API under /api, static client from /client, and the pure modules
+// shared by client and server from /shared (served at /shared/…). No framework on purpose.
 // Binds to 127.0.0.1 by default — the server acts with the local sf CLI's org credentials,
 // so it must not be reachable from the network unless HOST is set explicitly.
 
@@ -16,7 +17,9 @@ import { createSfClient } from './sf/client.js';
 import { mapDescribe } from './sf/describe-map.js';
 import { insertRecords } from './sf/insert.js';
 
-const CLIENT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../client');
+const ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const CLIENT_DIR = path.join(ROOT_DIR, 'client');
+const SHARED_DIR = path.join(ROOT_DIR, 'shared');
 const MAX_BODY = 10 * 1024 * 1024;
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -113,9 +116,17 @@ async function readJson(req) {
 }
 
 async function serveStatic(pathname, res) {
-  const rel = pathname === '/' ? 'index.html' : decodeURIComponent(pathname).replace(/^\/+/, '');
-  const file = path.resolve(CLIENT_DIR, rel);
-  if (!file.startsWith(CLIENT_DIR + path.sep)) throw httpError(403, 'Forbidden');
+  let decoded;
+  try {
+    decoded = decodeURIComponent(pathname);
+  } catch {
+    throw httpError(400, 'Đường dẫn không hợp lệ.');
+  }
+  const shared = decoded.startsWith('/shared/');
+  const dir = shared ? SHARED_DIR : CLIENT_DIR;
+  const rel = pathname === '/' ? 'index.html' : decoded.slice(shared ? '/shared/'.length : 0).replace(/^\/+/, '');
+  const file = path.resolve(dir, rel);
+  if (!file.startsWith(dir + path.sep)) throw httpError(403, 'Forbidden');
   try {
     if (!(await stat(file)).isFile()) throw new Error();
   } catch {

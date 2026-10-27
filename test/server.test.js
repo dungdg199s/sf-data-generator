@@ -54,3 +54,14 @@ test('static files are served and traversal is blocked', async () => {
   const evil = await fetch(base + '/..%2fpackage.json');
   assert.ok([403, 404].includes(evil.status));
 });
+
+test('shared modules are served from /shared/ and traversal out of it is blocked', async () => {
+  const mod = await fetch(base + '/shared/workflow-tree.js');
+  assert.equal(mod.status, 200);
+  assert.match(mod.headers.get('content-type'), /javascript/);
+  assert.match(await mod.text(), /export function findStep/);
+  for (const evil of ['/shared/..%2fpackage.json', '/shared/%2e%2e/server/index.js', '/shared/..%5c..%5cpackage.json']) {
+    const res = await fetch(base + evil);
+    assert.ok([400, 403, 404].includes(res.status), `${evil} → ${res.status}`);
+  }
+});
