@@ -860,9 +860,10 @@ Quyết định cần người dùng chốt:
 ### Phụ thuộc và giả định về 0004–0006
 
 - **0004 (stream)**, đã đối chiếu với bản nháp `0004-streaming-execution.md`:
-  - 0004 giữ thuật toán duyệt và `version: 1`. Nó đổi `runChain` thành `async function*` với `yield*` cho thân vòng lặp,
-    và bỏ checkbox "stream mode" (luôn chạy dạng luồng). Như vậy không có ngữ nghĩa luồng dữ liệu nào xung đột với cây.
-  - Trên v2, phần đó chỉ là `async function* runSteps(steps, scope)` lặp qua mảng, `yield*` cho `slots`. Hai design cùng
+  - 0004 giữ thuật toán duyệt và `version: 1`. Bản cuối của 0004 đổi `runChain` thành **generator đồng bộ** (`function*`)
+    với `yield*` cho thân vòng lặp; `runWorkflow` vẫn đồng bộ. 0004 cũng bỏ checkbox "stream mode" (luôn chạy dạng luồng).
+    Như vậy không có ngữ nghĩa luồng dữ liệu nào xung đột với cây. (Cập nhật khi tổng hợp, xem [0007](0007-tong-hop-0003-0006.md).)
+  - Trên v2, phần đó chỉ là `function* runSteps(steps, scope)` lặp qua mảng, `yield*` cho `slots`. Hai design cùng
     viết lại `executor.js`, nên làm lần lượt (câu hỏi 6). Ai làm sau thì chuyển phần kia sang.
   - Đề xuất 0004 thêm `byStep` (cùng hình dạng `stats.byStep` ở trên) vào sự kiện `progress` và vào `stats` cuối, để chip
     số liệu trên thẻ cập nhật trực tiếp khi chạy. `errorGroups[].nodeId` và `stopped.nodeId` của 0004 có thể hiện thành
