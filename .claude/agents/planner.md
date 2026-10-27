@@ -25,7 +25,7 @@ Your job is to turn a request into a design that is **convenient to use**, and t
 - Is anything written to an org? Then there must be a confirmation naming the org and record counts, with an extra warning for production, and a way to preview the same data first (seed).
 - Can the user lose work? Consider undo, autosave, confirmations, and renames propagating to references.
 - Does the UI need new hard-coded knowledge? Prefer extending the server-side option schema (`kind`, `showIf`, `help`) so the form is generated from `/api/meta`.
-- Is the workflow JSON change backward compatible with saved `version: 1` files? If not, plan a migration.
+- Is the workflow JSON change backward compatible with saved `version: 2` files (and with `version: 1` files, which are migrated by `shared/migrate-v1.js`)? If not, plan a migration.
 
 ## Rules
 

@@ -12,10 +12,11 @@ The workflow JSON is shared by UI and server. Any change to node types, ports, c
 
 | Layer | File(s) |
 | --- | --- |
-| Catalogue | `server/workflow/nodes.js` or `server/generators/*.js` (+ registry `server/generators/index.js`) |
-| Validation | `server/workflow/schema.js` (issues must carry `nodeId` and `field`) |
+| Catalogue | `server/workflow/nodes.js` (step types: `slots`, `category`, `options`) or `server/generators/*.js` (+ registry `server/generators/index.js`) |
+| Validation | `server/workflow/schema.js` (issues must carry `nodeId` = step id and `field`) |
 | Execution | `server/workflow/executor.js` / `server/workflow/conditions.js` / `server/workflow/paths.js` |
-| UI | Only if the option `kind` is new: `client/js/forms.js`; node summary text: `client/js/canvas.js` `nodeSummary` |
+| Shared (client + server) | `shared/workflow-tree.js` (tree ops), `shared/migrate-v1.js` (v1 → v2), `shared/scope.js` (Lookup `ref` scope) |
+| UI | Only if the option `kind` is new: `client/js/forms.js`; card summary text and stat chip: `client/js/summary.js` (`stepSummary`, `statChip`) |
 | Docs | `docs/workflow-schema.md`, `docs/field-types.md` |
 | Tests | `test/*.test.js` |
 | Samples | `client/js/samples.js` if an existing sample becomes invalid |
