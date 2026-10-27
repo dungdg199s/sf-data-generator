@@ -2,8 +2,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   walkSteps, findStep, insertStep, removeStep, moveStep, wrapStep, cloneSteps, renameAlias, setStepAlias, isAliasName, malformedSteps,
-  defaultInsertTarget, neighbourTarget, allSteps, collectAliases, collectIds,
+  defaultInsertTarget, neighbourTarget, allSteps, collectAliases, collectIds, renameField,
 } from '../shared/workflow-tree.js';
+import { scopeCatalog } from '../server/workflow/schema.js';
 
 const SLOTS = { record: [], loop: ['body'], branch: ['true', 'false'] };
 const slotKeys = (type) => SLOTS[type] ?? [];
@@ -193,4 +194,53 @@ test('malformedSteps names the first step that is not an object, or a bad slots 
   assert.match(malformedSteps(tree([{ id: 'l', type: 'loop', slots: { body: 3 } }])), /"slots.body" của bước "l"/);
   assert.match(malformedSteps(tree([{ id: 'l', type: 'loop', slots: [] }])), /"slots" của bước "l"/);
   assert.match(malformedSteps({ version: 2 }), /steps/);
+});
+
+// ---------- reference-aware renames (design 0005) ----------
+
+const catalog = scopeCatalog();
+const T = (name, template) => ({ name, type: 'template', options: { template } });
+const fieldsOf = (wf, id) => findStep(wf, id).step.config.fields;
+
+test('renameAlias with the catalogue: templates, {{ }} in a branch left, Lookup ref; counts references', () => {
+  const br = { id: 'br', type: 'branch', config: { kind: 'compare', left: '{{ acc.Industry }}' }, slots: { true: [], false: [] } };
+  const wf = tree([r('a', 'acc'), r('c', 'con', [T('T', '{{acc.Name}} {{ acc.Name }} {{accX.Name}} {{acc}}'), { name: 'P', type: 'lookup', options: { ref: 'acc' } }]), br]);
+  const n = renameAlias(wf.steps, 'acc', 'account', { catalog });
+  assert.equal(n, 5);
+  assert.equal(fieldsOf(wf, 'c')[0].options.template, '{{account.Name}} {{ account.Name }} {{accX.Name}} {{account}}');
+  assert.equal(fieldsOf(wf, 'c')[1].options.ref, 'account');
+  assert.equal(br.config.left, '{{ account.Industry }}');
+});
+
+test('setStepAlias with the catalogue renames only references to that loop (two loops named "loop")', () => {
+  // Nested loops with the same name (old files): the inner loop owns {{loop.*}} inside its body.
+  const wf = tree([loop('outer', [r('a', 'a', [T('T', '{{loop.index}}')]), loop('inner', [r('b', 'b', [T('T', '{{loop.index}}')])]), r('c', 'c', [T('T', '{{loop.count}}')])])]);
+  setStepAlias(wf, 'outer', 'i', { memo: new Map(), slotKeys, catalog });
+  assert.equal(fieldsOf(wf, 'a')[0].options.template, '{{i.index}}');
+  assert.equal(fieldsOf(wf, 'c')[0].options.template, '{{i.count}}');
+  assert.equal(fieldsOf(wf, 'b')[0].options.template, '{{loop.index}}', 'the inner loop keeps its references');
+  // Without the catalogue the whole body follows (old behaviour).
+  const old = structuredClone(wf);
+  findStep(old, 'outer').step.config.alias = 'loop';
+  setStepAlias(old, 'outer', 'k', { memo: new Map(), slotKeys });
+  assert.equal(fieldsOf(old, 'b')[0].options.template, '{{k.index}}');
+});
+
+test('renameField updates {{alias.Old}} everywhere, {{this.Old}} in the step and branch left paths', () => {
+  const br = { id: 'br', type: 'branch', config: { kind: 'compare', left: 'acc.Industry', op: 'eq', right: 'x' }, slots: { true: [], false: [] } };
+  const wf = tree([
+    r('a', 'acc', [{ name: 'Industry', type: 'picklist', options: { values: ['A'] } }, T('Copy', '{{this.Industry}}!')]),
+    r('o', 'other', [{ name: 'Industry', type: 'text' }]),
+    r('c', 'con', [T('Title', '{{acc.Industry}} / {{other.Industry}} / {{acc.Name}}'), T('Other', '{{this.Industry}}')]),
+    br,
+  ]);
+  fieldsOf(wf, 'a')[0].name = 'Industry__c'; // the inspector has already applied the new name
+  const res = renameField(wf, 'a', 'Industry', 'Industry__c', { catalog });
+  assert.equal(res.count, 3);
+  assert.deepEqual(res.places.map((p) => `${p.nodeId}:${p.field}`).sort(), ['a:fields.Copy', 'br:left', 'c:fields.Title']);
+  assert.equal(fieldsOf(wf, 'a')[1].options.template, '{{this.Industry__c}}!');
+  assert.equal(fieldsOf(wf, 'c')[0].options.template, '{{acc.Industry__c}} / {{other.Industry}} / {{acc.Name}}');
+  assert.equal(fieldsOf(wf, 'c')[1].options.template, '{{this.Industry}}', "another step's this.* is not touched");
+  assert.equal(br.config.left, 'acc.Industry__c');
+  assert.deepEqual(renameField(wf, 'a', 'Nope', 'X', { catalog }), { count: 0, places: [] });
 });

@@ -1,5 +1,6 @@
 // Tree operations on workflow JSON version 2 (design 0003). Shared by the server (Node) and
-// the browser (served from /shared/), so it must stay pure: no DOM, no I/O, no imports.
+// the browser (served from /shared/), so it must stay pure: no DOM, no I/O, and only imports
+// from shared/ (scope.js, for reference-aware renames: design 0005).
 //
 // A workflow is { version: 2, steps: [step…] }. A step is { id, type, config, slots?, disabled? };
 // container steps (loop, branch) hold child sequences in `slots: { <key>: [step…] }`.
@@ -8,6 +9,8 @@
 //
 // An insertion point ("target") is { parentId: null | stepId, slot: null | key, index }:
 // parentId null means the root sequence `wf.steps`.
+
+import { analyzeScope, referenceOptions, refsTo, tokenize, stripPath } from './scope.js';
 
 const ownSlots = (step) => Object.keys(step?.slots ?? {});
 
@@ -195,29 +198,106 @@ export function nextId(id, taken) {
   }
 }
 
-const escapeRe = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-
 /** A usable alias / loop variable name (same rule as server/workflow/schema.js). */
 export const isAliasName = (name) => typeof name === 'string' && /^[A-Za-z_][A-Za-z0-9_]*$/.test(name) && name !== 'this';
 
-/**
- * Rename a record alias (or a loop variable) inside `steps`: Lookup `ref`, `{{from.` in
- * templates and `from.` at the start of a branch `left`. Pass the loop body to rename a loop
- * variable only where it is visible.
- */
-export function renameAlias(steps, from, to) {
-  if (!from || from === to || !isAliasName(to)) return; // never move references to an unusable name
-  const re = new RegExp(`\\{\\{(\\s*)${escapeRe(from)}\\.`, 'g');
-  walkSteps(steps, (s) => {
-    for (const f of s.config?.fields ?? []) {
-      if (!f?.options) continue;
-      if (f.options.ref === from) f.options.ref = to;
-      if (typeof f.options.template === 'string') f.options.template = f.options.template.replace(re, `{{$1${to}.`);
-    }
-    if (s.type === 'branch' && typeof s.config?.left === 'string' && s.config.left.startsWith(`${from}.`)) {
-      s.config.left = to + s.config.left.slice(from.length);
+/** Options holding references, without a catalogue: the built-in ones (template, ref, left). */
+function legacyReferenceOptions(step) {
+  const out = [];
+  (step.config?.fields ?? []).forEach((f, fieldIndex) => {
+    if (!f?.options) return;
+    for (const [key, mode] of [['template', 'template'], ['ref', 'ref']]) {
+      if (typeof f.options[key] === 'string') out.push({ field: `fields.${f.name}`, option: key, mode, stored: f.options[key], fieldIndex, set: (v) => { f.options[key] = v; } });
     }
   });
+  if (step.type === 'branch' && typeof step.config?.left === 'string') {
+    out.push({ field: 'left', option: 'left', mode: 'path', value: step.config.left, set: (v) => { step.config.left = v; } });
+  }
+  return out;
+}
+
+/** Stored value of a reference option (a field option left at its default is not stored). */
+const storedValue = (o) => (o.fieldIndex !== undefined ? o.stored : o.value);
+
+/** Rename the head `from` of every reference in one option value. → [newValue, count] */
+export function renameInValue(mode, value, from, to) {
+  if (typeof value !== 'string') return [value, 0];
+  if (mode === 'ref') return value === from ? [to, 1] : [value, 0];
+  if (mode === 'path') {
+    const path = stripPath(value);
+    if (path !== from && !path.startsWith(`${from}.`)) return [value, 0];
+    const i = value.indexOf(from);
+    return [value.slice(0, i) + to + value.slice(i + from.length), 1];
+  }
+  let count = 0;
+  const out = tokenize(value).map((p) => {
+    if (p.kind !== 'token' || (p.path !== from && !p.path.startsWith(`${from}.`))) return p.text;
+    count++;
+    return p.text.replace(from, to); // the path is the first word inside the braces
+  }).join('');
+  return [out, count];
+}
+
+/**
+ * Rename a record alias (or a loop variable) inside `steps`: every option holding references
+ * (with `catalog` = { nodeTypes, fieldTypes }: options declaring `vars` or `kind: 'ref'`;
+ * without it: Lookup `ref`, `template`, branch `left`). `only` (Set of "stepId|field|option")
+ * limits the rename to those options, e.g. the references that resolve to one loop.
+ * Returns the number of references changed.
+ */
+export function renameAlias(steps, from, to, { catalog, only } = {}) {
+  if (!from || from === to || !isAliasName(to)) return 0; // never move references to an unusable name
+  let count = 0;
+  walkSteps(steps, (s) => {
+    const options = catalog ? referenceOptions(s, catalog, { includeHidden: true }) : legacyReferenceOptions(s);
+    for (const o of options) {
+      if (only && !only.has(`${s.id}|${o.field}|${o.option}`)) continue;
+      const [next, n] = renameInValue(o.mode, storedValue(o), from, to);
+      if (!n) continue;
+      o.set(next);
+      count += n;
+    }
+  });
+  return count;
+}
+
+/**
+ * After renaming field `from` → `to` of step `stepId`: update `{{<alias>.from}}` everywhere,
+ * `{{this.from}}` in the same step and branch `left` paths, using the scope analysis (only
+ * references that resolve to this step). Returns { count, places: [{ nodeId, field }] }.
+ */
+export function renameField(wf, stepId, from, to, { catalog } = {}) {
+  const none = { count: 0, places: [] };
+  if (!from || !to || from === to || !catalog) return none;
+  const scope = analyzeScope(wf, catalog);
+  const refs = refsTo(scope, stepId, from).filter((r) => r.mode !== 'ref');
+  if (!refs.length) return none;
+  let count = 0;
+  const places = [];
+  const steps = new Map();
+  walkSteps(wf.steps, (s) => { steps.set(s.id, s); });
+  const byOption = new Map();
+  for (const r of refs) {
+    const key = `${r.nodeId}|${r.field}|${r.option}`;
+    if (!byOption.has(key)) byOption.set(key, { r, names: new Set() });
+    byOption.get(key).names.add(r.name);
+  }
+  for (const { r, names } of byOption.values()) {
+    const o = referenceOptions(steps.get(r.nodeId), catalog, { includeHidden: true }).find((x) => x.field === r.field && x.option === r.option);
+    let value = o ? storedValue(o) : undefined;
+    if (typeof value !== 'string') continue;
+    let changed = 0;
+    for (const name of names) {
+      const [next, n] = renameInValue(o.mode, value, `${name}.${from}`, `${name}.${to}`);
+      value = next;
+      changed += n;
+    }
+    if (!changed) continue;
+    o.set(value);
+    count += changed;
+    places.push({ nodeId: r.nodeId, field: r.field });
+  }
+  return { count, places };
 }
 
 /**
@@ -226,9 +306,10 @@ export function renameAlias(steps, from, to) {
  * used by another step. While the field is empty, invalid or equal to another name (mid-typing),
  * references stay on the last good name, remembered in `memo` (Map stepId → name), and follow
  * again once the name is good. Record references are renamed in the whole workflow, loop
- * variables only inside the loop body. Returns true when references were moved.
+ * variables only inside the loop body — and, with `catalog`, only where they resolve to this
+ * loop (not inside a nested loop of the same name). Returns true when references were moved.
  */
-export function setStepAlias(wf, id, value, { memo = new Map(), slotKeys } = {}) {
+export function setStepAlias(wf, id, value, { memo = new Map(), slotKeys, catalog } = {}) {
   const at = findStep(wf, id, slotKeys);
   if (!at) return false;
   const step = at.step;
@@ -243,9 +324,18 @@ export function setStepAlias(wf, id, value, { memo = new Map(), slotKeys } = {})
   if (good(current) || (!memo.has(id) && owns(current))) memo.set(id, current);
   const from = memo.get(id);
   const to = effective(value);
+  if (!from || from === to || !good(to) || !owns(from)) {
+    c.alias = value;
+    return false;
+  }
+  let only;
+  if (isLoop && catalog) {
+    // Only the references that resolve to this loop (not those of a shadowing inner loop).
+    c.alias = from;
+    only = new Set(analyzeScope(wf, catalog).refs.filter((r) => r.source === id).map((r) => `${r.nodeId}|${r.field}|${r.option}`));
+  }
   c.alias = value;
-  if (!from || from === to || !good(to) || !owns(from)) return false;
-  renameAlias(isLoop ? step.slots?.body ?? [] : wf.steps, from, to);
+  renameAlias(isLoop ? step.slots?.body ?? [] : wf.steps, from, to, { catalog, only });
   memo.set(id, to);
   return true;
 }
@@ -275,7 +365,7 @@ function aliasTaken(wf, at, name, slotKeys) {
  * copy; references *inside the copy* follow the rename. `ids` and `aliases` (Sets) are the
  * names already taken and are updated. Returns { steps, renamed: [{ id, copyId, alias, newAlias }] }.
  */
-export function cloneSteps(steps, { ids = new Set(), aliases = new Set(), makeId = nextId } = {}) {
+export function cloneSteps(steps, { ids = new Set(), aliases = new Set(), makeId = nextId, catalog } = {}) {
   const copy = structuredClone(steps);
   const renamed = [];
   const aliasMap = new Map();
@@ -293,7 +383,7 @@ export function cloneSteps(steps, { ids = new Set(), aliases = new Set(), makeId
     }
     renamed.push(entry);
   });
-  for (const [from, to] of aliasMap) renameAlias(copy, from, to);
+  for (const [from, to] of aliasMap) renameAlias(copy, from, to, { catalog });
   return { steps: copy, renamed };
 }
 
