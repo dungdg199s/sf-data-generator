@@ -30,7 +30,7 @@ export const template = {
   uniqueable: true,
   options: [
     opt('template', 'Mẫu', 'string', '{{this.LastName}} - {{loop.index}}', {
-      help: '{{this.Field}} = field đã sinh trong node này, {{alias.Field}} = node trước, {{loop.index}} = vòng lặp hiện tại (bắt đầu từ 1).',
+      help: '{{this.Field}} = field đã sinh trong bước này, {{alias.Field}} = bước Record phía trên, {{loop.index}} = vòng lặp hiện tại (bắt đầu từ 1).',
     }),
   ],
   generate(o, { scope, record }) {

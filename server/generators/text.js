@@ -163,7 +163,7 @@ export const email = {
         { value: 'fromName', label: 'Theo FirstName/LastName của bản ghi' },
         { value: 'random', label: 'Ngẫu nhiên' },
       ],
-      help: '"Theo tên" dùng FirstName/LastName đã sinh phía trên trong cùng node, nếu có.',
+      help: '"Theo tên" dùng FirstName/LastName đã sinh phía trên trong cùng bước, nếu có.',
     }),
     opt('domains', 'Tên miền', 'list', domains, { help: 'Nên dùng tên miền test để không gửi mail thật.' }),
   ],

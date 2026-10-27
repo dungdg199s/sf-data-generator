@@ -115,3 +115,33 @@ test('migration: a v2 workflow is returned unchanged; garbage does not throw', (
   assert.deepEqual(migrateV1({ version: 1 }).workflow.steps, []);
   assert.deepEqual(migrateV1({ version: 1, nodes: [null, { id: 'a', type: 'record' }], edges: [null] }).workflow.steps.map((s) => s.disabled), [true]);
 });
+
+// ---------- equivalence with the frozen v1 runner (needs the tree executor) ----------
+
+import { runWorkflow } from '../server/workflow/executor.js';
+import { runV1 } from './fixtures/run-v1.js';
+import { NOW } from './helpers.js';
+
+const cases = { ...Object.fromEntries(V1_SAMPLES.map((s) => [`sample "${s.label}"`, s.workflow])), ...STRUCTURED };
+for (const [label, v1] of Object.entries(cases)) {
+  test(`migration equivalence: ${label} gives byte-identical records`, () => {
+    const { workflow, report } = migrateV1(v1);
+    assert.ok(reportIsEmpty(report));
+    for (const seed of [1, 7, 'seed-x']) {
+      const expected = JSON.stringify(runV1(v1, { seed, now: NOW }));
+      assert.equal(JSON.stringify(runWorkflow(workflow, { seed, now: NOW }).records), expected);
+    }
+  });
+}
+
+test('migration equivalence: a duplicated tail generates the same values (only nodeId/alias differ)', () => {
+  const v1 = W(
+    [{ id: 'l', type: 'loop', config: { count: 3 } }, rec('a', 'A', 'a'), rec('c', 'C', 'c')],
+    [E('start', 'l'), E('l', 'a', 'body'), E('a', 'c'), E('l', 'c', 'done')],
+  );
+  const expected = runV1(v1, { seed: 7, now: NOW });
+  const actual = runWorkflow(migrateV1(v1).workflow, { seed: 7, now: NOW }).records;
+  const strip = (rs) => rs.map((r) => ({ sobject: r.sobject, fields: r.fields }));
+  assert.deepEqual(strip(actual), strip(expected));
+  assert.equal(actual.at(-1).nodeId, 'c_2');
+});

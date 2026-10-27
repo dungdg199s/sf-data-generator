@@ -9,7 +9,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { describeGenerators } from './generators/index.js';
-import { NODE_TYPES, LIMITS } from './workflow/nodes.js';
+import { NODE_TYPES, STEP_CATEGORIES, LIMITS } from './workflow/nodes.js';
 import { validateWorkflow, WorkflowError } from './workflow/schema.js';
 import { runWorkflow } from './workflow/executor.js';
 import { createSfCli } from './sf/cli.js';
@@ -35,7 +35,7 @@ export function createApp({ cli = createSfCli(), client } = {}) {
   const sfClient = client ?? createSfClient({ cli });
 
   const routes = [
-    ['GET', /^\/api\/meta$/, () => ({ fieldTypes: describeGenerators(), nodeTypes: NODE_TYPES, limits: LIMITS })],
+    ['GET', /^\/api\/meta$/, () => ({ fieldTypes: describeGenerators(), nodeTypes: NODE_TYPES, stepCategories: STEP_CATEGORIES, limits: LIMITS })],
     ['POST', /^\/api\/validate$/, (_m, body) => validateWorkflow(body?.workflow)],
     [
       'POST',
