@@ -433,7 +433,8 @@ Khi chuyển có thay đổi, hiện hộp thoại:
 Đã chuyển workflow sang dạng Quy trình
 
 Workflow này lưu ở định dạng cũ (version 1, dạng sơ đồ nối dây). Ứng dụng đã chuyển nó sang
-version 2 (các bước lồng nhau). Dữ liệu sinh ra không đổi, trừ các điểm sau:
+version 2 (các bước lồng nhau). Với cùng seed, dữ liệu sinh ra giống bản cũ, trừ ở các bước được
+nhân bản: bản sao sinh giá trị riêng nên giá trị duy nhất, số tự tăng và dữ liệu phía sau có thể khác. Các điểm cần kiểm tra:
 
 • Bước Record "con" được nối tới từ 2 chỗ nên đã được nhân thành "con" và "con2". Kiểm tra các field tham chiếu tới "con".
 • 3 node chưa được nối từ Bắt đầu đã được đặt ở cuối và đang tắt: "o1", "o2", Lặp "loop". Bật lại (Ctrl+/) nếu cần.
@@ -725,7 +726,8 @@ Như vậy chỉ có một bản phân tích phạm vi.
    `steps` với `disabled: true`. Ghi vào `report.disabled`.
 6. Giữ `name`, `seed`, `settings`. Gọi `migrateV1` với workflow v2 thì trả về nguyên như cũ.
 
-`report = { duplicated: [{ id, copyId, alias, newAlias }], disabled: [id], droppedEdges: [{ from, fromPort, to, reason: 'missing' | 'fanout' | 'cycle' }], truncated: [id] }`.
+`report = { duplicated: [{ id, copyId, alias, newAlias }], disabled: [id], droppedEdges: [{ from, fromPort, to, reason: 'missing' | 'fanout' | 'cycle' }], truncated: [id] }`
+(sau review có thêm `root`, `uniqueFields`, `duplicateIds`, `tooDeep`: xem `docs/workflow-schema.md`).
 
 Kết quả chạy thử nguyên mẫu (seed 7, cùng `now`):
 
@@ -733,7 +735,7 @@ Kết quả chạy thử nguyên mẫu (seed 7, cùng `now`):
 | --- | --- |
 | Mẫu "Account + Contact", mẫu "Lead theo xác suất" | Bản ghi **giống hệt** v1 |
 | Gộp sau Rẽ nhánh trong Lặp; gộp lồng nhau; Lặp trong nhánh rồi gộp | Giống hệt v1 |
-| Thân Lặp thoát ra ngoài (dạng 4) | Phát hiện, nhân bản C. Nội dung bản ghi giống v1, chỉ khác `nodeId` (và `ref` khi đổi alias) |
+| Thân Lặp thoát ra ngoài (dạng 4) | Phát hiện, nhân bản C. Nội dung bản ghi giống v1, chỉ khác `nodeId` (và `ref` khi đổi alias), **nếu C không có field "Giá trị duy nhất" hay Auto Number**. Có thì bản sao đếm riêng: giá trị duy nhất có thể trùng giữa `c` và `c_2` và dữ liệu sau đó khác v1 (báo cáo có dòng riêng, xem "Đã làm") |
 | Nối chéo (dạng 5) | X ở nhánh Đúng, bản sao `x_2` ở nhánh Đúng của `b2` |
 | Node lơ lửng; vòng bằng dây | Đặt cuối và tắt; cắt dây `b → a` |
 
@@ -944,6 +946,24 @@ Khác với thiết kế (và lý do):
 - Thêm: phím ContextMenu / Shift+F10 mở menu `⋯` của bước đang chọn.
 - Test tương đương của bước 2 (cần executor cây) nằm trong commit của bước 3; bước 4 và 5 chung một commit vì view mới
   và lõi client phụ thuộc nhau.
+
+### Sửa sau review đợt A, 2026-10-27
+
+| Mục | Đã làm | File chính |
+| --- | --- | --- |
+| S1 | Bản sao do migration tạo có trạng thái riêng (`fieldStates` theo id bước): field "Giá trị duy nhất" / Auto Number có thể trùng giữa `c` và `c_2`, và dữ liệu sau đó khác v1. Không đổi hợp đồng: `report.duplicated[].uniqueFields` + một dòng báo cáo riêng kèm cách sửa (Tiền tố/Hậu tố); sửa câu "sinh đúng dữ liệu cũ" ở tài liệu, bảng trên và hộp thoại chuyển đổi | `shared/migrate-v1.js`, `client/js/main.js`, `docs/workflow-schema.md`, `docs/field-types.md`, `test/migrate.test.js` (Tên, unique, pool nhỏ: thấy trùng thật) |
+| S2 | `/api/run` với v1 và `target.kind === 'org'`: nếu chuyển đổi có `duplicated`/`truncated`/`tooDeep` thì 422 kèm câu hướng dẫn mở trình soạn và Lưu; xem trước vẫn chạy, có cảnh báo | `server/workflow/schema.js` (`insertBlockedReason`, `prepareWorkflow().migration`), `server/index.js`, `test/server.test.js` |
+| S4 | Quy trình: `stale` tính một lần mỗi lần render; sửa từ inspector (`source: 'inspector'`) gộp render bằng `requestAnimationFrame` | `client/js/process.js` |
+| S5 | Bước không phải object hiện thẻ "Bước lỗi" thay vì làm hỏng view; mở file v2 kiểm tra cấu trúc (`malformedSteps`) trước `replaceWorkflow`; lần render đầu có try/catch: autosave hỏng thì mở mẫu, **không ghi đè** `sfdg.workflow.v2`, sao lưu sang `sfdg.workflow.v2.broken`, toast có nút "Tải bản lưu" | `shared/workflow-tree.js`, `client/js/{process,main,store,inspector}.js`, smoke test |
+| N1 | Tóm tắt Lặp dùng đúng giá trị dự phòng của executor (`count ?? 0`, `min ?? 1`, `max ?? 1`); migration ghi rõ các giá trị này vào `config` khi thiếu | `client/js/summary.js`, `shared/migrate-v1.js` |
+| N2 | "Hoàn tác" ở toast xóa / bỏ vỏ chỉ hoàn tác đúng thao tác đó: có thay đổi khác (sửa, undo, redo) thì nút biến mất (`workflowRevision()`) | `client/js/{ops,store,dom}.js`, smoke test |
+| N3 | "Bọc trong Lặp" không đặt tên biến trùng biến của vòng lặp bên trong phần được bọc (hay alias Record) | `client/js/ops.js` |
+| N4 | Báo cáo nhân bản: một dòng cho mỗi đoạn sao chép ("… và N bước phía sau"), `report.duplicated[].root` | `shared/migrate-v1.js`, `test/migrate.test.js` |
+| N5 | Lồng sâu: điểm gộp tính lặp (không đệ quy) theo thứ tự topo ngược; `build` dừng ở cấp `maxDepth + 1`, ghi `report.tooDeep`, validate báo lỗi "lồng nhau quá 32 cấp" thay vì `RangeError` | `shared/migrate-v1.js`, `server/workflow/schema.js`, `test/migrate.test.js` (5000 Lặp / Rẽ nhánh lồng nhau; 3000 Rẽ nhánh nối tiếp vẫn nguyên) |
+| N6 | Trùng id node v1: giữ node sau cùng như executor v1, ghi `report.duplicateIds` | `shared/migrate-v1.js`, `test/migrate.test.js` |
+| N7 | Đổi alias / biến lặp khi đang gõ: tham chiếu chỉ đi theo tên hợp lệ, không trùng; ô trống hay trùng alias khác giữa chừng thì tham chiếu đứng yên ở tên tốt gần nhất (`setStepAlias`, `renameAlias` bỏ qua tên rỗng/không hợp lệ) | `shared/workflow-tree.js`, `client/js/inspector.js`, `test/workflow-tree.test.js`, smoke test |
+
+`migrateV1` nhận thêm `{ maxDepth, fieldTypes }` (server: `LIMITS.maxDepth` và `describeGenerators()`, client: `/api/meta`).
 
 Chưa làm trong đợt A: chế độ Sơ đồ và nút đổi chế độ (đợt B); ô tìm kiếm trong menu "+" chỉ hiện khi có hơn 6 loại bước
 (hiện có 3). `CLAUDE.md`, `.claude/agents/*.md` và `.claude/skills/*/SKILL.md` chưa sửa theo danh sách ở mục

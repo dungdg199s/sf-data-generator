@@ -5,7 +5,9 @@
 //   3. Ctrl+Enter previews: results table and a "bản ghi" stat chip on a card
 //   4. a v1 autosave is migrated on load (toast) and the sfdg.workflow.v1 key is left untouched
 //   5. opening a v1 file with an unconnected node shows the migration report dialog
-//   6. narrow (390 px) layout renders, tapping a card opens the inspector bottom sheet
+//   6. a malformed v2 autosave falls back to the sample without being overwritten; a malformed
+//      v2 file is refused with a toast; "Hoàn tác" on the delete toast disappears after another edit
+//   7. narrow (390 px) layout renders, tapping a card opens the inspector bottom sheet
 // Usage: node .claude/skills/smoke-test/smoke.cjs [screenshotDir]
 // Needs Playwright with a Chromium build available (require('playwright')).
 
@@ -113,6 +115,27 @@ const V1_ORPHAN = {
     console.log(`summary=${summary.trim()}`);
     if (outDir) await page.screenshot({ path: path.join(outDir, 'smoke-1440.png') });
 
+    // Renaming an alias by clearing the field and typing a name: Lookups follow, not lost on "".
+    await page.click('.step-card[data-id="acc"] .type');
+    const aliasInput = '#inspector input[data-key="alias"]';
+    await page.fill(aliasInput, '');
+    await page.type(aliasInput, 'account');
+    const ref = await page.evaluate(() => JSON.stringify(JSON.parse(localStorage.getItem('sfdg.workflow.v2'))).match(/"ref":"(\w+)"/)?.[1]);
+    check(ref === 'account', `Lookup ref did not follow the alias rename (${ref})`);
+    check(await page.evaluate((sel) => document.activeElement === document.querySelector(sel), aliasInput), 'alias input lost focus while typing');
+    for (let i = 0; i < 'account'.length + 1; i++) await page.keyboard.press('Control+z');
+    await page.waitForFunction(() => /"ref":"acc"/.test(localStorage.getItem('sfdg.workflow.v2')));
+
+    // "Hoàn tác" in the delete toast only undoes the delete: another edit removes the button.
+    await page.click(`.step-card[data-id="${added}"] .type`);
+    await page.keyboard.press('Delete');
+    await page.waitForSelector('#toast .toast-action');
+    await page.keyboard.press('Control+d'); // duplicates the newly selected step
+    await page.waitForFunction(() => !document.querySelector('#toast .toast-action'));
+    await page.keyboard.press('Control+z');
+    await page.keyboard.press('Control+z');
+    await page.waitForFunction((n) => document.querySelectorAll('.step-card:not(.start-card)').length === n + 1, before);
+
     // Migration of a v1 autosave on load.
     const v1Text = JSON.stringify(V1_SAMPLE);
     await page.evaluate((t) => { localStorage.clear(); localStorage.setItem('sfdg.workflow.v1', t); }, v1Text);
@@ -123,6 +146,24 @@ const V1_ORPHAN = {
     const kept = await page.evaluate(() => [localStorage.getItem('sfdg.workflow.v1'), JSON.parse(localStorage.getItem('sfdg.workflow.v2') || '{}').version]);
     check(kept[0] === v1Text, 'sfdg.workflow.v1 was modified');
     check(kept[1] === 2, 'sfdg.workflow.v2 was not written');
+
+    // A malformed v2 autosave: the sample is shown, the autosave is not overwritten.
+    const broken = JSON.stringify({ version: 2, name: 'Hỏng', steps: [{ id: 'x', type: 'loop', config: {}, slots: { body: 5 } }] });
+    await page.evaluate((t) => { localStorage.clear(); localStorage.setItem('sfdg.workflow.v2', t); }, broken);
+    await page.reload();
+    await page.waitForSelector('.step-card[data-id="con"]');
+    const brokenToast = await page.textContent('#toast');
+    check(/Không hiển thị được workflow lưu tự động/.test(brokenToast), `no recovery toast (${brokenToast})`);
+    check(await page.isVisible('#toast button:has-text("Tải bản lưu")'), 'no "Tải bản lưu" button');
+    const stored = await page.evaluate(() => [localStorage.getItem('sfdg.workflow.v2'), localStorage.getItem('sfdg.workflow.v2.broken')]);
+    check(stored[0] === broken && stored[1] === broken, 'broken autosave was overwritten or not backed up');
+
+    // A malformed v2 file is refused.
+    const badFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'sfdg-smoke-')), 'bad.json');
+    fs.writeFileSync(badFile, JSON.stringify({ version: 2, steps: [{ id: 'a', type: 'record', config: {} }, 3] }));
+    await page.setInputFiles('#file-input', badFile);
+    await page.waitForFunction(() => /Không mở được file: steps\[1\]/.test(document.getElementById('toast').textContent));
+    check(await page.isVisible('.step-card[data-id="con"]'), 'malformed file replaced the workflow');
 
     // Opening a v1 file with an unconnected node → report dialog.
     const tmp = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'sfdg-smoke-')), 'old.json');

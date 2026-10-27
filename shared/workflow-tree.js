@@ -45,6 +45,31 @@ export function walkSteps(steps, visit, slotKeys, _parent = null, _slot = null, 
   }
 }
 
+/**
+ * Structural check before showing a workflow: every step must be a JSON object and every
+ * `slots` an object of lists. → a Vietnamese message naming the first problem, or null.
+ * Iterative, so a very deep file cannot overflow the stack.
+ */
+export function malformedSteps(wf) {
+  if (!Array.isArray(wf?.steps)) return 'thiếu danh sách "steps"';
+  const todo = [{ list: wf.steps, where: 'steps' }];
+  while (todo.length) {
+    const { list, where } = todo.pop();
+    for (let i = 0; i < list.length; i++) {
+      const step = list[i];
+      const at = `${where}[${i}]`;
+      if (!step || typeof step !== 'object' || Array.isArray(step)) return `${at} không phải một bước (object JSON)`;
+      if (step.slots === undefined) continue;
+      if (!step.slots || typeof step.slots !== 'object' || Array.isArray(step.slots)) return `"slots" của bước "${step.id ?? at}" không phải object`;
+      for (const [key, children] of Object.entries(step.slots)) {
+        if (!Array.isArray(children)) return `"slots.${key}" của bước "${step.id ?? at}" không phải danh sách`;
+        todo.push({ list: children, where: `${at}.slots.${key}` });
+      }
+    }
+  }
+  return null;
+}
+
 /** Steps in reading order, flattened. */
 export function allSteps(wf, slotKeys) {
   const out = [];
@@ -172,13 +197,16 @@ export function nextId(id, taken) {
 
 const escapeRe = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
+/** A usable alias / loop variable name (same rule as server/workflow/schema.js). */
+export const isAliasName = (name) => typeof name === 'string' && /^[A-Za-z_][A-Za-z0-9_]*$/.test(name) && name !== 'this';
+
 /**
  * Rename a record alias (or a loop variable) inside `steps`: Lookup `ref`, `{{from.` in
  * templates and `from.` at the start of a branch `left`. Pass the loop body to rename a loop
  * variable only where it is visible.
  */
 export function renameAlias(steps, from, to) {
-  if (!from || from === to) return;
+  if (!from || from === to || !isAliasName(to)) return; // never move references to an unusable name
   const re = new RegExp(`\\{\\{(\\s*)${escapeRe(from)}\\.`, 'g');
   walkSteps(steps, (s) => {
     for (const f of s.config?.fields ?? []) {
@@ -190,6 +218,56 @@ export function renameAlias(steps, from, to) {
       s.config.left = to + s.config.left.slice(from.length);
     }
   });
+}
+
+/**
+ * Set the alias of a record step, or the variable of a loop step (empty = "loop"), to `value`
+ * while the user types, and move references along — but only to a name that is valid and not
+ * used by another step. While the field is empty, invalid or equal to another name (mid-typing),
+ * references stay on the last good name, remembered in `memo` (Map stepId → name), and follow
+ * again once the name is good. Record references are renamed in the whole workflow, loop
+ * variables only inside the loop body. Returns true when references were moved.
+ */
+export function setStepAlias(wf, id, value, { memo = new Map(), slotKeys } = {}) {
+  const at = findStep(wf, id, slotKeys);
+  if (!at) return false;
+  const step = at.step;
+  const c = (step.config ??= {});
+  const isLoop = step.type === 'loop';
+  const effective = (v) => (isLoop ? v || 'loop' : v);
+  const good = (name) => isAliasName(name) && !aliasTaken(wf, at, name, slotKeys);
+  // References can follow from the current name when it is unambiguous. A loop variable that
+  // shadows an enclosing one still owns the references inside its body.
+  const owns = (name) => isAliasName(name) && (isLoop || !aliasTaken(wf, at, name, slotKeys));
+  const current = effective(c.alias);
+  if (good(current) || (!memo.has(id) && owns(current))) memo.set(id, current);
+  const from = memo.get(id);
+  const to = effective(value);
+  c.alias = value;
+  if (!from || from === to || !good(to) || !owns(from)) return false;
+  renameAlias(isLoop ? step.slots?.body ?? [] : wf.steps, from, to);
+  memo.set(id, to);
+  return true;
+}
+
+/**
+ * Is `name` used by another step in a way that clashes with step `at` (from findStep)?
+ * Record alias: another record alias or any loop variable. Loop variable: a record alias, or
+ * the variable of an enclosing loop or of a loop inside this one (shadowing).
+ */
+function aliasTaken(wf, at, name, slotKeys) {
+  const self = at.step;
+  let taken = false;
+  walkSteps(wf.steps, (s) => {
+    if (taken || s === self) return !taken;
+    if (s.type === 'record' && s.config?.alias === name) taken = true;
+    else if (s.type === 'loop' && self.type === 'record' && (s.config?.alias || 'loop') === name) taken = true;
+    return !taken;
+  }, slotKeys);
+  if (taken || self.type !== 'loop') return taken;
+  const nested = [];
+  walkSteps(Object.values(self.slots ?? {}).flat(), (s) => { if (s.type === 'loop') nested.push(s); }, slotKeys);
+  return [...at.ancestors, ...nested].some((s) => s.type === 'loop' && (s.config?.alias || 'loop') === name);
 }
 
 /**

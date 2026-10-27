@@ -5,9 +5,10 @@ import { api } from './api.js';
 import { h, toast, download } from './dom.js';
 import {
   state, emit, subscribe, updateWorkflow, replaceWorkflow, emptyWorkflow, loadPersisted, loadLegacy, persist,
-  undo, redo, select, stepById, runKey, saveCollapsed, NODE_COLORS,
+  undo, redo, select, stepById, runKey, saveCollapsed, backupBrokenAutosave, NODE_COLORS,
 } from './store.js';
 import { migrateV1, describeReport, reportIsEmpty } from '/shared/migrate-v1.js';
+import { malformedSteps } from '/shared/workflow-tree.js';
 import { initProcess, focusSelected, openAddMenuAtDefault, openStepMenu, paletteDragStart, paletteDragEnd } from './process.js';
 import * as ops from './ops.js';
 import { initInspector } from './inspector.js';
@@ -32,11 +33,39 @@ async function boot() {
   initProcess();
   initInspector();
   initResults();
+  firstRender();
   wireToolbar();
   wireShortcuts();
   wireValidation();
   loadOrgs();
   afterBoot?.();
+}
+
+/** Options for migrateV1 from /api/meta (depth limit, defaults of the "unique" option). */
+const migrateOptions = () => ({ maxDepth: state.meta?.limits?.maxDepth, fieldTypes: state.meta?.fieldTypes });
+
+/**
+ * Show the loaded workflow. If the autosave is malformed or the views fail on it, show the
+ * first sample instead, without overwriting the autosave, and tell the user how to recover it.
+ */
+function firstRender() {
+  try {
+    const bad = malformedSteps(state.workflow);
+    if (bad) throw new Error(bad);
+    emit('app', 'all');
+  } catch (e) {
+    console.error(e);
+    const json = JSON.stringify(state.workflow);
+    const key = backupBrokenAutosave(json);
+    state.workflow = structuredClone(SAMPLES[0].workflow); // not persisted: the autosave stays as it was
+    state.selection = null;
+    emit('app', 'all');
+    toast(
+      `Không hiển thị được workflow lưu tự động (${e.message}). Đang mở mẫu "${SAMPLES[0].label}"; bản lưu cũ chưa bị ghi đè${key ? ` và có bản sao trong trình duyệt (${key})` : ''}. Bấm "Tải bản lưu" để lấy file JSON, sửa rồi Mở lại.`,
+      15000,
+      { label: 'Tải bản lưu', onClick: () => download('workflow-autosave.json', json) },
+    );
+  }
 }
 
 /** v2 autosave → old v1 autosave (migrated, original kept) → first sample. */
@@ -49,7 +78,7 @@ function loadInitialWorkflow() {
   const legacy = loadLegacy();
   if (legacy?.workflow?.version === 1 && Array.isArray(legacy.workflow.nodes)) {
     try {
-      const { workflow, report } = migrateV1(legacy.workflow);
+      const { workflow, report } = migrateV1(legacy.workflow, migrateOptions());
       state.workflow = workflow;
       persist(); // writes sfdg.workflow.v2 only; sfdg.workflow.v1 stays as it was
       return () => announceMigration(report, legacy.raw, { name: workflow.name, autosave: true });
@@ -77,7 +106,9 @@ function announceMigration(report, rawOriginal, { name, autosave }) {
   const items = describeReport(report);
   modal.replaceChildren(
     h('h2', {}, 'Đã chuyển workflow sang dạng Quy trình'),
-    h('p', {}, 'Workflow này lưu ở định dạng cũ (version 1, dạng sơ đồ nối dây). Ứng dụng đã chuyển nó sang version 2 (các bước lồng nhau). Dữ liệu sinh ra không đổi, trừ các điểm sau:'),
+    h('p', {}, `Workflow này lưu ở định dạng cũ (version 1, dạng sơ đồ nối dây). Ứng dụng đã chuyển nó sang version 2 (các bước lồng nhau). ${report.duplicated?.length
+      ? 'Với cùng seed, dữ liệu sinh ra giống bản cũ, trừ ở các bước được nhân bản: bản sao sinh giá trị riêng nên giá trị duy nhất, số tự tăng và dữ liệu phía sau có thể khác. Các điểm cần kiểm tra:'
+      : 'Với cùng seed, dữ liệu sinh ra giống bản cũ, trừ các điểm sau:'}`),
     h('ul', { class: 'migration-report' }, items.map((i) => h('li', {}, i.message))),
     h('p', { class: 'hint' }, autosave ? 'Bản gốc vẫn được giữ trong trình duyệt.' : 'Bản gốc vẫn được giữ: file trên máy không bị sửa cho tới khi bạn bấm Lưu.'),
     h(
@@ -180,12 +211,12 @@ function wireToolbar() {
 }
 
 function openWorkflowObject(wf, raw, fileName) {
-  if (!wf || typeof wf !== 'object') return toast('Không mở được file: không phải file workflow.', 5000);
+  if (!wf || typeof wf !== 'object' || Array.isArray(wf)) return toast('Không mở được file: không phải file workflow.', 5000);
   if (wf.version === 1) {
     if (!Array.isArray(wf.nodes)) return toast('Không mở được file: không phải file workflow (thiếu "nodes").', 5000);
     let migrated;
     try {
-      migrated = migrateV1(wf);
+      migrated = migrateV1(wf, migrateOptions());
     } catch (e) {
       return toast(`Không chuyển được file version 1: ${e.message}`, 6000);
     }
@@ -201,7 +232,8 @@ function openWorkflowObject(wf, raw, fileName) {
       6000,
     );
   }
-  if (!Array.isArray(wf.steps)) return toast('Không mở được file: thiếu danh sách "steps".', 5000);
+  const bad = malformedSteps(wf);
+  if (bad) return toast(`Không mở được file: ${bad}. Sửa file JSON rồi mở lại.`, 6000);
   replaceWorkflow(wf);
   toast(`Đã mở "${wf.name ?? fileName}".`);
   return undefined;

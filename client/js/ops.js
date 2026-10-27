@@ -4,7 +4,7 @@
 
 import { h, toast } from './dom.js';
 import {
-  state, updateWorkflow, select, undo, nodeType, slotKeys, locate, stepById, newId, suggestAlias,
+  state, subscribe, updateWorkflow, select, undo, nodeType, slotKeys, locate, stepById, newId, suggestAlias, workflowRevision,
 } from './store.js';
 import {
   insertStep, removeStep, moveStep, wrapStep, cloneSteps, collectIds, collectAliases,
@@ -44,8 +44,18 @@ function enclosingLoopVars(target) {
   return new Set([...at.ancestors, at.step].filter((s) => s.type === 'loop').map((s) => s.config?.alias || 'loop'));
 }
 
-/** A new step of `type` with the catalogue defaults, ready to insert at `target`. */
-export function newStep(type, target) {
+/** Loop variables used by `steps` and everything inside them. */
+function loopVarsIn(steps) {
+  const out = new Set();
+  walkSteps(steps, (s) => { if (s.type === 'loop') out.add(s.config?.alias || 'loop'); }, slotKeys);
+  return out;
+}
+
+/**
+ * A new step of `type` with the catalogue defaults, ready to insert at `target`.
+ * `around`: steps the new step will contain (wrapIn), whose loop variables it must not shadow.
+ */
+export function newStep(type, target, around = []) {
   const def = nodeType(type);
   const step = {
     id: newId(type === 'record' ? 'r' : type === 'loop' ? 'l' : type === 'branch' ? 'b' : 's'),
@@ -59,7 +69,8 @@ export function newStep(type, target) {
   }
   if (type === 'loop') {
     // Do not shadow the variable of an enclosing loop: loop, loop2, loop3…
-    const taken = enclosingLoopVars(target);
+    // …nor a loop inside the steps it wraps, nor a record alias.
+    const taken = new Set([...enclosingLoopVars(target), ...loopVarsIn(around), ...collectAliases(state.workflow)]);
     const base = step.config.alias || 'loop';
     let name = base;
     for (let i = 2; taken.has(name); i++) name = `${base}${i}`;
@@ -100,6 +111,30 @@ export function deleteStep(id = selectedId()) {
   doRemove(at, false);
 }
 
+/**
+ * Toast with "Hoàn tác" that undoes only this edit: as soon as anything else changes the
+ * workflow (another edit, undo or redo), the button is removed — Ctrl+Z still works.
+ */
+let dropUndoWatch = null;
+function toastWithUndo(message) {
+  dropUndoWatch?.();
+  const rev = workflowRevision();
+  const t = toast(message, 4000, {
+    label: 'Hoàn tác',
+    onClick: () => {
+      if (workflowRevision() === rev) undo();
+      else toast('Đã có thay đổi khác sau thao tác này. Dùng Ctrl+Z để hoàn tác từng bước.', 4000);
+    },
+  });
+  const off = subscribe(({ kind }) => {
+    if (kind !== 'workflow' || workflowRevision() === rev) return;
+    t.removeAction();
+    off();
+    dropUndoWatch = null;
+  });
+  dropUndoWatch = off;
+}
+
 function doRemove(at, keepChildren) {
   const step = at.step;
   const nextSel = keepChildren ? (slotKeys(step.type).flatMap((k) => slotList(step, k))[0]?.id ?? selectionAfterRemove(at)) : selectionAfterRemove(at);
@@ -107,16 +142,12 @@ function doRemove(at, keepChildren) {
   select(nextSel ? { kind: 'step', id: nextSel } : null);
   if (nextSel) reveal(nextSel);
   if (keepChildren) {
-    toast(`Đã bỏ vỏ ${stepLabel(step)}.`, 4000, { label: 'Hoàn tác', onClick: undo });
+    toastWithUndo(`Đã bỏ vỏ ${stepLabel(step)}.`);
     return;
   }
   const alias = step.type === 'record' ? step.config?.alias : null;
   const refs = refsTo(alias);
-  toast(
-    `Đã xóa bước ${stepLabel(step)}.${refs ? ` ${refs} field đang tham chiếu "${alias}" sẽ báo lỗi.` : ''}`,
-    4000,
-    { label: 'Hoàn tác', onClick: undo },
-  );
+  toastWithUndo(`Đã xóa bước ${stepLabel(step)}.${refs ? ` ${refs} field đang tham chiếu "${alias}" sẽ báo lỗi.` : ''}`);
 }
 
 /** "Bỏ vỏ" is only possible when at most one slot has steps. */
@@ -178,7 +209,7 @@ export function toggleDisabled(id = selectedId()) {
 export function wrapIn(id, type) {
   const at = locate(id);
   if (!at) return;
-  const container = newStep(type, { parentId: at.parentId, slot: at.slot, index: at.index });
+  const container = newStep(type, { parentId: at.parentId, slot: at.slot, index: at.index }, [at.step]);
   updateWorkflow((wf) => wrapStep(wf, id, container, { slotKeys }));
   select({ kind: 'step', id: container.id });
   reveal(container.id, { flash: true });

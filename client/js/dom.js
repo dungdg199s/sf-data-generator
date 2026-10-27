@@ -25,12 +25,15 @@ export function h(tag, attrs = {}, ...children) {
 }
 
 let toastTimer;
+let toastGeneration = 0;
 /**
  * Short status message at the bottom. With `action: { label, onClick }` the toast gets a
- * button (e.g. "Hoàn tác") and stays a little longer.
+ * button (e.g. "Hoàn tác") and stays a little longer. Returns { removeAction() } to drop the
+ * button later (no-op once another toast replaced this one).
  */
 export function toast(message, ms = 2600, action = null) {
   const el = document.getElementById('toast');
+  const generation = ++toastGeneration;
   el.replaceChildren(document.createTextNode(message));
   if (action) {
     el.append(' ', h('button', {
@@ -45,6 +48,13 @@ export function toast(message, ms = 2600, action = null) {
   el.classList.add('show');
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => el.classList.remove('show'), action ? Math.max(ms, 6000) : ms);
+  return {
+    removeAction() {
+      if (generation !== toastGeneration) return;
+      el.querySelector('.toast-action')?.remove();
+      el.classList.remove('has-action');
+    },
+  };
 }
 
 export function download(filename, text, type = 'application/json') {

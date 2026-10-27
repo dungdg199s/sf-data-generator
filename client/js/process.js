@@ -33,19 +33,34 @@ export function initProcess() {
   root.addEventListener('drop', onPaletteDrop);
   document.getElementById('btn-collapse-all').onclick = () => setCollapsed(containerIds(), true);
   document.getElementById('btn-expand-all').onclick = () => setCollapsed(containerIds(), false);
-  subscribe(({ kind }) => {
-    if (kind === 'workflow' || kind === 'all' || kind === 'view' || kind === 'result') render();
+  subscribe(({ kind, source }) => {
+    // Typing in the inspector: one rebuild per frame at most, not one per keystroke.
+    if (kind === 'workflow' && source === 'inspector') scheduleRender();
+    else if (kind === 'workflow' || kind === 'all' || kind === 'view' || kind === 'result') render();
     else if (kind === 'selection' || kind === 'issues') decorate();
   });
   ops.onReveal(revealStep);
-  render();
+  // The first render is done by main.js (emit 'all'), which can recover from a broken autosave.
 }
+
+let renderFrame = 0;
+function scheduleRender() {
+  if (!renderFrame) renderFrame = requestAnimationFrame(() => { renderFrame = 0; render(); });
+}
+
+// Per-render values shared by every card (computed once in render()).
+let staleStats = false;
 
 const containerIds = () => allSteps(state.workflow, slotKeys).filter((s) => slotKeys(s.type).length).map((s) => s.id);
 
 // ---------- rendering ----------
 
 function render() {
+  if (renderFrame) {
+    cancelAnimationFrame(renderFrame);
+    renderFrame = 0;
+  }
+  staleStats = state.lastRunSteps !== null && state.lastRunSteps !== JSON.stringify(state.workflow.steps);
   const scroll = root.scrollTop;
   const hadFocus = root.contains(document.activeElement) && !document.activeElement.closest('.popup');
   const steps = state.workflow.steps ?? [];
@@ -91,18 +106,28 @@ function startCard() {
   );
 }
 
+const isStep = (step) => step && typeof step === 'object' && !Array.isArray(step);
+
 function renderSeq(list, parentId, slot, level) {
   const out = [];
   list.forEach((step, index) => {
-    out.push(addPoint({ parentId, slot, index }, list), renderStep(step, level, { parentId, slot, index }));
+    out.push(addPoint({ parentId, slot, index }, list), isStep(step) ? renderStep(step, level, { parentId, slot, index }) : invalidStep(step));
   });
   out.push(addPoint({ parentId, slot, index: list.length }, list));
   return out;
 }
 
+/** Placeholder for an entry of a hand-edited file that is not a step object. */
+function invalidStep(value) {
+  return h('div', { class: 'step invalid-step', role: 'note' },
+    h('div', { class: 'invalid-card' },
+      h('span', { class: 'type' }, 'Bước lỗi'),
+      h('span', { class: 'sum' }, `Không phải một bước (${JSON.stringify(value) ?? String(value)}). Xóa mục này trong file JSON rồi mở lại.`)));
+}
+
 function addPoint(target, list) {
-  const before = list[target.index];
-  const after = list[target.index - 1];
+  const before = isStep(list[target.index]) ? list[target.index] : null;
+  const after = isStep(list[target.index - 1]) ? list[target.index - 1] : null;
   let label;
   if (after) label = `Thêm bước sau "${nameOf(after)}"`;
   else if (before) label = `Thêm bước trước "${nameOf(before)}"`;
@@ -124,7 +149,7 @@ function renderStep(step, level, at) {
   const alias = stepAlias(step);
   const summary = stepSummary(step);
   const chip = state.result ? statChip(step, state.result.stats?.byStep) : null;
-  const stale = state.lastRunSteps !== null && state.lastRunSteps !== JSON.stringify(state.workflow.steps);
+  const stale = staleStats;
   const showDetails = !container && detailsOpen.has(step.id);
 
   const card = h(
@@ -203,7 +228,7 @@ function renderSlot(step, def, level, labelled) {
 }
 
 function fieldChips(step) {
-  const fields = step.config?.fields ?? [];
+  const fields = Array.isArray(step.config?.fields) ? step.config.fields : [];
   const chips = fields.slice(0, MAX_FIELD_CHIPS).map((f, i) => {
     const t = fieldType(f.type)?.label ?? f.type;
     const ref = (f.type === 'lookup' || f.type === 'masterdetail') && f.options?.ref ? ` → ${f.options.ref}` : '';

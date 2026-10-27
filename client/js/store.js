@@ -8,6 +8,8 @@ import { analyzeRecordScope } from '/shared/scope.js';
 const STORAGE_KEY = 'sfdg.workflow.v2';
 // Autosave of the old graph editor. Read once for migration, never written or removed.
 const LEGACY_STORAGE_KEY = 'sfdg.workflow.v1';
+// Copy of an autosave that could not be shown, kept so the next edit cannot overwrite it.
+const BROKEN_STORAGE_KEY = 'sfdg.workflow.v2.broken';
 const COLLAPSED_KEY = 'sfdg.collapsed';
 const COLLAPSED_MAX = 500;
 const HISTORY_LIMIT = 100;
@@ -41,6 +43,10 @@ const listeners = new Set();
 const past = [];
 const future = [];
 let lastCoalesce = { key: null, at: 0 };
+let revision = 0; // bumped by every change to the workflow (edits, undo, redo)
+
+/** Changes when the workflow changes; lets a toast's "Hoàn tác" check nothing happened since. */
+export const workflowRevision = () => revision;
 
 export function subscribe(fn) {
   listeners.add(fn);
@@ -67,6 +73,7 @@ export function updateWorkflow(fn, { source = 'app', coalesceKey = null, history
     if (past.length > HISTORY_LIMIT) past.shift();
     future.length = 0;
   }
+  revision++;
   persist();
   emit(source, 'workflow');
   return result;
@@ -98,6 +105,7 @@ export function redo() {
 function restore(json) {
   state.workflow = JSON.parse(json);
   lastCoalesce = { key: null, at: 0 };
+  revision++;
   if (state.selection?.kind === 'step' && !stepById(state.selection.id)) state.selection = null;
   persist();
   emit('history', 'workflow');
@@ -118,6 +126,16 @@ export function persist() {
 
 export function loadPersisted() {
   return readJson(STORAGE_KEY);
+}
+
+/** Keep a copy of an autosave that could not be shown (see main.js). Returns the key or null. */
+export function backupBrokenAutosave(json) {
+  try {
+    localStorage.setItem(BROKEN_STORAGE_KEY, json);
+    return BROKEN_STORAGE_KEY;
+  } catch {
+    return null;
+  }
 }
 
 /** The old editor's autosave (version 1), if any. Read-only. */

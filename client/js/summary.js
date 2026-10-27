@@ -10,7 +10,8 @@ export function stepSummary(step) {
     case 'record':
       return `${c.sobject || '?'} × ${c.count ?? 1} · ${(c.fields ?? []).length} field`;
     case 'loop': {
-      const times = (c.mode ?? 'fixed') === 'range' ? `${c.min ?? 1}–${c.max ?? 5} lần` : `${c.count ?? 3} lần`;
+      // Same fallbacks as the executor (server/workflow/executor.js) for a missing value.
+      const times = (c.mode ?? 'fixed') === 'range' ? `${c.min ?? 1}–${c.max ?? 1} lần` : `${c.count ?? 0} lần`;
       return `${times} · {{${c.alias || 'loop'}.index}}`;
     }
     case 'branch': {

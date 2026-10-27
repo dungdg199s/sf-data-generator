@@ -97,6 +97,10 @@ input:focus, select:focus, textarea:focus, button:focus-visible { outline: 2px s
   border: 1px solid var(--border); border-left: 4px solid var(--c); border-radius: 8px; box-shadow: var(--shadow);
   cursor: pointer; user-select: none; position: relative;
 }
+.invalid-card {
+  display: flex; align-items: center; gap: 6px; min-height: 40px; padding: 4px 8px; background: var(--panel);
+  border: 1px dashed var(--danger, #c0392b); border-radius: 8px; overflow-wrap: anywhere;
+}
 .step-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .step-card.selected { outline: 2px solid var(--accent); outline-offset: 0; }
 .step-card.has-error { border-color: var(--danger); border-left-color: var(--c); }

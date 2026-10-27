@@ -8,9 +8,9 @@ import { h, toast } from './dom.js';
 import { renderOptions } from './forms.js';
 import { api } from './api.js';
 import {
-  state, subscribe, select, updateWorkflow, stepById, nodeType, fieldType, suggestAlias, recordScope, NODE_COLORS,
+  state, subscribe, select, updateWorkflow, stepById, nodeType, fieldType, suggestAlias, recordScope, slotKeys, NODE_COLORS,
 } from './store.js';
-import { renameAlias } from '/shared/workflow-tree.js';
+import { setStepAlias } from '/shared/workflow-tree.js';
 import { recordChoices, HIDDEN_REASON } from '/shared/scope.js';
 import { deleteStep, duplicateStep, toggleDisabled } from './ops.js';
 
@@ -18,6 +18,8 @@ let root;
 const expanded = new Set(); // `${stepId}:${fieldIndex}` with options panel open
 let sheetClosed = false; // narrow screens: "‹ Xong" hides the sheet but keeps the selection
 let lastSelectionKey = null;
+// Last good alias per step: references wait there while the alias field is empty or clashing.
+const aliasMemo = new Map();
 
 export function initInspector() {
   root = document.getElementById('inspector');
@@ -27,7 +29,7 @@ export function initInspector() {
     if (source === 'inspector') return undefined;
     render();
   });
-  render();
+  // The first render is done by main.js (emit 'all'), which can recover from a broken autosave.
 }
 
 /** Select a step and open the options of one of its fields (field chips on the cards). */
@@ -122,18 +124,14 @@ function onStepOption(step, key, v, form) {
       c.sobject = v;
       if (auto) {
         const next = suggestAlias(v, step.id);
-        renameAlias(wf.steps, c.alias, next);
-        c.alias = next;
+        setStepAlias(wf, step.id, next, { memo: aliasMemo, slotKeys });
         const input = form.querySelector('[data-key="alias"]');
         if (input) input.value = next;
       }
-    } else if (key === 'alias' && step.type === 'record') {
-      renameAlias(wf.steps, c.alias, v);
-      c.alias = v;
-    } else if (key === 'alias' && step.type === 'loop') {
-      // A loop variable is only visible inside the loop body: rename there only.
-      renameAlias(step.slots?.body ?? [], c.alias || 'loop', v || 'loop');
-      c.alias = v;
+    } else if (key === 'alias' && (step.type === 'record' || step.type === 'loop')) {
+      // References follow only to a valid, free name (a loop variable: inside its body only);
+      // while the field is empty or matches another alias mid-typing, they stay put.
+      setStepAlias(wf, step.id, v, { memo: aliasMemo, slotKeys });
     } else c[key] = v;
   }, { source: 'inspector', coalesceKey: `${step.id}:${key}` });
   // Card summary/alias changed; the process view re-renders, the inspector keeps focus.

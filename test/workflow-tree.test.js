@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  walkSteps, findStep, insertStep, removeStep, moveStep, wrapStep, cloneSteps, renameAlias,
+  walkSteps, findStep, insertStep, removeStep, moveStep, wrapStep, cloneSteps, renameAlias, setStepAlias, isAliasName, malformedSteps,
   defaultInsertTarget, neighbourTarget, allSteps, collectAliases, collectIds,
 } from '../shared/workflow-tree.js';
 
@@ -142,4 +142,55 @@ test('neighbourTarget goes through both branch columns, true first', () => {
     seq.push(shape(wf.steps));
   }
   assert.deepEqual(seq, ['br{t|x}', 'br{t,x|}', 'br{x,t|}', 'x,br{t|}']);
+});
+
+test('renameAlias never moves references to an empty or invalid name', () => {
+  const wf = tree([r('a', 'acc'), r('c', 'con', [{ name: 'AccountId', type: 'lookup', options: { ref: 'acc' } }])]);
+  for (const bad of ['', undefined, '1x', 'a-b', 'this']) renameAlias(wf.steps, 'acc', bad);
+  assert.equal(findStep(wf, 'c').step.config.fields[0].options.ref, 'acc');
+  assert.ok(isAliasName('acc_2') && !isAliasName('') && !isAliasName('this'));
+});
+
+test('setStepAlias: clearing the field or passing through another alias while typing keeps the references', () => {
+  const lk = (ref) => [{ name: 'AccountId', type: 'lookup', options: { ref } }];
+  const wf = tree([r('a', 'acc'), r('o', 'acc2'), r('c', 'con', [...lk('acc'), { name: 'Other', type: 'lookup', options: { ref: 'acc2' } }])]);
+  const memo = new Map();
+  const refs = () => findStep(wf, 'c').step.config.fields.map((f) => f.options.ref).join(',');
+  // Select all + delete, then type "acc2x": "", "a", "ac", "acc", "acc2" (taken), "acc2x".
+  for (const v of ['', 'a', 'ac', 'acc', 'acc2', 'acc2x']) {
+    setStepAlias(wf, 'a', v, { memo, slotKeys });
+    if (v === '') assert.equal(refs(), 'acc,acc2', 'empty: references stay on the last good name');
+    if (v === 'acc2') assert.equal(refs(), 'acc,acc2', 'never merged into the other alias');
+  }
+  assert.equal(findStep(wf, 'a').step.config.alias, 'acc2x');
+  assert.equal(refs(), 'acc2x,acc2', 'references follow once the name is good again');
+  // Invalid characters mid-typing: references wait on the last good name.
+  setStepAlias(wf, 'a', 'acc-', { memo, slotKeys });
+  assert.equal(refs(), 'acc2x,acc2');
+  setStepAlias(wf, 'a', 'account', { memo, slotKeys });
+  assert.equal(refs(), 'account,acc2');
+});
+
+test('setStepAlias: loop variables rename inside the body only, and not into a shadowing name', () => {
+  const tpl = (id, t) => ({ id, type: 'record', config: { alias: id, fields: [{ name: 'T', type: 'template', options: { template: t } }] } });
+  const wf = tree([loop('outer', [loop('inner', [tpl('b', '{{j.index}}')], { alias: 'j' })], { alias: 'i' }), tpl('z', '{{j.index}}')]);
+  const memo = new Map();
+  const t = (id) => findStep(wf, id).step.config.fields[0].options.template;
+  setStepAlias(wf, 'inner', 'i', { memo, slotKeys }); // would shadow the outer loop: wait
+  assert.equal(t('b'), '{{j.index}}');
+  setStepAlias(wf, 'inner', 'k', { memo, slotKeys });
+  assert.equal(t('b'), '{{k.index}}');
+  assert.equal(t('z'), '{{j.index}}', 'outside the loop body nothing changes');
+  setStepAlias(wf, 'inner', '', { memo, slotKeys }); // empty = "loop", a valid name
+  assert.equal(t('b'), '{{loop.index}}');
+  assert.equal(findStep(wf, 'inner').step.config.alias, '');
+});
+
+test('malformedSteps names the first step that is not an object, or a bad slots value', () => {
+  assert.equal(malformedSteps(tree([r('a'), loop('l', [r('b')])])), null);
+  assert.match(malformedSteps(tree([r('a'), null])), /steps\[1\] không phải một bước/);
+  assert.match(malformedSteps(tree([loop('l', ['x'])])), /steps\[0\]\.slots\.body\[0\]/);
+  assert.match(malformedSteps(tree([{ id: 'l', type: 'loop', slots: { body: 3 } }])), /"slots.body" của bước "l"/);
+  assert.match(malformedSteps(tree([{ id: 'l', type: 'loop', slots: [] }])), /"slots" của bước "l"/);
+  assert.match(malformedSteps({ version: 2 }), /steps/);
 });
