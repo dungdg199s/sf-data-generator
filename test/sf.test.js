@@ -68,6 +68,7 @@ test('mapDescribe picks sensible defaults and skips non-createable fields', () =
   assert.equal(byName.LastName.options.mode, 'lastName');
   assert.equal(byName.AccountId.type, 'lookup');
   assert.deepEqual(byName.AccountId.referenceTo, ['Account']);
+  assert.deepEqual(byName.AccountId.options, { mode: 'current', ref: '', referenceTo: ['Account'] }, 'referenceTo narrows the parent list (0005)');
   assert.deepEqual(byName.Level__c.options.values, ['A']);
   assert.ok(!byName.Id);
 });

@@ -85,8 +85,8 @@ function mapField(f, sobject) {
     case 'reference': {
       if (!f.referenceTo?.length) return null;
       const isMasterDetail = f.relationshipOrder !== null && f.relationshipOrder !== undefined;
-      // Parent alias is unknown until the user wires the node; the UI asks for it.
-      return { name, type: isMasterDetail ? 'masterdetail' : 'lookup', options: { mode: 'current', ref: '' } };
+      // Parent alias is unknown until the user picks it; referenceTo narrows the "Bản ghi cha" list.
+      return { name, type: isMasterDetail ? 'masterdetail' : 'lookup', options: { mode: 'current', ref: '', referenceTo: [...f.referenceTo] } };
     }
     case 'location':
       return { name, type: 'geolocation', options: { scale: f.scale ?? 6 } };

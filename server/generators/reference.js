@@ -25,6 +25,10 @@ function makeReference(type, label, nullable) {
         help: 'Alias của một bước Record ở phía trên.',
       }),
       opt('ids', 'Danh sách Id', 'list', [], { showIf: { key: 'mode', in: ['fixed'] }, help: 'Mỗi dòng một Id 15/18 ký tự.' }),
+      opt('referenceTo', 'Trỏ tới sObject', 'list', [], {
+        showIf: { key: 'mode', in: ['current', 'random'] },
+        help: 'Điền sẵn khi Import từ org. Danh sách Bản ghi cha chỉ gợi ý bước Record có sObject này; để trống thì không lọc.',
+      }),
     ],
     generate(o, { rng, scope, fieldName }) {
       if (o.mode === 'fixed') {

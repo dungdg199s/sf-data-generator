@@ -149,7 +149,7 @@ export function prepareWorkflow(wf) {
   for (const { step, off } of steps) {
     if (off) continue;
     const c = step.config ?? {};
-    if (step.type === 'record') validateRecord(step, c, { err, warn });
+    if (step.type === 'record') validateRecord(step, c, { err, warn, scope });
     if (step.type === 'loop') {
       const mode = c.mode ?? 'fixed';
       const check = (key) => {
@@ -219,7 +219,7 @@ export function insertBlockedReason(wf) {
   return 'Workflow version 1 này phải đổi cấu trúc khi chuyển sang version 2 (có bước được nhân bản hoặc bị cắt). Mở file trong trình soạn, kiểm tra hộp thoại chuyển đổi rồi bấm Lưu trước khi insert. Xem trước vẫn chạy được.';
 }
 
-function validateRecord(step, c, { err, warn }) {
+function validateRecord(step, c, { err, warn, scope }) {
   if (!c.sobject || !API_NAME.test(c.sobject)) err('Chưa nhập sObject hợp lệ (API name).', step.id, 'sobject');
   const count = c.count ?? 1;
   if (!Number.isInteger(Number(count)) || count < 1 || count > LIMITS.maxCountPerNode) {
@@ -244,10 +244,20 @@ function validateRecord(step, c, { err, warn }) {
       err(`Field "${f.name}": kiểu "${f.type}" không được hỗ trợ.`, step.id, key);
       continue;
     }
-    if (REF_TYPES.has(f.type) && (f.options?.mode ?? 'current') !== 'fixed' && !f.options?.ref) {
-      err(`Field "${f.name}": chưa chọn bản ghi cha. Chọn một bước Record phía trên trong ô "Bản ghi cha".`, step.id, key);
+    if (REF_TYPES.has(f.type) && (f.options?.mode ?? 'current') !== 'fixed') {
+      if (!f.options?.ref) err(`Field "${f.name}": chưa chọn bản ghi cha. Chọn một bước Record phía trên trong ô "Bản ghi cha".`, step.id, key);
+      else checkReferenceTo(step, f, key, { warn, scope });
     }
   }
+}
+
+/** A Lookup imported from the org (referenceTo) whose parent step creates another sObject. */
+function checkReferenceTo(step, f, key, { warn, scope }) {
+  const targets = Array.isArray(f.options?.referenceTo) ? f.options.referenceTo.filter(Boolean) : [];
+  if (!targets.length) return;
+  const parent = Object.values(scope.sources).find((s) => s.lookupParent && s.name === f.options.ref);
+  if (!parent?.sobject || targets.some((t) => String(t).toLowerCase() === parent.sobject.toLowerCase())) return;
+  warn(`Field "${f.name}": bước "${parent.name}" là ${parent.sobject}, nhưng field này trỏ tới ${targets.join(', ')}. Chọn bản ghi cha là ${targets.join(' hoặc ')}.`, step.id, key, { code: 'wrongSobject', path: f.options.ref, option: 'ref' });
 }
 
 // ---------- variable references (design 0005, "Thông báo lỗi và cảnh báo") ----------

@@ -297,3 +297,14 @@ test('template: {{this.$n}} and {{acc.$n}} follow alias#n; the default is {{this
   assert.deepEqual(contacts.map((r) => r.fields.N), ['1', '2', '3']);
   assert.deepEqual(contacts.map((r) => r.fields.P), ['C1 of A2', 'C2 of A2', 'C3 of A2']);
 });
+
+test('validation: a Lookup imported with referenceTo warns when the parent step is another sObject', () => {
+  const w = wf([acc(), record('l', 'Lead', 'ld', [{ name: 'Name', type: 'text' }]), record('c', 'Contact', 'con', [{ name: 'AccountId', type: 'lookup', options: { ref: 'ld', referenceTo: ['Account'] } }])]);
+  const { errors, warnings } = validateWorkflow(w);
+  assert.deepEqual(errors, []);
+  const x = warnings.find((i) => i.code === 'wrongSobject');
+  assert.equal(x.message, 'Field "AccountId": bước "ld" là Lead, nhưng field này trỏ tới Account. Chọn bản ghi cha là Account.');
+  assert.equal(x.field, 'fields.AccountId');
+  const ok = wf([acc(), record('c', 'Contact', 'con', [{ name: 'AccountId', type: 'lookup', options: { ref: 'acc', referenceTo: ['Account'] } }])]);
+  assert.deepEqual(validateWorkflow(ok), { errors: [], warnings: [] });
+});
