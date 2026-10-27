@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SF Data Generator</title>
+  <link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">SF Data Generator</div>
+    <input id="wf-name" class="wf-name" type="text" aria-label="Tên workflow" placeholder="Tên workflow">
+    <div class="toolbar">
+      <button id="btn-new" title="Workflow mới">Mới</button>
+      <button id="btn-open" title="Mở file workflow JSON">Mở…</button>
+      <button id="btn-save" title="Tải workflow JSON (Ctrl+S)">Lưu</button>
+      <button id="btn-undo" title="Hoàn tác (Ctrl+Z)">↶</button>
+      <button id="btn-redo" title="Làm lại (Ctrl+Shift+Z)">↷</button>
+      <input id="file-input" type="file" accept=".json,application/json" hidden>
+    </div>
+    <div class="spacer"></div>
+    <label class="field-inline" title="Để trống: mỗi lần chạy ra dữ liệu khác. Nhập seed: chạy lại ra đúng dữ liệu cũ.">
+      Seed <input id="seed" type="text" placeholder="ngẫu nhiên" size="9">
+    </label>
+    <label class="field-inline">
+      Org
+      <select id="org-select"><option value="">— không kết nối —</option></select>
+      <button id="btn-orgs" class="icon" title="Tải lại danh sách org từ sf CLI">⟳</button>
+    </label>
+    <button id="btn-preview" class="primary" title="Sinh dữ liệu và xem trước (Ctrl+Enter)">▶ Xem trước</button>
+    <button id="btn-insert" class="danger" title="Sinh dữ liệu và insert vào org đã chọn">⤒ Insert vào org</button>
+  </header>
+
+  <main class="layout">
+    <aside class="palette" aria-label="Thêm node">
+      <h3>Thêm node</h3>
+      <div id="palette-items"></div>
+      <p class="hint">Bấm để thêm và tự nối sau node đang chọn, hoặc kéo thả vào canvas.</p>
+      <h3>Mẫu</h3>
+      <div id="sample-items"></div>
+    </aside>
+
+    <section class="canvas-wrap">
+      <div id="canvas" class="canvas" tabindex="0" aria-label="Workflow canvas">
+        <div id="viewport" class="viewport">
+          <svg id="edges" class="edges" width="1" height="1"></svg>
+          <div id="nodes"></div>
+        </div>
+      </div>
+      <div class="canvas-controls">
+        <button id="btn-zoom-out" class="icon" title="Thu nhỏ">−</button>
+        <button id="btn-zoom-fit" class="icon" title="Vừa màn hình">⤢</button>
+        <button id="btn-zoom-in" class="icon" title="Phóng to">+</button>
+      </div>
+      <div id="issues" class="issues" hidden></div>
+    </section>
+
+    <aside id="inspector" class="inspector" aria-label="Cấu hình node"></aside>
+  </main>
+
+  <section id="results" class="results collapsed">
+    <div class="results-head">
+      <button id="btn-results-toggle" class="link">Kết quả</button>
+      <div id="results-summary" class="summary">Chưa chạy.</div>
+      <div class="spacer"></div>
+      <button id="btn-dl-json" disabled>Tải JSON</button>
+      <button id="btn-dl-csv" disabled>Tải CSV (tab hiện tại)</button>
+    </div>
+    <div id="results-body" class="results-body"></div>
+  </section>
+
+  <dialog id="modal"></dialog>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <script type="module" src="/js/main.js"></script>
+</body>
+</html>

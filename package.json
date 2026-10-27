@@ -1,0 +1,17 @@
+{
+  "name": "sf-data-generator",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Generate Salesforce-typed test data from a node-based workflow and optionally insert it into an org via the sf CLI connection.",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js",
+    "test": "node --test 'test/**/*.test.js'",
+    "test:watch": "node --test --watch 'test/**/*.test.js'"
+  },
+  "license": "UNLICENSED"
+}
