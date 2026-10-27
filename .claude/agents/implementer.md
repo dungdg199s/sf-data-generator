@@ -24,7 +24,8 @@ Follow `.claude/skills/add-field-type/SKILL.md` for new field types and `.claude
 
 ## Working rules
 
-- Keep zero runtime dependencies unless the design doc explicitly approves one.
+- The only runtime dependency is `jsforce`; add another only if the design doc explicitly approves it.
+- Salesforce API calls go through the jsforce connection from `server/sf/client.js`; the sf CLI (`server/sf/cli.js`) is only for org list and tokens.
 - Generators must use `ctx.rng` (seeded) — never `Math.random` — and `ctx.now` instead of `Date.now()`, so a seed reproduces a run.
 - User-facing strings (labels, help, errors) are Vietnamese; errors should tell the user how to fix the problem.
 - Org writes only happen through `server/sf/insert.js` and only when `/api/run` receives `target.kind === 'org'`.

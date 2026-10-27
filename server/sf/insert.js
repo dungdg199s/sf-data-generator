@@ -4,7 +4,7 @@
 // Id. Parents therefore land before children, and self-lookups (Account.ParentId) work across
 // waves. A child whose parent failed is reported as failed without being sent.
 
-const BATCH_SIZE = 200; // sObject Collections limit.
+const BATCH_SIZE = 200; // sObject Collections limit; batching here also drives progress reporting.
 
 export function collectRefs(fields) {
   const refs = [];
@@ -12,8 +12,9 @@ export function collectRefs(fields) {
   return refs;
 }
 
+/** Field values as sent to Salesforce (jsforce adds the sObject `attributes`). */
 export function toSObject(record, idByRef) {
-  const out = { attributes: { type: record.sobject } };
+  const out = {};
   for (const [name, v] of Object.entries(record.fields)) {
     if (v === null || v === undefined) continue;
     if (typeof v === 'object' && '$ref' in v) out[name] = idByRef.get(v.$ref);
@@ -58,12 +59,12 @@ export async function insertRecords(client, target, records, { onProgress } = {}
       if (!bySobject.has(r.sobject)) bySobject.set(r.sobject, []);
       bySobject.get(r.sobject).push(r);
     }
-    for (const group of bySobject.values()) {
+    for (const [sobject, group] of bySobject) {
       for (let i = 0; i < group.length; i += BATCH_SIZE) {
         const chunk = group.slice(i, i + BATCH_SIZE);
         let results;
         try {
-          results = await client.createCollection(target, chunk.map((r) => toSObject(r, idByRef)));
+          results = await client.create(target, sobject, chunk.map((r) => toSObject(r, idByRef)));
         } catch (e) {
           results = chunk.map(() => ({ success: false, errors: [{ message: e.message }] }));
         }

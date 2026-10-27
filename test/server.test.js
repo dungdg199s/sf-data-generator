@@ -11,7 +11,7 @@ const inserted = [];
 before(async () => {
   const cli = { listOrgs: async () => [{ alias: 'dev', username: 'a@x.com' }], getConnection: async () => ({}) };
   const client = {
-    createCollection: async (_t, recs) => {
+    create: async (_t, _sobject, recs) => {
       inserted.push(...recs);
       return recs.map((_, i) => ({ success: true, id: `001${i}` }));
     },

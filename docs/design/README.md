@@ -12,6 +12,7 @@ viết và cập nhật các file này theo skill `design-doc`; người viết 
 | # | Tiêu đề | Trạng thái |
 | --- | --- | --- |
 | [0001](0001-workflow-editor-ux.md) | Trải nghiệm trình soạn workflow (bản đầu) | Đã làm |
+| [0002](0002-jsforce-api.md) | Gọi API Salesforce bằng jsforce, sf CLI chỉ lấy token | Đã làm |
 
 ## Nguyên tắc tiện dụng
 

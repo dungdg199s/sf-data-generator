@@ -2,14 +2,21 @@
 
 ## Lấy thông tin org
 
-App không tự làm OAuth. Server dùng Salesforce CLI (`sf`) đã đăng nhập sẵn trên máy:
+App không tự làm OAuth. Việc được chia làm hai phần:
 
-| Việc | Lệnh | Nơi gọi |
-| --- | --- | --- |
-| Danh sách org | `sf org list --json` | `server/sf/cli.js` → `listOrgs()` |
-| Access token, instance URL | `sf org display --target-org <alias> --json` | `getConnection()`; cache trong bộ nhớ 10 phút |
+- **sf CLI chỉ dùng để lấy thông tin đăng nhập** (`server/sf/cli.js`):
 
-Khi REST trả 401, client gọi lại `sf org display` một lần để lấy token mới.
+  | Việc | Lệnh | Hàm |
+  | --- | --- | --- |
+  | Danh sách org | `sf org list --json` | `listOrgs()` |
+  | Access token, instance URL, API version | `sf org display --target-org <alias> --json` | `getConnection()`; cache trong bộ nhớ 10 phút |
+
+- **Mọi lời gọi API đi qua [jsforce](https://jsforce.github.io/)** (`server/sf/client.js`). Mỗi org có một `jsforce.Connection`,
+  được tạo từ `accessToken`, `instanceUrl` và `version` mà CLI trả về.
+
+Khi Salesforce trả `INVALID_SESSION_ID` (token hết hạn), jsforce gọi `refreshFn`. Hàm này chạy lại `sf org display`
+(CLI tự làm mới token từ thông tin đăng nhập nó đang giữ), rồi jsforce gọi lại request đó. Lỗi từ Salesforce được trả về
+UI với HTTP 502 và mã lỗi, ví dụ `Salesforce: NOT_FOUND: ...`.
 Nếu máy chưa cài `sf` thì `/api/orgs` trả 503 kèm thông báo; UI vẫn dùng được ở chế độ xem trước.
 
 Đăng nhập org trên máy: `sf org login web --alias <tên>`.
@@ -32,7 +39,7 @@ Nếu máy chưa cài `sf` thì `/api/orgs` trả 503 kèm thông báo; UI vẫn
 
 ## Insert
 
-`server/sf/insert.js` dùng sObject Collections (`POST /composite/sobjects`, tối đa 200 bản ghi/lần, `allOrNone: false`):
+`server/sf/insert.js` gọi `conn.sobject(type).create(records, { allOrNone: false })` của jsforce (sObject Collections `POST /composite/sobjects`), mỗi lần tối đa 200 bản ghi:
 
 1. Mỗi đợt (wave) lấy những bản ghi mà mọi `$ref` đã có Id thật.
 2. Gom theo sObject, chia lô 200, gửi đi, lưu Id trả về theo `ref`.
@@ -41,4 +48,8 @@ Nếu máy chưa cài `sf` thì `/api/orgs` trả 503 kèm thông báo; UI vẫn
 
 Kết quả: `{ inserted, failed, errors: [{ ref, sobject, message }], ids: { ref: Id } }`.
 
-Chưa làm: Bulk API 2.0 cho khối lượng lớn, xóa dữ liệu đã insert (rollback), upsert theo External Id.
+Chưa làm (jsforce đã hỗ trợ sẵn, chỉ cần nối vào): Bulk API 2.0 (`conn.bulk2`) cho khối lượng lớn, xóa dữ liệu đã insert (`conn.sobject(type).destroy`),
+upsert theo External Id, tìm bản ghi có sẵn bằng SOQL (`conn.query`).
+
+Lưu ý proxy: jsforce đọc `https_proxy` / `HTTPS_PROXY` khi khởi động và **không** xét `NO_PROXY`. Sau proxy công ty thì cứ đặt
+`HTTPS_PROXY` như bình thường.

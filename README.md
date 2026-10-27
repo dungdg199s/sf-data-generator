@@ -8,7 +8,11 @@ xem trước dữ liệu, rồi insert vào org đã đăng nhập bằng Salesf
 - Node.js 20 trở lên
 - (Không bắt buộc) [Salesforce CLI](https://developer.salesforce.com/tools/salesforcecli) `sf`, đã đăng nhập org: `sf org login web --alias dev`
 
-Không cần `npm install`, vì dự án không có dependency runtime.
+Cài dependency (chỉ có [jsforce](https://jsforce.github.io/)) một lần:
+
+```bash
+npm install
+```
 
 ## Chạy
 

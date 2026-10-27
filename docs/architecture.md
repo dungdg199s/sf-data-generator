@@ -12,7 +12,7 @@ Trình duyệt (client/)                         Server Node.js (server/)
 │                          │  POST /api/run    │ workflow/executor.js          │
 │ Kết quả / CSV / JSON     │ ◄──────────────── │   └─► sf/insert.js (nếu org)  │
 └──────────────────────────┘                   │ sf/cli.js ─► `sf` CLI máy local│
-                                               │ sf/client.js ─► Salesforce REST│
+                                               │ sf/client.js ─► jsforce ─► SF  │
                                                └───────────────────────────────┘
 ```
 
@@ -29,13 +29,15 @@ Trình duyệt (client/)                         Server Node.js (server/)
 | --- | --- | --- |
 | `server/generators/` | Mỗi kiểu field Salesforce một generator, tự khai báo option | Registry trong `index.js`; xử lý chung `nullRatio`/`unique` |
 | `server/workflow/` | Danh mục node, validate, chạy workflow | Executor là hàm thuần: không I/O, không gọi org |
-| `server/sf/` | sf CLI, REST client, map describe → field, insert | Không lưu credential; token chỉ cache trong bộ nhớ 10 phút |
+| `server/sf/` | sf CLI (chỉ lấy token), jsforce connection, map describe → field, insert | Không lưu credential; token chỉ giữ trong bộ nhớ |
 | `server/random.js` | PRNG có seed (mulberry32) | Cùng workflow + seed ⇒ cùng dữ liệu |
 
 ## Quyết định thiết kế quan trọng
 
-- **Không framework, không dependency runtime.** Server dùng `node:http`, client dùng ES modules thuần,
-  không có bước build. Chỉ thêm thư viện khi thực sự cần (yêu cầu của dự án).
+- **Không framework, dependency tối thiểu.** Server dùng `node:http`, client dùng ES modules thuần,
+  không có bước build. Dependency runtime duy nhất là `jsforce` để gọi API Salesforce
+  ([0002](design/0002-jsforce-api.md)). Chỉ thêm thư viện khi thực sự cần (yêu cầu của dự án).
+- **sf CLI chỉ dùng để lấy token.** Mọi lời gọi API (describe, insert, …) đi qua jsforce.
 - **Server bind `127.0.0.1` mặc định.** Server hành động bằng quyền của sf CLI trên máy,
   nên không được lộ ra mạng trừ khi đặt `HOST` một cách có chủ đích.
 - **Seed để tái lập.** Xem trước với seed cố định rồi insert với cùng seed thì dữ liệu insert giống hệt bản xem trước.

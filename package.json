@@ -13,5 +13,8 @@
     "test": "node --test 'test/**/*.test.js'",
     "test:watch": "node --test --watch 'test/**/*.test.js'"
   },
-  "license": "UNLICENSED"
+  "license": "UNLICENSED",
+  "dependencies": {
+    "jsforce": "^3.12.0"
+  }
 }

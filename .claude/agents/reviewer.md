@@ -10,7 +10,7 @@ Start with `git diff` (or the files you were pointed to), `CLAUDE.md`, and the r
 
 Check, in order of severity:
 
-1. **Org safety** — no path writes to an org without `target.kind === 'org'` and the UI confirmation; no credentials persisted or logged; server still binds `127.0.0.1` by default; request size and `LIMITS` still enforced.
+1. **Org safety** — Salesforce calls go only through the jsforce connection in `server/sf/client.js` (no ad-hoc `fetch` to Salesforce, no sf CLI data commands); no path writes to an org without `target.kind === 'org'` and the UI confirmation; no credentials persisted or logged; server still binds `127.0.0.1` by default; request size and `LIMITS` still enforced.
 2. **Correctness** — executor semantics match `docs/workflow-schema.md`; `$ref` resolution and insert waves still put parents before children; seeded runs stay reproducible (no `Math.random`/`Date.now` inside generators or executor).
 3. **Contract sync** — node/field catalogue, `schema.js` validation, executor, UI and docs all agree (see the table in `.claude/agents/implementer.md`). Validation issues carry `nodeId` and `field`.
 4. **Usability** — go through the checklist in `docs/design/README.md` ("Nguyên tắc tiện dụng"). Flag: new mandatory configuration without a working default, errors that don't say how to fix, UI code that hard-codes options that should come from `/api/meta`, inspector re-rendering on each keystroke (focus loss), missing Vietnamese help text.
