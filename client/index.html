@@ -32,30 +32,24 @@
   </header>
 
   <main class="layout">
-    <aside class="palette" aria-label="Thêm node">
-      <h3>Thêm node</h3>
+    <aside class="palette" aria-label="Thêm bước">
+      <h3>Thêm bước</h3>
       <div id="palette-items"></div>
-      <p class="hint">Bấm để thêm và tự nối sau node đang chọn, hoặc kéo thả vào canvas.</p>
+      <p class="hint">Bấm để thêm sau bước đang chọn (hoặc vào nhánh còn trống của nó). Kéo vào một dấu + để đặt đúng chỗ.</p>
       <h3>Mẫu</h3>
       <div id="sample-items"></div>
     </aside>
 
-    <section class="canvas-wrap">
-      <div id="canvas" class="canvas" tabindex="0" aria-label="Workflow canvas">
-        <div id="viewport" class="viewport">
-          <svg id="edges" class="edges" width="1" height="1"></svg>
-          <div id="nodes"></div>
-        </div>
+    <section class="view-wrap">
+      <div class="view-tools">
+        <button id="btn-collapse-all" title="Thu gọn mọi khung Lặp / Rẽ nhánh">Thu gọn tất cả</button>
+        <button id="btn-expand-all" title="Mở mọi khung Lặp / Rẽ nhánh">Mở tất cả</button>
       </div>
-      <div class="canvas-controls">
-        <button id="btn-zoom-out" class="icon" title="Thu nhỏ">−</button>
-        <button id="btn-zoom-fit" class="icon" title="Vừa màn hình">⤢</button>
-        <button id="btn-zoom-in" class="icon" title="Phóng to">+</button>
-      </div>
+      <div id="process" class="process" role="tree" aria-label="Các bước của workflow"></div>
       <div id="issues" class="issues" hidden></div>
     </section>
 
-    <aside id="inspector" class="inspector" aria-label="Cấu hình node"></aside>
+    <aside id="inspector" class="inspector" aria-label="Cấu hình bước"></aside>
   </main>
 
   <section id="results" class="results collapsed">

@@ -1,57 +1,79 @@
-// Right-hand panel: configuration for the selected node/edge, or workflow tips when nothing
-// is selected. Edits made here emit source 'inspector' and do not trigger a re-render, so
-// focus survives typing; structural edits (add/remove/reorder fields) use 'inspector-structure'.
+// Right-hand panel: configuration for the selected step, or workflow settings and tips when
+// the Start card (or nothing) is selected. It is the only place where configuration is edited.
+// Edits made here emit source 'inspector' and do not trigger a re-render, so focus survives
+// typing; structural edits (add/remove/reorder fields) use 'inspector-structure'.
+// On narrow screens the panel is a bottom sheet (.inspector.open) shown while a step is selected.
 
 import { h, toast } from './dom.js';
 import { renderOptions } from './forms.js';
 import { api } from './api.js';
 import {
-  state, subscribe, updateWorkflow, nodeById, nodeType, fieldType, recordAliases, suggestAlias, edgeId, NODE_COLORS,
+  state, subscribe, select, updateWorkflow, stepById, nodeType, fieldType, suggestAlias, recordScope, NODE_COLORS,
 } from './store.js';
-import { deleteSelection, duplicateSelection } from './canvas.js';
+import { renameAlias } from '/shared/workflow-tree.js';
+import { recordChoices, HIDDEN_REASON } from '/shared/scope.js';
+import { deleteStep, duplicateStep, toggleDisabled } from './ops.js';
 
 let root;
-const expanded = new Set(); // `${nodeId}:${fieldIndex}` with options panel open
+const expanded = new Set(); // `${stepId}:${fieldIndex}` with options panel open
+let sheetClosed = false; // narrow screens: "‹ Xong" hides the sheet but keeps the selection
+let lastSelectionKey = null;
 
 export function initInspector() {
   root = document.getElementById('inspector');
   subscribe(({ source, kind }) => {
     if (kind === 'issues') return markIssues();
-    if (source === 'inspector' || source === 'canvas-drag') return;
+    if (kind === 'view' || kind === 'result') return undefined;
+    if (source === 'inspector') return undefined;
     render();
   });
   render();
 }
 
+/** Select a step and open the options of one of its fields (field chips on the cards). */
+export function openField(stepId, index) {
+  expanded.add(`${stepId}:${index}`);
+  select({ kind: 'step', id: stepId });
+  requestAnimationFrame(() => root.querySelectorAll('.field-card')[index]?.scrollIntoView({ block: 'nearest' }));
+}
+
 function render() {
   const s = state.selection;
-  if (s?.kind === 'node' && nodeById(s.id)) root.replaceChildren(renderNode(nodeById(s.id)));
-  else if (s?.kind === 'edge') root.replaceChildren(renderEdge(s.id));
-  else root.replaceChildren(renderEmpty());
+  const step = s?.kind === 'step' ? stepById(s.id) : null;
+  const key = step ? `step:${step.id}` : s?.kind ?? 'none';
+  if (key !== lastSelectionKey) sheetClosed = false;
+  lastSelectionKey = key;
+  const closeSheet = h('button', { class: 'sheet-close', onclick: () => { sheetClosed = true; root.classList.remove('open'); } }, '‹ Xong');
+  root.replaceChildren(closeSheet, step ? renderStep(step) : renderWorkflow());
+  root.classList.toggle('open', Boolean(s) && !sheetClosed);
   markIssues();
 }
 
-function renderEmpty() {
+function renderWorkflow() {
   return h(
     'div',
     {},
+    h('div', { class: 'node-head' }, h('span', { class: 'dot', style: { background: NODE_COLORS.start } }), h('h2', {}, 'Bắt đầu')),
     h('h3', {}, 'Bắt đầu nhanh'),
     h(
       'ol',
       { class: 'hint' },
-      h('li', {}, 'Chọn node Bắt đầu, bấm "Record" ở cột trái để thêm và tự nối.'),
+      h('li', {}, 'Bấm "+ Thêm bước đầu tiên" hoặc Record ở cột trái.'),
       h('li', {}, 'Chọn org ở thanh trên rồi "Import từ org…" để lấy field có sẵn.'),
       h('li', {}, 'Bấm ▶ Xem trước (Ctrl+Enter) để kiểm tra dữ liệu trước khi insert.'),
     ),
     h('h3', {}, 'Phím tắt'),
     h(
       'ul',
-      { class: 'hint' },
-      h('li', {}, 'Delete: xóa node/cạnh đang chọn'),
-      h('li', {}, 'Ctrl+D: nhân bản node'),
+      { class: 'hint shortcuts' },
+      h('li', {}, '↑ / ↓: chọn bước trước / sau; ← / →: thu gọn / mở khung'),
+      h('li', {}, '/: thêm bước ở vị trí mặc định'),
+      h('li', {}, 'Alt+↑ / Alt+↓: di chuyển bước'),
+      h('li', {}, 'Ctrl+D: nhân bản; Ctrl+/: tắt / bật bước'),
+      h('li', {}, 'Delete: xóa bước (khung có bước con thì hỏi)'),
+      h('li', {}, 'Enter: sửa bước đang chọn; Esc: quay lại danh sách'),
       h('li', {}, 'Ctrl+Z / Ctrl+Shift+Z: hoàn tác / làm lại'),
-      h('li', {}, 'Ctrl+S: tải workflow JSON'),
-      h('li', {}, 'Kéo nền để di chuyển, cuộn chuột để zoom'),
+      h('li', {}, 'Ctrl+S: tải workflow JSON; Ctrl+Enter: xem trước'),
     ),
     h('h3', {}, 'Workflow'),
     renderOptions(
@@ -64,82 +86,67 @@ function renderEmpty() {
   );
 }
 
-function renderEdge(id) {
-  const e = state.workflow.edges.find((x) => edgeId(x) === id);
-  if (!e) return renderEmpty();
-  const from = nodeById(e.from);
-  const to = nodeById(e.to);
-  const portLabel = nodeType(from?.type)?.outputs.find((p) => p.port === (e.fromPort ?? 'next'))?.label;
-  return h(
-    'div',
-    {},
-    h('div', { class: 'node-head' }, h('h2', {}, 'Cạnh nối')),
-    h('p', { class: 'desc' }, `${label(from)}${portLabel ? ` (${portLabel})` : ''} → ${label(to)}`),
-    h('div', { class: 'btn-row' }, h('button', { class: 'danger', onclick: deleteSelection }, 'Xóa cạnh (Delete)')),
-  );
-}
-
-const label = (n) => (n ? `${nodeType(n.type)?.label ?? n.type}${n.config?.alias ? ` "${n.config.alias}"` : ''}` : '?');
-
-function renderNode(node) {
-  const type = nodeType(node.type);
+function renderStep(step) {
+  const type = nodeType(step.type);
   const wrap = h(
     'div',
     {},
     h(
       'div',
       { class: 'node-head' },
-      h('span', { style: { width: '10px', height: '10px', borderRadius: '50%', background: NODE_COLORS[node.type] } }),
-      h('h2', {}, type?.label ?? node.type),
+      h('span', { class: 'dot', style: { background: NODE_COLORS[step.type] } }),
+      h('h2', {}, type?.label ?? step.type),
+      step.disabled ? h('span', { class: 'tag-off' }, 'Đã tắt') : null,
       h('div', { class: 'spacer' }),
-      node.type !== 'start' && h('button', { class: 'icon', title: 'Nhân bản (Ctrl+D)', onclick: duplicateSelection }, '⧉'),
-      node.type !== 'start' && h('button', { class: 'icon danger', title: 'Xóa (Delete)', onclick: deleteSelection }, '✕'),
+      h('button', { class: 'icon', title: step.disabled ? 'Bật bước (Ctrl+/)' : 'Tắt bước (Ctrl+/)', onclick: () => toggleDisabled(step.id) }, step.disabled ? '◉' : '⊘'),
+      h('button', { class: 'icon', title: 'Nhân bản (Ctrl+D)', onclick: () => duplicateStep(step.id) }, '⧉'),
+      h('button', { class: 'icon danger', title: 'Xóa (Delete)', onclick: () => deleteStep(step.id) }, '✕'),
     ),
     h('p', { class: 'desc' }, type?.description ?? ''),
+    step.disabled ? h('div', { class: 'warn-box' }, 'Bước này đang tắt nên không chạy và không được kiểm tra. Bấm Ctrl+/ để bật lại.') : null,
   );
-  if (!type?.options.length && node.type !== 'record') return wrap;
+  if (!type?.options.length && step.type !== 'record') return wrap;
 
-  const form = renderOptions(type.options, node.config ?? {}, (key, v) => onNodeOption(node, key, v, form), {});
+  const form = renderOptions(type.options, step.config ?? {}, (key, v) => onStepOption(step, key, v, form), {});
   wrap.append(form);
-  if (node.type === 'record') wrap.append(renderFields(node));
+  if (step.type === 'record') wrap.append(renderFields(step));
   return wrap;
 }
 
-function onNodeOption(node, key, v, form) {
+function onStepOption(step, key, v, form) {
   updateWorkflow((wf) => {
-    const c = node.config;
-    if (key === 'sobject') {
+    const c = (step.config ??= {});
+    if (key === 'sobject' && step.type === 'record') {
       // Keep the alias in sync while it is still the auto-suggested one.
-      const auto = !c.alias || c.alias === suggestAlias(c.sobject, node.id);
+      const auto = !c.alias || c.alias === suggestAlias(c.sobject, step.id);
       c.sobject = v;
       if (auto) {
-        const next = suggestAlias(v, node.id);
-        renameAlias(wf, c.alias, next);
+        const next = suggestAlias(v, step.id);
+        renameAlias(wf.steps, c.alias, next);
         c.alias = next;
         const input = form.querySelector('[data-key="alias"]');
         if (input) input.value = next;
       }
-    } else if (key === 'alias') {
-      renameAlias(wf, c.alias, v);
+    } else if (key === 'alias' && step.type === 'record') {
+      renameAlias(wf.steps, c.alias, v);
+      c.alias = v;
+    } else if (key === 'alias' && step.type === 'loop') {
+      // A loop variable is only visible inside the loop body: rename there only.
+      renameAlias(step.slots?.body ?? [], c.alias || 'loop', v || 'loop');
       c.alias = v;
     } else c[key] = v;
-  }, { source: 'inspector', coalesceKey: `${node.id}:${key}` });
-  // Node card summary/alias changed; re-render canvas only (inspector keeps focus).
+  }, { source: 'inspector', coalesceKey: `${step.id}:${key}` });
+  // Card summary/alias changed; the process view re-renders, the inspector keeps focus.
 }
 
-/** Renaming an alias updates lookups and {{alias.X}} templates/conditions that used it. */
-function renameAlias(wf, from, to) {
-  if (!from || from === to) return;
-  const re = new RegExp(`\\{\\{\\s*${from}\\.`, 'g');
-  for (const n of wf.nodes) {
-    for (const f of n.config?.fields ?? []) {
-      if (f.options?.ref === from) f.options.ref = to;
-      if (typeof f.options?.template === 'string') f.options.template = f.options.template.replace(re, `{{${to}.`);
-    }
-    if (n.type === 'branch' && typeof n.config?.left === 'string' && n.config.left.startsWith(`${from}.`)) {
-      n.config.left = to + n.config.left.slice(from.length);
-    }
-  }
+/** Parent choices for Lookup "Bản ghi cha" at this step (usable first, nearest first). */
+function parentChoices(step) {
+  return recordChoices(recordScope(), step.id).map((c) => ({
+    alias: c.alias,
+    sobject: c.sobject,
+    usable: c.usable,
+    note: c.usable ? (c.state === 'maybe' ? 'có thể chưa có' : '') : HIDDEN_REASON[c.state] ?? '',
+  }));
 }
 
 // ---------- fields editor ----------
@@ -160,7 +167,7 @@ function groupedTypeSelect(value, onchange) {
 function renderFields(node) {
   const fields = node.config.fields ?? (node.config.fields = []);
   const structural = (fn) => updateWorkflow(fn, { source: 'inspector-structure' });
-  const aliases = recordAliases(node.id);
+  const aliases = parentChoices(node);
 
   const list = h(
     'div',
@@ -248,7 +255,7 @@ function renderFields(node) {
 
 function markIssues() {
   const s = state.selection;
-  if (s?.kind !== 'node') return;
+  if (s?.kind !== 'step') return;
   const issues = [...state.issues.errors].filter((i) => i.nodeId === s.id);
   for (const card of root.querySelectorAll('.field-card')) {
     const mine = issues.filter((i) => i.field === card.dataset.field);
@@ -297,18 +304,24 @@ async function openImport(node) {
 
 function renderImportList(node, described, box, modal) {
   const existing = new Set((node.config.fields ?? []).map((f) => f.name.toLowerCase()));
-  const aliases = recordAliases(node.id);
+  const aliases = parentChoices(node);
   const rows = described.fields.map((f) => {
     const has = existing.has(f.name.toLowerCase());
     const cb = h('input', { type: 'checkbox', checked: f.required && !has, disabled: has });
     let parentSel = null;
     if (f.type === 'lookup' || f.type === 'masterdetail') {
-      const matches = aliases.filter((a) => f.referenceTo?.includes(a.sobject));
+      // Auto-pick only among parents usable at this position (above, not in the other branch, on).
+      const matches = aliases.filter((a) => a.usable && f.referenceTo?.includes(a.sobject));
+      const usable = aliases.filter((a) => a.usable);
+      const other = aliases.filter((a) => !a.usable);
       parentSel = h(
         'select',
-        { title: 'Node cha' },
-        h('option', { value: '' }, '— node cha —'),
-        aliases.map((a) => h('option', { value: a.alias, selected: matches.length === 1 && matches[0].alias === a.alias }, `${a.alias} (${a.sobject})`)),
+        { title: 'Bản ghi cha' },
+        h('option', { value: '' }, '— bản ghi cha —'),
+        usable.map((a) => h('option', { value: a.alias, selected: matches.length === 1 && matches[0].alias === a.alias }, `${a.alias} (${a.sobject})${a.note ? ` · ${a.note}` : ''}`)),
+        other.length
+          ? h('optgroup', { label: 'Không dùng được ở vị trí này' }, other.map((a) => h('option', { value: a.alias, disabled: true, title: a.note }, `${a.alias} (${a.sobject}) · ${a.note}`)))
+          : null,
       );
     }
     const typeLabel = fieldType(f.type)?.label ?? f.type;
@@ -334,7 +347,7 @@ function renderImportList(node, described, box, modal) {
     },
   });
   box.replaceChildren(
-    h('p', { class: 'hint' }, 'Field bắt buộc đã được chọn sẵn. Field Lookup tự chọn node cha nếu chỉ có một node khớp sObject.'),
+    h('p', { class: 'hint' }, 'Field bắt buộc đã được chọn sẵn. Field Lookup tự chọn bản ghi cha nếu chỉ có một bước Record phía trên khớp sObject.'),
     filter,
     h('div', { class: 'list' }, rows.map((r) => r.el)),
     h(

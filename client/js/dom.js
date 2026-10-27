@@ -25,12 +25,26 @@ export function h(tag, attrs = {}, ...children) {
 }
 
 let toastTimer;
-export function toast(message, ms = 2600) {
+/**
+ * Short status message at the bottom. With `action: { label, onClick }` the toast gets a
+ * button (e.g. "Hoàn tác") and stays a little longer.
+ */
+export function toast(message, ms = 2600, action = null) {
   const el = document.getElementById('toast');
-  el.textContent = message;
+  el.replaceChildren(document.createTextNode(message));
+  if (action) {
+    el.append(' ', h('button', {
+      class: 'toast-action',
+      onclick: () => {
+        el.classList.remove('show');
+        action.onClick();
+      },
+    }, action.label));
+  }
+  el.classList.toggle('has-action', Boolean(action));
   el.classList.add('show');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => el.classList.remove('show'), ms);
+  toastTimer = setTimeout(() => el.classList.remove('show'), action ? Math.max(ms, 6000) : ms);
 }
 
 export function download(filename, text, type = 'application/json') {

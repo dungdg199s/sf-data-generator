@@ -1,14 +1,19 @@
-// App bootstrap: loads metadata, wires toolbar, shortcuts, live validation and runs.
+// App bootstrap: loads metadata, migrates old workflows, wires toolbar, shortcuts, live
+// validation and runs.
 
 import { api } from './api.js';
 import { h, toast, download } from './dom.js';
 import {
-  state, emit, subscribe, updateWorkflow, replaceWorkflow, emptyWorkflow, loadPersisted, undo, redo, select, nodeById, runKey, NODE_COLORS,
+  state, emit, subscribe, updateWorkflow, replaceWorkflow, emptyWorkflow, loadPersisted, loadLegacy, persist,
+  undo, redo, select, stepById, runKey, saveCollapsed, NODE_COLORS,
 } from './store.js';
-import { initCanvas, addNode, deleteSelection, duplicateSelection, fit } from './canvas.js';
+import { migrateV1, describeReport, reportIsEmpty } from '/shared/migrate-v1.js';
+import { initProcess, focusSelected, openAddMenuAtDefault, openStepMenu, paletteDragStart, paletteDragEnd } from './process.js';
+import * as ops from './ops.js';
 import { initInspector } from './inspector.js';
 import { initResults, showRunning } from './results.js';
 import { SAMPLES } from './samples.js';
+import { stepAlias } from './summary.js';
 
 const $ = (id) => document.getElementById(id);
 const ORG_KEY = 'sfdg.org';
@@ -20,38 +25,98 @@ async function boot() {
     document.body.replaceChildren(h('p', { style: { padding: '20px' } }, `Không kết nối được server: ${e.message}`));
     return;
   }
-  const saved = loadPersisted();
-  state.workflow = saved?.version === 1 ? saved : structuredClone(SAMPLES[0].workflow);
+  const afterBoot = loadInitialWorkflow();
+  saveCollapsed();
 
   renderPalette();
-  initCanvas();
+  initProcess();
   initInspector();
   initResults();
   wireToolbar();
   wireShortcuts();
   wireValidation();
   loadOrgs();
+  afterBoot?.();
 }
 
+/** v2 autosave → old v1 autosave (migrated, original kept) → first sample. */
+function loadInitialWorkflow() {
+  const saved = loadPersisted();
+  if (saved?.version === 2 && Array.isArray(saved.steps)) {
+    state.workflow = saved;
+    return null;
+  }
+  const legacy = loadLegacy();
+  if (legacy?.workflow?.version === 1 && Array.isArray(legacy.workflow.nodes)) {
+    try {
+      const { workflow, report } = migrateV1(legacy.workflow);
+      state.workflow = workflow;
+      persist(); // writes sfdg.workflow.v2 only; sfdg.workflow.v1 stays as it was
+      return () => announceMigration(report, legacy.raw, { name: workflow.name, autosave: true });
+    } catch (e) {
+      console.error(e);
+      toast(`Không chuyển được workflow cũ trong trình duyệt (${e.message}). Bản cũ vẫn được giữ nguyên.`, 6000);
+    }
+  }
+  state.workflow = structuredClone(SAMPLES[0].workflow);
+  return null;
+}
+
+/** Toast when nothing changed; otherwise the report dialog with "Tải bản gốc (v1)". */
+function announceMigration(report, rawOriginal, { name, autosave }) {
+  if (reportIsEmpty(report)) {
+    toast(
+      autosave
+        ? 'Đã chuyển workflow đang soạn sang định dạng mới. Bản cũ vẫn được giữ trong trình duyệt.'
+        : `Đã chuyển "${name}" sang định dạng mới (version 2). Bấm Lưu để cập nhật file.`,
+      6000,
+    );
+    return;
+  }
+  const modal = $('modal');
+  const items = describeReport(report);
+  modal.replaceChildren(
+    h('h2', {}, 'Đã chuyển workflow sang dạng Quy trình'),
+    h('p', {}, 'Workflow này lưu ở định dạng cũ (version 1, dạng sơ đồ nối dây). Ứng dụng đã chuyển nó sang version 2 (các bước lồng nhau). Dữ liệu sinh ra không đổi, trừ các điểm sau:'),
+    h('ul', { class: 'migration-report' }, items.map((i) => h('li', {}, i.message))),
+    h('p', { class: 'hint' }, autosave ? 'Bản gốc vẫn được giữ trong trình duyệt.' : 'Bản gốc vẫn được giữ: file trên máy không bị sửa cho tới khi bạn bấm Lưu.'),
+    h(
+      'div',
+      { class: 'actions' },
+      h('button', { onclick: () => download(`${fileBase(name)}-v1.json`, rawOriginal) }, 'Tải bản gốc (v1)'),
+      h('button', { class: 'primary', onclick: () => modal.close() }, 'Đồng ý'),
+    ),
+  );
+  modal.onclose = null;
+  modal.showModal();
+}
+
+const fileBase = (name) => (name || 'workflow').replace(/[^\w.-]+/g, '_');
+
 function renderPalette() {
+  const cats = state.meta.stepCategories ?? [];
+  const types = state.meta.nodeTypes;
+  const item = (t) =>
+    h(
+      'button',
+      {
+        class: 'palette-item',
+        draggable: 'true',
+        style: { '--c': NODE_COLORS[t.type] },
+        title: `${t.description}\nBấm để thêm sau bước đang chọn; kéo vào một dấu + để đặt đúng chỗ.`,
+        onclick: () => ops.addStep(t.type),
+        ondragstart: (e) => paletteDragStart(e, t.type),
+        ondragend: paletteDragEnd,
+      },
+      t.label,
+      h('small', {}, t.description.split('.')[0]),
+    );
   $('palette-items').replaceChildren(
-    ...state.meta.nodeTypes
-      .filter((t) => t.type !== 'start')
-      .map((t) =>
-        h(
-          'button',
-          {
-            class: 'palette-item',
-            draggable: 'true',
-            style: { '--c': NODE_COLORS[t.type] },
-            title: t.description,
-            onclick: () => addNode(t.type),
-            ondragstart: (e) => e.dataTransfer.setData('text/x-node-type', t.type),
-          },
-          t.label,
-          h('small', {}, t.description.split('.')[0]),
-        ),
-      ),
+    ...cats.flatMap((c) => {
+      const inCat = types.filter((t) => t.category === c.key);
+      return inCat.length ? [h('div', { class: 'palette-group' }, c.label), ...inCat.map(item)] : [];
+    }),
+    ...types.filter((t) => !cats.some((c) => c.key === t.category)).map(item),
   );
   $('sample-items').replaceChildren(
     ...SAMPLES.map((s) =>
@@ -61,7 +126,6 @@ function renderPalette() {
         onclick: () => {
           if (!confirmDiscard()) return;
           replaceWorkflow(structuredClone(s.workflow));
-          requestAnimationFrame(fit);
         },
       }, s.label, h('small', {}, s.description)),
     ),
@@ -69,7 +133,7 @@ function renderPalette() {
 }
 
 function confirmDiscard() {
-  return state.workflow.nodes.length <= 1 || confirm('Thay workflow hiện tại? (Vẫn có thể hoàn tác bằng Ctrl+Z)');
+  return !state.workflow.steps?.length || confirm('Thay workflow hiện tại? (Vẫn có thể hoàn tác bằng Ctrl+Z)');
 }
 
 function wireToolbar() {
@@ -83,7 +147,6 @@ function wireToolbar() {
   $('btn-new').onclick = () => {
     if (!confirmDiscard()) return;
     replaceWorkflow(emptyWorkflow());
-    requestAnimationFrame(fit);
   };
   $('btn-save').onclick = saveFile;
   $('btn-open').onclick = () => $('file-input').click();
@@ -91,16 +154,16 @@ function wireToolbar() {
     const file = e.target.files[0];
     e.target.value = '';
     if (!file) return;
+    let raw;
+    let wf;
     try {
-      const wf = JSON.parse(await file.text());
-      if (wf.version !== 1 || !Array.isArray(wf.nodes)) throw new Error('Không phải file workflow (version 1).');
-      wf.nodes.forEach((n, i) => { n.position ??= { x: 60 + i * 260, y: 160 }; n.config ??= {}; });
-      replaceWorkflow(wf);
-      requestAnimationFrame(fit);
-      toast(`Đã mở "${wf.name ?? file.name}".`);
-    } catch (err) {
-      toast(`Không mở được file: ${err.message}`, 5000);
+      raw = await file.text();
+      wf = JSON.parse(raw);
+    } catch {
+      toast('Không mở được file: không phải JSON hợp lệ.', 5000);
+      return;
     }
+    openWorkflowObject(wf, raw, file.name);
   };
   $('btn-undo').onclick = () => undo() || toast('Không còn gì để hoàn tác.');
   $('btn-redo').onclick = () => redo() || toast('Không còn gì để làm lại.');
@@ -116,8 +179,36 @@ function wireToolbar() {
   updateInsertButton();
 }
 
+function openWorkflowObject(wf, raw, fileName) {
+  if (!wf || typeof wf !== 'object') return toast('Không mở được file: không phải file workflow.', 5000);
+  if (wf.version === 1) {
+    if (!Array.isArray(wf.nodes)) return toast('Không mở được file: không phải file workflow (thiếu "nodes").', 5000);
+    let migrated;
+    try {
+      migrated = migrateV1(wf);
+    } catch (e) {
+      return toast(`Không chuyển được file version 1: ${e.message}`, 6000);
+    }
+    replaceWorkflow(migrated.workflow);
+    announceMigration(migrated.report, raw, { name: migrated.workflow.name ?? fileName, autosave: false });
+    return undefined;
+  }
+  if (wf.version !== 2) {
+    return toast(
+      wf.version === undefined
+        ? 'Không mở được file: không phải file workflow (thiếu "version").'
+        : `Không mở được file: workflow version ${wf.version} chưa được hỗ trợ. Hãy cập nhật ứng dụng.`,
+      6000,
+    );
+  }
+  if (!Array.isArray(wf.steps)) return toast('Không mở được file: thiếu danh sách "steps".', 5000);
+  replaceWorkflow(wf);
+  toast(`Đã mở "${wf.name ?? fileName}".`);
+  return undefined;
+}
+
 function saveFile() {
-  download(`${(state.workflow.name || 'workflow').replace(/[^\w.-]+/g, '_')}.json`, JSON.stringify(state.workflow, null, 2));
+  download(`${fileBase(state.workflow.name)}.json`, JSON.stringify(state.workflow, null, 2));
 }
 
 function updateInsertButton() {
@@ -128,28 +219,52 @@ function updateInsertButton() {
 
 function wireShortcuts() {
   window.addEventListener('keydown', (e) => {
+    if (e.defaultPrevented || document.querySelector('dialog[open]') || e.target.closest('.popup')) return;
     const typing = e.target.closest('input, textarea, select, [contenteditable]');
     const mod = e.ctrlKey || e.metaKey;
+    const key = e.key.toLowerCase();
+    const sel = ops.selectedId();
     if (mod && e.key === 'Enter') {
       e.preventDefault();
       run(false);
-    } else if (mod && e.key.toLowerCase() === 's') {
+    } else if (mod && key === 's') {
       e.preventDefault();
       saveFile();
     } else if (typing) {
-      // Let inputs keep their native undo/delete behaviour.
-    } else if (mod && e.key.toLowerCase() === 'z') {
+      // Inputs keep their native keys; Esc in the inspector goes back to the selected card.
+      if (e.key === 'Escape' && e.target.closest('#inspector')) {
+        e.preventDefault();
+        e.target.blur();
+        focusSelected();
+      }
+    } else if (mod && key === 'z') {
       e.preventDefault();
       e.shiftKey ? redo() : undo();
-    } else if (mod && e.key.toLowerCase() === 'y') {
+    } else if (mod && key === 'y') {
       e.preventDefault();
       redo();
-    } else if (mod && e.key.toLowerCase() === 'd') {
+    } else if (mod && key === 'd') {
       e.preventDefault();
-      duplicateSelection();
+      if (sel) ops.duplicateStep(sel);
+    } else if (mod && (e.key === '/' || e.code === 'Slash')) {
+      e.preventDefault();
+      if (sel) ops.toggleDisabled(sel);
+    } else if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+      e.preventDefault();
+      if (sel) ops.moveBy(sel, e.key === 'ArrowUp' ? -1 : 1);
+    } else if (!mod && !e.altKey && e.key === '/') {
+      e.preventDefault();
+      openAddMenuAtDefault();
     } else if (e.key === 'Delete' || e.key === 'Backspace') {
+      if (!sel) return;
       e.preventDefault();
-      deleteSelection();
+      ops.deleteStep(sel);
+    } else if (e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10')) {
+      const card = sel && document.querySelector(`.step-card[data-id="${CSS.escape(sel)}"] .menu-btn`);
+      if (card) {
+        e.preventDefault();
+        openStepMenu(card, sel);
+      }
     } else if (e.key === 'Escape') {
       select(null);
     }
@@ -176,19 +291,32 @@ async function validateNow() {
   }
 }
 
+/** Select the step an issue belongs to, opening collapsed frames around it. */
+function goToIssue(i) {
+  if (!i.nodeId || !stepById(i.nodeId)) return select({ kind: 'workflow' });
+  ops.expandAncestors(i.nodeId);
+  saveCollapsed();
+  select({ kind: 'step', id: i.nodeId });
+  emit('app', 'view');
+  ops.reveal(i.nodeId);
+  return undefined;
+}
+
 function setIssues(issues) {
   state.issues = { errors: issues.errors ?? [], warnings: issues.warnings ?? [] };
   const box = $('issues');
   const all = [...state.issues.errors.map((i) => ({ ...i, level: 'error' })), ...state.issues.warnings.map((i) => ({ ...i, level: 'warning' }))];
   box.hidden = !all.length;
   box.replaceChildren(
-    ...all.map((i) =>
-      h('button', {
+    ...all.map((i) => {
+      const step = i.nodeId ? stepById(i.nodeId) : null;
+      const alias = step ? stepAlias(step) : '';
+      return h('button', {
         class: `issue ${i.level}`,
-        title: i.nodeId ? 'Bấm để chọn node' : '',
-        onclick: () => i.nodeId && nodeById(i.nodeId) && select({ kind: 'node', id: i.nodeId }),
-      }, `${i.nodeId && nodeById(i.nodeId)?.config?.alias ? `[${nodeById(i.nodeId).config.alias}] ` : ''}${i.message}`),
-    ),
+        title: step ? 'Bấm để chọn bước' : '',
+        onclick: () => goToIssue(i),
+      }, `${alias ? `[${alias}] ` : ''}${i.message}`);
+    }),
   );
   emit('validation', 'issues');
 }
@@ -215,14 +343,15 @@ async function run(insert) {
     const result = await api.run(state.workflow, { seed, target: insert ? { kind: 'org', org: state.org } : undefined });
     state.result = result;
     state.lastRunKey = runKey(state.workflow, result.seed);
+    state.lastRunSteps = JSON.stringify(state.workflow.steps);
     setIssues({ errors: [], warnings: result.warnings });
     emit('run', 'result');
     if (insert) toast(result.insert.failed ? `Insert ${result.insert.inserted}, lỗi ${result.insert.failed}. Xem tab "Lỗi insert".` : `Đã insert ${result.insert.inserted} bản ghi.`, 5000);
   } catch (e) {
     if (e.issues) {
       setIssues({ errors: e.issues, warnings: state.issues.warnings });
-      const first = e.issues.find((i) => i.nodeId);
-      if (first) select({ kind: 'node', id: first.nodeId });
+      const first = e.issues.find((i) => i.nodeId && stepById(i.nodeId));
+      if (first) goToIssue(first);
     }
     showRunning(`Lỗi: ${e.message}`);
     toast(e.message, 5000);

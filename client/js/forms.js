@@ -9,7 +9,9 @@ let uid = 0;
  * @param defs     option definitions
  * @param values   current values (missing → default shown)
  * @param onChange (key, value) => void
- * @param ctx      { aliases: [{alias, sobject}], invalidKeys: Set }
+ * @param ctx      { aliases: [{ alias, sobject, usable, note }], invalidKeys: Set }
+ *                 aliases feed `ref` dropdowns; `usable: false` ones are listed disabled, with
+ *                 `note` saying why (below this step, other branch, turned off).
  */
 export function renderOptions(defs, values, onChange, ctx = {}) {
   const root = h('div', { class: 'options' });
@@ -78,11 +80,22 @@ function renderControl(def, value, set, id, ctx) {
       return h('textarea', { id, rows: 3, value: v ?? '', oninput: (e) => set(e.target.value) });
     case 'ref': {
       const aliases = ctx.aliases ?? [];
+      const usable = aliases.filter((a) => a.usable !== false);
+      const other = aliases.filter((a) => a.usable === false);
+      const text = (a) => `${a.alias} (${a.sobject || '?'})${a.note ? ` · ${a.note}` : ''}`;
       const sel = h(
         'select',
         { id, onchange: (e) => set(e.target.value) },
-        h('option', { value: '' }, aliases.length ? '— chọn node —' : '— chưa có node Record nào —'),
-        aliases.map((a) => h('option', { value: a.alias, selected: a.alias === v }, `${a.alias} (${a.sobject || '?'})`)),
+        h('option', { value: '' }, usable.length ? '— chọn bản ghi cha —' : '— chưa có bước Record nào phía trên —'),
+        usable.map((a) => h('option', { value: a.alias, selected: a.alias === v, title: a.note || undefined }, text(a))),
+        other.length
+          ? h(
+            'optgroup',
+            { label: 'Không dùng được ở vị trí này' },
+            // The current value stays selectable so it is shown (and flagged by validation).
+            other.map((a) => h('option', { value: a.alias, disabled: a.alias !== v, selected: a.alias === v, title: a.note || undefined }, text(a))),
+          )
+          : null,
       );
       // Keep a value pointing at a since-renamed alias visible instead of silently dropping it.
       if (v && !aliases.some((a) => a.alias === v)) sel.append(h('option', { value: v, selected: true }, `${v} (không tồn tại)`));
