@@ -10,7 +10,9 @@
 // - branch: always evaluates its condition, runs slots.true or slots.false, then the next step.
 // Record pools (scope.current / scope.all) are global to the run; loop variables are lexical.
 // The rng call order is the same as the v1 graph executor, so a migrated v1 workflow
-// produces byte-identical records for the same seed (test/migrate.test.js).
+// produces byte-identical records for the same seed (test/migrate.test.js) — except where the
+// migration copied steps: field state (unique sets, Auto Number counters) is keyed by step id,
+// so a copy "c_2" counts on its own (reported by shared/migrate-v1.js describeReport).
 
 import { createRandom } from '../random.js';
 import { generateValue } from '../generators/index.js';

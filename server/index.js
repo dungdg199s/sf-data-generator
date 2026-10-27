@@ -10,7 +10,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { describeGenerators } from './generators/index.js';
 import { NODE_TYPES, STEP_CATEGORIES, LIMITS } from './workflow/nodes.js';
-import { validateWorkflow, WorkflowError } from './workflow/schema.js';
+import { validateWorkflow, insertBlockedReason, WorkflowError } from './workflow/schema.js';
 import { runWorkflow } from './workflow/executor.js';
 import { createSfCli } from './sf/cli.js';
 import { createSfClient } from './sf/client.js';
@@ -41,6 +41,12 @@ export function createApp({ cli = createSfCli(), client } = {}) {
       'POST',
       /^\/api\/run$/,
       async (_m, body) => {
+        if (body?.target?.kind === 'org') {
+          // A v1 workflow whose conversion copied or cut steps runs differently from what the
+          // user built; preview is allowed (with warnings), inserting is not until it is saved as v2.
+          const blocked = insertBlockedReason(body.workflow);
+          if (blocked) throw httpError(422, blocked);
+        }
         const result = runWorkflow(body?.workflow, { seed: body?.seed, maxRecords: body?.maxRecords });
         const response = { seed: result.seed, stats: result.stats, warnings: result.warnings, records: result.records };
         if (body?.target?.kind === 'org') {

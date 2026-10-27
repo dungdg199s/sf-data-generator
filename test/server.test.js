@@ -4,6 +4,7 @@ import http from 'node:http';
 import { createApp } from '../server/index.js';
 import { wf, record, loop } from './helpers.js';
 import { V1_SAMPLES } from './fixtures/v1-samples.js';
+import { W, rec, E } from './fixtures/v1-cases.js';
 
 let server;
 let base;
@@ -66,6 +67,31 @@ test('POST /api/run and /api/validate accept version 1 with a conversion warning
   const v = await (await post('/api/validate', { workflow: v1 })).json();
   assert.deepEqual(v.errors, []);
   assert.match(v.warnings[0].message, /version 1/);
+});
+
+test('POST /api/run refuses to insert a v1 workflow whose conversion copied steps; preview still works', async () => {
+  const v1 = W(
+    [{ id: 'l', type: 'loop', config: { count: 2 } }, rec('a', 'A', 'a'), rec('c', 'C', 'c')],
+    [E('start', 'l'), E('l', 'a', 'body'), E('a', 'c'), E('l', 'c', 'done')],
+  );
+  const before = inserted.length;
+  const res = await post('/api/run', { workflow: v1, target: { kind: 'org', org: 'dev' } });
+  assert.equal(res.status, 422);
+  const body = await res.json();
+  assert.match(body.error, /Workflow version 1 này phải đổi cấu trúc/);
+  assert.match(body.error, /bấm Lưu trước khi insert/);
+  assert.equal(inserted.length, before, 'nothing was inserted');
+
+  const preview = await post('/api/run', { workflow: v1, seed: 1 });
+  assert.equal(preview.status, 200);
+  const r = await preview.json();
+  assert.ok(r.records.length > 0);
+  assert.ok(r.warnings.some((w) => /nhân thành "c" và "c_2"/.test(w.message)));
+
+  // A v1 workflow that converts cleanly can still be inserted directly.
+  const ok = await post('/api/run', { workflow: V1_SAMPLES[1].workflow, target: { kind: 'org', org: 'dev' } });
+  assert.equal(ok.status, 200);
+  assert.ok((await ok.json()).insert.inserted > 0);
 });
 
 test('static files are served and traversal is blocked', async () => {

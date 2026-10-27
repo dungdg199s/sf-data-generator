@@ -7,8 +7,8 @@
 // migrated with shared/migrate-v1.js first, and the conversion is reported as warnings.
 
 import { nodeTypeMap, slotKeys, CONDITION_OPS, LIMITS } from './nodes.js';
-import { getGenerator } from '../generators/index.js';
-import { migrateV1, describeReport } from '../../shared/migrate-v1.js';
+import { getGenerator, describeGenerators } from '../generators/index.js';
+import { migrateV1, describeReport, reportNeedsReview } from '../../shared/migrate-v1.js';
 import { analyzeRecordScope, refState } from '../../shared/scope.js';
 
 const API_NAME = /^[A-Za-z][A-Za-z0-9_]*$/;
@@ -32,34 +32,37 @@ export function validateWorkflow(wf) {
 }
 
 /**
- * Normalise (v1 → v2) and validate. → { workflow (v2, or null when unusable), errors, warnings }.
+ * Normalise (v1 → v2) and validate.
+ * → { workflow (v2, or null when unusable), errors, warnings, migration (v1 report, or null) }.
  */
 export function prepareWorkflow(wf) {
   const errors = [];
   const warnings = [];
+  let migration = null;
   const err = (message, nodeId, field) => errors.push({ message, nodeId, field });
   const warn = (message, nodeId, field) => warnings.push({ message, nodeId, field });
 
   if (!wf || typeof wf !== 'object' || Array.isArray(wf)) {
     err('Workflow phải là một object JSON.');
-    return { workflow: null, errors, warnings };
+    return { workflow: null, errors, warnings, migration };
   }
   let workflow = wf;
   if (wf.version === 1) {
     if (!Array.isArray(wf.nodes)) err('Thiếu danh sách "nodes" (workflow version 1).');
     if (!Array.isArray(wf.edges)) err('Thiếu danh sách "edges" (workflow version 1).');
-    if (errors.length) return { workflow: null, errors, warnings };
-    const migrated = migrateV1(wf);
+    if (errors.length) return { workflow: null, errors, warnings, migration };
+    const migrated = migrateV1(wf, { maxDepth: LIMITS.maxDepth, fieldTypes: describeGenerators() });
     workflow = migrated.workflow;
+    migration = migrated.report;
     warn('Workflow version 1 đã được tự chuyển sang version 2 để chạy. Mở file trong trình soạn rồi bấm Lưu để cập nhật.');
     for (const item of describeReport(migrated.report)) warn(item.message, item.nodeId);
   } else if (wf.version !== CURRENT_VERSION) {
     err(`Không hỗ trợ workflow version ${wf.version}. Version hiện tại là ${CURRENT_VERSION}.`);
-    return { workflow: null, errors, warnings };
+    return { workflow: null, errors, warnings, migration };
   }
   if (!Array.isArray(workflow.steps)) {
     err('Thiếu danh sách "steps".');
-    return { workflow: null, errors, warnings };
+    return { workflow: null, errors, warnings, migration };
   }
 
   // Structure: ids, types, slots, depth. Collects steps (with their disabled state) in reading order.
@@ -112,7 +115,7 @@ export function prepareWorkflow(wf) {
     }
   };
   visit(workflow.steps, 0, false);
-  if (errors.length) return { workflow, errors, warnings };
+  if (errors.length) return { workflow, errors, warnings, migration };
 
   // Aliases: unique across the whole tree, disabled steps included (so turning one back on
   // cannot create a clash).
@@ -170,7 +173,18 @@ export function prepareWorkflow(wf) {
     }
   }
 
-  return { workflow, errors, warnings };
+  return { workflow, errors, warnings, migration };
+}
+
+/**
+ * Message when a version-1 workflow may not be inserted into an org as is: its conversion
+ * copied or cut steps, so the user must review it in the editor first. Null when fine.
+ */
+export function insertBlockedReason(wf) {
+  if (wf?.version !== 1) return null;
+  const { migration } = prepareWorkflow(wf);
+  if (!reportNeedsReview(migration)) return null;
+  return 'Workflow version 1 này phải đổi cấu trúc khi chuyển sang version 2 (có bước được nhân bản hoặc bị cắt). Mở file trong trình soạn, kiểm tra hộp thoại chuyển đổi rồi bấm Lưu trước khi insert. Xem trước vẫn chạy được.';
 }
 
 function validateRecord(step, c, { err, warn, scope }) {

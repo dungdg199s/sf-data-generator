@@ -115,7 +115,8 @@ chỉ thấy các field ở phía trên.
   (giá trị cố định). Nếu cả hai là số thì so theo số, không thì so theo chuỗi.
   Phép so sánh: `eq`, `neq`, `gt`, `gte`, `lt`, `lte`, `contains`, `empty`, `notEmpty`, `divisibleBy`.
 - Bản ghi đã sinh (`<alias>` hiện tại và danh sách mọi bản ghi của alias) dùng chung cho cả lần chạy; biến lặp theo phạm vi.
-- Thứ tự gọi `rng` giống executor version 1, nên workflow chuyển từ v1 sinh đúng dữ liệu cũ với cùng seed.
+- Thứ tự gọi `rng` giống executor version 1, nên workflow v1 chuyển sang v2 sinh đúng dữ liệu cũ với cùng seed, **trừ ở các
+  bước bị nhân bản** khi chuyển (xem [Version 1 (cũ) và chuyển đổi](#version-1-cũ-và-chuyển-đổi)): bản sao có trạng thái riêng.
 - Giới hạn: `LIMITS` trong `server/workflow/nodes.js` (số bản ghi, số bước đã chạy, `maxDepth = 32` cấp lồng nhau).
 
 ### Đường dẫn tham chiếu
@@ -189,25 +190,38 @@ Version 1 là **đồ thị**: `nodes[]` (có `position` cho canvas, đúng mộ
 - **Server** (`POST /api/validate`, `POST /api/run`) vẫn nhận version 1, không thời hạn: workflow được chuyển bằng
   `shared/migrate-v1.js` rồi mới validate/chạy, kèm cảnh báo (không có `nodeId`)
   `Workflow version 1 đã được tự chuyển sang version 2 để chạy. Mở file trong trình soạn rồi bấm Lưu để cập nhật.`
-  Mỗi mục trong báo cáo chuyển đổi thành một cảnh báo có `nodeId`.
+  Mỗi mục trong báo cáo chuyển đổi thành một cảnh báo có `nodeId`. Xem trước luôn chạy được. **Insert** (`target.kind ===
+  'org'`) một workflow version 1 mà khi chuyển có bước bị nhân bản hoặc bị cắt (`duplicated`, `truncated`, `tooDeep`) bị
+  từ chối với HTTP 422 `{ "error": "Workflow version 1 này phải đổi cấu trúc khi chuyển sang version 2 … bấm Lưu trước khi
+  insert. …" }` (không có `issues`): người dùng phải mở file trong trình soạn, xem hộp thoại chuyển đổi rồi lưu bản v2.
 - **Trình soạn** chuyển ngay trong trình duyệt khi mở file version 1 hoặc khi autosave cũ (`sfdg.workflow.v1`) còn đó.
   Khóa `sfdg.workflow.v1` không bao giờ bị ghi đè hay xóa; bản mới lưu ở `sfdg.workflow.v2`. Nếu chuyển có thay đổi thì
   có hộp thoại báo cáo với nút **Tải bản gốc (v1)**.
 
-Quy tắc chuyển (`migrateV1(wf)` → `{ workflow, report }`):
+Quy tắc chuyển (`migrateV1(wf, { maxDepth, fieldTypes })` → `{ workflow, report }`; `maxDepth` = `LIMITS.maxDepth`,
+`fieldTypes` = `fieldTypes` của `/api/meta`, để biết mặc định của tùy chọn "Giá trị duy nhất"):
 
-1. **Chuẩn hóa dây:** bỏ dây tới/từ node không tồn tại; mỗi cổng giữ dây **sau cùng** (dây executor v1 thực sự chạy);
+1. **Chuẩn hóa node và dây:** nhiều node cùng `id` thì giữ node **sau cùng** (node executor v1 dùng) và ghi vào
+   `duplicateIds`; bỏ dây tới/từ node không tồn tại; mỗi cổng giữ dây **sau cùng** (dây executor v1 thực sự chạy);
    cắt dây tạo vòng.
 2. **Bước kế:** `start`/`record` → `next`; `loop` → `done`; `branch` → điểm gộp = node đầu tiên trên chuỗi của nhánh
    `true` cũng có trên chuỗi của nhánh `false` (không có thì `null`).
 3. **Dựng cây:** `loop` → `slots.body` là chuỗi từ `body`; `branch` → `slots.true` / `slots.false` là chuỗi từ mỗi nhánh tới
-   điểm gộp, và điểm gộp thành bước sau khung. Giữ `id`, `config`, `name`, `seed`, `settings`; bỏ `position`.
+   điểm gộp, và điểm gộp thành bước sau khung. Giữ `id`, `config`, `name`, `seed`, `settings`; bỏ `position`. Lặp thiếu
+   số lần thì ghi rõ giá trị executor dùng (`count: 0`; chế độ `range`: `min: 1`, `max: 1`). Lồng sâu hơn `maxDepth` thì
+   khung ở cấp `maxDepth + 1` để trống, phần bên trong bị bỏ và ghi vào `tooDeep`; validate báo lỗi "lồng nhau quá 32 cấp".
 4. **Node được tới từ hai chỗ** (thân Lặp "thoát" ra `done`, nối chéo giữa các nhánh, hai Lặp dùng chung thân): chỗ thứ hai
    nhận một **bản sao** của node và phần đuôi sau nó, id `<id>_2`, alias mới (`con` → `con2`), tham chiếu bên trong bản sao
    đổi theo. Tối đa `2 × số node + 50` bước; phần vượt bị cắt và ghi vào báo cáo.
+   Bản sao là bước riêng nên có trạng thái riêng: field "Giá trị duy nhất" và Auto Number đếm riêng ở `c` và `c_2`, nên
+   **giá trị duy nhất có thể trùng giữa hai bước**, số tự tăng bắt đầu lại, và (vì số lần thử lại khác) dữ liệu từ đó trở đi
+   khác bản cũ với cùng seed. Các field này được ghi vào `uniqueFields` và báo cáo có một dòng riêng, kèm cách sửa.
 5. **Node không được nối từ Bắt đầu:** đặt ở cuối `steps`, `disabled: true`.
 
-`report = { duplicated: [{ id, copyId, alias, newAlias }], disabled: [id], droppedEdges: [{ from, fromPort, to, reason: 'missing' | 'fanout' | 'cycle' }], truncated: [id] }`.
+`report = { duplicated: [{ id, copyId, alias, newAlias, root, uniqueFields? }], disabled: [id], droppedEdges: [{ from, fromPort, to, reason: 'missing' | 'fanout' | 'cycle' }], truncated: [id], duplicateIds: [id], tooDeep: [id] }`.
+`root` là `copyId` của bước đầu tiên trong đoạn được sao chép; `describeReport` viết **một dòng cho mỗi đoạn** ("… nhân
+thành "c" và "c_2" và N bước phía sau"), cộng một dòng cho mỗi bản sao có `uniqueFields`.
 Workflow "có cấu trúc" (gộp sau Rẽ nhánh, gộp lồng nhau, nhánh không nối) chuyển với báo cáo rỗng và sinh bản ghi
 **giống hệt từng byte** với cùng seed (`test/migrate.test.js` so với executor v1 được đóng băng trong `test/fixtures/run-v1.js`).
+Khi có bước bị nhân bản, dữ liệu giống bản cũ trừ ở các bản sao (như trên) và `nodeId`/`ref` của chúng.
 Gọi `migrateV1` với workflow version 2 thì nhận lại nguyên như cũ.

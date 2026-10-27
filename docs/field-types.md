@@ -7,6 +7,8 @@ Option chung (registry tự thêm, generator không cần khai báo):
 
 - `nullRatio` (0–1): tỉ lệ để trống. Không có với `checkbox`, `autonumber`, `masterdetail`.
 - `unique`: không lặp giá trị trong một lần chạy (thử tối đa 100 lần rồi báo lỗi). Chỉ có với các kiểu đặt `uniqueable: true`.
+  Tập giá trị đã dùng (và bộ đếm của `autonumber`) tính **theo từng bước**: hai bước khác nhau, kể cả bản sao `c_2` do
+  chuyển workflow v1 tạo ra, có thể sinh trùng giá trị của nhau.
 
 | `type` | Salesforce | Option riêng | Giá trị sinh ra |
 | --- | --- | --- | --- |
