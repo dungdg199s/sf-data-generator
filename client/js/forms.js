@@ -2,16 +2,20 @@
 // The UI never hard-codes per-type options: adding a generator on the server is enough.
 
 import { h } from './dom.js';
+import { attachVarPicker } from './var-picker.js';
 
 let uid = 0;
 
 /**
  * @param defs     option definitions
  * @param values   current values (missing → default shown)
- * @param onChange (key, value) => void
- * @param ctx      { aliases: [{ alias, sobject, usable, note }], invalidKeys: Set }
- *                 aliases feed `ref` dropdowns; `usable: false` ones are listed disabled, with
- *                 `note` saying why (below this step, other branch, turned off).
+ * @param onChange (key, value, meta?) => void; meta.coalesceKey is set for a variable insertion
+ *                 (its own undo step)
+ * @param ctx      { aliases: [{ alias, sobject, usable, note }], refChoices?(def, values), invalidKeys: Set,
+ *                   vars?: { stepId, fieldIndex?, fieldName?, field } }
+ *                 aliases (or refChoices) feed `ref` dropdowns; `usable: false` ones are listed
+ *                 disabled, with `note` saying why (below this step, other branch, turned off).
+ *                 Options declaring `vars` get the variable picker (var-picker.js) for `ctx.vars`.
  */
 export function renderOptions(defs, values, onChange, ctx = {}) {
   const root = h('div', { class: 'options' });
@@ -24,17 +28,28 @@ export function renderOptions(defs, values, onChange, ctx = {}) {
 
   for (const def of defs) {
     const id = `opt-${++uid}`;
-    const set = (v) => {
+    const set = (v, meta) => {
       current[def.key] = v;
-      onChange(def.key, v);
+      onChange(def.key, v, meta);
       refreshVisibility();
     };
-    const control = renderControl(def, values?.[def.key], set, id, ctx);
+    const control = renderControl(def, values?.[def.key], set, id, ctx, current);
     control.dataset.key = def.key;
+    let field = control;
+    let strip = null;
+    if (def.vars && ctx.vars && (def.kind === 'string' || def.kind === undefined)) {
+      ({ wrap: field, strip } = attachVarPicker(control, {
+        ...ctx.vars,
+        field: ctx.vars.field ?? def.key,
+        option: def.key,
+        mode: def.vars,
+        unsaved: values?.[def.key] === undefined || values?.[def.key] === '',
+      }));
+    }
     const row =
       def.kind === 'boolean'
         ? h('div', { class: 'form-row check' }, control, h('label', { for: id }, def.label), def.help && h('div', { class: 'help', style: { gridColumn: '1 / -1' } }, def.help))
-        : h('div', { class: 'form-row' }, h('label', { for: id }, def.label), control, def.help && h('div', { class: 'help' }, def.help));
+        : h('div', { class: 'form-row' }, h('label', { for: id }, def.label), field, strip, def.help && h('div', { class: 'help' }, def.help), ctx.vars && !ctx.vars.fieldName && def.vars ? h('div', { class: 'opt-error', hidden: true }) : null);
     if (ctx.invalidKeys?.has(def.key)) control.classList.add('invalid');
     rows.push({ def, row });
     root.append(row);
@@ -43,7 +58,9 @@ export function renderOptions(defs, values, onChange, ctx = {}) {
   return root;
 }
 
-function renderControl(def, value, set, id, ctx) {
+let insertSeq = 0;
+
+function renderControl(def, value, set, id, ctx, current) {
   const v = value ?? def.default;
   switch (def.kind) {
     case 'boolean':
@@ -79,7 +96,7 @@ function renderControl(def, value, set, id, ctx) {
     case 'text':
       return h('textarea', { id, rows: 3, value: v ?? '', oninput: (e) => set(e.target.value) });
     case 'ref': {
-      const aliases = ctx.aliases ?? [];
+      const aliases = (ctx.refChoices ? ctx.refChoices(def, current) : ctx.aliases) ?? [];
       const usable = aliases.filter((a) => a.usable !== false);
       const other = aliases.filter((a) => a.usable === false);
       const text = (a) => `${a.alias} (${a.sobject || '?'})${a.note ? `${a.usable === false ? ' — ' : ' · '}${a.note}` : ''}`;
@@ -104,6 +121,12 @@ function renderControl(def, value, set, id, ctx) {
     case 'time':
       return h('input', { id, type: 'time', value: v ?? '', oninput: (e) => set(e.target.value) });
     default:
-      return h('input', { id, type: 'text', value: v ?? '', oninput: (e) => set(e.target.value) });
+      return h('input', {
+        id,
+        type: 'text',
+        value: v ?? '',
+        // A variable inserted by the picker is its own undo step (not merged with typing).
+        oninput: (e) => set(e.target.value, e.target._varInsert ? { coalesceKey: `insert:${++insertSeq}` } : undefined),
+      });
   }
 }

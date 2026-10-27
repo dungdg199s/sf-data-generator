@@ -11,7 +11,7 @@ import { migrateV1, describeReport, reportIsEmpty } from '/shared/migrate-v1.js'
 import { malformedSteps } from '/shared/workflow-tree.js';
 import { initProcess, focusSelected, openAddMenuAtDefault, openStepMenu, paletteDragStart, paletteDragEnd } from './process.js';
 import * as ops from './ops.js';
-import { initInspector } from './inspector.js';
+import { initInspector, openField } from './inspector.js';
 import { initResults, showRunning } from './results.js';
 import { SAMPLES } from './samples.js';
 import { stepAlias } from './summary.js';
@@ -324,12 +324,15 @@ async function validateNow() {
   }
 }
 
-/** Select the step an issue belongs to, opening collapsed frames around it. */
+/** Select the step an issue belongs to (opening collapsed frames around it and the field's card). */
 function goToIssue(i) {
-  if (!i.nodeId || !stepById(i.nodeId)) return select({ kind: 'workflow' });
+  const step = i.nodeId ? stepById(i.nodeId) : null;
+  if (!step) return select({ kind: 'workflow' });
   ops.expandAncestors(i.nodeId);
   saveCollapsed();
-  select({ kind: 'step', id: i.nodeId });
+  const index = i.field?.startsWith('fields.') ? (step.config?.fields ?? []).findIndex((f) => `fields.${f?.name}` === i.field) : -1;
+  if (index >= 0) openField(i.nodeId, index);
+  else select({ kind: 'step', id: i.nodeId });
   emit('app', 'view');
   ops.reveal(i.nodeId);
   return undefined;

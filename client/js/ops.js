@@ -4,13 +4,14 @@
 
 import { h, toast } from './dom.js';
 import {
-  state, subscribe, updateWorkflow, select, undo, nodeType, slotKeys, locate, stepById, newId, suggestAlias, workflowRevision,
+  state, subscribe, updateWorkflow, select, undo, nodeType, slotKeys, locate, stepById, newId, suggestAlias, workflowRevision, currentScope,
 } from './store.js';
 import {
   insertStep, removeStep, moveStep, wrapStep, cloneSteps, collectIds, collectAliases,
-  defaultInsertTarget, neighbourTarget, findStep, walkSteps, slotList,
+  defaultInsertTarget, neighbourTarget, findStep, walkSteps, slotList, subtreeIds,
 } from '/shared/workflow-tree.js';
 import { stepLabel } from './summary.js';
+import { placesText } from './variables.js';
 
 /** Listeners that want to scroll to / flash a step after an operation (the process view). */
 const revealers = new Set();
@@ -89,13 +90,10 @@ export function addStep(type, target = defaultTarget()) {
   return step;
 }
 
-function refsTo(alias) {
-  let n = 0;
-  if (!alias) return 0;
-  walkSteps(state.workflow.steps, (s) => {
-    for (const f of s.config?.fields ?? []) if (f.options?.ref === alias) n++;
-  }, slotKeys);
-  return n;
+/** References from outside `step` to variables it (or a step inside it) provides. */
+function outsideRefs(step) {
+  const inside = subtreeIds(step, slotKeys);
+  return currentScope().refs.filter((r) => inside.has(r.source) && !inside.has(r.nodeId));
 }
 
 /** The step to select after removing `id`: next sibling, else previous, else the parent. */
@@ -138,16 +136,17 @@ function toastWithUndo(message) {
 function doRemove(at, keepChildren) {
   const step = at.step;
   const nextSel = keepChildren ? (slotKeys(step.type).flatMap((k) => slotList(step, k))[0]?.id ?? selectionAfterRemove(at)) : selectionAfterRemove(at);
+  const refs = keepChildren ? currentScope().refs.filter((r) => r.source === step.id && r.nodeId !== step.id) : outsideRefs(step);
+  const srcName = refs.length ? currentScope().sources[refs[0].source]?.name ?? refs[0].source : '';
   updateWorkflow((wf) => removeStep(wf, step.id, { keepChildren, slotKeys }));
   select(nextSel ? { kind: 'step', id: nextSel } : null);
   if (nextSel) reveal(nextSel);
-  if (keepChildren) {
-    toastWithUndo(`Đã bỏ vỏ ${stepLabel(step)}.`);
-    return;
-  }
-  const alias = step.type === 'record' ? step.config?.alias : null;
-  const refs = refsTo(alias);
-  toastWithUndo(`Đã xóa bước ${stepLabel(step)}.${refs ? ` ${refs} field đang tham chiếu "${alias}" sẽ báo lỗi.` : ''}`);
+  const places = placesText(refs);
+  const sources = new Set(refs.map((r) => r.source));
+  const used = places.length
+    ? ` ${sources.size === 1 ? `Bước "${srcName}"` : 'Các bước vừa xóa'} đang được dùng ở ${places.length} chỗ: ${places.join(', ')}. ${places.length > 1 ? 'Các chỗ đó' : 'Chỗ đó'} sẽ báo lỗi cho tới khi sửa.`
+    : '';
+  toastWithUndo(keepChildren ? `Đã bỏ vỏ ${stepLabel(step)}.${used}` : `Đã xóa bước ${stepLabel(step)}.${used}`);
 }
 
 /** "Bỏ vỏ" is only possible when at most one slot has steps. */
@@ -187,7 +186,7 @@ export function duplicateStep(id = selectedId()) {
   if (!at) return;
   let copyId = null;
   updateWorkflow((wf) => {
-    const { steps: [copy] } = cloneSteps([at.step], { ids: collectIds(wf), aliases: collectAliases(wf) });
+    const { steps: [copy] } = cloneSteps([at.step], { ids: collectIds(wf), aliases: collectAliases(wf), catalog: state.meta });
     copyId = copy.id;
     insertStep(wf, { parentId: at.parentId, slot: at.slot, index: at.index + 1 }, copy);
   });

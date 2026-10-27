@@ -10,9 +10,12 @@ import { api } from './api.js';
 import {
   state, subscribe, select, updateWorkflow, stepById, nodeType, fieldType, suggestAlias, currentScope, slotKeys,
 } from './store.js';
-import { setStepAlias } from '/shared/workflow-tree.js';
-import { refChoices } from '/shared/scope.js';
+import { setStepAlias, renameField } from '/shared/workflow-tree.js';
+import { refChoices, refsTo, referenceOptions } from '/shared/scope.js';
 import { deleteStep, duplicateStep, toggleDisabled } from './ops.js';
+import { placesText } from './variables.js';
+import { applySuggestion, closePicker } from './var-picker.js';
+import { stepAlias } from './summary.js';
 
 let root;
 const expanded = new Set(); // `${stepId}:${fieldIndex}` with options panel open
@@ -109,13 +112,16 @@ function renderStep(step) {
   );
   if (!type?.options.length && step.type !== 'record') return wrap;
 
-  const form = renderOptions(type.options, step.config ?? {}, (key, v) => onStepOption(step, key, v, form), {});
+  const form = renderOptions(type.options, step.config ?? {}, (key, v, meta) => onStepOption(step, key, v, form, meta), {
+    vars: { stepId: step.id },
+    refChoices: (def) => parentChoices(step, def.accepts),
+  });
   wrap.append(form);
   if (step.type === 'record') wrap.append(renderFields(step));
   return wrap;
 }
 
-function onStepOption(step, key, v, form) {
+function onStepOption(step, key, v, form, meta) {
   updateWorkflow((wf) => {
     const c = (step.config ??= {});
     if (key === 'sobject' && step.type === 'record') {
@@ -124,16 +130,16 @@ function onStepOption(step, key, v, form) {
       c.sobject = v;
       if (auto) {
         const next = suggestAlias(v, step.id);
-        setStepAlias(wf, step.id, next, { memo: aliasMemo, slotKeys });
+        setStepAlias(wf, step.id, next, { memo: aliasMemo, slotKeys, catalog: state.meta });
         const input = form.querySelector('[data-key="alias"]');
         if (input) input.value = next;
       }
     } else if (key === 'alias' && (step.type === 'record' || step.type === 'loop')) {
       // References follow only to a valid, free name (a loop variable: inside its body only);
       // while the field is empty or matches another alias mid-typing, they stay put.
-      setStepAlias(wf, step.id, v, { memo: aliasMemo, slotKeys });
+      setStepAlias(wf, step.id, v, { memo: aliasMemo, slotKeys, catalog: state.meta });
     } else c[key] = v;
-  }, { source: 'inspector', coalesceKey: `${step.id}:${key}` });
+  }, { source: 'inspector', coalesceKey: meta?.coalesceKey ?? `${step.id}:${key}` });
   // Card summary/alias changed; the process view re-renders, the inspector keeps focus.
 }
 
@@ -141,13 +147,21 @@ function onStepOption(step, key, v, form) {
  * Choices for a `kind: 'ref'` option at this step (Lookup "Bản ghi cha"): usable first, nearest
  * first, then the others with the reason (shared/scope.js refChoices).
  */
-function parentChoices(step, accepts) {
-  return refChoices(currentScope(), step.id, accepts).map((c) => ({
-    alias: c.name,
-    sobject: c.sobject,
-    usable: c.usable,
-    note: c.usable ? (c.certainty === 'maybe' ? 'có thể trống' : c.certainty === 'last' ? 'bản ghi cuối' : '') : c.note ?? '',
-  }));
+function parentChoices(step, accepts, referenceTo) {
+  const targets = (Array.isArray(referenceTo) ? referenceTo : []).map((x) => String(x).toLowerCase());
+  const list = refChoices(currentScope(), step.id, accepts).map((c) => {
+    // A Lookup imported from the org knows which sObjects it points to (referenceTo).
+    if (c.usable && targets.length && c.sobject && !targets.includes(c.sobject.toLowerCase())) {
+      return { alias: c.name, sobject: c.sobject, usable: false, note: `là ${c.sobject}, field này trỏ tới ${referenceTo.join(', ')}` };
+    }
+    return {
+      alias: c.name,
+      sobject: c.sobject,
+      usable: c.usable,
+      note: c.usable ? (c.certainty === 'maybe' ? 'có thể trống' : c.certainty === 'last' ? 'bản ghi cuối' : '') : c.note ?? '',
+    };
+  });
+  return [...list.filter((c) => c.usable), ...list.filter((c) => !c.usable)];
 }
 
 // ---------- fields editor ----------
@@ -168,7 +182,6 @@ function groupedTypeSelect(value, onchange) {
 function renderFields(node) {
   const fields = node.config.fields ?? (node.config.fields = []);
   const structural = (fn) => updateWorkflow(fn, { source: 'inspector-structure' });
-  const aliases = parentChoices(node);
 
   const list = h(
     'div',
@@ -187,12 +200,14 @@ function renderFields(node) {
             value: f.name,
             placeholder: 'API name',
             'aria-label': 'Tên field',
+            onfocus: () => { renameFrom = f.name; },
             oninput: (e) => {
               updateWorkflow(() => {
                 f.name = e.target.value.trim();
               }, { source: 'inspector', coalesceKey: `${key}:name` });
               card.dataset.field = `fields.${f.name}`;
             },
+            onchange: () => followFieldRename(node, renameFrom, f.name),
           }),
           groupedTypeSelect(f.type, (e) =>
             structural(() => {
@@ -207,7 +222,7 @@ function renderFields(node) {
             h('button', { title: open ? 'Ẩn tùy chọn' : 'Tùy chọn', onclick: () => { open ? expanded.delete(key) : expanded.add(key); render(); } }, open ? '▴' : '⚙'),
             h('button', { title: 'Lên', disabled: i === 0, onclick: () => structural(() => fields.splice(i - 1, 0, fields.splice(i, 1)[0])) }, '↑'),
             h('button', { title: 'Xuống', disabled: i === fields.length - 1, onclick: () => structural(() => fields.splice(i + 1, 0, fields.splice(i, 1)[0])) }, '↓'),
-            h('button', { title: 'Xóa field', onclick: () => structural(() => fields.splice(i, 1)) }, '✕'),
+            h('button', { title: 'Xóa field', onclick: () => removeField(node, i) }, '✕'),
           ),
         ),
       );
@@ -216,11 +231,14 @@ function renderFields(node) {
           h(
             'div',
             { class: 'opts' },
-            renderOptions(ft.options, f.options ?? {}, (k, v) =>
+            renderOptions(ft.options, f.options ?? {}, (k, v, meta) =>
               updateWorkflow(() => {
                 f.options = { ...(f.options ?? {}), [k]: v };
-              }, { source: 'inspector', coalesceKey: `${key}:${k}` }),
-              { aliases },
+              }, { source: 'inspector', coalesceKey: meta?.coalesceKey ?? `${key}:${k}` }),
+              {
+                refChoices: (def, values) => parentChoices(node, def.accepts, values?.referenceTo),
+                vars: { stepId: node.id, fieldIndex: i, get fieldName() { return f.name; }, get field() { return `fields.${f.name}`; } },
+              },
             ),
           ),
         );
@@ -261,13 +279,70 @@ function markIssues() {
   for (const card of root.querySelectorAll('.field-card')) {
     const mine = issues.filter((i) => i.field === card.dataset.field);
     card.classList.toggle('has-error', mine.length > 0);
-    const text = card.querySelector('.error-text');
-    text.hidden = !mine.length;
-    text.textContent = mine.map((i) => i.message).join(' ');
+    fillErrors(card.querySelector('.error-text'), mine);
   }
   for (const input of root.querySelectorAll('.options [data-key]')) {
     if (input.closest('.field-card')) continue;
-    input.classList.toggle('invalid', issues.some((i) => i.field === input.dataset.key));
+    const mine = issues.filter((i) => i.field === input.dataset.key);
+    input.classList.toggle('invalid', mine.length > 0);
+    const box = input.closest('.form-row')?.querySelector('.opt-error');
+    if (box) fillErrors(box, mine);
+  }
+}
+
+/** Error lines with a one-click "Sửa thành …" button when the issue has a suggestion. */
+function fillErrors(box, issues) {
+  if (!box) return;
+  box.hidden = !issues.length;
+  box.replaceChildren(...issues.map((i) => h(
+    'div',
+    { class: 'error-line' },
+    i.message,
+    i.suggestion ? h('button', { class: 'link fix-btn', onclick: () => applyFix(i) }, `Sửa thành ${suggestionText(i)}`) : null,
+  )));
+}
+
+function issueOption(issue) {
+  const step = stepById(issue.nodeId);
+  return step ? referenceOptions(step, state.meta, { includeHidden: true }).find((x) => x.field === issue.field && x.option === issue.suggestion?.option) : null;
+}
+
+const suggestionText = (issue) => (issueOption(issue)?.mode === 'template' ? `{{${issue.suggestion.to}}}` : issue.suggestion.to);
+
+/** Apply an issue's suggestion to the first matching reference (one undo step). */
+function applyFix(issue) {
+  const step = stepById(issue.nodeId);
+  if (!step) return;
+  closePicker();
+  updateWorkflow(() => {
+    const o = issueOption(issue);
+    if (!o) return;
+    const value = o.fieldIndex !== undefined ? o.stored ?? o.value : o.value;
+    o.set(applySuggestion(o.mode, value, issue.suggestion));
+  }, { source: 'inspector-structure' });
+}
+
+// ---------- rename / delete keep references (design 0005) ----------
+
+let renameFrom = null;
+
+/** After a field was renamed (on change, not per key): move {{alias.Old}} / {{this.Old}} along. */
+function followFieldRename(step, from, to) {
+  renameFrom = to;
+  if (!from || !to || from === to) return;
+  const res = updateWorkflow((wf) => renameField(wf, step.id, from, to, { catalog: state.meta }), { source: 'inspector-structure' });
+  if (!res?.count) return;
+  const name = stepAlias(step) || step.id;
+  toast(`Đã cập nhật ${res.count} tham chiếu: ${name}.${from} → ${name}.${to}. Ctrl+Z để hoàn tác.`, 5000);
+}
+
+function removeField(step, index) {
+  const f = step.config.fields[index];
+  const refs = f?.name ? refsTo(currentScope(), step.id, f.name).filter((r) => r.mode !== 'ref' && !(r.nodeId === step.id && r.fieldIndex === index)) : [];
+  updateWorkflow(() => step.config.fields.splice(index, 1), { source: 'inspector-structure' });
+  const places = placesText(refs);
+  if (places.length) {
+    toast(`Field "${f.name}" đang được dùng ở ${places.length} chỗ: ${places.join(', ')}. ${places.length > 1 ? 'Các chỗ đó' : 'Chỗ đó'} sẽ báo lỗi cho tới khi sửa. Ctrl+Z để hoàn tác.`, 7000);
   }
 }
 
