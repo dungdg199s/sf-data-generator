@@ -81,12 +81,21 @@ Người dùng mới có thể bắt đầu từ mẫu "Account + Contact" ở c
 ## Câu hỏi mở / Việc tiếp theo
 
 - Lưu nhiều workflow có tên (thư viện workflow) thay vì một bản autosave duy nhất.
+  → **Chuyển sang** [0012](0012-nang-suat-soan-thao.md).
 - Xem trước nhanh ngay trong inspector: 3 giá trị mẫu cho field đang sửa.
+  → **Chuyển sang** [0012](0012-nang-suat-soan-thao.md).
 - Bulk API 2.0 khi số bản ghi lớn hơn khoảng 10 000; hiện tiến độ insert theo thời gian thực (SSE).
+  → Tiến độ theo thời gian thực: **Đã làm** ở [0004](0004-streaming-execution.md#đã-làm) (NDJSON thay SSE, có nút Dừng).
+  Bulk API 2.0: **Chuyển sang** [0011](0011-thao-tac-du-lieu-org.md).
 - Xóa dữ liệu vừa insert (lưu danh sách Id theo lần chạy).
+  → **Chuyển sang** [0011](0011-thao-tac-du-lieu-org.md).
 - Import từ org cho cả node đã có field: gợi ý field bắt buộc còn thiếu.
+  → **Chuyển sang** [0012](0012-nang-suat-soan-thao.md).
 - Lookup tới bản ghi có sẵn trong org bằng SOQL (thay vì dán Id).
+  → **Đã làm** ở [0006](0006-query-pick-nodes.md#đã-làm) (bước Query và Chọn bản ghi).
 - Minimap và căn chỉnh tự động khi workflow lớn.
+  → Căn chỉnh tự động: **Đã làm** ở [0003](0003-process-mode.md#đợt-b-chế-độ-sơ-đồ-bước-6-2026-10-28) (Sơ đồ tự sắp xếp).
+  Minimap: **Chuyển sang** [0014](0014-hoan-thien-giao-dien.md).
 
 ## Đã làm
 

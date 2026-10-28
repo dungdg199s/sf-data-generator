@@ -36,6 +36,7 @@ thì ưu tiên chế độ Quy trình**.
   - Có chỗ sẵn cho 0005 (chọn biến trong thẻ) và 0006 (loại bước mới) mà không phải sửa view.
 - Ngoài phạm vi:
   - Nhánh song song (Power Automate "Add a parallel branch"): executor chạy tuần tự để giữ tính tái lập theo seed.
+    → **Không làm:** chạy song song phá tính tất định (cùng seed + `now` phải ra cùng dữ liệu khi xem trước, insert và tải về).
   - Sửa cấu hình ngay trong thẻ (inline). Bản này sửa ở panel phải, xem [Câu hỏi mở](#câu-hỏi-mở).
   - Chọn nhiều bước, copy/paste bước giữa các workflow, ước tính số bản ghi trước khi chạy.
   - Vẽ dây tự do và đặt vị trí node bằng tay trên Sơ đồ.
@@ -424,6 +425,7 @@ Tab "Phím tắt" ở inspector (khi chưa chọn gì) cập nhật theo bảng 
   Quy trình), kéo mục từ cột trái thả lên đường nối.
 - **Không** kéo dây, **không** đặt vị trí tự do. `position` không còn trong JSON.
 - Kéo thẻ để di chuyển trên Sơ đồ để sau. Người dùng có thể đổi sang Quy trình (M) để làm việc đó.
+  → **Không làm:** xem mục [Việc tiếp theo](#việc-tiếp-theo-không-làm-trong-bản-này).
 
 ### Chuyển workflow cũ
 
@@ -844,20 +846,29 @@ Rủi ro chính và cách giảm:
 Quyết định cần người dùng chốt:
 
 1. **Duyệt hướng (a):** workflow thành cây (JSON v2), bỏ kéo dây và vị trí tự do. Đây là đổi hướng dự án.
+   → **Đã chốt:** (a) (xem [0007](0007-tong-hop-0003-0006.md#đã-chốt-2026-10-27) Q1).
 2. **Có làm Sơ đồ (đợt B) không?** Đề xuất: có, nhưng sau khi dùng thử Quy trình. Nếu Quy trình cộng "Thu gọn tất cả" là
    đủ nhìn tổng quan thì bỏ (tức phương án (c)).
+   → **Đã chốt:** có làm, sau Quy trình. **Đã làm** ở [đợt B](#đợt-b-chế-độ-sơ-đồ-bước-6-2026-10-28).
 3. **Sửa ngay trong thẻ?** Đề xuất: chưa, chỉ sửa ở panel phải. Nếu cần sau này thì thêm cờ option `inline: true` ở server
    để thẻ dựng vài ô sửa nhanh (số lần lặp, xác suất, sObject) bằng chính `forms.js`.
+   → **Đã chốt:** chỉ sửa ở panel phải (xem [0007](0007-tong-hop-0003-0006.md#quyết-định-nhỏ-dùng-đề-xuất-nếu-không-có-ý-kiến-khác)).
+   **Không làm** sửa trong thẻ: một nơi sửa duy nhất (inspector) ở cả hai chế độ, thẻ giữ kích thước cố định trên Sơ đồ.
 4. **"Tắt bước" (`disabled`, Ctrl+/) thành tính năng chung?** Migration cần nó cho node lơ lửng. Đề xuất: có, vì nó cũng tiện
   để tạm bỏ Task mà không xóa.
+   → **Đã chốt:** có (0007). **Đã làm** ở [đợt A](#đợt-a-bước-05-và-7-2026-10-27).
 5. **Gọi là "bước" thay vì "node" trên UI?** Đề xuất: có, trong mọi câu chữ mới và sửa. Code giữ `nodeId`/`type`.
+   → **Đã chốt:** có (0007). **Đã làm** ở đợt A.
 6. **Thứ tự với 0004–0006.** Bản nháp 0005 và 0006 đều giữ `version: 1` và viết trên đồ thị (0005: `scope.js` theo
    `flow`; 0006: pre-fetch "mỗi node Query đến được từ Bắt đầu"). Đề xuất: làm bước 1–3 của 0003 trước, rồi
    0004/0005/0006 viết trên v2. Như vậy `scope.js` duyệt cây (đơn giản hơn nhiều), và không phải viết `toFlowGraph`.
    Nếu 0005 hoặc 0006 vào trước thì ở bước 3, phần schema/executor của chúng phải chuyển sang cây, và bước 1 thêm `toFlowGraph`.
+   → **Đã chốt:** 0003 bước 1–3 trước, rồi 0005, 0006, 0004 trên cây v2 (xem [0007](0007-tong-hop-0003-0006.md#thứ-tự-triển-khai-đề-xuất)). Không có `toFlowGraph`.
 7. **Server nhận v1 tới bao giờ?** Đề xuất: mãi mãi, vì chỉ là một lời gọi `migrateV1`.
+   → **Đã chốt:** có, không thời hạn (0007).
 8. Giữ nhãn **"Rẽ nhánh"** hay đổi thành **"Điều kiện"** như Power Automate? Đề xuất: giữ "Rẽ nhánh", vì `label` đã nằm ở
    server và đổi lúc nào cũng được.
+   → **Đã chốt:** giữ "Rẽ nhánh" (0007).
 
 ### Phụ thuộc và giả định về 0004–0006
 
@@ -870,6 +881,8 @@ Quyết định cần người dùng chốt:
   - Đề xuất 0004 thêm `byStep` (cùng hình dạng `stats.byStep` ở trên) vào sự kiện `progress` và vào `stats` cuối, để chip
     số liệu trên thẻ cập nhật trực tiếp khi chạy. `errorGroups[].nodeId` và `stopped.nodeId` của 0004 có thể hiện thành
     badge `3 lỗi insert` trên thẻ (việc sau).
+    → `byStep` trong `progress` và `stats`: **Đã làm** ở [0004](0004-streaming-execution.md#đã-làm). Chip cập nhật trực tiếp
+    khi chạy (thẻ hiện chỉ đọc `stats.byStep` của kết quả cuối) và badge lỗi insert trên thẻ: **Chuyển sang** [0012](0012-nang-suat-soan-thao.md).
   - Determinism: thứ tự gọi `rng` của v2 giữ như mục [Ngữ nghĩa khi chạy](#ngữ-nghĩa-khi-chạy-dự-kiến). 0004 cũng giữ
     nguyên thứ tự đó.
 - **0005 (chọn biến)**, đã đối chiếu với bản nháp `0005-variable-picker.md`:
@@ -899,13 +912,22 @@ Quyết định cần người dùng chốt:
 ### Việc tiếp theo (không làm trong bản này)
 
 - Chọn nhiều bước liền nhau (Shift+bấm) để bọc, xóa hoặc kéo cùng lúc. Copy/paste bước (Ctrl+C/Ctrl+V).
+  → **Chuyển sang** [0012](0012-nang-suat-soan-thao.md).
 - Kéo thẻ để di chuyển trên Sơ đồ; minimap.
+  → Kéo thẻ: **Không làm:** vị trí tự do trái mô hình cây (bố cục luôn tự tính); đổi thứ tự bằng Alt+↑/↓, menu ⋯ Lên/Xuống,
+  hoặc kéo trong Quy trình (M). Minimap: **Chuyển sang** [0014](0014-hoan-thien-giao-dien.md).
 - Ước tính số bản ghi theo bước trước khi chạy (từ số lần lặp trung bình và xác suất).
+  → **Chưa xếp lịch** (chưa thuộc 0011–0014; xem [Việc còn lại](README.md#việc-còn-lại)).
 - Rê chuột lên chip `AccountId → acc` thì tô thẻ `acc`.
+  → **Chưa xếp lịch** (chưa thuộc 0011–0014; xem [Việc còn lại](README.md#việc-còn-lại)).
 - Khi đổi sObject mà đã chọn org, thay field mặc định `Name` bằng name field thật (Task không có `Name` mà có `Subject`).
   Hiện Record Task mới vẫn mang field `Name` và insert sẽ lỗi.
+  → Bước Query đã làm việc này ([0006](0006-query-pick-nodes.md#đã-làm) quyết định 14); bước Record thì chưa (đổi sObject chỉ
+  đổi alias, `client/js/inspector.js`). → **Chưa xếp lịch** (chưa thuộc 0011–0014; xem [Việc còn lại](README.md#việc-còn-lại)).
 - Loại khung nhiều nhánh (kiểu Switch) có số slot theo cấu hình: cần `slots` động trong meta.
+  → **Chưa xếp lịch** (chưa thuộc 0011–0014; xem [Việc còn lại](README.md#việc-còn-lại)).
 - Cho phép trùng alias ở các nhánh loại trừ nhau, để bước sau Rẽ nhánh tham chiếu "bản ghi vừa tạo ở nhánh nào cũng được".
+  → **Chưa xếp lịch** (chưa thuộc 0011–0014; xem [Việc còn lại](README.md#việc-còn-lại)).
 
 ## Đã làm
 
@@ -969,6 +991,8 @@ Chưa làm trong đợt A: chế độ Sơ đồ và nút đổi chế độ (đ
 (hiện có 3). `CLAUDE.md`, `.claude/agents/*.md` và `.claude/skills/*/SKILL.md` chưa sửa theo danh sách ở mục
 [Thay đổi cần làm ở tài liệu tham chiếu](#thay-đổi-cần-làm-ở-tài-liệu-tham-chiếu-dự-kiến-implementer-làm-cùng-code):
 đây là file cấu hình của agent, cần người dùng tự duyệt và áp dụng.
+→ Chế độ Sơ đồ và nút đổi chế độ: **Đã làm** ở [đợt B](#đợt-b-chế-độ-sơ-đồ-bước-6-2026-10-28). `CLAUDE.md`, `implementer.md` và
+skill `add-node-type` / `smoke-test` đã theo hợp đồng v2 (`slots`, không còn `edges`/`outputs`), cập nhật ở các đợt sau.
 
 ### Đợt B: chế độ Sơ đồ (bước 6), 2026-10-28
 
@@ -1009,7 +1033,7 @@ Khác với thiết kế (và lý do):
 - Kéo thẻ để di chuyển trên Sơ đồ vẫn chưa làm (đúng phạm vi): kéo trên thẻ là pan; dùng Alt+↑/↓, menu ⋯ Lên/Xuống, hoặc M
   sang Quy trình để kéo.
 
-Chưa làm: kéo thẻ trên Sơ đồ, minimap (mục "Việc tiếp theo").
+Chưa làm: kéo thẻ trên Sơ đồ, minimap (mục "Việc tiếp theo"). → Kéo thẻ: **Không làm**; minimap: **Chuyển sang** [0014](0014-hoan-thien-giao-dien.md).
 
 ### Sửa sau review (đợt B), 2026-10-28
 

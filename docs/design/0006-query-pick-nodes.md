@@ -757,14 +757,14 @@ Query là node hay nguồn dữ liệu cấp workflow:
 
 | Ứng viên | Đánh giá | Khuyến nghị |
 | --- | --- | --- |
-| Lặp "mỗi bản ghi trong pool" (`loop.mode: 'each'`, option `pool`) | "Mỗi Account có sẵn tạo 3 Contact" rất hay gặp, mà Chọn bản ghi `sequential` không làm trọn được vì người dùng không biết pool có bao nhiêu dòng. Việc làm nhỏ: mỗi vòng gán `scope.current[pool]` = dòng thứ i, `{{loop.count}}` = kích thước pool. | **Làm tiếp ngay sau 0006**, hoặc gộp vào 0006 (câu hỏi mở 5) |
-| Xóa dữ liệu vừa insert | Là hành động ở bảng kết quả, không phải node. Dùng `insert.ids` + `conn.sobject(type).destroy`, xóa theo thứ tự ngược các đợt (con trước cha). Có xác nhận ghi rõ org và số bản ghi. | **Nên làm sớm** (dọn dữ liệu test); cần design doc riêng |
-| Cập nhật bản ghi có sẵn (Update) | Dùng pool của Query để sửa field của bản ghi có sẵn. Rủi ro cao hơn insert vì sửa dữ liệu người khác: cần hộp xác nhận riêng "sẽ **sửa** N bản ghi có sẵn" và cảnh báo production mạnh hơn. | Làm sau, design doc riêng |
-| Upsert theo External Id | Hợp lý hơn nếu là option của node Record (`upsertKey`) thay vì node mới; giúp chạy lại mà không bị trùng. | Design doc riêng, ưu tiên trung bình |
-| Đặt biến (Set variable) | Ví dụ mã lô `RUN-{{seed}}` dùng chung để lọc hoặc xóa sau. Template và Giá trị cố định đã làm được phần lớn. | Chờ 0005 (biến) rồi xét |
-| Sub-workflow | Cần thư viện workflow có tên, hiện chưa có. | Chưa |
+| Lặp "mỗi bản ghi trong pool" (`loop.mode: 'each'`, option `pool`) | "Mỗi Account có sẵn tạo 3 Contact" rất hay gặp, mà Chọn bản ghi `sequential` không làm trọn được vì người dùng không biết pool có bao nhiêu dòng. Việc làm nhỏ: mỗi vòng gán `scope.current[pool]` = dòng thứ i, `{{loop.count}}` = kích thước pool. | **Làm tiếp ngay sau 0006**, hoặc gộp vào 0006 (câu hỏi mở 5) → **Đã làm** ở [0010](0010-lap-theo-ban-ghi.md) |
+| Xóa dữ liệu vừa insert | Là hành động ở bảng kết quả, không phải node. Dùng `insert.ids` + `conn.sobject(type).destroy`, xóa theo thứ tự ngược các đợt (con trước cha). Có xác nhận ghi rõ org và số bản ghi. | **Nên làm sớm** (dọn dữ liệu test); cần design doc riêng → **Chuyển sang** [0011](0011-thao-tac-du-lieu-org.md) |
+| Cập nhật bản ghi có sẵn (Update) | Dùng pool của Query để sửa field của bản ghi có sẵn. Rủi ro cao hơn insert vì sửa dữ liệu người khác: cần hộp xác nhận riêng "sẽ **sửa** N bản ghi có sẵn" và cảnh báo production mạnh hơn. | Làm sau, design doc riêng → **Chuyển sang** [0011](0011-thao-tac-du-lieu-org.md) |
+| Upsert theo External Id | Hợp lý hơn nếu là option của node Record (`upsertKey`) thay vì node mới; giúp chạy lại mà không bị trùng. | Design doc riêng, ưu tiên trung bình → **Chuyển sang** [0011](0011-thao-tac-du-lieu-org.md) |
+| Đặt biến (Set variable) | Ví dụ mã lô `RUN-{{seed}}` dùng chung để lọc hoặc xóa sau. Template và Giá trị cố định đã làm được phần lớn. | Chờ 0005 (biến) rồi xét → 0005 đã làm; **Chưa xếp lịch** (chưa thuộc 0011–0014) |
+| Sub-workflow | Cần thư viện workflow có tên, hiện chưa có. | Chưa → thư viện workflow ở [0012](0012-nang-suat-soan-thao.md); sub-workflow **Chưa xếp lịch** (chưa thuộc 0011–0014) |
 | Delay | Không có ý nghĩa với việc sinh dữ liệu; tốc độ insert do `insert.js` lo. | Không |
-| Query phụ thuộc (chạy mỗi lượt) | Tốn API; bộ lọc của Chọn bản ghi đã thay được. | Chưa; xem lại sau 0004 nếu có nhu cầu thật (có cache theo SOQL và trần số lần gọi) |
+| Query phụ thuộc (chạy mỗi lượt) | Tốn API; bộ lọc của Chọn bản ghi đã thay được. | Chưa; xem lại sau 0004 nếu có nhu cầu thật (có cache theo SOQL và trần số lần gọi) → **Chưa xếp lịch** (chưa thuộc 0011–0014) |
 
 ## Kế hoạch thực hiện
 
@@ -897,23 +897,33 @@ Theo bảng đồng bộ hợp đồng trong `.claude/agents/implementer.md` và
 ## Câu hỏi mở
 
 1. **Khi chưa có org**: dùng 5 bản ghi mẫu kèm cảnh báo (đề xuất), hay báo lỗi bắt chọn org?
+   → **Đã chốt:** bản ghi mẫu kèm cảnh báo (0007 mâu thuẫn 4). **Đã làm.**
 2. **Cache khi xem trước**: dùng cache 10 phút kèm "⟳ Đọc lại" và xóa cache sau insert (đề xuất, xem trước nhanh), hay lần
    xem trước nào cũng đọc lại org (dễ hiểu hơn, mỗi lần chậm hơn khoảng 0,3–1 giây cho mỗi Query)?
+   → **Đã chốt:** cache 10 phút + "⟳ Đọc lại" ([0007](0007-tong-hop-0003-0006.md#quyết-định-nhỏ-dùng-đề-xuất-nếu-không-có-ý-kiến-khác)). **Đã làm.**
 3. **Org đổi giữa xem trước và insert**: chặn bằng 409 (đề xuất), hay chỉ cảnh báo rồi vẫn insert?
+   → **Đã chốt:** chặn bằng 409 (0007). **Đã làm.**
 4. **Mặc định `onEmpty`**: "Bỏ qua (cảnh báo)" (đề xuất) hay "Báo lỗi và dừng"?
+   → **Đã chốt:** "Bỏ qua" (0007). **Đã làm.**
 5. **Lặp "mỗi bản ghi trong pool"**: gộp vào 0006 hay để một doc riêng ngay sau?
+   → **Đã chốt:** doc riêng (0007). **Đã làm** ở [0010](0010-lap-theo-ban-ghi.md).
 6. **Trần 2000 dòng mỗi Query** có đủ không? Muốn nhiều hơn thì `maxFetch` lên tới 10 000 (5 lần queryMore) và cache tốn bộ
    nhớ hơn.
+   → **Đã chốt:** 2 000 dòng đủ cho bản đầu (0007). **Đã làm.**
 7. **Pool không có "bản ghi hiện tại"** (khớp với 0005): `{{accs.Name}}` và Lookup `current` vào Query là lỗi, kèm hướng
    dẫn thêm node Chọn bản ghi. Đồng ý chứ? Phương án kia là cho "dòng đầu" (tiện hơn một chút cho Pricebook chuẩn với
    LIMIT 1), nhưng dễ hiểu nhầm khi pool có nhiều dòng.
+   → **Đã chốt:** lỗi, dùng Chọn bản ghi ([0007](0007-tong-hop-0003-0006.md#đã-chốt-2026-10-27) Q3). **Đã làm.**
 8. **Giá trị số từ tham chiếu**: `{{pbe.UnitPrice}}` qua Template ra chuỗi. Có cần một kiểu field "Giá trị từ tham chiếu"
    giữ nguyên kiểu (số, boolean) để gán `OpportunityLineItem.UnitPrice` không, hay Template trả giá trị gốc khi mẫu chỉ có
    đúng một `{{…}}`? Cách sau thay đổi hành vi hiện có.
+   → **Đã chốt:** có (0007). **Đã làm:** field type `copy` "Lấy từ biến (giữ kiểu)" ([Đã làm](#đã-làm) quyết định 12).
 9. **Chọn N bản ghi một lần / trọng số theo field** (ví dụ chọn theo `NumberOfEmployees`): để sau, hay cần ngay?
+   → **Đã chốt:** để sau (0007). **Chuyển sang** [0013](0013-mo-rong-bien-va-lap.md).
 10. **Tên khi khớp với 0005**: giữ `pick`/`from` (đề xuất; `source` đã là thuật ngữ của 0005), hay theo giả định của 0005
     là `pickRecord`/`source`? Ngoài ra 0005 cần chấp nhận `members`/`label` dạng hàm ở server cho Query và
     `lookupTarget: { fromSource }` cho Chọn bản ghi.
+    → **Đã chốt:** `pick`/`from` (0007 mục 8); hợp đồng nguồn theo 0005 ([Đã làm](#đã-làm) quyết định 2). **Đã làm.**
 
 ## Đã làm
 
@@ -947,12 +957,14 @@ Commit trên nhánh `claude/salesforce-data-generator-xt3u27`:
 4. **Pool giữ bản ghi đầy đủ** (mâu thuẫn 1 của 0007): 0004 chưa làm nên mọi pool vẫn giữ bản ghi đầy đủ như trước. Khi làm 0004,
    alias là `from` của một Chọn bản ghi (và của Lặp `each` của 0010) phải giữ bản ghi đầy đủ; test `pick from a record pool keeps
    $ref` khóa hành vi này.
+   → **Đã làm** ở [0004](0004-streaming-execution.md#đã-làm) (`poolUsage`, quyết định 1).
 5. **"Bỏ qua các bước phía sau" trên cây:** dừng phần còn lại của lượt hiện tại **tới thân Lặp gần nhất** (sang lần lặp sau),
    đi xuyên qua Rẽ nhánh; ở dãy gốc thì dừng lần chạy. Cách này giống "chuỗi phía sau" của đồ thị v1 (chuỗi đi qua điểm gộp tới
    hết thân vòng lặp). Option có thêm help `Bỏ qua: các bước còn lại của lượt này không chạy (trong Lặp thì sang lần lặp sau).`
 6. **Template dùng field Query không lấy là lỗi** `unknownMember` (0007 mâu thuẫn 3), câu của doc này:
    `Field "Title": Template dùng {{acc.Industry}} nhưng Query "accs" không lấy field Industry. Thêm Industry vào "Field cần lấy" của bước Query.`
    (với Chọn bản ghi, câu nêu tên Query gốc). Nút sửa nhanh "Thêm `<Field>` vào SELECT" chưa làm.
+   → Nút sửa nhanh: **Chuyển sang** [0012](0012-nang-suat-soan-thao.md).
 7. **Câu chữ:** "node" đổi thành "bước" ở mọi câu của bảng "Thông báo". Thêm hoặc chỉnh:
    - `Pool "accs" phải nằm phía trước bước này trong workflow. Kéo bước "accs" lên phía trên hoặc chọn pool khác.` (thêm cách sửa);
      `unknownName`/`otherBranch`/`disabled` của `from` dùng câu "pool" của 0010 để Lặp `each` dùng chung;
@@ -1033,8 +1045,9 @@ Smoke test: trần thời gian nâng từ 10 lên 12 giây (thường ~8 giây, 
 
 **Chưa làm / để sau:**
 
-- Nút sửa nhanh "Thêm `<Field>` vào SELECT" cho lỗi template dùng field Query không lấy.
+- Nút sửa nhanh "Thêm `<Field>` vào SELECT" cho lỗi template dùng field Query không lấy. → **Chuyển sang** [0012](0012-nang-suat-soan-thao.md).
 - ~~Sự kiện tiến độ `Đang đọc Query…` và `queries[]` trong sự kiện đầu khi chạy dạng stream (0004).~~ Đã làm ở
   [0004](0004-streaming-execution.md#đã-làm) (`queries` trong sự kiện `start`; UI ghi `Đang đọc Query…` trong lúc chờ).
 - ~~Lặp "mỗi bản ghi trong pool"~~ Đã làm ở [0010](0010-lap-theo-ban-ghi.md#đã-làm). Chọn N bản ghi / trọng số,
   Update/Upsert/Delete.
+  → Chọn N bản ghi / trọng số: **Chuyển sang** [0013](0013-mo-rong-bien-va-lap.md). Update/Upsert/Delete: **Chuyển sang** [0011](0011-thao-tac-du-lieu-org.md).

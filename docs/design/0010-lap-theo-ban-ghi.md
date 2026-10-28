@@ -17,7 +17,7 @@ Với những gì 0006 có, họ chỉ làm được gần đúng:
 | --- | --- |
 | Lặp cố định N lần → Chọn bản ghi `acc` từ `accs`, cách chọn "Lần lượt (quay vòng)" → Record Contact × 3 | Phải biết trước pool có đúng 5 dòng. Org có 7 Account thì 2 Account không có Contact; có 4 thì một Account nhận 6 Contact. Số dòng đổi theo org, nên workflow không dùng lại được giữa các sandbox |
 | Lookup `AccountId` "Ngẫu nhiên trong pool" `accs`, Contact × 15 | Phân bố ngẫu nhiên: có Account 0 Contact, có Account 6 |
-| Lặp `count = {{accs.$count}}` | Chưa có: 0007 chốt "option số nhận biến" là design riêng, chưa làm |
+| Lặp `count = {{accs.$count}}` | Chưa có: 0007 chốt "option số nhận biến" là design riêng, chưa làm (→ **Chuyển sang** [0013](0013-mo-rong-bien-va-lap.md)) |
 
 Cùng nhu cầu với bản ghi đã sinh: Record `acc` × 20 (một bước, `count: 20`), rồi "mỗi Account 2 Opportunity". Hiện phải bọc
 Account trong Lặp 20 lần với `count: 1` để có "bản ghi hiện tại" ở từng vòng. Làm được, nhưng phải dựng lại cấu trúc.
@@ -478,12 +478,18 @@ Không có câu hỏi chặn việc làm. Ý tưởng để sau:
 
 - Lọc ngay trong Lặp (`filterField`/`filterOp`/`filterValue` như Chọn bản ghi), mở ra "mỗi Contact của Account đang lặp"
   (`AccountId = {{acc.Id}}`).
+  → **Chuyển sang** [0013](0013-mo-rong-bien-va-lap.md).
 - "Tối đa N bản ghi đầu" và "xáo trộn thứ tự (theo seed)" cho pool lớn.
+  → **Chuyển sang** [0013](0013-mo-rong-bien-va-lap.md).
 - `minIterations` thông minh hơn: pool Record `always` với `count ≥ 1` thì vòng lặp luôn chạy ≥ 1 lần, bỏ cảnh báo `maybe` phía sau.
+  → **Chuyển sang** [0013](0013-mo-rong-bien-va-lap.md).
 - Pool Record "chỉ các bản ghi sinh trong lượt hiện tại của vòng lặp ngoài" (option phạm vi pool), nếu người dùng thấy cách 7
   khó hiểu khi lồng vòng lặp.
+  → **Chuyển sang** [0013](0013-mo-rong-bien-va-lap.md).
 - Lặp theo danh sách giá trị cố định (`["Hot", "Warm", "Cold"]`), dùng cùng `{{loop.value}}`.
+  → **Chuyển sang** [0013](0013-mo-rong-bien-va-lap.md).
 - "Bọc trong Lặp qua từng bản ghi" trong menu `⋯` (bọc các bước có sẵn).
+  → **Chuyển sang** [0012](0012-nang-suat-soan-thao.md).
 
 ## Đã làm
 
@@ -603,6 +609,7 @@ câu `outsideLoop` trên thanh lỗi. Sau commit cuối, ba lần liên tiếp `
   sửa sau review (mục 2 dưới đây).
 - Các ý trong [Câu hỏi mở](#câu-hỏi-mở--việc-tiếp-theo): lọc / giới hạn / xáo trộn trong Lặp, `minIterations` thông minh hơn,
   phạm vi pool theo lượt, lặp theo danh sách giá trị, "Bọc trong Lặp qua từng bản ghi".
+  → "Bọc trong Lặp qua từng bản ghi": **Chuyển sang** [0012](0012-nang-suat-soan-thao.md); các ý còn lại: **Chuyển sang** [0013](0013-mo-rong-bien-va-lap.md).
 
 ### Sửa sau review (2026-10-28)
 

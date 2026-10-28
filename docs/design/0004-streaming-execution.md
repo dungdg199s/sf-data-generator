@@ -538,7 +538,7 @@ Mỗi bước nhỏ, có test riêng, và `npm test` phải xanh sau mỗi bư�
   vẫn luôn vào trước con. Trigger hoặc flow nào giả định "mọi Account đã có trước Contact đầu tiên" sẽ thấy khác. Ghi rõ
   điều này trong `org-connection.md`.
 - **Dừng giữa chừng để lại dữ liệu dở** (Account không có đủ Contact). Hộp xác nhận và thông báo nói rõ điều này. Tính
-  năng xóa dữ liệu đã insert là việc sau.
+  năng xóa dữ liệu đã insert là việc sau. → **Chuyển sang** [0011](0011-thao-tac-du-lieu-org.md).
 - **Lượt chạy thử nhân đôi CPU** (4–5 s cho 200k). Chấp nhận được, vì chỉ khoảng 1 % thời gian insert, và đổi lại không
   bao giờ ghi dở vì lỗi sinh dữ liệu.
 - **`unique` vẫn tốn bộ nhớ tăng dần** (khoảng 165 B/giá trị; 200k Email ≈ 30 MB). Đây là ngữ nghĩa của "duy nhất trong
@@ -553,15 +553,22 @@ Mỗi bước nhỏ, có test riêng, và `npm test` phải xanh sau mỗi bư�
 
 1. **Không có checkbox "stream mode", luôn chạy dạng luồng.** Khuyến nghị: đồng ý. Nếu vẫn muốn có checkbox thì cần nói
    rõ người dùng sẽ cân nhắc điều gì khi bật hay tắt nó.
+   → **Đã chốt:** luôn chạy dạng luồng, không checkbox ([0007](0007-tong-hop-0003-0006.md#đã-chốt-2026-10-27) Q2). **Đã làm.**
 2. **Xem trước tự động khi bấm Insert** mà chưa có bản xem trước khớp, để hộp xác nhận luôn có số bản ghi. Với 200k thì
    chờ thêm khoảng 5 s. Khuyến nghị: đồng ý.
+   → **Đã chốt:** có ([0007](0007-tong-hop-0003-0006.md#quyết-định-nhỏ-dùng-đề-xuất-nếu-không-có-ý-kiến-khác)). **Đã làm.**
 3. **Dừng sớm sau 3 lô đầu lỗi 100 %** của một sObject. Có cần cho tắt không? Khuyến nghị: luôn bật, không có option.
+   → **Đã chốt:** luôn bật (0007). **Đã làm.**
 4. **Thứ tự insert xen kẽ theo window 2 000** thay vì tất cả sObject cha trước. Khuyến nghị: chấp nhận.
+   → **Đã chốt:** chấp nhận (0007). **Đã làm.**
 5. **Tải JSON** đổi từ pretty sang một bản ghi một dòng (vẫn là mảng JSON hợp lệ). Khuyến nghị: đồng ý.
+   → **Đã chốt:** chấp nhận (0007). **Đã làm.**
 6. **Nâng `maxRecordsHard` quá 200 000?** Khuyến nghị: chưa. Để dành cho design Bulk API, vì 1 triệu bản ghi qua sObject
    Collections là 5 000 lời gọi API và hàng giờ chạy.
+   → **Đã chốt:** chưa nâng (0007). **Chuyển sang** [0011](0011-thao-tac-du-lieu-org.md) (cùng Bulk API 2.0).
 7. **Có cần tải toàn bộ Id đã insert** (ví dụ để xóa sau) không? Khuyến nghị: làm cùng tính năng xóa, không làm trong doc
    này. NDJSON có thể thêm sự kiện `ids` theo lô, khoảng 8 MB cho 200k.
+   → **Chuyển sang** [0011](0011-thao-tac-du-lieu-org.md) (cùng tính năng xóa dữ liệu vừa insert).
 
 ### Phụ thuộc và giả định với các design song song
 
@@ -573,9 +580,11 @@ Mỗi bước nhỏ, có test riêng, và `npm test` phải xanh sau mỗi bư�
   - `scope.all[alias]` của Query (mảng dòng, ≤ `maxQueryRows` = 2 000) **giữ nguyên**. Chỉ pool của alias **Record** đổi
     thành đối tượng đếm `{ kind: 'generated', length, refAt }`. Cần 0006 xác nhận: Lookup "Ngẫu nhiên trong pool" phân
     biệt hai loại pool bằng `kind` (hoặc `Array.isArray`), và cả hai cùng rút đúng một số `Math.floor(rng.next() * length)`.
+    → **Đã làm** (commit `430b065`, "Lookup `random` rút chỉ số"; test vàng không đổi).
   - Node Chọn bản ghi chỉ lấy từ pool Query (`lookupTarget: "org"`), nên không cần giữ bản ghi đã sinh. Nếu sau này muốn
     chọn từ bản ghi **đã sinh** kèm field, executor phải giữ bản ghi của alias đó (biết trước từ workflow), tốn khoảng
     450 B/bản ghi.
+    → **Đã chốt** ở [0007](0007-tong-hop-0003-0006.md#mâu-thuẫn-giữa-các-doc-và-cách-giải-quyết) mâu thuẫn 1, **Đã làm** bằng `poolUsage` (quyết định 1 ở [Đã làm](#đã-làm)).
   - Hộp xác nhận: dòng "Đọc từ org, không ghi…" và điều kiện "cùng org" của 0006 được giữ nguyên. Doc này chỉ thêm các
     dòng của mình (xem [Hộp xác nhận Insert](#hộp-xác-nhận-insert-luôn-có-số-bản-ghi)).
   - `queryCache.invalidateOrg(org)` được gọi ở cuối driver, kể cả khi dừng giữa chừng.
@@ -587,9 +596,11 @@ Mỗi bước nhỏ, có test riêng, và `npm test` phải xanh sau mỗi bư�
     giữ nguyên.
   - **Cần 0003 cập nhật:** phần "Phụ thuộc" của 0003 đang ghi theo bản nháp trước của doc này (`async function*`). Từ bản
     này, executor là **`function*` đồng bộ**, vì 0006 đã chọn đọc trước (xem mục Executor).
+    → **Đã làm:** 0003 đã sửa (0007 mâu thuẫn 5).
   - **Nhận đề xuất `byStep` của 0003:** sự kiện `progress` và `stats` cuối có `byStep` đúng hình dạng `stats.byStep` của
     0003 (xem [mục API](#post-apirun-dự-kiến)). `errorGroups[].nodeId` và `stopped.nodeId` để 0003 dựng badge lỗi trên
     thẻ (việc sau của 0003).
+    → `byStep`: **Đã làm** (xem [Đã làm](#đã-làm)). Badge lỗi insert trên thẻ: **Chuyển sang** [0012](0012-nang-suat-soan-thao.md).
   - 0003 để nhánh song song ra ngoài phạm vi, vì executor phải chạy tuần tự để giữ tính tái lập theo seed. Doc này cũng
     dựa trên giả định chạy tuần tự đó.
 - **0005 (bộ chọn biến):** Không xung đột, vì `/api/run` chỉ được thêm khóa. Pool của alias Record không còn giữ field
@@ -681,8 +692,9 @@ NDJSON. `SMOKE OK`, khoảng 9 giây (trần 12 giây).
 
 **Chưa làm / để sau:**
 
-- Badge lỗi insert trên thẻ bước (dùng `errorGroups[].nodeId`, việc sau của 0003).
+- Badge lỗi insert trên thẻ bước (dùng `errorGroups[].nodeId`, việc sau của 0003). → **Chuyển sang** [0012](0012-nang-suat-soan-thao.md).
 - Bulk API 2.0, gửi song song, chạy tiếp lần đã dừng, xóa dữ liệu vừa insert, tải toàn bộ Id (câu hỏi mở 7), worker thread.
+  → **Chuyển sang** [0011](0011-thao-tac-du-lieu-org.md).
 - ~~Phần còn lại của 0009 (menu `⤓ Tải` ở ≤ 720 px…).~~ Đã làm ở [0009](0009-bo-cuc-man-hinh.md#đã-làm): lúc chạy nút
   Dừng thay cả ô nút tải lẫn nút `⤓ Tải`; `<progress>` 3 px giữ nguyên ở mép dưới đầu panel.
 

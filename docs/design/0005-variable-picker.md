@@ -795,21 +795,30 @@ Theo bảng contract-sync trong `.claude/agents/implementer.md`. Mỗi bước �
 1. **Mặc định của Template và biến `$n`.** Đề xuất mặc định `{{this.$n}}` và thêm `$n` (`{{this.$n}}`, `{{acc.$n}}`).
    Field Template cũ không lưu `options.template` sẽ ra dữ liệu khác. Phương án khác: mặc định rỗng và tự mở bộ chọn.
    Phương án này không đạt nguyên tắc 1 trọn vẹn.
+   → **Đã chốt:** mặc định `{{this.$n}}` và có `$n` ([0007](0007-tong-hop-0003-0006.md#quyết-định-nhỏ-dùng-đề-xuất-nếu-không-có-ý-kiến-khác)). **Đã làm.**
 2. **Mức độ của tham chiếu hỏng.** Đề xuất là **lỗi** (chặn Xem trước và Insert cho tới khi sửa). Nếu muốn workflow cũ
    vẫn chạy được ngay, có thể để là cảnh báo trong một phiên bản rồi mới nâng thành lỗi.
+   → **Đã chốt:** lỗi, chặn xem trước và insert ([0007](0007-tong-hop-0003-0006.md#đã-chốt-2026-10-27) Q4). **Đã làm.**
 3. **`right` của Branch nhận biến** (`acc.AnnualRevenue > {{opp.Amount}}`)? Chỉ cần thêm `vars: 'template'` cho `right`
    và render template trước khi so sánh. Đổi ngữ nghĩa với giá trị cũ có chứa `{{`; trường hợp này hiếm.
+   → **Đã chốt:** chưa, design riêng (0007). **Chuyển sang** [0013](0013-mo-rong-bien-va-lap.md).
 4. **Option số nhận biến** (Số lần lặp = `{{acc.NumberOfEmployees__c}}`)? Cần `vars: 'number'`, kiểm tra `valueType`,
    kẹp theo `LIMITS` lúc chạy. Nên làm thành một design riêng.
+   → **Đã chốt:** design riêng (0007). **Chuyển sang** [0013](0013-mo-rong-bien-va-lap.md).
 5. **Lưu `referenceTo` từ describe vào option của Lookup** để dropdown Node cha chỉ hiện nguồn đúng sObject và cảnh báo
    khi chọn sai sObject? Cần thêm một option (ẩn) vào generator Lookup.
+   → **Đã chốt:** có (0007). **Đã làm** (option `referenceTo` "Trỏ tới sObject" trong `server/generators/reference.js`).
 6. **Tự đặt tên biến lặp không trùng** (`loop`, `loop2`…) khi thêm node Lặp, để vòng lồng nhau không che nhau như hiện
    nay. 0003 đã đề xuất việc này cho chế độ Quy trình. Nếu 0003 không được duyệt thì làm trong `addNode` của `canvas.js`.
+   → **Đã làm** ở [0003](0003-process-mode.md#đã-làm) (`newStep` trong `client/js/ops.js`).
 7. **Phím tắt:** giữ Ctrl+Space (quen thuộc, nhưng bị chiếm trên macOS) hay đổi sang phím khác?
+   → **Đã chốt:** giữ Ctrl+Space, kèm nút `{x}` và gõ `{{` (0007). Phím thay thế trên macOS: **Chuyển sang** [0014](0014-hoan-thien-giao-dien.md).
 8. **Template dùng field mà Query không lấy.** 0006 để là *cảnh báo*. 0005 đề xuất *lỗi* `unknownMember` khi danh sách
    field đã biết chính xác (chế độ builder, hoặc SOQL parse được), vì lúc chạy giá trị chắc chắn rỗng, giống field gõ sai
    ở node Record. Chỉ còn là cảnh báo `openMember` khi danh sách chưa đầy đủ (`FIELDS(...)`). Lời sửa dùng câu của 0006.
    Cần thống nhất một mức.
+   → **Đã chốt:** lỗi `unknownMember` ([0007](0007-tong-hop-0003-0006.md#mâu-thuẫn-giữa-các-doc-và-cách-giải-quyết) mâu thuẫn 3),
+   **Đã làm** ở [0006](0006-query-pick-nodes.md#đã-làm) (quyết định 6). Nút sửa nhanh "Thêm `<Field>` vào SELECT": **Chuyển sang** [0012](0012-nang-suat-soan-thao.md).
 9. **Thứ tự làm với 0003.** Đề xuất làm bước 1–3 của 0003 (định dạng v2, `shared/`) **trước**, giống 0003 đề xuất. Khi đó:
    - `analyzeScope` chạy trên cây, đơn giản hơn nhiều so với thuật toán ngữ cảnh trên đồ thị.
    - Nó nằm ở `shared/`, nên bộ chọn không bị trễ.
@@ -817,6 +826,7 @@ Theo bảng contract-sync trong `.claude/agents/implementer.md`. Mỗi bước �
 
    Nếu cần bộ chọn sớm hơn thì làm 0005 trên v1. Phần thuật toán đồ thị (bước 2) sẽ bị viết lại khi 0003 vào; phần còn
    lại (dạng `scope`, bộ chọn, validate, đổi tên) giữ nguyên.
+   → **Đã chốt:** 0003 trước (0007). **Đã làm** theo cách đó (xem [Đã làm](#đã-làm)).
 
 **Phụ thuộc và giả định với các design khác:**
 
@@ -841,6 +851,8 @@ Theo bảng contract-sync trong `.claude/agents/implementer.md`. Mỗi bước �
     sObject (ví dụ hai node Account), bản ghi đầu của node thứ hai có thể không nằm trong 200 dòng đó, nên bộ chọn và dòng
     "Lần xem trước" sẽ không có giá trị mẫu. Đề xuất 0004 luôn đưa thêm bản ghi đầu tiên của mỗi `nodeId` vào dòng xem
     trước, hoặc thêm `samples: { "<nodeId>": { ...fields } }` vào `done.result`. Nếu không có thì bộ chọn hiện `—`.
+    → `samples` hiện chỉ có cho bước Chọn bản ghi ([0006](0006-query-pick-nodes.md#đã-làm) quyết định 15). Mẫu theo mọi bước:
+    **Chuyển sang** [0013](0013-mo-rong-bien-va-lap.md).
   - 0004 bỏ field trong pool của alias Record (chỉ giữ `length`/`refAt`). 0005 chỉ đọc field của **bản ghi hiện tại**
     (`scope.current`, vẫn giữ), còn `$n` lấy từ `ref`, nên không bị ảnh hưởng. `pool: true` trong `exposes` chỉ có nghĩa
     là "dùng được cho Lookup Ngẫu nhiên và `pick.from`".
@@ -868,10 +880,12 @@ Theo bảng contract-sync trong `.claude/agents/implementer.md`. Mỗi bước �
   - Lookup tới nguồn `origin: "org"` sinh Id thật (0006 làm, qua cờ `existing`).
   - **Giá trị mẫu** của member Query lấy từ `queries[].records[0]` trong kết quả `/api/run` (0006). Với `pick` thì lấy từ
     bản ghi pool mà lần chạy đã chọn, nếu 0006 đưa nó vào kết quả. Nếu không có thì hiện `—`.
+    → **Đã làm** ở [0006](0006-query-pick-nodes.md#đã-làm) (quyết định 15).
 
 **Ý tưởng để sau:** hàm trong template; `{{acc.Id}}` thành Id thật lúc insert (cần thay token trong chuỗi ở
 `server/sf/insert.js`); biến cấp workflow (`{{run.today}}`, `{{run.seed}}`); đi xuyên Lookup (`{{con.AccountId.Name}}`);
 nút "Biến" trên thẻ node của canvas để xem node đó cung cấp gì.
+→ **Chưa xếp lịch** (chưa thuộc 0011–0014; xem [Việc còn lại](README.md#việc-còn-lại)).
 
 ## Đã làm
 
@@ -1003,7 +1017,10 @@ Các điểm nhỏ:
 **Chưa làm / để sau:**
 
 - `pick.filterValue` (0006) chưa có, nên chưa khai báo `vars` cho nó; giá trị mẫu của Query/Chọn bản ghi chờ 0006.
+  → **Đã làm** ở [0006](0006-query-pick-nodes.md#đã-làm): `filterValue` có `vars: 'template'` (`server/workflow/nodes.js`), đổi
+  tên kéo theo; giá trị mẫu Query từ `queries[].records[0]`, Chọn bản ghi từ `samples`.
 - `samples` theo bước khi chạy dạng stream (phụ thuộc 0004): hiện lấy bản ghi đầu tiên trong `records`.
-- Câu hỏi mở 3, 4 (`right` nhận biến, option số nhận biến): để design riêng, theo 0007.
+  → **Chuyển sang** [0013](0013-mo-rong-bien-va-lap.md).
+- Câu hỏi mở 3, 4 (`right` nhận biến, option số nhận biến): để design riêng, theo 0007. → **Chuyển sang** [0013](0013-mo-rong-bien-va-lap.md).
 - Thử tay "hai vòng lặp cùng tên" của bước 8 được thay bằng test đơn vị (`setStepAlias with the catalogue renames only
   references to that loop`).

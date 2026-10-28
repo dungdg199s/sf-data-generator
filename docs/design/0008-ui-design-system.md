@@ -245,6 +245,8 @@ Không có thay đổi contract (bảng trong `.claude/agents/implementer.md` ch
 
 ## Câu hỏi mở
 
+→ **Đã chốt** cả sáu câu, xem [Đã chốt](#đã-chốt-2026-10-27).
+
 1. **Record đổi từ xanh dương sang teal.** Đây là thay đổi dễ thấy nhất với người đã quen. Đồng ý, hay muốn giữ Record
    xanh dương và đổi accent (phương án B, có nhược điểm đã nêu)?
 2. **Nút chuyển theme sáng/tối trong UI?** CSS đã hỗ trợ `:root[data-theme]`. Nếu muốn, cần một nút ở topbar và lưu vào
@@ -348,3 +350,6 @@ dưới, `top: 42px`, bỏ listener `storage`): test hoặc smoke tương ứng 
 Còn lại (ngoài phạm vi 0008): danh sách lỗi nổi đè thẻ cuối (Đã chốt 6, cần design doc bố cục); thanh trên 4 hàng và thanh
 Kết quả xuống dòng ở 390 px; các ký tự `⋯ ▸ ▾ ⠿ ↶ ↷ ⟳` chưa thành SVG; CSS `.var-chip` sẽ làm cùng 0005; Query/Chọn bản ghi
 (0006) chỉ cần đặt `data-type`.
+→ Danh sách lỗi, thanh trên và thanh Kết quả: **Đã làm** ở [0009](0009-bo-cuc-man-hinh.md#đã-làm). `.var-chip`: **Đã làm** ở
+[0005](0005-variable-picker.md#đã-làm). `data-type` của Query/Chọn bản ghi: **Đã làm** ở [0006](0006-query-pick-nodes.md#đã-làm).
+Icon SVG cho các ký tự còn lại: **Chuyển sang** [0014](0014-hoan-thien-giao-dien.md).

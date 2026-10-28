@@ -307,8 +307,11 @@ Ghi chú khi làm:
 
 - Kéo đổi chiều cao panel kết quả (hiện cố định 38vh; ở 1440 × 900 canvas còn 433 px khi panel mở) và sheet hai nấc
   (60 % / 90 %). Nên làm cùng hoặc sau 0004, khi panel kết quả có thêm tiến độ.
+  → **Chuyển sang** [0014](0014-hoan-thien-giao-dien.md).
 - Dấu hiệu "còn mục" (mờ dần mép phải) cho hàng palette ngang khi 0006 thêm 2 mục.
+  → **Chuyển sang** [0014](0014-hoan-thien-giao-dien.md).
 - Đổi các ký tự `⋯ ▸ ▾ ⠿ ↶ ↷ ⟳ ⤓` thành icon SVG (còn từ 0008).
+  → **Chuyển sang** [0014](0014-hoan-thien-giao-dien.md).
 
 ## Đã chốt
 
@@ -332,7 +335,7 @@ Người dùng giao chọn theo phương án đề xuất; planner chốt như s
 12. **Chỗ cho 0004**: nút Dừng thay ô nút tải lúc chạy, `<progress>` 3 px ở mép dưới đầu panel, không thêm hàng.
     **Chỗ cho 0005**: popup trong sheet theo quy tắc §3. **Chỗ cho 0006**: hàng palette và hàng tab cuộn ngang; ô Org
     không bao giờ bị giấu.
-13. Kéo đổi chiều cao panel/sheet **để sau** (Câu hỏi mở).
+13. Kéo đổi chiều cao panel/sheet **để sau** (Câu hỏi mở). → **Chuyển sang** [0014](0014-hoan-thien-giao-dien.md).
 
 ## Đã làm
 
@@ -398,7 +401,7 @@ tải đầu, đổi kích thước một trang thay vì mở context mỗi chi�
 đổi / rỗng) và 1 test token trong `test/css-tokens.test.js`. **Không sửa test cũ nào.** Tổng **229** test, đều qua.
 
 **Chưa làm / để sau:** như "Câu hỏi mở" (kéo đổi chiều cao panel / sheet hai nấc, dấu hiệu "còn mục" ở palette ngang, icon
-SVG cho các ký tự `⋯ ▸ ▾ ⠿ ↶ ↷ ⟳ ⤓`).
+SVG cho các ký tự `⋯ ▸ ▾ ⠿ ↶ ↷ ⟳ ⤓`). → Cả ba: **Chuyển sang** [0014](0014-hoan-thien-giao-dien.md).
 
 ### Sửa sau review (2026-10-28)
 
