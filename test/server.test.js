@@ -242,3 +242,131 @@ test('POST /api/validate returns derived SOQL and pool fields', async () => {
   assert.deepEqual(v.derived.q, { soql: 'SELECT Id, Name FROM Account ORDER BY Id LIMIT 200', sobject: 'Account', fields: ['Id', 'Name'] });
   assert.deepEqual(v.derived.p, { sobject: 'Account', fields: ['Id', 'Name'], from: 'accs' });
 });
+
+// ---------- streaming /api/run, cancel, export (design 0004) ----------
+
+const ndjson = (path, body, extra = {}) => fetch(base + path, { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson' }, body: JSON.stringify(body), ...extra });
+const lines = async (res) => (await res.text()).trim().split('\n').map((l) => JSON.parse(l));
+const big = () => wf([loop('l', { count: 300 }, [record('a', 'Account', 'acc', [{ name: 'Name', type: 'text', options: { mode: 'company' } }]), loop('m', { count: 3 }, [record('c', 'Contact', 'con', [{ name: 'LastName', type: 'text', options: { mode: 'lastName' } }, { name: 'AccountId', type: 'lookup', options: { ref: 'acc' } }])])])]);
+
+test('POST /api/run with Accept ndjson streams events ending in done (first 200 rows per sObject)', async () => {
+  const res = await ndjson('/api/run', { workflow: big(), seed: 4, now: 1761552000000 });
+  assert.equal(res.status, 200);
+  assert.match(res.headers.get('content-type'), /^application\/x-ndjson/);
+  const events = await lines(res);
+  assert.equal(events[0].type, 'start');
+  assert.match(events[0].runId, /^r[0-9a-f]{8}$/);
+  assert.deepEqual([events[0].seed, events[0].now], [4, 1761552000000]);
+  const done = events.at(-1);
+  assert.equal(done.type, 'done');
+  assert.deepEqual(done.result.stats.bySobject, { Account: 300, Contact: 900 });
+  assert.equal(done.result.records.length, 400);
+  assert.equal(done.result.stats.truncated, true);
+  assert.equal(done.result.now, 1761552000000);
+  // Same seed and now ⇒ same data as the JSON mode.
+  const json = await (await post('/api/run', { workflow: big(), seed: 4, now: 1761552000000 })).json();
+  assert.equal(json.records.length, 1200);
+  assert.equal(json.now, 1761552000000);
+  assert.deepEqual(done.result.records, [...json.records.filter((r) => r.sobject === 'Account').slice(0, 200), ...json.records.filter((r) => r.sobject === 'Contact').slice(0, 200)].sort((a, b) => json.records.indexOf(a) - json.records.indexOf(b)));
+});
+
+test('invalid workflow still returns 422 before streaming; a bad now is 400', async () => {
+  const bad = await ndjson('/api/run', { workflow: { version: 2, steps: [{ id: 'x', type: 'record', config: { sobject: '' } }] } });
+  assert.equal(bad.status, 422);
+  assert.match(bad.headers.get('content-type'), /^application\/json/);
+  assert.ok((await bad.json()).issues[0].nodeId === 'x');
+  const now = await post('/api/run', { workflow: big(), now: 'yesterday' });
+  assert.equal(now.status, 400);
+  assert.equal((await now.json()).error, 'Tham số now không hợp lệ.');
+});
+
+test('NDJSON insert: plan, insert progress and done with the insert summary', async () => {
+  const before = inserted.length;
+  const events = await lines(await ndjson('/api/run', { workflow: big(), seed: 4, target: { kind: 'org', org: 'dev' } }));
+  const plan = events.find((e) => e.type === 'plan');
+  assert.deepEqual([plan.total, plan.apiCalls], [1200, 7]);
+  const done = events.at(-1);
+  assert.equal(done.result.insert.inserted, 1200);
+  assert.deepEqual([done.result.insert.errorsTotal, done.result.insert.errorGroups, done.result.insert.cancelled, done.result.insert.stopped], [0, [], false, null]);
+  assert.equal(inserted.length - before, 1200);
+});
+
+test('cancel unknown run returns 404', async () => {
+  const res = await post('/api/runs/rdeadbeef/cancel', {});
+  assert.equal(res.status, 404);
+  assert.equal((await res.json()).error, 'Lần chạy này đã kết thúc.');
+});
+
+test('POST /api/runs/:id/cancel stops an insert after the call in flight', async () => {
+  let release;
+  let calls = 0;
+  const held = new Promise((r) => { release = r; });
+  const client = {
+    identity: async (org) => org,
+    create: async (_t, _s, recs) => {
+      if (++calls === 2) await held;
+      return recs.map((_, i) => ({ success: true, id: `001${calls}${i}` }));
+    },
+  };
+  const app = http.createServer(createApp({ cli: { listOrgs: async () => [] }, client }));
+  await new Promise((r) => app.listen(0, '127.0.0.1', r));
+  try {
+    const url = `http://127.0.0.1:${app.address().port}`;
+    const res = await fetch(`${url}/api/run`, { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson' }, body: JSON.stringify({ workflow: big(), seed: 1, target: { kind: 'org', org: 'dev' } }) });
+    const reader = res.body.getReader();
+    const first = JSON.parse(new TextDecoder().decode((await reader.read()).value).split('\n')[0]);
+    assert.equal(first.type, 'start');
+    while (calls < 2) await new Promise((r) => setTimeout(r, 5));
+    const cancel = await fetch(`${url}/api/runs/${first.runId}/cancel`, { method: 'POST' });
+    assert.deepEqual(await cancel.json(), { ok: true });
+    release();
+    let text = '';
+    for (let c; !(c = await reader.read()).done;) text += new TextDecoder().decode(c.value);
+    const done = text.trim().split('\n').map((l) => JSON.parse(l)).at(-1);
+    assert.equal(done.type, 'done');
+    // The first window holds the 300 Accounts: call 1 (200) and the held call 2 (100) both land.
+    assert.deepEqual([done.result.insert.cancelled, done.result.insert.inserted, calls], [true, 300, 2]);
+    assert.equal((await fetch(`${url}/api/runs/${first.runId}/cancel`, { method: 'POST' })).status, 404, 'the run is over');
+  } finally {
+    app.close();
+  }
+});
+
+test('export csv streams the header + one line per record of the sObject, matching the preview rows', async () => {
+  const body = { workflow: big(), seed: 11, now: 1761552000000 };
+  const preview = await (await ndjson('/api/run', body)).text();
+  const result = JSON.parse(preview.trim().split('\n').at(-1)).result;
+  const res = await post('/api/export', { ...body, format: 'csv', sobject: 'Contact' });
+  assert.equal(res.status, 200);
+  assert.match(res.headers.get('content-disposition'), /attachment; filename="test-Contact\.csv"/);
+  const csv = (await res.text()).trim().split('\r\n');
+  assert.equal(csv[0], 'ref,LastName,AccountId');
+  assert.equal(csv.length, 901);
+  const firstCon = result.records.find((r) => r.sobject === 'Contact');
+  assert.equal(csv[1], `${firstCon.ref},${firstCon.fields.LastName},${firstCon.fields.AccountId.$ref}`);
+
+  const json = await (await post('/api/export', { ...body, format: 'json' })).json();
+  assert.equal(json.length, 1200);
+  assert.deepEqual(json.filter((r) => r.sobject === 'Account').slice(0, 200), result.records.filter((r) => r.sobject === 'Account'));
+
+  assert.equal((await post('/api/export', { ...body, format: 'csv' })).status, 400);
+  assert.equal((await (await post('/api/export', { ...body, format: 'csv' })).json()).error, 'Chọn sObject cần tải CSV.');
+  assert.equal((await post('/api/export', { workflow: big(), format: 'json' })).status, 400);
+});
+
+test('export of a workflow with a Query reads through the cache; changed org data is a 409', async () => {
+  const preview = await (await post('/api/run', { workflow: queryWf(), seed: 3, org: 'dev', refreshQueries: true })).json();
+  const expectQueries = Object.fromEntries(preview.queries.map((q) => [q.nodeId, q.fingerprint]));
+  const ok = await (await post('/api/export', { workflow: queryWf(), seed: 3, now: preview.now, org: 'dev', expectQueries, format: 'json' })).json();
+  assert.deepEqual(ok, preview.records);
+  orgAccounts = [...orgAccounts, { attributes: { type: 'Account' }, Id: '001000000000009AAA', Name: 'Umbrella' }];
+  await post('/api/run', { workflow: queryWf(), seed: 3, org: 'dev', refreshQueries: true });
+  const stale = await post('/api/export', { workflow: queryWf(), seed: 3, now: preview.now, org: 'dev', expectQueries, format: 'json' });
+  assert.equal(stale.status, 409);
+  assert.equal((await stale.json()).error, 'Dữ liệu đọc từ org đã đổi so với lần chạy này. Bấm Xem trước lại rồi tải.');
+});
+
+test('GET /api/meta serves limits.previewRows', async () => {
+  const meta = await (await fetch(base + '/api/meta')).json();
+  assert.equal(meta.limits.previewRows, 200);
+});

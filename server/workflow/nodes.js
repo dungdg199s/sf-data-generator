@@ -23,6 +23,9 @@ export const LIMITS = {
   maxCountPerNode: 100000,
   maxSteps: 2000000,
   maxDepth: 32,
+  // Records of each sObject a run sends back for the results table (design 0004); the rest is
+  // counted, and downloaded through /api/export.
+  previewRows: 200,
   // Query steps (design 0006): rows per Query (LIMIT and jsforce maxFetch), Query steps per
   // workflow, time per query, and how long rows read from an org are reused (same TTL as the
   // sf CLI token cache).
