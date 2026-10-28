@@ -165,7 +165,9 @@ export async function executeRun({
   function insertSummary(s, sent) {
     const notSent = total - sent + s.notSent;
     const cancelled = !s.stopped && (s.cancelled || (Boolean(signal?.aborted) && notSent > 0));
-    return { ...s, notSent, cancelled, stopped: s.stopped, total };
+    // The streamed result carries the Ids of the preview rows only (Lookup targets were kept for the insert).
+    const ids = collect ? s.ids : Object.fromEntries(Object.entries(s.ids).filter(([ref]) => previewRefs.has(ref)));
+    return { ...s, ids, notSent, cancelled, stopped: s.stopped, total };
   }
 
   function done(result) {

@@ -81,9 +81,9 @@ test('org target emits plan before insert progress; the insert gets the same rec
   const r = end.result;
   assert.equal(r.insert.inserted, 2500);
   assert.equal(r.insert.cancelled, false);
-  // NDJSON keeps the Ids of the preview rows (and of Lookup targets), not of every Contact.
+  // NDJSON returns the Ids of the preview rows only (Lookup targets were kept while inserting).
   for (const x of r.records) assert.ok(r.insert.ids[x.ref], x.ref);
-  assert.ok(Object.keys(r.insert.ids).filter((k) => k.startsWith('con#')).length === 200);
+  assert.equal(Object.keys(r.insert.ids).length, r.records.length);
 });
 
 test('cancel during insert emits done with cancelled true and the exact counts', async () => {
