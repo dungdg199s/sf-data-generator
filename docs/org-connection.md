@@ -60,23 +60,43 @@ Hệ quả và giới hạn:
   Chọn bản ghi) và của các dòng xem trước; khoảng 100 B/bản ghi. Chế độ JSON một cục vẫn trả mọi Id.
 - **Dừng sớm khi lỗi hàng loạt.** Nếu 3 lô đầu của một sObject đều lỗi 100 % thì ngừng gửi (`stopped.reason: "allFailing"`):
   thường là thiếu field bắt buộc, validation rule… nên không spam org với hàng trăm lô giống nhau. Lô lỗi sau khi sObject đó đã
-  có lô thành công thì không tính (có thể là lỗi theo dữ liệu, ví dụ trùng).
+  có lô thành công thì không tính (có thể là lỗi theo dữ liệu, ví dụ trùng). `stopped.records` chỉ đếm bản ghi Salesforce đã
+  từ chối trong các lô đó, không đếm bản ghi con bị bỏ qua vì cha lỗi.
+  **sObject thưa:** "lô" là một lời gọi, không phải 200 bản ghi. Một sObject chỉ có vài bản ghi trong mỗi cửa sổ 2 000 (ví dụ
+  một Opportunity cho mỗi 50 Contact) được gửi thành những lô nhỏ, nên 3 lô đầu có thể chỉ là 3–10 bản ghi; nếu cả 3 đều lỗi
+  thì lần chạy vẫn dừng (với mọi sObject). Đó là chủ ý: 3 lần lỗi 100 % liên tiếp ngay từ đầu gần như luôn là lỗi cấu hình.
 - **Dừng bằng tay.** Nút **Dừng** (`POST /api/runs/:runId/cancel`) hoặc đóng tab / mất kết nối: inserter kiểm tra trước mỗi
   lô và luôn chờ lô đang gửi xong, nên số đã insert là chính xác. Bản ghi đã insert **vẫn ở lại** trong org (chưa có tính
   năng xóa); thông báo ghi rõ đã insert bao nhiêu bản ghi mỗi sObject. Chưa có "chạy tiếp" một lần đã dừng.
 - **Lượt chạy thử trước khi ghi.** Trước khi gửi lô đầu, server sinh hết một lượt chỉ để đếm (khoảng 1 % thời gian insert);
   lỗi sinh dữ liệu (hết giá trị `unique`, vượt `maxRecords`) dừng lần chạy khi chưa ghi gì.
-- **Lỗi gom nhóm.** `errorGroups` đếm đủ theo (sObject, bước, field, thông báo); `errors` chỉ giữ 1 000 lỗi đầu
-  (`errorsTotal` là tổng). `field` = `fields.<Name>` khi Salesforce chỉ đúng một field có trong bước.
+- **Lỗi gom nhóm.** `errorGroups` đếm đủ theo (sObject, bước, field, mẫu thông báo — Id và giá trị trong ngoặc kép bị che);
+  tối đa 100 nhóm, phần còn lại cộng trong `errorGroupsOther`; `errors` chỉ giữ 1 000 lỗi đầu (`errorsTotal` là tổng). `field` = `fields.<Name>` khi Salesforce chỉ đúng một field có trong bước.
 - Streaming **không** làm insert nhanh hơn: thời gian nằm ở API (0,5–2 s mỗi lô 200). Muốn nhanh hơn cần Bulk API 2.0 hoặc
   gửi song song (chưa làm).
 
 Kết quả: `{ inserted, failed, errorsTotal, errors: [{ ref, sobject, nodeId, field?, message, parentRef? }], errorGroups,
-ids: { ref: Id }, bySobject, total, notSent, cancelled, stopped }` (chi tiết ở [workflow-schema.md](workflow-schema.md#kết-quả-apirun)).
+errorGroupsOther, ids: { ref: Id }, bySobject, total, notSent, cancelled, stopped }` (chi tiết ở [workflow-schema.md](workflow-schema.md#kết-quả-apirun)).
 `insertRecords(client, org, records)` vẫn có cho script: bọc `createInserter`, giữ mọi Id.
 
 Bản ghi đọc từ org (bước Query) không bao giờ nằm trong `records` nên không bao giờ bị insert lại. Lookup tới chúng là chuỗi Id
 thật, `collectRefs` không coi là phụ thuộc, nên bản ghi con được gửi ngay ở đợt đầu (`insert.js` không phải đổi).
+
+## An toàn
+
+Server hành động bằng quyền sf CLI của máy, nên phải chặn mọi thứ ngoài giao diện của chính nó:
+
+- Mặc định chỉ bind `127.0.0.1` (đổi bằng `HOST`).
+- **Chặn yêu cầu từ trang web khác** (CSRF, DNS rebinding) cho mọi `/api/*` — kể cả `GET /api/orgs…` (danh sách org,
+  describe) và `/api/validate`, `/api/run`, `/api/runs/:id/cancel`, `/api/export`:
+  - `Host` phải là máy này: `127.0.0.1`, `localhost`, `::1` hoặc giá trị `HOST` (bind `0.0.0.0`/`::` thì không kiểm tra Host).
+    Trang dùng DNS rebinding gửi tên miền của nó nên bị từ chối.
+  - `Origin` (nếu có) phải đúng `http://<Host>`; `Sec-Fetch-Site` (nếu có) phải là `same-origin` hoặc `none`.
+    Sai ⇒ 403 `Từ chối yêu cầu từ trang web khác. Chỉ giao diện của app (cùng địa chỉ) mới được gọi API này.`
+  - POST phải có `Content-Type: application/json` ⇒ không thì 415. Một trang khác chỉ gửi được `text/plain`, form hay
+    multipart mà không qua CORS preflight, và server không trả header CORS nào, nên preflight cũng thất bại.
+  - curl và script không gửi `Origin`/`Sec-Fetch-Site` nên vẫn gọi được (`-H 'Content-Type: application/json'`).
+- Ghi vào org chỉ qua `/api/run` với `target.kind === 'org'`, sau hộp xác nhận ở UI.
 
 ## Đọc dữ liệu (Query)
 

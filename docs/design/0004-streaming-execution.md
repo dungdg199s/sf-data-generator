@@ -648,8 +648,11 @@ bật, thứ tự insert xen kẽ theo cửa sổ 2 000, JSON tải về một b
 7. **Kết quả insert thêm** `bySobject`, `total`, `notSent` (để báo chính xác khi dừng), `stopped` có thêm `batches` và
    `records` (để câu "3 lô Contact đầu tiên (600 bản ghi)…"). Bản xem trước bị Dừng có `cancelled: true` và **không** được
    dùng lại cho Insert (sẽ tự xem trước lại).
-8. **"Bản xem trước khớp"** cho Insert = cùng workflow (theo `runKey`), cùng org, và ô Seed trống hoặc bằng seed của bản xem
-   trước. Insert gửi `seed` + `now` + `expectQueries` của bản xem trước đó. Khác thì tự xem trước (dùng seed trong ô, nếu có).
+8. **"Bản xem trước khớp"** cho Insert = cùng workflow (theo `runKey`), cùng org, ô Seed trống hoặc bằng seed của bản xem
+   trước, **và kết quả đó chưa được insert** (sửa sau review). Insert gửi `seed` + `now` + `expectQueries` của bản xem trước
+   đó. Khác thì tự xem trước (dùng seed trong ô, nếu có): sau một lần insert, bấm Insert lần nữa với ô Seed trống ra dữ liệu
+   mới; với seed cố định thì vẫn xem trước lại, và hộp xác nhận cảnh báo `Seed 7 đã dùng cho lần insert trước vào org này…`
+   (cùng seed ⇒ cùng dữ liệu, có thể trùng).
 9. **`/api/export` bắt buộc `seed` và `now`** (400 `Thiếu seed hoặc now của lần chạy. Bấm Xem trước rồi tải lại.`); lỗi sinh
    dữ liệu trước byte đầu vẫn là 422, sau đó thì cắt kết nối. Cột CSV theo thứ tự field trong workflow (`columnsBySobject`).
    **CSV của tab Query vẫn dựng ở client** (khác "client bỏ `toCsv`"): các dòng đã có sẵn trong trình duyệt (≤ 2 000), đọc từ
@@ -681,3 +684,47 @@ NDJSON. `SMOKE OK`, khoảng 9 giây (trần 12 giây).
 - Badge lỗi insert trên thẻ bước (dùng `errorGroups[].nodeId`, việc sau của 0003).
 - Bulk API 2.0, gửi song song, chạy tiếp lần đã dừng, xóa dữ liệu vừa insert, tải toàn bộ Id (câu hỏi mở 7), worker thread.
 - Phần còn lại của 0009 (menu `⤓ Tải` ở ≤ 720 px…).
+
+### Sửa sau review (2026-10-28)
+
+Mỗi mục có test (`npm test`) hoặc bước smoke cho hành vi ở client.
+
+1. **(bảo mật, có từ trước 0004) Trang web khác gọi được `/api/run`:** server nhận mọi Content-Type và không xét `Origin`,
+   nên một trang người dùng đang mở có thể POST `text/plain` với `target.kind: 'org'` tới 127.0.0.1:3000 và insert không qua
+   hộp xác nhận. Giờ `requestGuard` (`server/index.js`) chặn mọi `/api/*`: `Host` phải là máy này (`127.0.0.1`, `localhost`,
+   `::1` hoặc `HOST`; chặn DNS rebinding), `Origin` (nếu có) phải là chính server, `Sec-Fetch-Site` (nếu có) phải là
+   `same-origin`/`none` ⇒ 403 `Từ chối yêu cầu từ trang web khác…`; POST phải `application/json` ⇒ 415. Áp cho cả
+   `GET /api/orgs…` (describe). curl không `Origin` và chính app vẫn chạy (`cancelRun` giờ gửi body `{}` JSON). Test
+   `cross-site requests are refused…`; smoke vẫn qua. Tài liệu: `org-connection.md` (mục "An toàn"), `architecture.md`,
+   `workflow-schema.md`.
+2. **Dừng trước khi có `runId` có thể báo "Chưa ghi bản ghi nào" sau khi một lô đã vào org.** Client chỉ hủy `fetch` khi
+   response chưa về; đã có response thì đặt `cancelOnStart` và gọi `cancelRun` ngay khi nhận `start`. Server nhường event loop
+   rồi xét lại signal ngay trước `plan`, và trước **mỗi** lời gọi `create`. Test `a Dừng that arrives while pass 1 runs
+   synchronously is seen before plan`; smoke 3b (response bị giữ 200 ms ⇒ Dừng gửi `POST /api/runs/<id>/cancel`).
+3. **Insert lần hai insert lại đúng các bản ghi cũ.** Xem quyết định 8 (đã sửa). Smoke 12: insert giả lập hai lần, lần hai tự
+   xem trước; seed 7 thì có cảnh báo.
+4. **`errorGroups` không giới hạn** (40 000 thông báo "duplicates value on record with id: 003…" thành 39 800 nhóm, dòng
+   `done` 7 MB). Khóa nhóm che Id 15/18 ký tự và giá trị trong ngoặc kép (`errorPattern`), giữ thông báo gốc đầu tiên làm ví
+   dụ; tối đa 100 nhóm, phần còn lại đếm trong `errorGroupsOther: { groups, count }` (đếm đủ). UI vẽ hàng "… và N nhóm lỗi
+   khác" và tối đa 200 dòng chi tiết. Test `error groups are bounded…` (dạng repro4: 1 nhóm, dòng `done` < 400 KB) và
+   `error groups: Ids and quoted values are masked…`.
+5. **Chế độ JSON bỏ qua việc client ngắt kết nối.** Mọi lần chạy (JSON lẫn NDJSON) giờ có `runId` và `res.on('close')` hủy nó.
+   Test `JSON mode stops when the client disconnects`.
+6. **Tải về sau khi insert trả 409** khi một Query đọc chính sObject vừa insert (cache bị xóa, org đã đổi). Server giữ dòng Query
+   của 10 lần chạy gần nhất theo `runId` (`result.runId`); `/api/export` có `runId` thì dùng đúng các dòng đó. Không có `runId`
+   (hoặc đã bị đẩy ra) thì vẫn đọc lại và báo 409 như trước. Test `export after an insert uses the Query rows that run used`.
+7. **Nhỏ:**
+   - `runId` hỏng (`%E0%A4%A`) ⇒ 404 thay vì 500.
+   - Kết thúc response **trước** khi chờ xóa cache Query (`identity` có thể chậm). Test chung với mục trên.
+   - `workflow-schema.md`: câu về `insert.ids` (chỉ Id của các dòng xem trước).
+   - Dừng sớm: `stopped.records` chỉ đếm bản ghi Salesforce từ chối, không đếm con bị bỏ qua (test); `org-connection.md` ghi
+     hành vi với sObject thưa (3 lô nhỏ đều lỗi vẫn dừng).
+   - `server/run.js` nhường event loop theo thời gian (50 ms) chứ không chỉ mỗi 1 000 bản ghi: `records({ ticks: true })`
+     yield `TICK` mỗi 5 000 lần thăm bước (không dùng rng, dữ liệu không đổi), nên workflow chạy nhiều bước mà không sinh bản
+     ghi vẫn dừng được nhanh. Test `generation without records still yields…`.
+   - Client: hết lần chạy mà focus đang ở Dừng thì chuyển sang Xem trước; `#results-summary` có `aria-live="polite"`; hàng
+     nhóm lỗi `role="button"`, Enter và Space (smoke 3b, 12).
+   - Test vàng thêm một ca (2 seed) có Lookup ngẫu nhiên vào alias Chọn bản ghi và field `copy` của Lookup; hash ghi bằng
+     executor **trước** 0004 (worktree ở commit `c4e5690`). Fuzz 6 000 workflow ngẫu nhiên của reviewer: 0 khác biệt.
+
+Tổng sau sửa: **224** test, đều qua (215 + 9). Smoke `SMOKE OK`, khoảng 10 giây (trần 12 giây).

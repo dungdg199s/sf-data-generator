@@ -83,6 +83,10 @@ Thứ tự slot được truyền vào qua tham số `slotKeys(type)`: server l�
 - **sf CLI chỉ dùng để lấy token.** Mọi lời gọi API (describe, insert, …) đi qua jsforce.
 - **Server bind `127.0.0.1` mặc định.** Server hành động bằng quyền của sf CLI trên máy,
   nên không được lộ ra mạng trừ khi đặt `HOST` một cách có chủ đích.
+- **Chỉ giao diện của chính app được gọi API.** `requestGuard` (`server/index.js`) từ chối mọi `/api/*` có `Origin` lạ,
+  `Sec-Fetch-Site` khác `same-origin`/`none` hoặc `Host` không phải máy này (403), và POST không phải
+  `application/json` (415): một trang web người dùng đang mở không thể insert vào org hay đọc describe qua server
+  (chi tiết: [org-connection.md](org-connection.md#an-toàn)).
 - **Seed và `now` để tái lập.** Cùng workflow, `seed`, `now` (và cùng dòng Query) ⇒ cùng dữ liệu. Insert luôn dùng `seed`
   và `now` của bản xem trước vừa xác nhận (tự xem trước nếu chưa có), nên dữ liệu insert giống hệt bản xem trước, kể cả
   field ngày tương đối như `today`.

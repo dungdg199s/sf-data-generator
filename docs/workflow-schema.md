@@ -302,17 +302,28 @@ Các sự kiện NDJSON:
 - `plan` (chỉ khi insert): tổng chính xác và số lời gọi API ước tính `Σ ceil(n_sObject / 200)`; sau đó là `progress`
   (`insert`) sau các lô, rồi `done`.
 - `done.result`: ở chế độ NDJSON, `records` chỉ có **200 bản ghi đầu mỗi sObject** (`stats.previewRows`;
-  `stats.truncated: true` nếu bị cắt) và `insert.ids` chỉ có Id của các bản ghi đó cùng alias được Lookup trỏ tới. Một lần
-  xem trước bị Dừng có `cancelled: true` và số đếm tới lúc dừng.
+  `stats.truncated: true` nếu bị cắt) và `insert.ids` chỉ có Id của **chính các bản ghi đó** (Id của alias được Lookup trỏ tới
+  chỉ được giữ trong lúc insert, không gửi về). `runId` của lần chạy dùng cho `/api/export` (bên dưới). Một lần xem trước bị
+  Dừng có `cancelled: true` và số đếm tới lúc dừng.
 - `error`: `issues` (có `nodeId`/`field`) cho lỗi sinh dữ liệu; `insert` là `null` nếu chưa ghi gì, còn không là tóm tắt đã
   insert tới lúc lỗi.
 - `insert.errors`: tối đa **1 000** lỗi đầu, mỗi lỗi `{ ref, sobject, nodeId, field?, message, parentRef? }` (`field` =
   `fields.<Name>` khi Salesforce chỉ đúng một field có trong bước; bản ghi con của bản ghi cha lỗi có `message: "Bỏ qua vì
   bản ghi cha lỗi."` và `parentRef`). `errorsTotal` đếm đủ. `errorGroups: [{ sobject, nodeId, field?, message, count,
-  refs }]` gom theo (sObject, bước, field, thông báo), `count` đủ, `refs` là 3 ref đầu.
+  refs }]` gom theo (sObject, bước, field, **mẫu** thông báo: Id 15/18 ký tự và giá trị trong ngoặc kép bị che, nên "duplicates
+  value on record with id: 003…" của 40 000 bản ghi là một nhóm; `message` là thông báo gốc đầu tiên làm ví dụ), `count` đủ,
+  `refs` là 3 ref đầu. Tối đa **100** nhóm; phần còn lại cộng trong `errorGroupsOther: { groups, count }` (`null` nếu không có),
+  nên dòng `done` luôn nhỏ.
 - `insert.cancelled`: dừng bằng tay (Dừng hoặc đóng kết nối) trước khi gửi hết; lô đang gửi luôn được chờ xong nên
   `inserted` chính xác. `insert.stopped: { reason: "allFailing", sobject, nodeId, message, batches, records }`: 3 lô đầu của
   một sObject lỗi 100 % nên app tự dừng. `notSent`: số bản ghi chưa gửi. Bản ghi đã insert **không** tự xóa.
+
+### Chặn yêu cầu từ trang web khác
+
+Mọi `/api/*` từ chối (403) yêu cầu có `Origin` khác địa chỉ của server, có `Sec-Fetch-Site` khác `same-origin`/`none`, hoặc
+có `Host` không phải máy này (`127.0.0.1`, `localhost`, `::1`, hoặc `HOST` đã đặt); mọi POST phải là `Content-Type:
+application/json` (không thì 415). curl và script không gửi `Origin` nên vẫn dùng được. Xem
+[org-connection.md](org-connection.md#an-toàn).
 
 ### `POST /api/runs/:runId/cancel`
 
@@ -321,8 +332,10 @@ Dừng lần chạy sau lô đang gửi. Trả `{ "ok": true }`; lần chạy đ
 
 ### `POST /api/export`
 
-Body `{ workflow, seed, now, format: "csv" | "json", sobject?, org?, expectQueries? }`. Server sinh lại lần chạy (cùng
-`seed`, `now`, và dòng Query qua cache như `/api/run`) và ghi thẳng ra response (`Content-Disposition: attachment`).
+Body `{ workflow, seed, now, format: "csv" | "json", sobject?, org?, expectQueries?, runId? }`. Server sinh lại lần chạy
+(cùng `seed`, `now`, và dòng Query qua cache như `/api/run`) và ghi thẳng ra response (`Content-Disposition: attachment`).
+Có `runId` của một lần chạy gần đây (10 lần chạy cuối có Query) thì dùng **đúng các dòng Query lần chạy đó đã dùng**, không
+đọc lại org: tải về sau khi insert ra đúng dữ liệu đã insert, kể cả khi Query đọc chính sObject vừa được insert.
 `csv`: một sObject (`sobject` bắt buộc, thiếu ⇒ 400 `Chọn sObject cần tải CSV.`), cột `ref` rồi field theo thứ tự trong
 workflow, `{ $ref }` ghi thành ref. `json`: mảng bản ghi, mỗi bản ghi một dòng. Thiếu `seed`/`now` ⇒ 400. Dữ liệu Query đã
 đổi (fingerprint khác `expectQueries`) ⇒ 409 `Dữ liệu đọc từ org đã đổi so với lần chạy này. Bấm Xem trước lại rồi tải.`
