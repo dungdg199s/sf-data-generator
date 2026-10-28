@@ -21,6 +21,9 @@ viết và cập nhật các file này theo skill `design-doc`; người viết 
 | [0008](0008-ui-design-system.md) | Chuẩn hoá bảng màu và phong cách UI (design system) | Đã làm |
 | [0009](0009-bo-cuc-man-hinh.md) | Bố cục màn hình: danh sách lỗi, thanh trên, bottom sheet, panel kết quả | Đã làm |
 | [0010](0010-lap-theo-ban-ghi.md) | Lặp theo từng bản ghi trong pool | Đã làm |
+| [0011](0011-thao-tac-du-lieu-org.md) | Thao tác dữ liệu org: Bulk API 2.0, lịch sử chạy, xóa dữ liệu đã insert | Đã duyệt |
+| [0012](0012-nang-suat-soan-thao.md) | Năng suất soạn thảo: thư viện workflow, chọn nhiều bước, copy/paste, sửa nhanh | Đã duyệt |
+| [0013](0013-mo-rong-bien-va-lap.md) | Mở rộng biến và lặp | Đã duyệt |
 
 ## Nguyên tắc tiện dụng
 
@@ -79,10 +82,19 @@ Các mục "Câu hỏi mở" / "Việc tiếp theo" / "Chưa làm" của 0001–
 | Kéo thẻ / vị trí tự do trên Sơ đồ | **Không làm** | Trái mô hình cây (bố cục tự tính). Đổi thứ tự bằng Alt+↑/↓, menu ⋯, hoặc kéo trong Quy trình (M) |
 | Sửa cấu hình ngay trong thẻ | **Không làm** | 0003 câu 3: chỉ sửa ở inspector, một nơi sửa cho cả hai chế độ |
 | Nhánh song song | **Không làm** | 0003, 0004: phá tính tất định theo seed |
-| Ước tính số bản ghi theo bước trước khi chạy | Chưa xếp lịch | 0003 |
-| Rê chuột lên chip Lookup thì tô thẻ cha | Chưa xếp lịch | 0003 |
-| Record: đổi sObject thì thay field `Name` bằng name field thật (Task → `Subject`) | Chưa xếp lịch | 0003; Query đã có (0006 quyết định 14), Record chưa |
-| Khung nhiều nhánh kiểu Switch (`slots` động) | Chưa xếp lịch | 0003 |
-| Trùng alias ở các nhánh loại trừ nhau | Chưa xếp lịch | 0003 |
-| Hàm trong template, biến cấp workflow (`{{run.seed}}`), đi xuyên Lookup, `{{acc.Id}}` thành Id thật lúc insert, nút "Biến" trên thẻ | Chưa xếp lịch | 0005 "Ý tưởng để sau" |
-| Bước Đặt biến, sub-workflow, Query phụ thuộc (chạy mỗi lượt) | Chưa xếp lịch | 0006 "Các node khác" |
+| Ước tính số bản ghi theo bước trước khi chạy | [0012](0012-nang-suat-soan-thao.md) | 0003 (phần H) |
+| Rê chuột lên chip Lookup thì tô thẻ cha | [0012](0012-nang-suat-soan-thao.md) | 0003 (phần I) |
+| Record: đổi sObject thì thay field `Name` bằng name field thật (Task → `Subject`) | [0012](0012-nang-suat-soan-thao.md) | 0003; lỗi thật, làm đầu tiên (phần G) |
+| Biến cấp workflow `{{run.seed}}`, `{{run.now}}`, `{{run.today}}` | [0013](0013-mo-rong-bien-va-lap.md) | 0005 "Ý tưởng để sau" |
+| Khung nhiều nhánh kiểu Switch (`slots` động) | **Hoãn** | 0003; 0013: cần đổi hợp đồng `slots` cố định theo loại bước |
+| Hàm trong template; bước Đặt biến | **Hoãn** | 0005, 0006; 0013: cần design riêng vì đổi ngữ pháp token |
+| `{{acc.Id}}` thành Id thật lúc insert | **Hoãn** | 0005; 0013: cần giữ Id qua cửa sổ insert, xem trước sẽ khác insert |
+| Option số của generator nhận biến; `count` của Record nhận biến | **Hoãn** | 0013: cần design riêng; bọc Record trong Lặp thay thế |
+| Option phạm vi pool (chỉ bản ghi của lượt hiện tại) | **Hoãn** | 0010, 0013 |
+| Chọn N bản ghi một lần | **Không làm** | 0013: Lặp `each` + xáo trộn + giới hạn N làm được việc này |
+| Đi xuyên Lookup (`{{con.AccountId.Name}}`) | **Không làm** | 0013: phá pool chỉ đếm số (0004) |
+| Query phụ thuộc (chạy mỗi lượt) | **Không làm** | 0013: phá mô hình đọc trước và xem trước == insert; dùng Lặp `each` có lọc |
+| Chạy tiếp lần đã dừng; Update/Upsert; gửi song song; nâng `maxRecordsHard` | **Không làm** (đợt này) | 0011: xóa rồi chạy lại; Update/Upsert cần design lưu giá trị cũ |
+| Trùng alias ở các nhánh loại trừ nhau | **Không làm** | 0003: làm phân tích phạm vi phức tạp; đặt hai tên khác nhau |
+| Sub-workflow | **Hoãn** | 0006: cần thư viện workflow (0012) trước |
+| Nút "Biến" trên thẻ | **Không làm** | 0005: đã có bộ chọn biến ở inspector và tô thẻ nguồn (0012 phần I) |
