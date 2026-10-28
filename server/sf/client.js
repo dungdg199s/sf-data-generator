@@ -51,12 +51,20 @@ export function createSfClient({ cli, createConnection = (options) => new Connec
      * has one SaveResult per record: { id, success, errors: [{ statusCode, message, fields }] }.
      * Callers send at most 200 records per call (see server/sf/insert.js).
      */
+    /** Cache identity of an org target (server/sf/query.js): instance URL + username from the sf CLI. */
+    identity: async (target) => {
+      const info = await cli.getConnection(target);
+      return `${info.instanceUrl}|${info.username ?? target}`;
+    },
     create: (target, sobject, records) => call(target, (conn) => conn.sobject(sobject).create(records, { allOrNone: false })),
     /**
      * Read-only SOQL (Query step, design 0006) through the REST `/query` endpoint: jsforce follows
      * nextRecordsUrl (queryMore) until `maxFetch` rows. Never `scanAll` (that would be queryAll,
      * which also returns deleted records). → { records, totalSize, done }.
-     * A query running longer than `timeoutMs` is reported as QUERY_TIMEOUT (status 504).
+     * A query running longer than `timeoutMs` rejects with errorCode QUERY_TIMEOUT; `call` wraps it
+     * like every Salesforce error (status 502, `cause`), and server/sf/query.js turns it into a 422
+     * issue on the Query step. The timeout does not abort jsforce: pages already requested may
+     * still arrive and are dropped.
      */
     query: (target, soql, { maxFetch, timeoutMs } = {}) => call(target, (conn) => withTimeout(
       Promise.resolve(conn.query(soql, { autoFetch: true, maxFetch })),

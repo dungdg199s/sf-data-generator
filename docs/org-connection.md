@@ -60,13 +60,21 @@ Bước Query ([0006](design/0006-query-pick-nodes.md)) đọc bản ghi có s�
 
 - **Chỉ đọc.** `client.query(org, soql, { maxFetch, timeoutMs })` gọi `conn.query(soql, { autoFetch: true, maxFetch })` của
   jsforce: endpoint REST `/query`, tự theo `nextRecordsUrl` (queryMore) tới `maxFetch` dòng (LIMIT của builder, tối đa 2 000).
-  Không bao giờ đặt `scanAll` (sẽ thành `queryAll`, trả cả bản ghi đã xóa). SOQL tự viết phải bắt đầu bằng `SELECT`, không có
-  `FOR UPDATE / VIEW / REFERENCE`, không có `{{…}}` (kiểm tra ở `shared/soql.js` khi validate). Tối đa 20 bước Query, mỗi
-  query 30 giây (`LIMITS` trong `server/workflow/nodes.js`).
+  Không bao giờ đặt `scanAll` (sẽ thành `queryAll`, trả cả bản ghi đã xóa). SOQL tự viết phải bắt đầu bằng `SELECT`; ở **bất
+  kỳ đâu** ngoài chuỗi ký tự (kể cả trong ngoặc và subquery), cả ở SOQL tự viết lẫn ô WHERE / ORDER BY của builder, không được
+  có `FOR UPDATE / VIEW / REFERENCE`, không có từ `UPDATE` (`UPDATE VIEWSTAT`, `UPDATE TRACKING` ghi số liệu vào org), không có
+  dấu `;`, không có `{{…}}`; ô WHERE / ORDER BY phải đủ cặp ngoặc (kiểm tra ở `shared/soql.js` khi validate, và kiểm lại
+  ngay trước khi gọi Salesforce). `LIMIT 0` không gọi Salesforce. Tối đa 20 bước Query, mỗi query 30 giây, cả lần đọc trước
+  tối đa 120 giây (`queryTotalMs`; quá thì dừng với lỗi gắn bước Query kế tiếp, chưa ghi gì) — `LIMITS` trong
+  `server/workflow/nodes.js`. Timeout không hủy được jsforce: trang đang tải có thể vẫn về và bị bỏ.
+- **Tên field không phân biệt hoa thường** (như Salesforce): các dòng được đổi khóa theo cách viết trong SELECT
+  (`SELECT id, name` → `{ id, name }`), và tham chiếu tới bản ghi đọc từ org (`{{acc.Name}}`, ô lọc của Chọn bản ghi) bỏ qua
+  hoa thường.
 - **Org nào.** Xem trước: org đang chọn ở thanh trên (`org` trong request), không chọn thì 5 dòng mẫu (không gọi Salesforce).
   Insert: luôn đọc `target.org`, không bao giờ dùng dòng mẫu. Các query chạy tuần tự theo thứ tự đọc, bỏ bước đang tắt.
-- **Cache.** Trong bộ nhớ, khóa `(org, SOQL, maxFetch)`, TTL 10 phút (`queryCacheTtlMs`), tối đa 50 mục. Xem trước rồi insert
-  ngay dùng **cùng** các dòng. "⟳ Đọc lại" (Ctrl+Shift+Enter) gửi `refreshQueries: true` để bỏ qua cache. Insert vào một org
+- **Cache.** Trong bộ nhớ, khóa `(org, SOQL, maxFetch)` với org là **instance URL + username** lấy từ sf CLI (hai alias của
+  cùng org dùng chung, alias trỏ sang org khác thì không dùng lại), TTL 10 phút (`queryCacheTtlMs`), tối đa 50 mục. Xem trước rồi insert
+  ngay dùng **cùng** các dòng (nên trong 10 phút insert không phát hiện được thay đổi trong org; hộp xác nhận nói rõ điều này). "⟳ Đọc lại" (Ctrl+Shift+Enter) gửi `refreshQueries: true` để bỏ qua cache. Insert vào một org
   xóa cache của org đó, để lần xem trước sau thấy cả bản ghi vừa tạo.
 - **Dấu vân tay.** Mỗi kết quả có `fingerprint` (8 ký tự đầu của SHA-1 các dòng đã bỏ `attributes`, `node:crypto`). Khi insert
   "giống lần xem trước" (cùng workflow, seed và org) UI gửi `expectQueries`; nếu server đọc lại (cache hết hạn, server khởi động

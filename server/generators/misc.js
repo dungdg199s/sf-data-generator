@@ -58,8 +58,13 @@ export const copy = {
       help: 'Bấm {x} để chọn, ví dụ pbe.UnitPrice. Giữ nguyên kiểu số / đúng-sai (Template luôn ra chuỗi).',
     }),
   ],
-  generate(o, { scope, record, n }) {
+  generate(o, { scope, record, n, fieldName }) {
     const v = resolvePath(o.path, scope, record, { n });
+    // A Lookup value ({ $ref }) is copied as a Lookup; any other object (a relationship of a Query
+    // row, a geolocation) is not one value Salesforce accepts.
+    if (v && typeof v === 'object' && typeof v.$ref !== 'string') {
+      throw new Error(`Field ${fieldName}: biến "${o.path}" là cả một đối tượng, không phải một giá trị. Chọn một field con, ví dụ ${o.path}.Name.`);
+    }
     return v === undefined ? null : v;
   },
 };

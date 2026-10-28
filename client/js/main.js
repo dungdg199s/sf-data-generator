@@ -440,7 +440,9 @@ function confirmInsert(org, previewed, seed) {
       read.length
         ? h('p', {}, `Đọc từ org, không ghi: ${read.map((q) => `${q.sobject} ${q.count} (${q.alias}, đọc lúc ${hhmm(q.fetchedAt)})`).join(', ')}.`)
         : null,
-      read.length ? h('p', { class: 'hint' }, 'Nếu dữ liệu đọc được đã đổi so với lần xem trước, app sẽ dừng trước khi ghi và yêu cầu xem trước lại.') : null,
+      // Within the 10-minute cache the insert reuses the previewed rows as they were; only a re-read
+      // (cache expired, server restarted) can notice that the org changed.
+      read.length ? h('p', { class: 'hint query-reuse' }, 'Insert dùng lại đúng các dòng đã đọc lúc xem trước. Nếu đã quá 10 phút (hoặc server vừa khởi động lại), app đọc lại org và dừng trước khi ghi nếu dữ liệu đã đổi. Muốn insert theo dữ liệu mới nhất, bấm ⟳ Đọc lại rồi Insert.') : null,
       !stats && hasQueries() ? h('p', { class: 'hint' }, `Bước Query sẽ đọc org "${state.org}" ngay trước khi insert.`) : null,
       h('div', { class: 'actions' }, h('button', { onclick: () => done(false) }, 'Hủy'), h('button', { class: 'danger solid', onclick: () => done(true) }, 'Insert')),
     ].filter(Boolean));

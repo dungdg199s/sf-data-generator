@@ -168,12 +168,13 @@ chỉ thấy các field ở phía trên.
 | `<alias>.Field` | Field của bản ghi hiện tại của bước record có alias đó. Field kiểu Geolocation có member con: `<alias>.Loc.latitude` |
 | `<alias>.$n` | `n` của bản ghi hiện tại của alias đó |
 | `<pool>.$count` | Số bản ghi của pool (Query: số dòng đọc được) |
-| `<pick>.Field` | Field của bản ghi bước Chọn bản ghi vừa chọn; field quan hệ của Query lồng được: `acc.Owner.Name` |
+| `<pick>.Field` | Field của bản ghi bước Chọn bản ghi vừa chọn; field quan hệ của Query lồng được: `acc.Owner.Name`. Với bản ghi đọc từ org, tên field **không phân biệt hoa thường** (như Salesforce) |
 | `<loopAlias>.index` / `.index0` / `.count` | Biến lặp (từ 1 / từ 0 / tổng số lần) |
 
 Template dùng `{{path}}` (regex `\{\{\s*([\w.$]+)\s*\}\}`, khai báo một lần ở `shared/scope.js` và gửi qua
 `meta.syntax.templateToken`). Field và biến lặp so khớp **có phân biệt hoa thường**, giống lúc chạy.
-Alias của Record, Query và Chọn bản ghi dùng **chung một không gian tên**: duy nhất trên **cả cây** (kể cả bước đang tắt),
+Alias của Record, Query và Chọn bản ghi (mọi loại bước có `exposes` là bản ghi đặt tên bằng `alias`; server, `shared/` và
+UI đều đọc danh sách này từ danh mục) dùng **chung một không gian tên**: duy nhất trên **cả cây** (kể cả bước đang tắt),
 không trùng tên biến lặp và không được là `this`. Query và Chọn bản ghi bắt buộc có alias (Record thiếu alias thì dùng `id`).
 Alias của Query là pool nên không có bản ghi hiện tại: chỉ dùng được trong Lookup "Ngẫu nhiên trong pool", `from` của Chọn
 bản ghi và `{{accs.$count}}`; `{{accs.Name}}` là lỗi `noCurrent`.

@@ -40,6 +40,9 @@ function makeReference(type, label, nullable) {
       if (!o.ref) throw new Error(`Field ${fieldName}: chưa chọn bản ghi cha.`);
       const pool = o.mode === 'random' ? scope.all[o.ref] : scope.current[o.ref] && [scope.current[o.ref]];
       if (!pool || !pool.length) {
+        if (!nullable && pool?.queryAlias) {
+          throw new Error(`Field ${fieldName}: Query "${pool.queryAlias}" không trả về bản ghi nào. Kiểm tra "Điều kiện (WHERE)" của bước Query hoặc chọn org khác.`);
+        }
         if (!nullable) {
           throw new Error(`Field ${fieldName}: chưa có bản ghi nào của "${o.ref}" khi chạy tới đây. Hãy đặt bước "${o.ref}" phía trên bước này.`);
         }

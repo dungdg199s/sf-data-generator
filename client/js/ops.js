@@ -75,7 +75,7 @@ export function newStep(type, target, around = []) {
   if (type === 'loop') {
     // Do not shadow the variable of an enclosing loop: loop, loop2, loop3…
     // …nor a loop inside the steps it wraps, nor a record alias.
-    const taken = new Set([...enclosingLoopVars(target), ...loopVarsIn(around), ...collectAliases(state.workflow)]);
+    const taken = new Set([...enclosingLoopVars(target), ...loopVarsIn(around), ...collectAliases(state.workflow, state.meta)]);
     const base = step.config.alias || 'loop';
     let name = base;
     for (let i = 2; taken.has(name); i++) name = `${base}${i}`;
@@ -207,7 +207,7 @@ export function duplicateStep(id = selectedId()) {
   if (!at) return;
   let copyId = null;
   updateWorkflow((wf) => {
-    const { steps: [copy] } = cloneSteps([at.step], { ids: collectIds(wf), aliases: collectAliases(wf), catalog: state.meta });
+    const { steps: [copy] } = cloneSteps([at.step], { ids: collectIds(wf), aliases: collectAliases(wf, state.meta), catalog: state.meta });
     copyId = copy.id;
     insertStep(wf, { parentId: at.parentId, slot: at.slot, index: at.index + 1 }, copy);
   });

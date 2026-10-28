@@ -86,6 +86,7 @@ Thứ tự slot được truyền vào qua tham số `slotKeys(type)`: server l�
 | `maxQueryRows` | 2 000 | LIMIT tối đa và `maxFetch` của một bước Query |
 | `maxQueryNodes` | 20 | Số bước Query tối đa mỗi workflow |
 | `queryTimeoutMs` | 30 000 | Thời gian tối đa của một query |
+| `queryTotalMs` | 120 000 | Thời gian tối đa của cả lần đọc trước (mọi bước Query), dưới mọi timeout HTTP |
 | `queryCacheTtlMs` | 600 000 | Thời gian dùng lại dòng đã đọc (10 phút); cache tối đa 50 mục |
 
 Migration v1 cũng giới hạn số bước nhân bản (`2 × số node + 50`) để workflow hiểm hóc không làm treo trình duyệt.

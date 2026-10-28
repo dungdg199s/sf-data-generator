@@ -286,3 +286,60 @@ test('mapQueryFields lists every field: Id, the name field, then by label', () =
   assert.deepEqual(r.fields.map((f) => f.name), ['Id', 'Name', 'CreatedDate', 'OwnerId']);
   assert.deepEqual(r.fields[3], { name: 'OwnerId', label: 'Owner ID', type: 'reference', referenceTo: ['User'], relationshipName: 'Owner', filterable: true, sortable: true });
 });
+
+// ---------- review fixes (0006 "Sửa sau review") ----------
+
+test('prefetch re-keys rows to the SELECT spelling and never asks jsforce for LIMIT 0', async () => {
+  const client = fakeQueryClient(() => ({ records: [{ attributes: {}, Id: '001', Name: 'Acme', Owner: { attributes: {}, Name: 'Lan' } }], totalSize: 1, done: true }));
+  const pre = await prefetchQueries({ client, org: 'dev', workflow: wf([query('q', 'accs', { mode: 'soql', soql: 'SELECT id, name, owner.name FROM Account ORDER BY Id' })]) });
+  assert.deepEqual(pre.results.q.records[0], { id: '001', name: 'Acme', owner: { name: 'Lan' } });
+  const zero = await prefetchQueries({ client, org: 'dev', workflow: wf([query('z', 'none', { mode: 'soql', soql: 'SELECT Id FROM Account ORDER BY Id LIMIT 0' })]) });
+  assert.equal(client.calls.length, 1, 'no call for LIMIT 0');
+  assert.deepEqual(zero.results.z.records, []);
+});
+
+test('prefetch refuses unsafe SOQL even when validation was skipped', async () => {
+  const client = fakeQueryClient(() => assert.fail('must not query'));
+  for (const config of [{ mode: 'soql', soql: 'SELECT Id FROM Account UPDATE VIEWSTAT' }, { where: "Name = 'x' UPDATE TRACKING" }]) {
+    await assert.rejects(prefetchQueries({ client, org: 'dev', workflow: wf([query('q', 'accs', config)]) }), (e) => e instanceof WorkflowError && e.issues[0].code === 'update');
+  }
+});
+
+test('prefetch stops with an issue once the total time budget is used up', async () => {
+  let t = 0;
+  const clock = () => new Date(t);
+  const client = fakeQueryClient(() => { t += 70000; return { records: accRows(1), totalSize: 1, done: true }; });
+  const w = wf([query('a', 'as'), query('b', 'bs', { sobject: 'Contact' }), query('c', 'cs', { sobject: 'Lead' })]);
+  await assert.rejects(prefetchQueries({ client, org: 'dev', workflow: w, clock, budgetMs: 120000 }), (e) => e instanceof WorkflowError
+    && e.issues[0].nodeId === 'c'
+    && e.issues[0].message === 'Các bước Query đọc org quá 120 giây nên đã dừng ở bước Query "cs" (chưa ghi gì vào org). Bớt bước Query, thu hẹp "Điều kiện (WHERE)" hoặc giảm LIMIT rồi chạy lại.');
+  assert.equal(client.calls.length, 2);
+  assert.equal(client.calls[1][2].timeoutMs, 30000);
+  // The last query only gets what is left of the budget.
+  t = 0;
+  const calls = [];
+  const slow = { async query(_o, _s, opts) { calls.push(opts.timeoutMs); t += 100000; return { records: [], totalSize: 0, done: true }; } };
+  await prefetchQueries({ client: slow, org: 'dev', workflow: wf([query('a', 'as'), query('b', 'bs', { sobject: 'Contact' })]), clock, budgetMs: 120000 }).catch(() => {});
+  assert.deepEqual(calls, [30000, 20000]);
+});
+
+test('the query cache is keyed by org identity (instance URL + username), not the alias', async () => {
+  const cache = createQueryCache();
+  const who = { dev: 'https://a|u@x', dev2: 'https://a|u@x', other: 'https://b|v@y' };
+  const client = fakeQueryClient(() => ({ records: accRows(1), totalSize: 1, done: true }));
+  client.identity = async (org) => who[org];
+  const w = wf([query('q', 'accs')]);
+  await prefetchQueries({ client, org: 'dev', workflow: w, cache });
+  const again = await prefetchQueries({ client, org: 'dev2', workflow: w, cache });
+  assert.equal(client.calls.length, 1, 'two aliases of one org share the rows');
+  assert.equal(again.queries[0].org, 'dev2');
+  who.dev = 'https://b|v@y'; // alias re-pointed to another org
+  await prefetchQueries({ client, org: 'dev', workflow: w, cache });
+  assert.equal(client.calls.length, 2);
+  cache.invalidateOrg('https://a|u@x');
+  await prefetchQueries({ client, org: 'dev2', workflow: w, cache });
+  assert.equal(client.calls.length, 3);
+  // The real client's identity comes from the sf CLI.
+  const real = createSfClient({ cli: { getConnection: async () => ({ instanceUrl: 'https://x', username: 'me@x', accessToken: 't' }) }, createConnection: fakeJsforce().createConnection });
+  assert.equal(await real.identity('dev'), 'https://x|me@x');
+});

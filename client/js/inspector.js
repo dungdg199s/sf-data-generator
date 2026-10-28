@@ -335,7 +335,7 @@ function onStepOption(step, key, v, form, meta) {
       const auto = !c.alias || c.alias === suggestPickAlias(c.from, step.id);
       c.from = v;
       if (auto && v) follow(suggestPickAlias(v, step.id));
-    } else if (key === 'alias' && ['record', 'loop', 'query', 'pick'].includes(step.type)) {
+    } else if (key === nodeType(step.type)?.exposes?.name?.key) {
       // References follow only to a valid, free name (a loop variable: inside its body only);
       // while the field is empty or matches another alias mid-typing, they stay put.
       setStepAlias(wf, step.id, v, { memo: aliasMemo, slotKeys, catalog: state.meta, scope: currentScope() });

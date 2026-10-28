@@ -9,6 +9,7 @@
 // Which references are valid where is decided by shared/scope.js (analyzeScope) at validation time.
 
 import { TEMPLATE_TOKEN_SOURCE, stripPath } from '../../shared/scope.js';
+import { keyOf } from '../../shared/soql.js';
 
 /** Source of the template token regex `{{path}}` (single declaration in shared/scope.js). */
 export const TEMPLATE_TOKEN = TEMPLATE_TOKEN_SOURCE;
@@ -29,18 +30,23 @@ export function resolvePath(path, scope, record, self = {}) {
   else if (scope.current && head in scope.current) {
     const rec = scope.current[head];
     if (rest[0] === '$n') return rec?.ref ? refNumber(rec.ref) : undefined;
+    // A row read from the org: Salesforce field names ignore case (SELECT name … {{acc.Name}}).
+    if (rec?.existing) return getPath(rec.fields, rest, { ignoreCase: true });
     base = rec?.fields;
   } else if (rest[0] === '$count' && scope.all && head in scope.all) return scope.all[head].length;
   else return undefined;
   return getPath(base, rest);
 }
 
-/** `obj` followed along `keys` (an array, or a dotted path such as `Account.Type`). */
-export function getPath(obj, keys) {
+/**
+ * `obj` followed along `keys` (an array, or a dotted path such as `Account.Type`).
+ * `ignoreCase`: keys match whatever their case (rows read from the org).
+ */
+export function getPath(obj, keys, { ignoreCase = false } = {}) {
   let v = obj;
   for (const key of Array.isArray(keys) ? keys : String(keys ?? '').split('.').filter(Boolean)) {
     if (v === null || v === undefined) return undefined;
-    v = v[key];
+    v = v[ignoreCase ? keyOf(v, key) : key];
   }
   return v;
 }

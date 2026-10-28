@@ -87,7 +87,8 @@ export function createApp({ cli = createSfCli(), client, queryCache = createQuer
         };
         if (insert) {
           response.insert = await insertRecords(sfClient, body.target.org, result.records);
-          queryCache.invalidateOrg(body.target.org); // the next preview sees the records just created
+          // The next preview sees the records just created.
+          queryCache.invalidateOrg(sfClient.identity ? await sfClient.identity(body.target.org).catch(() => body.target.org) : body.target.org);
         }
         return response;
       },

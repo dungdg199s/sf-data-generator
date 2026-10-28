@@ -30,7 +30,7 @@ import { evaluateCondition, compareValues } from './conditions.js';
 import { getPath, renderTemplate } from './paths.js';
 import { prepareWorkflow, WorkflowError } from './schema.js';
 import { LIMITS } from './nodes.js';
-import { soqlSobject } from '../../shared/soql.js';
+import { soqlSobject, keyOf } from '../../shared/soql.js';
 
 /** Returned by runSteps when a Chọn bản ghi step skipped the rest of the current run. */
 const SKIP = Symbol('skip');
@@ -103,8 +103,10 @@ export function runWorkflow(input, opts = {}) {
     const c = step.config ?? {};
     const sobject = qr.sobject || soqlSobject(c);
     pool = (qr.records ?? []).map((row, i) => ({
-      ref: `${c.alias}#${i + 1}`, sobject, alias: c.alias, nodeId: step.id, id: row?.Id ?? null, existing: true, fields: row ?? {},
+      ref: `${c.alias}#${i + 1}`, sobject, alias: c.alias, nodeId: step.id, id: row?.[keyOf(row, 'Id')] ?? null, existing: true, fields: row ?? {},
     }));
+    // Lets a Lookup into an empty pool say that the Query found nothing (generators/reference.js).
+    Object.defineProperty(pool, 'queryAlias', { value: c.alias });
     queryPools.set(step.id, pool);
     return pool;
   }
@@ -127,7 +129,7 @@ export function runWorkflow(input, opts = {}) {
       if (!cands) {
         const op = c.filterOp ?? 'eq';
         cands = pool.filter((r) => {
-          const v = getPath(r.fields, c.filterField);
+          const v = getPath(r.fields, c.filterField, { ignoreCase: Boolean(r.existing) });
           return compareValues(v && typeof v === 'object' && v.$ref ? v.$ref : v, op, key);
         });
         if (st.cache.size >= PICK_FILTER_CACHE) st.cache.clear();

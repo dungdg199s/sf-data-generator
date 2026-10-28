@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   walkSteps, findStep, insertStep, removeStep, moveStep, wrapStep, cloneSteps, renameAlias, setStepAlias, isAliasName, malformedSteps,
-  defaultInsertTarget, neighbourTarget, allSteps, collectAliases, collectIds, renameField,
+  defaultInsertTarget, neighbourTarget, allSteps, collectAliases, collectIds, renameField, aliasTypes,
 } from '../shared/workflow-tree.js';
 import { scopeCatalog } from '../server/workflow/schema.js';
 
@@ -267,7 +267,7 @@ test('Query / Chọn bản ghi aliases (0006): one namespace with records; renam
   const p = { id: 'p', type: 'pick', config: { from: 'accs', alias: 'acc', filter: 'compare', filterField: 'Id', filterValue: '{{acc0.Id}}' } };
   const c = r('c', 'con', [{ name: 'AccountId', type: 'lookup', options: { mode: 'random', ref: 'accs' } }, { name: 'T', type: 'template', options: { template: '{{acc.Name}} {{accs.$count}}' } }]);
   const wf = tree([{ id: 'q0', type: 'query', config: { alias: 'acc0s' } }, { id: 'p0', type: 'pick', config: { from: 'acc0s', alias: 'acc0' } }, q, p, c]);
-  assert.deepEqual([...collectAliases(wf)].sort(), ['acc', 'acc0', 'acc0s', 'accs', 'con']);
+  assert.deepEqual([...collectAliases(wf, catalog)].sort(), ['acc', 'acc0', 'acc0s', 'accs', 'con']);
   assert.equal(setStepAlias(wf, 'q', 'accounts', { catalog }), true);
   assert.equal(p.config.from, 'accounts');
   assert.equal(c.config.fields[0].options.ref, 'accounts');
@@ -279,6 +279,19 @@ test('Query / Chọn bản ghi aliases (0006): one namespace with records; renam
   assert.equal(c.config.fields[1].options.template, '{{acc.Name}} {{accounts.$count}}');
   setStepAlias(wf, 'p', 'acc', { catalog }); // back to the free name (the field is mid-typing)
   // Ctrl+D on a Query + Chọn bản ghi pair: both get new aliases, the copy's `from` follows.
-  const { steps: [q2, p2] } = cloneSteps([q, p], { ids: collectIds(wf), aliases: collectAliases(wf), catalog });
+  const { steps: [q2, p2] } = cloneSteps([q, p], { ids: collectIds(wf), aliases: collectAliases(wf, catalog), catalog });
   assert.deepEqual([q2.config.alias, p2.config.alias, p2.config.from], ['accounts2', 'acc2', 'accounts2']);
+});
+
+test('alias types come from the catalogue exposes, not a hard-coded list (0006 review)', () => {
+  assert.deepEqual([...aliasTypes(scopeCatalog())].sort(), ['pick', 'query', 'record']);
+  // A future step type exposing a record named by `alias` joins the namespace without code changes.
+  const extra = { type: 'lookupRow', slots: [], exposes: { kind: 'record', name: { key: 'alias' } }, options: [] };
+  const catalog = { nodeTypes: [...scopeCatalog().nodeTypes, extra], fieldTypes: scopeCatalog().fieldTypes };
+  const wf = tree([r('a', 'acc'), { id: 'x', type: 'lookupRow', config: { alias: 'row' } }, loop('l', [], { alias: 'i' })]);
+  assert.deepEqual([...collectAliases(wf, catalog)].sort(), ['acc', 'row']);
+  assert.deepEqual([...collectAliases(wf)], ['acc'], 'without a catalogue (v1 migration): records only');
+  assert.equal(setStepAlias(wf, 'a', 'row', { catalog }), false, 'another type\'s alias is taken');
+  const { steps: [copy] } = cloneSteps([findStep(wf, 'x').step], { aliases: collectAliases(wf, catalog), catalog });
+  assert.equal(copy.config.alias, 'row2');
 });

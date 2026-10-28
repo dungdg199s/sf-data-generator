@@ -43,11 +43,14 @@ export function stepSummary(step) {
   }
 }
 
-/** The name shown next to the type label: record / pool alias or loop variable. */
+/**
+ * The name shown next to the type label: the name the step exposes (`exposes.name` of the
+ * catalogue — record / pool alias, loop variable with its default); a Record without alias shows none.
+ */
 export function stepAlias(step) {
-  if (step.type === 'record' || step.type === 'query' || step.type === 'pick') return step.config?.alias || '';
-  if (step.type === 'loop') return step.config?.alias || 'loop';
-  return '';
+  const name = nodeType(step?.type)?.exposes?.name;
+  if (!name?.key) return '';
+  return step.config?.[name.key] || name.default || '';
 }
 
 /** "Record "acc"", "Lặp "i"", "Rẽ nhánh" — for toasts and dialogs. */

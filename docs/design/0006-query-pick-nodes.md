@@ -993,7 +993,43 @@ pre-fetch không org, đọc tuần tự + cảnh báo 0 dòng / bị cắt, án
 `derived`, meta 0006); `test/scope.test.js` và `test/workflow-tree.test.js` (danh mục thật, đổi tên kéo theo `from`/`filterValue`,
 nhân bản). Hai test cũ **được sửa có chủ đích**: phép kiểm meta trong `test/server.test.js` (danh sách bước thêm `query`, `pick`;
 nhãn `ref` mới), và `test/samples.test.js` (có mẫu thứ ba không có bản v1; thêm test mẫu đó xem trước được không cần org).
-Tổng 173 test, đều qua. Smoke test thêm luồng 5c: `SMOKE OK` (~8,5 giây, dưới trần 10 giây).
+Tổng 173 test, đều qua (184 sau phần sửa sau review). Smoke test thêm luồng 5c: `SMOKE OK` (~8,5 giây, dưới trần 10 giây).
+
+**Sửa sau review** (commit sau `832b368`; mỗi mục có test):
+
+1. **(chặn) Kiểm tra chỉ đọc bị lọt `UPDATE VIEWSTAT` / `UPDATE TRACKING`** (ghi số liệu vào org ngay khi xem trước). Giờ trên
+   văn bản đã xóa chuỗi ký tự, ở bất kỳ đâu (cả trong ngoặc, subquery), ở cả SOQL tự viết lẫn ô WHERE / ORDER BY: từ
+   `UPDATE` → lỗi `update` (`Bỏ UPDATE (UPDATE VIEWSTAT / UPDATE TRACKING): lệnh này ghi số liệu vào org. Bước Query chỉ đọc dữ
+   liệu.`), `FOR UPDATE|VIEW|REFERENCE` → `forClause`, `;` → `semicolon` (`Bỏ dấu ";": mỗi bước Query chỉ chạy đúng một câu
+   SELECT.`), ngoặc không khớp trong ô builder → `parens` (chặn kiểu `Id) FROM Lead`). `prefetchQueries` kiểm lại ngay trước khi
+   gọi Salesforce (phòng khi validate bị bỏ qua). Test `read-only check: …`, `prefetch refuses unsafe SOQL…`.
+2. **Tên field phân biệt hoa thường**, trong khi SOQL thì không: dòng đọc về được đổi khóa theo cách viết trong SELECT
+   (`rekeyRow`, cả field quan hệ; `sampleRows` cũng vậy); `analyzeScope` so member của nguồn `origin: 'org'` không phân biệt
+   hoa thường; lúc chạy, tham chiếu vào bản ghi `existing` (template, ô lọc `filterField`) và Id của dòng cũng vậy. Bản ghi
+   sinh ra vẫn phân biệt. Test `Query field names ignore case…`, `rekeyRow and sampleRows…`, `prefetch re-keys rows…`.
+3. **"Lấy từ biến" cho lọt object quan hệ:** biến `vars: 'path'` trỏ vào member có field con là lỗi `wholeRecord`
+   (`pbe.Product2 là cả một đối tượng (Name), không phải một giá trị; hãy chọn một field con, ví dụ pbe.Product2.Name.`);
+   `copy.generate` báo lỗi với object không phải `{ $ref }`; câu `unknownMember` của Query ngoài template nói `Biến … cần
+   field … nhưng Query "…" không lấy field này.` thay cho "Template dùng…". Test `"Lấy từ biến" refuses an object…`.
+4. **Master-Detail vào pool Query rỗng** báo câu sai chỗ ("đặt bước … phía trên"). Giờ: `Field AccountId: Query "accs" không
+   trả về bản ghi nào. Kiểm tra "Điều kiện (WHERE)" của bước Query hoặc chọn org khác.` (pool Query mang tên Query). Test.
+5. **`LIMIT 0`:** `maxFetchFor` trả 0 và pre-fetch không gọi jsforce (jsforce hiểu `maxFetch: 0` là mặc định 10 000). Test.
+6. **Chú thích `client.js`** sửa lại: timeout là `QUERY_TIMEOUT` bọc thành 502 rồi `query.js` đổi thành issue 422; timeout không
+   hủy được jsforce (trang đang tải vẫn có thể về và bị bỏ).
+7. **Tổng thời gian đọc trước:** `LIMITS.queryTotalMs` = 120 000. Mỗi query chỉ được phần thời gian còn lại; hết thì dừng với
+   lỗi gắn bước Query kế tiếp: `Các bước Query đọc org quá 120 giây nên đã dừng ở bước Query "cs" (chưa ghi gì vào org). Bớt
+   bước Query, thu hẹp "Điều kiện (WHERE)" hoặc giảm LIMIT rồi chạy lại.` (20 × 30 giây không còn vượt timeout HTTP). Test.
+8. **Hộp xác nhận hứa quá:** trong 10 phút cache, insert dùng lại đúng các dòng đã xem nên không thấy org đổi. Câu mới: `Insert
+   dùng lại đúng các dòng đã đọc lúc xem trước. Nếu đã quá 10 phút (hoặc server vừa khởi động lại), app đọc lại org và dừng
+   trước khi ghi nếu dữ liệu đã đổi. Muốn insert theo dữ liệu mới nhất, bấm ⟳ Đọc lại rồi Insert.` Bước smoke mới (bản xem
+   trước giả lập đã đọc org) kiểm câu này và việc không còn chữ `null`.
+9. **Khóa cache theo org thật:** `client.identity(org)` = instance URL + username từ sf CLI; hai alias của cùng org dùng chung,
+   alias trỏ sang org khác không dùng lại; xóa cache sau insert theo cùng khóa. Test.
+10. **Danh sách loại bước có alias lấy từ danh mục:** `aliasTypes(catalog)` trong `shared/workflow-tree.js` (loại có `exposes`
+    là bản ghi đặt tên bằng `alias`; không có danh mục — migration v1 — thì chỉ `record`) thay `ALIAS_TYPES`; `stepAlias`
+    (`summary.js`) đọc `exposes.name`; inspector so `key` với `exposes.name.key`. Test `alias types come from the catalogue…`.
+
+Smoke test: trần thời gian nâng từ 10 lên 12 giây (thường ~8 giây, có lần 9,6 giây trên máy bận; 10 giây không còn dư).
 
 **Chưa làm / để sau:**
 

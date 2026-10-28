@@ -29,6 +29,7 @@ export const LIMITS = {
   maxQueryRows: 2000,
   maxQueryNodes: 20,
   queryTimeoutMs: 30000,
+  queryTotalMs: 120000, // all Query steps of one run together, well under the HTTP timeouts
   queryCacheTtlMs: 600000,
 };
 

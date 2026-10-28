@@ -447,6 +447,29 @@ const V1_ORPHAN = {
     if (outDir) await d.screenshot({ path: path.join(outDir, 'smoke-1440-dark-insert.png') });
     await d.click('dialog[open] .actions button:has-text("Hủy")');
     check(!(await d.$('dialog[open]')), '"Hủy" did not close the Insert confirmation');
+    // The confirmation for a workflow whose preview read the org (canned preview: the mocked org does not exist).
+    await d.route('**/api/run', (r) => {
+      const body = r.request().postDataJSON();
+      if (body?.target) { insertSent = true; return r.abort(); }
+      return r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+        seed: 1, warnings: [], records: [], samples: {},
+        stats: { total: 0, bySobject: { Contact: 0 }, byStep: {}, durationMs: 1 },
+        queries: [{ nodeId: 'accs', alias: 'accs', sobject: 'Account', soql: 'SELECT Id FROM Account', org: 'prod', source: 'org', fetchedAt: new Date().toISOString(), count: 2, totalSize: 2, truncated: false, fingerprint: 'abcd1234', fields: ['Id'], records: [{ Id: '001A' }, { Id: '001B' }] }],
+      }) });
+    });
+    d.on('dialog', (x) => x.accept());
+    await d.click('#sample-items .palette-item:has-text("Contact cho Account có sẵn")');
+    await d.waitForSelector('.step-card[data-id="accs"]');
+    await d.fill('#seed', '1');
+    await d.keyboard.press('Control+Enter');
+    await d.waitForSelector('.tabs .tab-query');
+    await d.click('#btn-insert');
+    await d.waitForSelector('dialog[open]');
+    const confirmText = await d.textContent('dialog[open]');
+    check(/Đọc từ org, không ghi: Account 2 \(accs, đọc lúc/.test(confirmText), `confirmation does not list the rows read (${confirmText})`);
+    check(/quá 10 phút/.test(confirmText) && /⟳ Đọc lại/.test(confirmText), 'confirmation over-promises change detection');
+    check(!/null/.test(confirmText), 'confirmation prints "null"');
+    await d.click('dialog[open] .actions button:has-text("Hủy")');
     check(!insertSent, 'an insert request was sent');
     await dark.close();
   } catch (e) {
@@ -457,7 +480,9 @@ const V1_ORPHAN = {
   }
   const ms = Date.now() - t0;
   console.log(`duration=${ms}ms`);
-  if (ms > 10000) errors.push(`smoke test took ${ms} ms (limit 10 s)`);
+  // 12 s: the 0006 flows (Query sample, canned insert confirmation) brought a typical run to ~8 s and
+  // single runs on a loaded machine to ~9.6 s; 10 s left no margin.
+  if (ms > 12000) errors.push(`smoke test took ${ms} ms (limit 12 s)`);
   if (errors.length) {
     console.error('SMOKE FAILED\n' + errors.join('\n'));
     process.exit(1);

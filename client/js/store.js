@@ -220,7 +220,7 @@ export function currentScope() {
 export function suggestAlias(sobject, exceptStepId) {
   const base = (sobject || 'rec').replace(/__c$/i, '').replace(/[^A-Za-z0-9]/g, '').toLowerCase().slice(0, 8) || 'rec';
   const short = base.length > 4 ? base.slice(0, 3) : base;
-  const taken = collectAliases(state.workflow);
+  const taken = collectAliases(state.workflow, state.meta);
   const own = stepById(exceptStepId)?.config?.alias;
   if (own) taken.delete(own);
   if (!taken.has(short)) return short;
@@ -248,7 +248,7 @@ function baseAlias(sobject) {
 }
 
 function uniqueAlias(name, exceptStepId) {
-  const taken = collectAliases(state.workflow);
+  const taken = collectAliases(state.workflow, state.meta);
   for (const s of allSteps(state.workflow, slotKeys)) if (s.type === 'loop') taken.add(s.config?.alias || 'loop');
   const own = stepById(exceptStepId)?.config?.alias;
   if (own) taken.delete(own);

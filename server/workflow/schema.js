@@ -439,7 +439,9 @@ export function referenceIssue(ref, scope, step) {
         } else if (src?.origin === 'org' || src?.nodeType === 'query') {
           // For a Chọn bản ghi, name the Query its rows come from.
           const q = src.root !== undefined ? scope.sources[src.root]?.name ?? s : s;
-          message = `Template dùng ${show(ref.path)} nhưng Query "${q}" không lấy field ${ref.missing}. Thêm ${ref.missing} vào "Field cần lấy" của bước Query.`;
+          message = ref.mode === 'template'
+            ? `Template dùng ${show(ref.path)} nhưng Query "${q}" không lấy field ${ref.missing}. Thêm ${ref.missing} vào "Field cần lấy" của bước Query.`
+            : `Biến ${ref.path} cần field ${ref.missing} nhưng Query "${q}" không lấy field này. Thêm ${ref.missing} vào "Field cần lấy" của bước Query.`;
         } else if (ref.memberOf) {
           const hint = suggest ? suggest.split('.').pop() : null;
           message = `field "${ref.memberOf}" của bước "${s}" chỉ có ${ref.validMembers.join(', ')}; không có "${ref.missing}".${hint ? ` Ý bạn là "${hint}"?` : ''}`;
@@ -453,6 +455,10 @@ export function referenceIssue(ref, scope, step) {
         }
         break;
       case 'wholeRecord':
+        if (ref.objectMember) {
+          message = `${show(ref.path)} là cả một đối tượng (${ref.validMembers.join(', ')}), không phải một giá trị; hãy chọn một field con, ví dụ ${show(`${ref.path}.${ref.validMembers[0]}`)}.`;
+          break;
+        }
         message = src?.kind === 'vars'
           ? `${show(s)} là cả vòng lặp; hãy chọn một biến, ví dụ ${show(`${s}.index`)}.`
           : `${show(ref.name)} là cả bản ghi; hãy chọn một field, ví dụ ${show(`${ref.name}.${ref.viaThis ? firstField(src) : firstField(src)}`)}.`;

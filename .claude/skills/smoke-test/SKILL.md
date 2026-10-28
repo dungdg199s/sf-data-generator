@@ -67,14 +67,16 @@ It starts the server on a random port 3900–3989 and drives headless Chromium t
     the mocked org never reaches the sf CLI; preview (`smoke-1440-dark.png`). With a mocked production org (`/api/orgs`), "⤒ Insert vào org" opens
     the confirmation with the production warning box and a solid red `.danger.solid` "Insert" button
     (`smoke-1440-dark-insert.png`); "Hủy" closes it. Any `/api/run` request with a `target` is aborted
-    and fails the run, so the smoke test never writes to an org.
+    and fails the run, so the smoke test never writes to an org. Then, with a canned preview of the Query sample that
+    read the (mocked) org, the confirmation lists "Đọc từ org, không ghi: Account 2 (accs, đọc lúc …)" and says the
+    rows are re-read only after 10 minutes or with "⟳ Đọc lại" (no over-promise, no "null").
 
-It also fails on any page error or a run over 10 s.
+It also fails on any page error or a run over 12 s (typically ~8 s; raised from 10 s with the 0006 flows, which left no margin on a loaded machine).
 Screenshots (only when a directory is given): `smoke-1440.png`, `smoke-390.png`, `smoke-390-sheet.png`,
 `smoke-390-dark.png`, `smoke-1440-dark.png`, `smoke-1440-dark-insert.png`.
 Requires Playwright with Chromium (`require('playwright')`); exit code 2 means it is not installed.
 
-Extend the script when you add a UI flow worth guarding (keep it fast, under ~10 s).
+Extend the script when you add a UI flow worth guarding (keep it fast, under ~12 s).
 
 ## Manual API checks
 

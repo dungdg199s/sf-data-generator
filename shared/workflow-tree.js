@@ -174,16 +174,22 @@ export function collectIds(wf) {
 }
 
 /**
- * Step types whose `alias` names a record or pool other steps reference: one namespace
- * (Record; Query and Chọn bản ghi of design 0006 — the types whose `exposes` is a record named
- * by `alias` in server/workflow/nodes.js).
+ * Step types whose `alias` names a record or pool other steps reference — one namespace — read
+ * from the catalogue ({ nodeTypes }, as in /api/meta): every type whose `exposes` is a record
+ * named by `alias` (Record; Query and Chọn bản ghi of design 0006). Without a catalogue (v1
+ * migration, which only knows Record): `record`.
  */
-export const ALIAS_TYPES = new Set(['record', 'query', 'pick']);
+export function aliasTypes(catalog) {
+  const types = catalog?.nodeTypes instanceof Map ? [...catalog.nodeTypes.values()] : catalog?.nodeTypes;
+  if (!Array.isArray(types)) return new Set(['record']);
+  return new Set(types.filter((t) => t.exposes?.kind === 'record' && t.exposes?.name?.key === 'alias').map((t) => t.type));
+}
 
 /** Aliases of record / pool steps (the names other steps reference). */
-export function collectAliases(wf) {
+export function collectAliases(wf, catalog) {
+  const types = aliasTypes(catalog);
   const out = new Set();
-  walkSteps(wf?.steps, (s) => { if (ALIAS_TYPES.has(s.type) && s.config?.alias) out.add(s.config.alias); });
+  walkSteps(wf?.steps, (s) => { if (types.has(s.type) && s.config?.alias) out.add(s.config.alias); });
   return out;
 }
 
@@ -332,14 +338,17 @@ export function setStepAlias(wf, id, value, { memo = new Map(), slotKeys, catalo
   const c = (step.config ??= {});
   const isLoop = step.type === 'loop';
   const effective = (v) => (isLoop ? v || 'loop' : v);
-  const good = (name) => isAliasName(name) && !aliasTaken(wf, at, name, slotKeys);
+  const types = aliasTypes(catalog);
+  const good = (name) => isAliasName(name) && !aliasTaken(wf, at, name, slotKeys, types);
   // References can follow from the current name when it is unambiguous. A loop variable that
   // shadows an enclosing one still owns the references inside its body.
-  const owns = (name) => isAliasName(name) && (isLoop || !aliasTaken(wf, at, name, slotKeys));
+  const owns = (name) => isAliasName(name) && (isLoop || !aliasTaken(wf, at, name, slotKeys, types));
   const current = effective(c.alias);
   if (good(current) || (!memo.has(id) && owns(current))) memo.set(id, current);
   // A record without alias is referenced by its id (like the executor): the first alias takes them along.
-  if (step.type === 'record' && !c.alias && !memo.has(id) && owns(String(step.id))) memo.set(id, String(step.id));
+  const exposes = (catalog?.nodeTypes instanceof Map ? catalog.nodeTypes.get(step.type) : catalog?.nodeTypes?.find?.((t) => t.type === step.type))?.exposes;
+  const byId = catalog ? exposes?.name?.fallback === 'id' : step.type === 'record';
+  if (byId && !c.alias && !memo.has(id) && owns(String(step.id))) memo.set(id, String(step.id));
   const from = memo.get(id);
   const to = effective(value);
   if (!from || from === to || !good(to) || !owns(from)) {
@@ -369,12 +378,12 @@ export function setStepAlias(wf, id, value, { memo = new Map(), slotKeys, catalo
  * Record / pool alias: another such alias or any loop variable. Loop variable: a record alias, or
  * the variable of an enclosing loop or of a loop inside this one (shadowing).
  */
-function aliasTaken(wf, at, name, slotKeys) {
+function aliasTaken(wf, at, name, slotKeys, types = aliasTypes()) {
   const self = at.step;
   let taken = false;
   walkSteps(wf.steps, (s) => {
     if (taken || s === self) return !taken;
-    if (ALIAS_TYPES.has(s.type) && s.config?.alias === name) taken = true;
+    if (types.has(s.type) && s.config?.alias === name) taken = true;
     else if (s.type === 'loop' && self.type !== 'loop' && (s.config?.alias || 'loop') === name) taken = true;
     return !taken;
   }, slotKeys);
@@ -391,13 +400,14 @@ function aliasTaken(wf, at, name, slotKeys) {
  */
 export function cloneSteps(steps, { ids = new Set(), aliases = new Set(), makeId = nextId, catalog } = {}) {
   const copy = structuredClone(steps);
+  const types = aliasTypes(catalog);
   const renamed = [];
   const aliasMap = new Map();
   walkSteps(copy, (s) => {
     const entry = { id: s.id, copyId: makeId(s.id, ids) };
     ids.add(entry.copyId);
     s.id = entry.copyId;
-    if (ALIAS_TYPES.has(s.type) && s.config?.alias) {
+    if (types.has(s.type) && s.config?.alias) {
       const next = nextName(s.config.alias, aliases);
       aliases.add(next);
       aliasMap.set(s.config.alias, next);

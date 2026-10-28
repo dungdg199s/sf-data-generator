@@ -34,7 +34,7 @@ Option chung (registry tự thêm, generator không cần khai báo):
 | `masterdetail` | Master-Detail | như `lookup`; báo lỗi nếu chưa có bản ghi cha | như trên |
 | `geolocation` | Geolocation | `latMin`, `latMax`, `lngMin`, `lngMax`, `scale` | `{ latitude, longitude }` (khi insert tách thành `X__Latitude__s` / `X__Longitude__s`) |
 | `template` | (ghép giá trị) | `template` (`vars: 'template'`, có bảng chọn biến) với `{{this.F}}`, `{{alias.F}}`, `{{loop.index}}`, `{{this.$n}}`, `{{alias.$n}}`. Mặc định `{{this.$n}}` (ra `1`, `2`, `3`…). Tham chiếu hỏng hoặc ngoài phạm vi là lỗi validate | chuỗi |
-| `copy` | Lấy từ biến (giữ kiểu) | `path` (`vars: 'path'`, mặc định `this.$n`): một biến, ví dụ `pbe.UnitPrice`. Khác Template (luôn ra chuỗi), giá trị giữ nguyên kiểu: số, đúng/sai, Id (0007: "giữ kiểu số khi lấy từ tham chiếu") | giá trị của biến (null nếu không có) |
+| `copy` | Lấy từ biến (giữ kiểu) | `path` (`vars: 'path'`, mặc định `this.$n`): một biến, ví dụ `pbe.UnitPrice`. Khác Template (luôn ra chuỗi), giá trị giữ nguyên kiểu: số, đúng/sai, Id (0007: "giữ kiểu số khi lấy từ tham chiếu"). Biến phải là **một giá trị**: trỏ vào cả bản ghi hay một đối tượng có field con (`pbe.Product2`, Geolocation) là lỗi `wholeRecord`; giá trị Lookup (`{ $ref }`) được chép nguyên | giá trị của biến (null nếu không có) |
 | `constant` | (cố định) | `value` (không nhận biến; muốn ghép biến thì dùng Template) | chuỗi |
 
 Mốc thời gian (`from`/`to` của date/datetime) nhận `YYYY-MM-DD`, ISO đầy đủ, hoặc mốc tương đối:

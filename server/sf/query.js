@@ -3,7 +3,9 @@
 // connection of server/sf/client.js (`client.query`, REST `/query` only); nothing is ever
 // written. Without an org each Query gets deterministic sample rows (shared/soql.js).
 //
-// Rows are cached per (org, SOQL, maxFetch) for LIMITS.queryCacheTtlMs, so a preview and the
+// Rows are cached per (org identity, SOQL, maxFetch) for LIMITS.queryCacheTtlMs — the identity is
+// instance URL + username when the client can tell (`client.identity`), so two aliases of one org
+// share rows and an alias re-pointed to another org does not reuse them — so a preview and the
 // insert right after it use the same rows. Each result has a fingerprint; an insert sends the
 // fingerprints of its preview (`expectQueries`) and a mismatch stops the run with HTTP 409
 // before anything is written.
@@ -11,7 +13,7 @@
 import { createHash } from 'node:crypto';
 import { LIMITS } from '../workflow/nodes.js';
 import { WorkflowError } from '../workflow/schema.js';
-import { buildSoql, soqlSobject, maxFetchFor, normalizeRow, sampleRows, selectFields } from '../../shared/soql.js';
+import { buildSoql, soqlSobject, maxFetchFor, normalizeRow, rekeyRow, sampleRows, selectFields, checkSoql, checkBuilder } from '../../shared/soql.js';
 
 const CACHE_MAX_ENTRIES = 50;
 
@@ -77,39 +79,64 @@ const hhmm = (iso) => {
  * @param refresh  bypass the cache
  * @param expect   { [stepId]: fingerprint | { fingerprint, count, fetchedAt } } from the preview
  * @param preview  true for a preview (adds the "no org" hint to connection errors)
+ * @param budgetMs time for all Query steps together (LIMITS.queryTotalMs): each query gets at most
+ *                 what is left, and a query that would start past it is reported on its step
  * → { results: { [stepId]: { records, sobject, … } }, queries: [summary], warnings }
  *   throws WorkflowError (422: the query is wrong), an error with status 409 (org data changed)
  *   or status 502/503 (Salesforce or sf CLI failure), always with `issues` carrying the step id.
  */
-export async function prefetchQueries({ client, org, workflow, cache, refresh = false, expect = null, preview = true, clock = () => new Date() }) {
+export async function prefetchQueries({
+  client, org, workflow, cache, refresh = false, expect = null, preview = true, clock = () => new Date(), budgetMs = LIMITS.queryTotalMs,
+}) {
   const results = {};
   const queries = [];
   const warnings = [];
   const changed = [];
+  const started = clock().getTime();
+  let identity = null; // cache key of the org, looked up once
   for (const step of queryStepsOf(workflow)) {
     const c = step.config ?? {};
     const alias = c.alias;
     const soql = buildSoql(c);
     const sobject = soqlSobject(c);
     const maxFetch = maxFetchFor(c, LIMITS.maxQueryRows);
+    const fields = selectFields(c).fields;
+    // Defence in depth: validation already refuses these, the org must never see them.
+    const unsafe = (c.mode ?? 'builder') === 'soql' ? checkSoql(c.soql).find((i) => i.level === 'error') : checkBuilder(c)[0];
+    if (unsafe) throw new WorkflowError([{ message: unsafe.message, nodeId: step.id, field: unsafe.field ?? 'soql', code: unsafe.code }]);
     let entry;
     if (!org) {
       const records = sampleRows(c, alias);
       entry = { records, totalSize: records.length, done: true, source: 'sample', fetchedAt: null, org: null, fingerprint: fingerprint(records) };
       warnings.push({ message: `Chưa chọn org nên bước Query "${alias}" dùng ${records.length} bản ghi mẫu (Id giả). Chọn org ở thanh trên để đọc dữ liệu thật.`, nodeId: step.id, code: 'querySample' });
     } else {
-      const hit = refresh ? null : cache?.get(org, soql, maxFetch);
-      if (hit) entry = { ...hit, source: 'cache' };
-      else {
-        let res;
+      if (identity === null) {
         try {
-          res = await client.query(org, soql, { maxFetch, timeoutMs: LIMITS.queryTimeoutMs });
+          identity = client.identity ? await client.identity(org) : org;
         } catch (e) {
           throw queryError(e, step, { org, preview });
         }
-        const records = (res?.records ?? []).map(normalizeRow);
+      }
+      const hit = refresh ? null : cache?.get(identity, soql, maxFetch);
+      if (hit) entry = { ...hit, source: 'cache', org };
+      else {
+        let res;
+        const left = budgetMs - (clock().getTime() - started);
+        if (left <= 0) throw budgetError(step, budgetMs);
+        if (maxFetch < 1) res = { records: [], totalSize: 0, done: true }; // LIMIT 0: nothing to ask for
+        else {
+          try {
+            res = await client.query(org, soql, { maxFetch, timeoutMs: Math.min(LIMITS.queryTimeoutMs, left) });
+          } catch (e) {
+            const code = e?.cause?.errorCode ?? e?.errorCode;
+            if (code === 'QUERY_TIMEOUT' && left < LIMITS.queryTimeoutMs) throw budgetError(step, budgetMs);
+            throw queryError(e, step, { org, preview });
+          }
+        }
+        // Salesforce answers with the API spelling (Name); the pool uses the SELECT's (name).
+        const records = (res?.records ?? []).map((r) => rekeyRow(normalizeRow(r), fields));
         entry = { records, totalSize: res?.totalSize ?? records.length, done: res?.done !== false, source: 'org', fetchedAt: clock().toISOString(), org, fingerprint: fingerprint(records) };
-        cache?.set(org, soql, maxFetch, entry);
+        cache?.set(identity, soql, maxFetch, entry);
       }
       if (!entry.records.length) {
         warnings.push({ message: `Query "${alias}" không trả về bản ghi nào trong org "${org}". Kiểm tra "Điều kiện (WHERE)"; Lookup và bước Chọn bản ghi dùng pool này sẽ không có gì để chọn.`, nodeId: step.id, code: 'queryEmpty' });
@@ -133,7 +160,7 @@ export async function prefetchQueries({ client, org, workflow, cache, refresh = 
     queries.push({
       nodeId: step.id, alias, sobject, soql, org: entry.org, source: entry.source, fetchedAt: entry.fetchedAt,
       count: entry.records.length, totalSize: entry.totalSize, truncated: entry.totalSize > entry.records.length,
-      fingerprint: entry.fingerprint, fields: selectFields(c).fields, records: entry.records,
+      fingerprint: entry.fingerprint, fields, records: entry.records,
     });
   }
   if (changed.length) {
@@ -143,6 +170,14 @@ export async function prefetchQueries({ client, org, workflow, cache, refresh = 
     );
   }
   return { results, queries, warnings };
+}
+
+function budgetError(step, budgetMs) {
+  return new WorkflowError([{
+    message: `Các bước Query đọc org quá ${Math.round(budgetMs / 1000)} giây nên đã dừng ở bước Query "${step.config?.alias}" (chưa ghi gì vào org). Bớt bước Query, thu hẹp "Điều kiện (WHERE)" hoặc giảm LIMIT rồi chạy lại.`,
+    nodeId: step.id,
+    code: 'queryBudget',
+  }]);
 }
 
 const lastLine = (msg) => String(msg ?? '').split('\n').map((l) => l.trim()).filter(Boolean).pop() ?? '';

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { runWorkflow } from '../server/workflow/executor.js';
 import { validateWorkflow, WorkflowError } from '../server/workflow/schema.js';
 import { wf, record, loop, branch, query, pick, rows, NOW } from './helpers.js';
+import { copy as copyType } from '../server/generators/misc.js';
 
 const accountFields = [{ name: 'Name', type: 'text', options: { mode: 'company' } }];
 const lookup = (ref, mode = 'current', type = 'lookup') => ({ name: 'AccountId', type, options: { mode, ref } });
@@ -537,4 +538,48 @@ test('a v2 loop without "count" runs 0 times, which is also the catalogue defaul
   assert.equal(stats.byStep.l.iterations, count.default);
   assert.equal(stats.byStep.r.iterations, max.default, 'range without max runs min..1');
   assert.deepEqual([count.default, count.initial, max.default, max.initial], [0, 3, 1, 5]);
+});
+
+// ---------- review fixes (0006 "Sửa sau review") ----------
+
+test('Query field names ignore case: template, hand-written SOQL and the Chọn bản ghi filter', () => {
+  const rowsSf = { q: rows([{ Id: '0011', Name: 'Acme', Industry: 'Banking' }, { Id: '0012', Name: 'Globex', Industry: 'Retail' }]) };
+  const make = (q, tpl, pickExtra = {}) => wf([{ id: 'q', type: 'query', config: { alias: 'accs', ...q } }, pick('p', 'acc', 'accs', pickExtra), record('c', 'Contact', 'con', [tplField('Title', tpl), lookup('acc')])]);
+  for (const w of [
+    make({ sobject: 'Account', fields: ['Id', 'name'] }, '{{acc.name}}'),
+    make({ mode: 'soql', soql: 'SELECT id, name FROM Account ORDER BY Id' }, '{{acc.Name}}'),
+    make({ sobject: 'Account', fields: ['Id', 'Name', 'industry'] }, '{{acc.Name}}', { filter: 'compare', filterField: 'INDUSTRY', filterValue: 'Retail', onEmpty: 'error' }),
+  ]) {
+    assert.deepEqual(validateWorkflow(w).errors, []);
+    const r = runWorkflow(w, { seed: 2, queryResults: rowsSf });
+    assert.ok(['Acme', 'Globex'].includes(r.records[0].fields.Title));
+    assert.match(r.records[0].fields.AccountId, /^001[12]$/, 'Id found whatever its spelling');
+  }
+  const filtered = runWorkflow(make({ sobject: 'Account', fields: ['Id', 'Name', 'industry'] }, '{{acc.Name}}', { filter: 'compare', filterField: 'INDUSTRY', filterValue: 'Retail' }), { seed: 2, queryResults: rowsSf });
+  assert.equal(filtered.records[0].fields.Title, 'Globex');
+  // Generated records stay case-sensitive.
+  assert.equal(errorsOf(wf([acc(), record('c', 'Contact', 'con', [tplField('T', '{{acc.name}}')])]))[0].code, 'unknownMember');
+});
+
+test('"Lấy từ biến" refuses an object: validation says wholeRecord, the generator throws; wording is not "Template"', () => {
+  const make = (path) => wf([
+    query('q', 'pbes', { sobject: 'PricebookEntry', fields: ['Id', 'UnitPrice', 'Product2.Name'] }),
+    pick('p', 'pbe', 'pbes'),
+    record('o', 'OpportunityLineItem', 'oli', [{ name: 'X', type: 'copy', options: { path } }]),
+  ]);
+  const obj = errorsOf(make('pbe.Product2'))[0];
+  assert.equal(obj.code, 'wholeRecord');
+  assert.equal(obj.message, 'Field "X": pbe.Product2 là cả một đối tượng (Name), không phải một giá trị; hãy chọn một field con, ví dụ pbe.Product2.Name.');
+  assert.deepEqual(errorsOf(make('pbe.Product2.Name')), []);
+  assert.equal(errorsOf(make('pbe.Nope'))[0].message, 'Field "X": Biến pbe.Nope cần field Nope nhưng Query "pbes" không lấy field này. Thêm Nope vào "Field cần lấy" của bước Query.');
+  // At run time (e.g. through the API without validation of the value's shape) an object is refused too.
+  const geo = wf([record('a', 'Account', 'acc', [{ name: 'Loc__c', type: 'geolocation' }]), record('o', 'Lead', 'ld', [{ name: 'X', type: 'copy', options: { path: 'acc.Loc__c.latitude' } }])]);
+  assert.equal(typeof runWorkflow(geo, { seed: 1 }).records[1].fields.X, 'number');
+  assert.throws(() => copyType.generate({ path: 'acc.Loc__c' }, { scope: { current: { acc: { fields: { Loc__c: { latitude: 1, longitude: 2 } } } }, all: {}, vars: {} }, record: {}, n: 1, fieldName: 'X' }), /là cả một đối tượng/);
+});
+
+test('Master-Detail into an empty Query pool names the Query', () => {
+  const w = wf([query('q', 'accs'), record('c', 'Contact', 'con', [{ name: 'AccountId', type: 'masterdetail', options: { mode: 'random', ref: 'accs' } }])]);
+  assert.throws(() => runWorkflow(w, { seed: 1, queryResults: { q: rows([]) } }), (e) => e.issues[0].nodeId === 'c'
+    && e.issues[0].message === 'Field AccountId: Query "accs" không trả về bản ghi nào. Kiểm tra "Điều kiện (WHERE)" của bước Query hoặc chọn org khác.');
 });

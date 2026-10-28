@@ -1,7 +1,7 @@
 // Design 0006: pure SOQL helpers shared by validation, pre-fetch and the browser (shared/soql.js).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildSoql, checkSoql, checkBuilder, selectFields, soqlSobject, sampleRows, normalizeRow, parseSoql, maxFetchFor } from '../shared/soql.js';
+import { buildSoql, checkSoql, checkBuilder, selectFields, soqlSobject, sampleRows, normalizeRow, parseSoql, maxFetchFor, rekeyRow } from '../shared/soql.js';
 
 test('buildSoql adds Id once, ORDER BY and LIMIT', () => {
   assert.equal(buildSoql({}), 'SELECT Id, Name FROM Account ORDER BY Id LIMIT 200');
@@ -61,4 +61,42 @@ test('sampleRows is deterministic and nests relationship fields', () => {
 test('normalizeRow drops attributes recursively and subquery results', () => {
   const row = { attributes: { type: 'Account' }, Id: '001', Owner: { attributes: { type: 'User' }, Name: 'Lan' }, Contacts: { totalSize: 1, done: true, records: [] }, Phone: null };
   assert.deepEqual(normalizeRow(row), { Id: '001', Owner: { Name: 'Lan' }, Phone: null });
+});
+
+// ---------- review fixes (0006 "Sửa sau review") ----------
+
+test('read-only check: UPDATE VIEWSTAT / TRACKING, FOR … inside parentheses and ";" are refused (raw and builder)', () => {
+  const errors = (t) => checkSoql(t).filter((i) => i.level === 'error').map((i) => i.code);
+  assert.deepEqual(errors("SELECT Id FROM KnowledgeArticleVersion WHERE PublishStatus='Online' AND Language='en_US' UPDATE VIEWSTAT"), ['update']);
+  assert.deepEqual(errors("SELECT Id FROM FAQ__kav WHERE PublishStatus='Online' WITH DATA CATEGORY Geography__c AT usa__c UPDATE TRACKING"), ['update']);
+  assert.deepEqual(errors('SELECT Id FROM Account update   viewstat'), ['update']);
+  assert.deepEqual(errors('SELECT Id FROM Account WHERE Id IN (SELECT AccountId FROM Contact FOR VIEW)'), ['forClause']);
+  assert.deepEqual(errors('SELECT Id, (SELECT Id FROM Contacts FOR REFERENCE) FROM Account'), ['forClause']);
+  assert.deepEqual(errors('SELECT Id FROM Account\nFOR\tUPDATE'), ['forClause']);
+  assert.deepEqual(errors('SELECT Id FROM Account; DELETE FROM Account'), ['semicolon']);
+  assert.deepEqual(errors('SELECT Id FROM Account;'), ['semicolon']);
+  // Inside string literals the words and ";" are data.
+  assert.deepEqual(errors("SELECT Id FROM Account WHERE Name = 'x; UPDATE VIEWSTAT FOR VIEW' ORDER BY Id"), []);
+  assert.deepEqual(errors("SELECT Id FROM Account WHERE Name = 'x\\' FOR VIEW' ORDER BY Id"), []);
+  assert.equal(checkSoql('SELECT Id FROM Account UPDATE VIEWSTAT').find((i) => i.code === 'update').message,
+    'Bỏ UPDATE (UPDATE VIEWSTAT / UPDATE TRACKING): lệnh này ghi số liệu vào org. Bước Query chỉ đọc dữ liệu.');
+  const builder = (c) => checkBuilder(c).map((i) => `${i.field}:${i.code}`);
+  assert.deepEqual(builder({ where: "Name='x' UPDATE VIEWSTAT" }), ['where:update']);
+  assert.deepEqual(builder({ orderBy: 'Id UPDATE TRACKING' }), ['orderBy:update']);
+  assert.deepEqual(builder({ where: 'Id IN (SELECT AccountId FROM Contact FOR VIEW)' }), ['where:forClause']);
+  assert.deepEqual(builder({ where: "Name = 'a'; DELETE" }), ['where:semicolon']);
+  assert.deepEqual(builder({ orderBy: 'Id) FROM Lead' }), ['orderBy:parens']);
+  assert.deepEqual(builder({ where: "Name = 'a;b' AND Note__c = 'update'" }), []);
+});
+
+test('LIMIT 0 gives maxFetch 0 (the caller then skips jsforce, whose 0 would mean its default)', () => {
+  assert.equal(maxFetchFor({ mode: 'soql', soql: 'SELECT Id FROM Account LIMIT 0' }, 2000), 0);
+  assert.deepEqual(sampleRows({ mode: 'soql', soql: 'SELECT Id FROM Account LIMIT 0' }, 'a'), []);
+});
+
+test('rekeyRow and sampleRows use the spelling of the SELECT list, case-insensitively, through relationships', () => {
+  const row = { Id: '001', Name: 'Acme', Owner: { Name: 'Lan', Email: 'l@x' }, Industry: 'Banking' };
+  assert.deepEqual(rekeyRow(row, ['id', 'name', 'owner.name', 'Owner.email']), { id: '001', name: 'Acme', owner: { name: 'Lan', email: 'l@x' }, Industry: 'Banking' });
+  const sample = sampleRows({ mode: 'soql', soql: 'SELECT id, name, owner.Name, OWNER.Email FROM Contact LIMIT 1' }, 'cons')[0];
+  assert.deepEqual(sample, { id: 'mẫu:cons#1', name: 'Contact mẫu 1', owner: { Name: 'owner.Name mẫu 1', Email: 'OWNER.Email mẫu 1' } });
 });

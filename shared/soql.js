@@ -4,9 +4,12 @@
 //
 // A Query step is written either with the builder (`mode: 'builder'`: sobject, fields, where,
 // orderBy, limit) or as hand-written SOQL (`mode: 'soql'`). Only read-only SELECT statements are
-// accepted: checkSoql rejects anything that does not start with SELECT and the FOR UPDATE /
-// FOR VIEW / FOR REFERENCE clauses (they lock or mark records in the org); the server only ever
-// calls the REST `/query` endpoint (never `queryAll`).
+// accepted. Outside string literals, anywhere in the text (subqueries and parentheses included):
+// no FOR UPDATE / FOR VIEW / FOR REFERENCE (they lock or mark records), no UPDATE at all
+// (UPDATE VIEWSTAT / UPDATE TRACKING write statistics to the org), no `;`. The server only ever
+// calls the REST `/query` endpoint (never `queryAll`). Salesforce field names are not case
+// sensitive: rows are re-keyed to the spelling of the SELECT list (rekeyRow) and lookups into a
+// row read from the org ignore case.
 
 /** Defaults of the builder options (server/workflow/nodes.js uses these for the catalogue). */
 export const QUERY_DEFAULTS = { mode: 'builder', sobject: 'Account', fields: ['Id', 'Name'], where: '', orderBy: 'Id', limit: 200 };
@@ -96,10 +99,16 @@ export function parseSoql(text) {
     out.hasOrderBy = Boolean(topLevel(rest, /\bORDER\s+BY\b/i));
     const lim = topLevel(rest, /\bLIMIT\s+(\d+)/i);
     out.limit = lim ? Number(lim.match[1]) : null;
-    out.forClause = Boolean(topLevel(rest, /\bFOR\s+(?:UPDATE|VIEW|REFERENCE)\b/i));
   }
+  out.forClause = FOR_CLAUSE.test(s);
+  out.update = UPDATE_WORD.test(s);
+  out.semicolon = s.includes(';');
   return out;
 }
+
+// Checked on text whose string literals are blanked, anywhere (not only at the top level).
+const FOR_CLAUSE = /\bFOR\s+(?:UPDATE|VIEW|REFERENCE)\b/i;
+const UPDATE_WORD = /\bUPDATE\b/i;
 
 const dedupe = (list) => {
   const seen = new Set();
@@ -150,7 +159,8 @@ export function buildSoql(config) {
 export function maxFetchFor(config, maxRows) {
   if (mode(config) === 'soql') {
     const limit = parseSoql(config?.soql).limit;
-    return Math.min(limit ?? maxRows, maxRows);
+    // LIMIT 0 → 0: the caller must not ask jsforce (its maxFetch 0 would mean "default 10 000").
+    return Math.max(0, Math.min(limit ?? maxRows, maxRows));
   }
   const limit = builderLimit(config);
   return Number.isInteger(limit) && limit >= 1 ? Math.min(limit, maxRows) : maxRows;
@@ -161,6 +171,9 @@ export const SOQL_MESSAGES = {
   notSelect: 'SOQL phải bắt đầu bằng SELECT. Bước Query chỉ đọc dữ liệu.',
   noFrom: 'SOQL thiếu "FROM <sObject>".',
   forClause: 'Bỏ FOR UPDATE / FOR VIEW / FOR REFERENCE: các lệnh này khóa hoặc đánh dấu bản ghi trong org.',
+  update: 'Bỏ UPDATE (UPDATE VIEWSTAT / UPDATE TRACKING): lệnh này ghi số liệu vào org. Bước Query chỉ đọc dữ liệu.',
+  semicolon: 'Bỏ dấu ";": mỗi bước Query chỉ chạy đúng một câu SELECT.',
+  parens: 'Dấu ngoặc "(" và ")" trong ô này chưa khớp nhau. Sửa lại cho đủ cặp.',
   noOrderBy: 'SOQL không có ORDER BY nên thứ tự bản ghi có thể đổi giữa các lần chạy, cùng seed có thể chọn ra bản ghi khác. Thêm ORDER BY Id.',
   noId: 'SOQL không lấy Id nên pool này không dùng được cho Lookup. Thêm Id vào SELECT.',
   subquery: 'Subquery (SELECT … FROM quan hệ con) chưa được hỗ trợ; phần đó sẽ bị bỏ qua.',
@@ -183,6 +196,8 @@ export function checkSoql(text) {
   }
   if (!p.sobject || !API_NAME.test(p.sobject)) add('noFrom', 'error');
   if (p.forClause) add('forClause', 'error');
+  else if (p.update) add('update', 'error');
+  if (p.semicolon) add('semicolon', 'error');
   if (issues.some((i) => i.level === 'error')) return issues;
   if (!p.hasOrderBy) add('noOrderBy', 'warning');
   if (!p.open && !p.fields.some((f) => f.toLowerCase() === 'id')) add('noId', 'warning');
@@ -200,13 +215,57 @@ export function checkBuilder(config) {
   const orderBy = String(config?.orderBy ?? '');
   const add = (field, code) => issues.push({ field, code, message: SOQL_MESSAGES[code] });
   for (const [field, value] of [['where', where], ['orderBy', orderBy]]) {
+    const b = blankStrings(value);
     if (/\{\{/.test(value)) add(field, 'template');
-    else if (/\bFOR\s+(?:UPDATE|VIEW|REFERENCE)\b/i.test(blankStrings(value))) add(field, 'forClause');
+    else if (FOR_CLAUSE.test(b)) add(field, 'forClause');
+    else if (UPDATE_WORD.test(b)) add(field, 'update');
+    else if (b.includes(';')) add(field, 'semicolon');
+    else if (!balanced(b)) add(field, 'parens');
   }
   const w = blankStrings(where);
   if (!issues.some((i) => i.field === 'where') && /\b(?:ORDER\s+BY|LIMIT|OFFSET)\b/i.test(w)) add('where', 'whereClause');
   if (!issues.some((i) => i.field === 'orderBy') && /\b(?:LIMIT|OFFSET)\b/i.test(blankStrings(orderBy))) add('orderBy', 'orderByLimit');
   return issues;
+}
+
+/** Parentheses pair up (a WHERE cannot close the statement's own parentheses, e.g. `x) FROM Lead`). */
+function balanced(text) {
+  let depth = 0;
+  for (const ch of text) {
+    if (ch === '(') depth++;
+    else if (ch === ')' && --depth < 0) return false;
+  }
+  return depth === 0;
+}
+
+/** Key of `obj` equal to `key` ignoring case (the key itself when there is none). */
+export function keyOf(obj, key) {
+  if (!obj || typeof obj !== 'object' || key in obj) return key;
+  const lower = String(key).toLowerCase();
+  return Object.keys(obj).find((k) => k.toLowerCase() === lower) ?? key;
+}
+
+/**
+ * A row re-keyed to the spelling of `fields` (the SELECT list, e.g. `name`, `owner.Name`), case
+ * insensitively and through relationship paths; keys not in the list keep their spelling.
+ */
+export function rekeyRow(row, fields) {
+  if (!row || typeof row !== 'object') return row;
+  const out = { ...row };
+  const byHead = new Map();
+  for (const f of fields ?? []) {
+    const [head, ...rest] = String(f).split('.');
+    if (!byHead.has(head.toLowerCase())) byHead.set(head.toLowerCase(), { head, rest: [] });
+    if (rest.length) byHead.get(head.toLowerCase()).rest.push(rest.join('.'));
+  }
+  for (const { head, rest } of byHead.values()) {
+    const k = keyOf(out, head);
+    if (!(k in out)) continue;
+    const v = out[k];
+    delete out[k];
+    out[head] = rest.length && v && typeof v === 'object' && !Array.isArray(v) ? rekeyRow(v, rest) : v;
+  }
+  return out;
 }
 
 /** A row from Salesforce without `attributes` (recursively) and without subquery results. */
@@ -237,12 +296,16 @@ export function sampleRows(config, alias) {
     const row = {};
     for (const f of fields) {
       const parts = f.split('.');
+      // Same spelling as the SELECT list; `Owner.Name` and `owner.Email` share one Owner object.
       let level = row;
-      parts.slice(0, -1).forEach((p) => { level = level[p] && typeof level[p] === 'object' ? level[p] : (level[p] = {}); });
+      parts.slice(0, -1).forEach((p) => {
+        const k = keyOf(level, p);
+        level = level[k] && typeof level[k] === 'object' ? level[k] : (level[k] = {});
+      });
       const leaf = parts[parts.length - 1];
       let value = `${f} mẫu ${i}`;
       if (parts.length === 1 && leaf.toLowerCase() === 'id') value = `mẫu:${alias || 'q'}#${i}`;
-      else if (parts.length === 1 && leaf === 'Name') value = `${sobject} mẫu ${i}`;
+      else if (parts.length === 1 && leaf.toLowerCase() === 'name') value = `${sobject} mẫu ${i}`;
       level[leaf] = value;
     }
     rows.push(row);

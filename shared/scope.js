@@ -533,10 +533,12 @@ export function analyzeScope(wf, catalog) {
 /** State of source `id` at `here`: { certainty, why? } or { reason }. */
 const stateAt = (here, id) => here.state(id);
 
-function resolveMember(members, parts) {
+/** `ignoreCase`: members of a source read from the org (Salesforce field names ignore case). */
+function resolveMember(members, parts, ignoreCase = false) {
   let level = members;
+  const same = ignoreCase ? (a, b) => a.toLowerCase() === b.toLowerCase() : (a, b) => a === b;
   for (let i = 0; i < parts.length; i++) {
-    const m = (level ?? []).find((x) => x.key === parts[i]);
+    const m = (level ?? []).find((x) => same(x.key, parts[i]));
     if (!m) return { missing: parts[i], depth: i, candidates: (level ?? []).map((x) => x.key) };
     if (i < parts.length - 1) {
       if (m.members?.length) {
@@ -545,6 +547,7 @@ function resolveMember(members, parts) {
       }
       return m.valueType === 'reference' ? { traversal: m } : { missing: parts.slice(0, i + 2).join('.'), depth: i, candidates: [] };
     }
+    if (i === parts.length - 1) return { ok: true, member: m };
   }
   return { ok: true };
 }
@@ -632,7 +635,11 @@ function resolveRef({ step, here, o, path, sources, byName, loopKeys }) {
     const builtin = src.members.find((m) => m.builtin && m.key === rest[0]);
     if (!builtin) {
       if (src.current === 'none') return fail('noCurrent', withSrc);
-      const r = resolveMember(src.members, rest);
+      const r = resolveMember(src.members, rest, src.origin === 'org');
+      // A path option holds one value: not an object member (Query relationship, geolocation).
+      if (r.ok && o.mode === 'path' && r.member?.members?.length && r.member.valueType !== 'reference') {
+        return fail('wholeRecord', { ...withSrc, objectMember: member, validMembers: r.member.members.map((m) => m.key) });
+      }
       if (r.traversal) return fail('noTraversal', { ...withSrc, traversal: r.traversal.key, traversalRef: r.traversal.ref });
       if (r.missing) {
         if (r.depth === 0 && r.missing === 'Id' && src.origin === 'generated') return fail('noIdYet', withSrc);
