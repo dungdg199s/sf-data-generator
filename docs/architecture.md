@@ -5,8 +5,8 @@
 ```
 Trình duyệt (client/)                         Server Node.js (server/)
 ┌──────────────────────────┐   GET /api/meta   ┌───────────────────────────────┐
-│ Quy trình + Inspector    │ ◄──────────────── │ generators/  (field types)    │
-│ (form sinh từ meta)      │                   │ workflow/nodes.js (step types)│
+│ Quy trình / Sơ đồ        │ ◄──────────────── │ generators/  (field types)    │
+│ + Inspector (form từ meta)│                   │ workflow/nodes.js (step types)│
 │                          │  POST /api/validate│                               │
 │ state.workflow (JSON)    │ ────────────────► │ workflow/schema.js            │
 │                          │  POST /api/run    │ run.js ◄─ workflow/executor.js│
@@ -21,7 +21,7 @@ Trình duyệt (client/)                         Server Node.js (server/)
 1. Khi tải trang, UI gọi `GET /api/meta` để lấy danh sách field type, loại bước (kèm `slots`, `category`) và option schema
    của từng loại.
    UI **không hard-code** option nào: form trong inspector được dựng từ meta này (`client/js/forms.js`).
-2. Người dùng dựng các bước ở chế độ Quy trình (chế độ Sơ đồ là đợt B của [0003](design/0003-process-mode.md), chưa làm).
+2. Người dùng dựng các bước ở chế độ Quy trình hoặc Sơ đồ (hai cách vẽ cùng một cây bước, [0003](design/0003-process-mode.md); phím M để đổi).
    Mỗi lần sửa, UI gọi `POST /api/validate` (debounce 400 ms) để hiện lỗi/cảnh báo gắn đúng bước, field và ô bước con.
 3. Khi bấm **Xem trước** hoặc **Insert vào org**, UI gửi toàn bộ workflow JSON lên `POST /api/run`.
    Server validate lại, **đọc trước** các bước Query (`server/sf/query.js` qua jsforce `conn.query`, hoặc dòng mẫu khi chưa
@@ -140,10 +140,14 @@ sObject, tối đa 1 000 lỗi chi tiết trong kết quả (nhóm lỗi luôn �
 
 | File | Trách nhiệm |
 | --- | --- |
-| `client/js/store.js` | State duy nhất, undo/redo, autosave `localStorage` (`sfdg.workflow.v2`; `sfdg.workflow.v1` chỉ đọc), trạng thái thu gọn khung (`sfdg.collapsed`), phát sự kiện thay đổi; `currentScope()` (kết quả `analyzeScope`, tính lại một lần mỗi phiên bản workflow) |
-| `client/js/process.js` | Chế độ Quy trình: thẻ bước, khung Lặp/Rẽ nhánh, nút "+", menu bước, kéo thả, bàn phím kiểu cây |
+| `client/js/store.js` | State duy nhất, undo/redo, autosave `localStorage` (`sfdg.workflow.v2`; `sfdg.workflow.v1` chỉ đọc), trạng thái thu gọn khung (`sfdg.collapsed`), chế độ xem (`state.view`, `sfdg.view`), phát sự kiện thay đổi; `currentScope()` (kết quả `analyzeScope`, tính lại một lần mỗi phiên bản workflow) |
+| `client/js/views.js` | Đổi chế độ xem Quy trình / Sơ đồ (nút ở hàng trên vùng xem, phím M, menu ⋯ trên điện thoại): chỉ view đang hiện có DOM; giữ lựa chọn, mở khung tổ tiên, đưa bước vào tầm nhìn, chuyển focus; nhớ `sfdg.view` trên màn hình > 720 px |
+| `client/js/process.js` | Chế độ Quy trình: thẻ bước, khung Lặp/Rẽ nhánh, nút "+", kéo thả, bàn phím kiểu cây |
+| `client/js/canvas.js` | Chế độ Sơ đồ ([0003](design/0003-process-mode.md) đợt B): vẽ cây từ `layout.js`, một SVG cho mọi đường nối, chỉ tạo thẻ/nút "+" gần khung nhìn; kéo/cuộn để di chuyển, Ctrl+cuộn / chụm hai ngón / nút − 100% + ⤢ để thu phóng; "+" trên đường nối, thả mục palette lên đường nối; cùng phím cây như Quy trình. Không kéo thẻ, không vị trí tự do |
+| `client/js/layout.js` | Hàm thuần `layout(steps, { slotsOf, collapsed })` của Sơ đồ, O(n): dãy trái sang phải, loại 1 slot là khung, loại ≥ 2 slot là các làn gộp ở một chấm; slot lấy từ catalogue. Không import gì, test trong Node (`test/layout.test.js`) |
+| `client/js/menus.js` | Menu "+" (loại bước theo `category`) và menu ⋯ của bước, dùng chung cho hai chế độ |
 | `client/js/ops.js` | Thao tác trên bước (thêm, xóa, nhân bản, tắt, bọc, bỏ vỏ, di chuyển) qua `shared/workflow-tree.js`, toast Hoàn tác |
-| `client/js/summary.js` | Câu tóm tắt trên thẻ và chip số liệu từ `stats.byStep` |
+| `client/js/summary.js` | Câu tóm tắt trên thẻ và chip số liệu từ `stats.byStep`; nhóm lỗi theo bước và nhãn nút "+" dùng chung cho hai chế độ |
 | `client/js/inspector.js` | Cấu hình bước (nơi duy nhất sửa cấu hình), trình soạn field, import field từ org, đổi alias tự cập nhật tham chiếu; bottom sheet trên màn hình hẹp (`body.sheet-open`, `openSheet`/`closeSheet`: chạy thì đóng, lỗi validate thì mở lại, [0009](design/0009-bo-cuc-man-hinh.md)) |
 | `client/js/popup.js` | Popup menu dùng chung ([0009](design/0009-bo-cuc-man-hinh.md)): menu "+", menu bước, menu **⋯** của thanh trên, menu `⤓ Tải`; hàng thường, hàng chọn một (`menuitemradio`), hàng ô nhập; bàn phím |
 | `client/js/issues.js` | Thanh lỗi dưới canvas ([0009](design/0009-bo-cuc-man-hinh.md)): số đếm, danh sách, thu gọn (`sfdg.issuesCollapsed`, không vào undo), F8 / Shift+F8, tự mở rộng khi chạy lỗi validate. Chỉ import `dom.js`, nên các hàm thuần (`issueCountsLabel`, `nextIssueIndex`) được test trong Node |
@@ -159,5 +163,5 @@ sObject, tối đa 1 000 lỗi chi tiết trong kết quả (nhóm lỗi luôn �
 
 Sự kiện của store có `source`: inspector bỏ qua thay đổi do chính nó tạo ra (`source: 'inspector'`)
 để không render lại và mất focus khi người dùng đang gõ. Thay đổi cấu trúc dùng `'inspector-structure'`.
-View Quy trình dựng lại DOM khi workflow đổi (giữ vị trí cuộn và focus); khi chỉ đổi lựa chọn hay lỗi thì chỉ cập nhật
+View đang hiện (Quy trình hoặc Sơ đồ) dựng lại DOM khi workflow đổi (giữ vị trí cuộn / pan và focus); khi chỉ đổi lựa chọn hay lỗi thì chỉ cập nhật
 class và badge. Thu gọn/mở khung là trạng thái UI (`kind: 'view'`), không tạo bước undo.

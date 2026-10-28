@@ -13,7 +13,7 @@ viết và cập nhật các file này theo skill `design-doc`; người viết 
 | --- | --- | --- |
 | [0001](0001-workflow-editor-ux.md) | Trải nghiệm trình soạn workflow (bản đầu) | Đã làm |
 | [0002](0002-jsforce-api.md) | Gọi API Salesforce bằng jsforce, sf CLI chỉ lấy token | Đã làm |
-| [0003](0003-process-mode.md) | Chế độ Quy trình (kiểu Power Automate), workflow JSON v2 dạng cây | Đã duyệt (đợt A đã làm, đã sửa sau review) |
+| [0003](0003-process-mode.md) | Chế độ Quy trình (kiểu Power Automate), workflow JSON v2 dạng cây; chế độ Sơ đồ | Đã làm (đợt A và đợt B) |
 | [0004](0004-streaming-execution.md) | Chạy dạng luồng: nghiên cứu khả thi và thiết kế | Đã làm |
 | [0005](0005-variable-picker.md) | Quét và chọn biến từ UI | Đã làm |
 | [0006](0006-query-pick-nodes.md) | Node Query và Chọn bản ghi | Đã làm |

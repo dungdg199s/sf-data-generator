@@ -19,7 +19,7 @@ flows
 
 **Speed (since design 0009).** The flows are grouped into seven independent functions that run **in parallel**, each in
 its own browser context (so storage, routes and dialogs never leak between them): `flowEditing` (1–5), `flowPicker`
-(5b), `flowFiles` (5c–10), `flowDark` (12), `flowLayoutWide` and `flowLayoutNarrow` (11, 13), `flowEach` (14). The browser launches
+(5b), `flowFiles` (5c–10), `flowDark` (12), `flowLayoutWide` and `flowLayoutNarrow` (11, 13), `flowEach` (14), `flowCanvas` (15). The browser launches
 while the server starts; a fresh context starts with empty storage, so no `localStorage.clear()` + reload; storage a flow
 needs before its first load is written by `addInitScript` (once, guarded by a marker key, so reloads keep it); layout
 checks resize one page (`setViewportSize`) instead of opening a context per width; waits for the sheet or toast
@@ -138,10 +138,21 @@ the others; never add a fixed `waitForTimeout`.
     workflow: a pool made in a finished fixed loop reads "acc (Account · đã sinh)" in "Lặp qua pool" (no "bản ghi cuối"),
     and inside a loop over each row of `accs` the picker's `accs` group says `dùng bản ghi đang lặp "row"`.
 
-It also fails on any page error or a run over 12 s (typically ~5.5–6.5 s since the flows run in parallel, flow 14 included; ~10 s before;
+15. **Sơ đồ view (design 0003 đợt B), `flowCanvas`, own contexts.** At 1440 px, `con` selected in Quy trình, **M**
+    shows the diagram: `con` still selected, focused and inside `#canvas`; `#process` has no DOM and is hidden, the
+    "Sơ đồ" switch is `aria-pressed`, `sfdg.view` = `canvas`, `#canvas` is `role=tree`. The "+" labelled
+    `Thêm bước sau "con"` → Record adds a Record right after `con` (autosave), selected and inside the viewport;
+    Delete removes it. ↑ from `con` selects and focuses its Lặp. Dark scheme (`emulateMedia`) applies
+    (`smoke-1440-canvas.png`, `smoke-1440-canvas-dark.png`); **M** goes back with the Lặp selected and no diagram DOM
+    left. At 390 × 844 (touch) with `sfdg.view` = `canvas` saved, the page opens in Quy trình; ⋯ → "Sơ đồ" shows the
+    diagram without horizontal overflow; tapping the Start card opens the sheet with the card above it
+    (`smoke-390-canvas.png`); ⋯ → "Quy trình" switches back and `sfdg.view` is still `canvas` (not saved on phones).
+
+It also fails on any page error or a run over 12 s (typically ~5.5–6.5 s since the flows run in parallel, flow 14 included, ~7–8.5 s with flow 15 on a 4-CPU machine; ~10 s before;
 ~7–8 s with two CPU-bound processes running alongside).
 Screenshots (only when a directory is given): `smoke-1440.png`, `smoke-390.png`, `smoke-390-sheet.png`,
-`smoke-390-dark.png`, `smoke-390-topbar.png`, `smoke-1280-issues.png`, `smoke-1440-dark.png`, `smoke-1440-dark-insert.png`.
+`smoke-390-dark.png`, `smoke-390-topbar.png`, `smoke-1280-issues.png`, `smoke-1440-dark.png`, `smoke-1440-dark-insert.png`,
+`smoke-1440-canvas.png`, `smoke-1440-canvas-dark.png`, `smoke-390-canvas.png`.
 Requires Playwright with Chromium (`require('playwright')`); exit code 2 means it is not installed.
 
 Extend the script when you add a UI flow worth guarding (keep it fast: see "Speed" above).

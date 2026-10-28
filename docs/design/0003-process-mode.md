@@ -1,6 +1,6 @@
 # 0003 — Chế độ Quy trình (giống Power Automate) và mô hình workflow dạng cây
 
-- **Trạng thái:** Đã duyệt (2026-10-27, xem [0007](0007-tong-hop-0003-0006.md)). Đợt A đã làm; đợt B (Sơ đồ) chờ quyết định sau khi dùng thử.
+- **Trạng thái:** Đã làm (đợt A 2026-10-27; đợt B, chế độ Sơ đồ, 2026-10-28 — người dùng chốt câu hỏi mở 2: có làm, sau Quy trình). Duyệt 2026-10-27, xem [0007](0007-tong-hop-0003-0006.md).
 - **Ngày:** 2026-10-27
 - **Liên quan:** [0001](0001-workflow-editor-ux.md), [workflow-schema.md](../workflow-schema.md), [architecture.md](../architecture.md).
   Viết song song với 0004 (chạy dạng stream), 0005 (chọn biến / "dynamic content"), 0006 (node Query, Pick random record).
@@ -969,3 +969,44 @@ Chưa làm trong đợt A: chế độ Sơ đồ và nút đổi chế độ (đ
 (hiện có 3). `CLAUDE.md`, `.claude/agents/*.md` và `.claude/skills/*/SKILL.md` chưa sửa theo danh sách ở mục
 [Thay đổi cần làm ở tài liệu tham chiếu](#thay-đổi-cần-làm-ở-tài-liệu-tham-chiếu-dự-kiến-implementer-làm-cùng-code):
 đây là file cấu hình của agent, cần người dùng tự duyệt và áp dụng.
+
+### Đợt B: chế độ Sơ đồ (bước 6), 2026-10-28
+
+Người dùng chốt câu hỏi mở 2 theo đề xuất: làm Sơ đồ, sau Quy trình.
+
+| Việc | Đã làm | File chính |
+| --- | --- | --- |
+| Bố cục tự động | Hàm thuần `layout(steps, { slotsOf, collapsed })`, không import gì, O(n) (một lượt đo từ dưới lên có nhớ, một lượt đặt từ trên xuống; dãy dài duyệt vòng lặp, chỉ lồng nhau mới đệ quy). Dãy từ trái sang phải, thẻ 210 × 76 px, đường nối 60 px có "+" ở giữa (cả trước bước đầu và sau bước cuối). Loại có 1 slot (Lặp) là khung: đầu khung là thẻ một hàng rộng cả khung, thân ở trong, đi vào ở mép trái và ra ở mép phải trên cùng một đường. Loại có ≥ 2 slot (Rẽ nhánh) là thẻ rồi các làn xếp từ trên xuống theo thứ tự khai báo (Đúng trên, Sai dưới), làn đầu nối thẳng, gộp lại ở một chấm. Khung thu gọn là thẻ thường. Ô rỗng là hộp "+ Thêm bước" (kèm `hint` của slot, ví dụ "Để trống: không làm gì"). Mọi thứ về slot lấy từ catalogue (`/api/meta` `slots`), không có danh sách loại bước trong client; mục không phải object là thẻ "Bước lỗi" | `client/js/layout.js`, `test/layout.test.js` (11 test: kích thước dãy, Lặp, Lặp rỗng, Rẽ nhánh, làn Sai rỗng, Rẽ nhánh/Lặp lồng nhau, thu gọn, loại tùy ý 1 và 3 slot, mục lỗi; không thẻ/nhãn/"+" nào chồng nhau và bước con nằm trong khung cha; 1 000 bước dưới 200 ms, tăng tuyến tính) |
+| View Sơ đồ | Một `<path>` SVG cho mọi đường nối, một cho các chấm gộp. Thẻ, "+", ô rỗng, nhãn làn là phần tử định vị tuyệt đối, **chỉ tạo cho phần gần khung nhìn** (±400 px); thẻ đang chọn (hoặc Bắt đầu khi chưa chọn gì) luôn có trong DOM để giữ focus. Kéo nền (chuột, một ngón) hoặc cuộn để di chuyển; Ctrl + cuộn, chụm hai ngón, nút − · 100% · + · ⤢ (góc trên phải) hoặc phím + / − / 0 để thu phóng (10 %–200 %). Thẻ dùng chung `.step-card` (chọn, lỗi, badge, chip số liệu, `Đã tắt`, `chưa chọn org`), màu/icon qua `[data-type]` và token. Bấm thẻ chọn bước (inspector chung, mở bottom sheet), bấm nền bỏ chọn; ⋯ và Delete, Ctrl+D, Ctrl+/, Alt+↑/↓, `/`, ContextMenu như Quy trình (phím toàn cục ở `main.js`); "+" trên đường nối mở **cùng menu**; thả mục palette lên "+" gần nhất (≤ 80 px). Khung thu gọn: nút ▾/▸, ghi "N bước bên trong · 1 lỗi" và badge cộng lỗi bên trong như Quy trình; ô con có lỗi `slots.<key>` viền nét đứt | `client/js/canvas.js`, `client/css/app.css` |
+| Chuyển chế độ | `views.js`: chỉ view đang hiện có DOM và render (view kia rỗng, nên truy vấn `.step-card[data-id]` toàn trang vẫn đúng). Đổi chế độ giữ `state.selection`, mở khung tổ tiên, đưa bước vào tầm nhìn (Quy trình: `scrollIntoView` giữa; Sơ đồ: `ensureVisible`, căn giữa nếu chưa thấy trọn) và chuyển focus nếu focus đang ở view cũ. Không tạo bước undo. Phím **M** (không khi đang gõ, không Ctrl/Alt). `sfdg.view` = `process` / `canvas` | `client/js/views.js`, `client/js/store.js`, `client/js/main.js`, `client/index.html` |
+| Dùng chung, không nhân đôi | Menu "+" và ⋯ chuyển sang `menus.js`; nhóm lỗi theo bước, đếm bước trong khung, nhãn "+" sang `summary.js`; inspector tìm thẻ đang chọn và đo phần bị sheet che theo view đang hiện, và nhờ `ops.reveal(id, { block: 'nearest' })` đưa thẻ lên trên mép sheet ở cả hai view | `client/js/menus.js`, `client/js/summary.js`, `client/js/inspector.js`, `client/js/process.js` |
+| Smoke | Luồng 15 (`flowCanvas`): M giữ lựa chọn, focus, thẻ trong khung nhìn; "+" sau `con` → Record đúng chỗ; Delete; ↑; ảnh tối; 390 px. Chạy 3 lần: OK, 7,2–8,4 s (trước đợt B ~6,9 s trên cùng máy 4 CPU) | `.claude/skills/smoke-test/smoke.cjs`, `SKILL.md` |
+| Tài liệu | `docs/architecture.md`, `docs/ui-design-system.md` §6.13 và §7, `README.md`, dòng mô tả view trong `CLAUDE.md` | |
+
+Kiểm tra: `npm test` 269 test qua (258 + 11 của `test/layout.test.js`). Smoke 3 lần OK. Thử tay bằng script Playwright:
+workflow ~875 bước (125 Lặp, mỗi Lặp có Rẽ nhánh): đổi sang Sơ đồ ~40 ms, ~20–30 phần tử trong DOM, mỗi lần cuộn để pan
+xong trong một khung hình (~17 ms); ⤢ ở 10 % tạo ~235 phần tử.
+
+Khác với thiết kế (và lý do):
+
+- **Nút Quy trình | Sơ đồ không ở thanh trên** mà ở đầu hàng "Thu gọn tất cả / Mở tất cả" ngay trên vùng xem. Thanh trên
+  của [0009](0009-bo-cuc-man-hinh.md) vừa đủ một hàng từ 1 140 px; thêm ~150 px sẽ làm nó gập hai hàng (smoke 13b). Đặt
+  cạnh vùng nó điều khiển cũng dễ hiểu hơn. Khi hàng đó bị ẩn (≤ 720 px, và ≤ 900 px khi cao ≤ 500 px) hai lựa chọn nằm
+  trong menu ⋯, nhóm **Chế độ xem**.
+- **Điện thoại (≤ 720 px): có Sơ đồ, mặc định Quy trình.** Trang luôn mở ở Quy trình trên điện thoại, kể cả khi đã lưu
+  `sfdg.view = canvas`; chọn Sơ đồ trong menu ⋯ chỉ có hiệu lực trong phiên, không ghi `sfdg.view` (máy bàn giữ lựa chọn
+  của nó). Kéo một ngón để di chuyển, chụm hai ngón để thu phóng.
+- **Phím mũi tên giống hệt Quy trình** (mẫu ARIA tree: ↑/↓ bước trước/sau theo thứ tự đọc, ← thu gọn / khung cha,
+  → mở / bước con đầu, Home/End, Enter vào inspector), không theo hướng trên hình. Lý do: một cách dùng cho cả hai chế độ
+  và đúng `role=tree` cho trình đọc màn hình. Thêm + / − / 0 để thu phóng.
+- **Trình đọc màn hình:** vì chỉ phần gần khung nhìn có trong DOM, duyệt bằng con trỏ ảo chỉ thấy phần đó; phím mũi tên
+  vẫn đi khắp cây (theo dữ liệu bố cục, tự pan). Mô tả phím ở `aria-describedby` của sơ đồ. Quy trình vẫn là chế độ đầy đủ.
+- **Thẻ không có chi tiết field (▸)** như Quy trình, vì thẻ có kích thước cố định; field xem ở inspector.
+- **Câu thông báo của ô con lỗi** không in trong sơ đồ (ô có viền nét đứt, hộp "+ Thêm bước" có `title` là câu đó); câu
+  đầy đủ ở thanh lỗi.
+- **Thu gọn / mở khung là trạng thái chung** (`sfdg.collapsed`) của hai chế độ, như dữ liệu, chỉ khác cách vẽ.
+- **Pan / zoom không lưu** (giữ trong phiên). Lần đầu mở: 100 %, thẻ Bắt đầu ở bên trái.
+- Kéo thẻ để di chuyển trên Sơ đồ vẫn chưa làm (đúng phạm vi): kéo trên thẻ là pan; dùng Alt+↑/↓, menu ⋯ Lên/Xuống, hoặc M
+  sang Quy trình để kéo.
+
+Chưa làm: kéo thẻ trên Sơ đồ, minimap (mục "Việc tiếp theo").

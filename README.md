@@ -28,6 +28,8 @@ npm test
 1. Mở trang, chọn mẫu **Account + Contact** ở cột trái, hoặc bấm **+ Thêm bước đầu tiên** / **Record** / **Lặp** ở cột trái.
    Bước mới vào sau bước đang chọn, hoặc vào nhánh còn trống của khung Lặp / Rẽ nhánh đang chọn. Nút **+** giữa hai bước
    chèn đúng chỗ đó; kéo tay cầm ⠿ (hoặc Alt+↑ / Alt+↓) để di chuyển.
+   Nút **Quy trình | Sơ đồ** trên vùng xem (phím **M**) đổi sang sơ đồ tự sắp xếp từ trái sang phải để nhìn tổng quan:
+   kéo nền để di chuyển, Ctrl + cuộn để thu phóng, vẫn chọn, thêm (nút **+** trên đường nối), xóa, nhân bản được.
 2. Chọn bước để cấu hình ở cột phải. Với bước Record, bấm **Import từ org…** để lấy field có sẵn từ org.
 3. **▶ Xem trước** (Ctrl+Enter) để sinh dữ liệu và xem bảng kết quả (200 dòng đầu mỗi sObject), tải JSON hoặc CSV đủ mọi
    bản ghi.

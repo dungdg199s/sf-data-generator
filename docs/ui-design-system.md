@@ -342,17 +342,33 @@ bằng chữ đó, trừ khi đang ở trong ô nhập; Esc, Tab và Shift+Tab �
 | Inspector chưa chọn gì | Chữ `text-muted`, căn giữa |
 | Kết quả chưa chạy | "Chưa chạy." `text-muted` |
 
+### 6.13 Sơ đồ (`.canvas`, [0003](design/0003-process-mode.md) đợt B)
+
+| Phần | Quy tắc |
+| --- | --- |
+| Nút chế độ `.view-switch` | Cặp nút liền ở đầu hàng "Thu gọn/Mở tất cả" (không nằm ở thanh trên, để giữ ngân sách chiều rộng của 0009). Nút đang chọn: nền `accent-subtle`, chữ `accent-text`, `aria-pressed="true"` |
+| Khung nhìn `.canvas` | Nền `bg` + chấm `canvas-dot` như Quy trình; chấm co giãn và trôi theo pan/zoom. Con trỏ `grab` / `grabbing` |
+| Đường nối `.dg-lines` | Một `<path>` SVG, nét `border-strong` 2 px; chấm gộp nhánh `.dg-dots` cùng màu |
+| Thẻ `.dg-card` | Dùng chung `.step-card` (§6.4: viền, sọc loại bước, chọn, lỗi, badge, chip, `Đã tắt`), kích thước cố định 210 × 76 px, ba hàng: loại + alias + badge + ⋯; tóm tắt; chip / tag. Bước tắt: `.is-disabled` (cùng luật với `.step.disabled > .step-card`) |
+| Khung `.dg-frame` + đầu khung `.dg-head` | Khung nền `--c-subtle`, sọc trái `--c`; đầu khung là một `.step-card` một hàng rộng cả khung |
+| Nhãn làn `.dg-lane-label` | `text-xs`, đậm, màu `--c-text` của loại bước cha; "✓" / "✗" như §6.5 |
+| "+" và ô rỗng | Như §6.6 (`.add-btn`, `.slot-empty`, `.add-first`); khi kéo mục palette, "+" gần nhất được tô `accent` |
+| Ô con lỗi `.dg-slot` | Viền nét đứt `danger` / `warning` quanh thân khung hoặc làn (cùng `.slot-error` / `.slot-warning`) |
+| Thu phóng `.dg-zoom` | Nhóm nút góc trên phải khung nhìn (không bị bottom sheet che): − · 100% · + · ⤢; nền `surface-raised`, bóng 1 |
+
+Các lớp vẽ theo thứ tự DOM (khung, đường nối, thẻ), không dùng `z-index` riêng; khung lồng nhau xếp theo cấp lồng.
+
 ## 7. Bố cục và tầng nền
 
 | Vùng | Nền | Ranh giới |
 | --- | --- | --- |
 | Topbar, palette, inspector, kết quả | `surface` | viền `border` |
-| Canvas Quy trình | `bg` + chấm `canvas-dot` 1 px mỗi 20 px | — |
+| Canvas Quy trình / Sơ đồ | `bg` + chấm `canvas-dot` 1 px mỗi 20 px | — |
 | Thẻ, popup, hộp thoại | `surface-raised` | viền `border` + bóng 1/2/3 |
 
 Ở theme tối, càng nổi càng sáng: `bg` (950) < `surface` (900) < `surface-raised` (850).
 
-Cột giữa là flex dọc `[Thu gọn/Mở tất cả] [canvas (co giãn)] [thanh lỗi]`. Không lớp nổi nào (thanh lỗi, sheet, toast) được
+Cột giữa là flex dọc `[Quy trình | Sơ đồ · Thu gọn/Mở tất cả] [canvas (co giãn)] [thanh lỗi]`. Không lớp nổi nào (thanh lỗi, sheet, toast) được
 che thẻ đang được nói tới hay đang chọn.
 
 **Mốc chiều rộng** ([0009](design/0009-bo-cuc-man-hinh.md); media query không dùng được biến CSS, nên ghi ở đây):
@@ -363,8 +379,8 @@ che thẻ đang được nói tới hay đang chọn.
 | 1 140–1 299 px | 1 hàng, ẩn tên app (vẫn có trong `<title>`) | |
 | 901–1 139 px | 2 hàng: `.tb-file` / `.tb-run` (Seed trái, các nút phải). Hai nhóm luôn gập nguyên nhóm | |
 | ≤ 900 px | như trên + nút **⋯** (nhóm Mẫu) | Palette thành hàng ngang, inspector thành bottom sheet |
-| ≤ 900 px và cao ≤ 500 px (điện thoại xoay ngang) | như trên | Ẩn hàng "Thu gọn/Mở tất cả" (để còn ≥ 60 px canvas trên sheet), hai mục này vào menu ⋯ (nhóm Khung) |
-| ≤ 720 px (điện thoại) | 2 hàng: `[tên][Seed n][↶][↷][⋯]` / `[Org][▶ Xem trước][⤒ Insert]`. Mới/Mở…/Lưu, Seed, ⟳, Thu gọn/Mở tất cả, Giao diện vào menu ⋯. Org, Xem trước, Insert không bao giờ vào menu | Đầu panel kết quả: tóm tắt cuộn ngang, `⤓ Tải`; popup bảng chọn biến rộng cả màn hình |
+| ≤ 900 px và cao ≤ 500 px (điện thoại xoay ngang) | như trên | Ẩn hàng "Thu gọn/Mở tất cả" (để còn ≥ 60 px canvas trên sheet), hai mục này vào menu ⋯ (nhóm Khung), nút Quy trình / Sơ đồ vào nhóm Chế độ xem |
+| ≤ 720 px (điện thoại) | 2 hàng: `[tên][Seed n][↶][↷][⋯]` / `[Org][▶ Xem trước][⤒ Insert]`. Mới/Mở…/Lưu, Seed, ⟳, Quy trình/Sơ đồ, Thu gọn/Mở tất cả, Giao diện vào menu ⋯. Luôn mở ở Quy trình. Org, Xem trước, Insert không bao giờ vào menu | Đầu panel kết quả: tóm tắt cuộn ngang, `⤓ Tải`; popup bảng chọn biến rộng cả màn hình |
 
 ## 8. Trợ năng
 

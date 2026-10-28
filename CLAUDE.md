@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A Salesforce test-data generator. Users build a workflow of nested steps in the browser (the "Quy trình" view: Record / Loop / Branch steps, Power Automate style), the UI POSTs the **workflow JSON** to a Node.js server, and the server generates Salesforce-typed values and can insert them into an org. Org credentials come from the **locally installed, authenticated `sf` CLI**, and are never stored.
+A Salesforce test-data generator. Users build a workflow of nested steps in the browser (the "Quy trình" view: Record / Loop / Branch steps, Power Automate style; or the auto-laid-out, pan/zoom "Sơ đồ" view of the same tree, key M), the UI POSTs the **workflow JSON** to a Node.js server, and the server generates Salesforce-typed values and can insert them into an org. Org credentials come from the **locally installed, authenticated `sf` CLI**, and are never stored.
 
 Stack constraint: Node.js and plain HTML/JS (ES modules, no build step). Add React or Tailwind only if they are really needed. The only runtime dependency is **jsforce** (Salesforce API), so run `npm install` once.
 
