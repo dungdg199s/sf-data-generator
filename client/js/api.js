@@ -74,7 +74,7 @@ export const api = {
   /** Streaming run (design 0004): body { workflow, seed, now?, target?, org?, refreshQueries?, expectQueries? }. */
   runStream,
   /** Stops a run after the Salesforce call in flight (404 once it is over). */
-  cancelRun: (runId) => call('POST', `/api/runs/${encodeURIComponent(runId)}/cancel`),
+  cancelRun: (runId) => call('POST', `/api/runs/${encodeURIComponent(runId)}/cancel`, {}),
   /** Regenerates the run on the server (same seed + now) → { blob, filename }. */
   exportFile: async (body) => {
     const res = await fetch('/api/export', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });

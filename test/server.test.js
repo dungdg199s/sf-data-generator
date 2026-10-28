@@ -317,7 +317,7 @@ test('POST /api/runs/:id/cancel stops an insert after the call in flight', async
     const first = JSON.parse(new TextDecoder().decode((await reader.read()).value).split('\n')[0]);
     assert.equal(first.type, 'start');
     while (calls < 2) await new Promise((r) => setTimeout(r, 5));
-    const cancel = await fetch(`${url}/api/runs/${first.runId}/cancel`, { method: 'POST' });
+    const cancel = await fetch(`${url}/api/runs/${first.runId}/cancel`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
     assert.deepEqual(await cancel.json(), { ok: true });
     release();
     let text = '';
@@ -326,7 +326,7 @@ test('POST /api/runs/:id/cancel stops an insert after the call in flight', async
     assert.equal(done.type, 'done');
     // The first window holds the 300 Accounts: call 1 (200) and the held call 2 (100) both land.
     assert.deepEqual([done.result.insert.cancelled, done.result.insert.inserted, calls], [true, 300, 2]);
-    assert.equal((await fetch(`${url}/api/runs/${first.runId}/cancel`, { method: 'POST' })).status, 404, 'the run is over');
+    assert.equal((await fetch(`${url}/api/runs/${first.runId}/cancel`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).status, 404, 'the run is over');
   } finally {
     app.close();
   }
@@ -398,5 +398,49 @@ test('a client that leaves while Query steps are read gets no run (nothing inser
     assert.equal(created, 0);
   } finally {
     app.close();
+  }
+});
+
+// ---------- review fixes (0004 "Sửa sau review") ----------
+
+import { requestGuard } from '../server/index.js';
+
+/** A throwaway app on its own port with a given client; → { url, close }. */
+async function appWith(client, opts = {}) {
+  const app = http.createServer(createApp({ cli: { listOrgs: async () => [{ alias: 'dev', username: 'a@x.com' }], getConnection: async () => ({}) }, client, ...opts }));
+  await new Promise((r) => app.listen(0, '127.0.0.1', r));
+  return { url: `http://127.0.0.1:${app.address().port}`, close: () => app.close() };
+}
+
+test('cross-site requests are refused: foreign Origin / Sec-Fetch-Site / Host (403), non-JSON body (415); curl and the app still work', async () => {
+  let created = 0;
+  const { url, close } = await appWith({ create: async (_t, _s, recs) => { created += recs.length; return recs.map(() => ({ success: true, id: '001x' })); } });
+  try {
+    const port = new URL(url).port;
+    const body = JSON.stringify({ workflow: wf([record('a', 'Account', 'acc', [], { count: 2 })]), target: { kind: 'org', org: 'dev' } });
+    // The attack: a page on another site posts a "simple" text/plain request (no CORS preflight).
+    const plain = await fetch(`${url}/api/run`, { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body });
+    assert.equal(plain.status, 415);
+    assert.match((await plain.json()).error, /Content-Type: application\/json/);
+    const foreign = await fetch(`${url}/api/run`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: 'https://evil.example' }, body });
+    assert.equal(foreign.status, 403);
+    assert.match((await foreign.json()).error, /^Từ chối yêu cầu từ trang web khác/);
+    const site = await fetch(`${url}/api/export`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Sec-Fetch-Site': 'cross-site' }, body: '{}' });
+    assert.equal(site.status, 403);
+    const read = await fetch(`${url}/api/orgs`, { headers: { Origin: 'http://evil.example' } });
+    assert.equal(read.status, 403, 'org data is not readable cross-site');
+    for (const path of ['/api/validate', '/api/runs/rabc/cancel']) {
+      assert.equal((await fetch(url + path, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: 'null' }, body: '{}' })).status, 403, path);
+    }
+    assert.equal(created, 0, 'nothing was inserted');
+    // DNS rebinding: same origin as far as the browser knows, but the Host is not this machine.
+    assert.deepEqual(requestGuard({ method: 'GET', headers: { host: `evil.example:${port}`, origin: `http://evil.example:${port}` } }, { allowedHosts: new Set(['127.0.0.1', 'localhost']) }).status, 403);
+    // curl (no Origin) and the app (same origin) are fine.
+    assert.equal((await fetch(`${url}/api/run`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body })).status, 200);
+    assert.equal((await fetch(`${url}/api/run`, { method: 'POST', headers: { 'Content-Type': 'application/json; charset=utf-8', Origin: url, 'Sec-Fetch-Site': 'same-origin' }, body })).status, 200);
+    assert.equal((await fetch(`${url}/api/meta`, { headers: { 'Sec-Fetch-Site': 'none' } })).status, 200);
+    assert.equal(created, 4);
+  } finally {
+    close();
   }
 });

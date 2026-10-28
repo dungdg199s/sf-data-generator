@@ -36,7 +36,44 @@ const MIME = {
 const STREAMED = Symbol('streamed'); // a route that wrote the response itself
 const NDJSON = 'application/x-ndjson';
 
-export function createApp({ cli = createSfCli(), client, queryCache = createQueryCache(), runOptions = {} } = {}) {
+/** Host names the API answers to (DNS-rebinding guard); `HOST` adds its own. */
+const LOCAL_HOSTS = ['localhost', '127.0.0.1', '[::1]', '::1'];
+const WILDCARD_HOSTS = new Set(['0.0.0.0', '::', '[::]']);
+
+/**
+ * Why a request to /api/* must be refused, or null. The server acts with the local sf CLI's org
+ * access, so a web page the user happens to visit must not be able to drive it:
+ * - the Host header must name this machine (a DNS-rebinding page sends its own host name);
+ * - a browser's `Sec-Fetch-Site` must be `same-origin` or `none` (typed URL, curl has none);
+ * - an `Origin` header, when present, must be this server's own origin;
+ * - a POST must be `Content-Type: application/json` (an HTML form or a "simple" cross-site fetch
+ *   can only send text/plain, form-urlencoded or multipart without a CORS preflight).
+ * → { status, message } | null
+ */
+export function requestGuard(req, { allowedHosts = null } = {}) {
+  const host = String(req.headers.host ?? '');
+  const hostname = host.replace(/:\d+$/, '').toLowerCase();
+  if (allowedHosts && !allowedHosts.has(hostname)) {
+    return { status: 403, message: `Từ chối yêu cầu tới địa chỉ "${host}". Mở app bằng http://127.0.0.1:<cổng> hoặc http://localhost:<cổng>.` };
+  }
+  const site = req.headers['sec-fetch-site'];
+  const origin = req.headers.origin;
+  if ((site && site !== 'same-origin' && site !== 'none') || (origin !== undefined && origin !== `http://${host}`)) {
+    return { status: 403, message: 'Từ chối yêu cầu từ trang web khác. Chỉ giao diện của app (cùng địa chỉ) mới được gọi API này.' };
+  }
+  if (req.method === 'POST' && !/^application\/json\s*(;|$)/i.test(String(req.headers['content-type'] ?? ''))) {
+    return { status: 415, message: 'Body phải là JSON (Content-Type: application/json).' };
+  }
+  return null;
+}
+
+/** Hosts for requestGuard from the HOST the server listens on (a wildcard bind accepts any name). */
+export function allowedHostsFor(bindHost) {
+  if (bindHost && WILDCARD_HOSTS.has(bindHost)) return null;
+  return new Set([...LOCAL_HOSTS, ...(bindHost ? [String(bindHost).toLowerCase()] : [])]);
+}
+
+export function createApp({ cli = createSfCli(), client, queryCache = createQueryCache(), runOptions = {}, allowedHosts = allowedHostsFor(null) } = {}) {
   const sfClient = client ?? createSfClient({ cli });
   const runs = createRunRegistry();
 
@@ -191,6 +228,8 @@ export function createApp({ cli = createSfCli(), client, queryCache = createQuer
     const url = new URL(req.url, 'http://localhost');
     try {
       if (url.pathname.startsWith('/api/')) {
+        const refused = requestGuard(req, { allowedHosts });
+        if (refused) throw httpError(refused.status, refused.message);
         const route = routes.find(([method, re]) => method === req.method && re.test(url.pathname));
         if (!route) throw httpError(404, 'Không có API này.');
         const body = req.method === 'POST' ? await readJson(req) : undefined;
@@ -312,7 +351,7 @@ async function serveStatic(pathname, res) {
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   const port = Number(process.env.PORT ?? 3000);
   const host = process.env.HOST ?? '127.0.0.1';
-  http.createServer(createApp()).listen(port, host, () => {
+  http.createServer(createApp({ allowedHosts: allowedHostsFor(host) })).listen(port, host, () => {
     console.log(`sf-data-generator: http://${host}:${port}`);
   });
 }
