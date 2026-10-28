@@ -242,5 +242,21 @@ test('renameField updates {{alias.Old}} everywhere, {{this.Old}} in the step and
   assert.equal(fieldsOf(wf, 'c')[0].options.template, '{{acc.Industry__c}} / {{other.Industry}} / {{acc.Name}}');
   assert.equal(fieldsOf(wf, 'c')[1].options.template, '{{this.Industry}}', "another step's this.* is not touched");
   assert.equal(br.config.left, 'acc.Industry__c');
-  assert.deepEqual(renameField(wf, 'a', 'Nope', 'X', { catalog }), { count: 0, places: [] });
+  assert.deepEqual(res.names.sort(), ['acc', 'this']);
+  assert.deepEqual(renameField(wf, 'a', 'Nope', 'X', { catalog }), { count: 0, places: [], names: [] });
+});
+
+test('setStepAlias renames a loop variable in a branch left hidden by showIf (review fix)', () => {
+  const br = { id: 'B', type: 'branch', config: { kind: 'chance', probability: 0.5, left: 'loop.index' }, slots: { true: [], false: [] } };
+  const wf = tree([loop('L', [br, r('c', 'c', [T('T', '{{loop.index}}')])])]);
+  setStepAlias(wf, 'L', 'it', { memo: new Map(), slotKeys, catalog });
+  assert.equal(br.config.left, 'it.index', 'switching back to "So sánh giá trị" must not find a broken reference');
+  assert.equal(fieldsOf(wf, 'c')[0].options.template, '{{it.index}}');
+});
+
+test('setStepAlias: the first alias of a record moves the references made through its id (review fix)', () => {
+  const wf = tree([r('r1', ''), r('c', 'con', [T('T', '{{r1.Name}}'), { name: 'P', type: 'lookup', options: { ref: 'r1' } }])]);
+  setStepAlias(wf, 'r1', 'acc', { memo: new Map(), slotKeys, catalog });
+  assert.equal(fieldsOf(wf, 'c')[0].options.template, '{{acc.Name}}');
+  assert.equal(fieldsOf(wf, 'c')[1].options.ref, 'acc');
 });

@@ -264,16 +264,18 @@ export function renameAlias(steps, from, to, { catalog, only } = {}) {
 /**
  * After renaming field `from` → `to` of step `stepId`: update `{{<alias>.from}}` everywhere,
  * `{{this.from}}` in the same step and branch `left` paths, using the scope analysis (only
- * references that resolve to this step). Returns { count, places: [{ nodeId, field }] }.
+ * references that resolve to this step). Returns { count, places: [{ nodeId, field }], names }
+ * (`names`: the prefixes whose references changed, e.g. ['acc', 'this']).
  */
 export function renameField(wf, stepId, from, to, { catalog } = {}) {
-  const none = { count: 0, places: [] };
+  const none = { count: 0, places: [], names: [] };
   if (!from || !to || from === to || !catalog) return none;
   const scope = analyzeScope(wf, catalog);
-  const refs = refsTo(scope, stepId, from).filter((r) => r.mode !== 'ref');
+  const refs = refsTo(scope, stepId, from, { includeHidden: true }).filter((r) => r.mode !== 'ref');
   if (!refs.length) return none;
   let count = 0;
   const places = [];
+  const changedNames = new Set();
   const steps = new Map();
   walkSteps(wf.steps, (s) => { steps.set(s.id, s); });
   const byOption = new Map();
@@ -291,13 +293,14 @@ export function renameField(wf, stepId, from, to, { catalog } = {}) {
       const [next, n] = renameInValue(o.mode, value, `${name}.${from}`, `${name}.${to}`);
       value = next;
       changed += n;
+      if (n) changedNames.add(name);
     }
     if (!changed) continue;
     o.set(value);
     count += changed;
     places.push({ nodeId: r.nodeId, field: r.field });
   }
-  return { count, places };
+  return { count, places, names: [...changedNames] };
 }
 
 /**
@@ -307,9 +310,10 @@ export function renameField(wf, stepId, from, to, { catalog } = {}) {
  * references stay on the last good name, remembered in `memo` (Map stepId → name), and follow
  * again once the name is good. Record references are renamed in the whole workflow, loop
  * variables only inside the loop body — and, with `catalog`, only where they resolve to this
- * loop (not inside a nested loop of the same name). Returns true when references were moved.
+ * loop (not inside a nested loop of the same name). A record without alias is referenced by its
+ * id; the first alias set moves those references. Returns true when references were moved.
  */
-export function setStepAlias(wf, id, value, { memo = new Map(), slotKeys, catalog } = {}) {
+export function setStepAlias(wf, id, value, { memo = new Map(), slotKeys, catalog, scope } = {}) {
   const at = findStep(wf, id, slotKeys);
   if (!at) return false;
   const step = at.step;
@@ -322,6 +326,8 @@ export function setStepAlias(wf, id, value, { memo = new Map(), slotKeys, catalo
   const owns = (name) => isAliasName(name) && (isLoop || !aliasTaken(wf, at, name, slotKeys));
   const current = effective(c.alias);
   if (good(current) || (!memo.has(id) && owns(current))) memo.set(id, current);
+  // A record without alias is referenced by its id (like the executor): the first alias takes them along.
+  if (!isLoop && !c.alias && !memo.has(id) && owns(String(step.id))) memo.set(id, String(step.id));
   const from = memo.get(id);
   const to = effective(value);
   if (!from || from === to || !good(to) || !owns(from)) {
@@ -330,9 +336,15 @@ export function setStepAlias(wf, id, value, { memo = new Map(), slotKeys, catalo
   }
   let only;
   if (isLoop && catalog) {
-    // Only the references that resolve to this loop (not those of a shadowing inner loop).
+    // Only the references that resolve to this loop (not those of a shadowing inner loop),
+    // including options hidden by showIf. `scope` (analysis of `wf` as it is) saves a second
+    // analysis when the loop still has the name the references use.
+    const reuse = scope && effective(c.alias) === from;
+    const saved = c.alias;
     c.alias = from;
-    only = new Set(analyzeScope(wf, catalog).refs.filter((r) => r.source === id).map((r) => `${r.nodeId}|${r.field}|${r.option}`));
+    const refs = (reuse ? scope : analyzeScope(wf, catalog)).refs;
+    c.alias = saved;
+    only = new Set(refs.filter((r) => r.source === id).map((r) => `${r.nodeId}|${r.field}|${r.option}`));
   }
   c.alias = value;
   renameAlias(isLoop ? step.slots?.body ?? [] : wf.steps, from, to, { catalog, only });

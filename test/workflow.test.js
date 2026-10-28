@@ -308,3 +308,34 @@ test('validation: a Lookup imported with referenceTo warns when the parent step 
   const ok = wf([acc(), record('c', 'Contact', 'con', [{ name: 'AccountId', type: 'lookup', options: { ref: 'acc', referenceTo: ['Account'] } }])]);
   assert.deepEqual(validateWorkflow(ok), { errors: [], warnings: [] });
 });
+
+// ---------- review fixes (0005 "Sửa sau review") ----------
+
+test('validation: a turned-off loop\'s variable used outside it is outsideLoop, not "turn it back on"', () => {
+  const w = wf([{ ...loop('L', { count: 2 }, [acc()]), disabled: true }, record('c', 'Contact', 'con', [tplField('T', '{{loop.index}}')])]);
+  const e = errorsOf(w).find((x) => x.nodeId === 'c');
+  assert.equal(e.code, 'outsideLoop');
+  assert.doesNotMatch(e.message, /Bật lại/);
+});
+
+test('validation: loop.index outside any loop is outsideLoop with how to fix; inside another loop it suggests that loop', () => {
+  const none = wf([acc(), branch('b', { kind: 'compare', left: 'loop.index', op: 'eq', right: '1' }, [record('t', 'Task', 'tk', [])])]);
+  const e = errorsOf(none).find((x) => x.nodeId === 'b');
+  assert.equal(e.code, 'outsideLoop');
+  assert.equal(e.message, 'loop.index chỉ dùng được bên trong một vòng lặp, nhưng bước này không nằm trong vòng lặp nào. Bọc bước này trong Lặp (menu ⋯ → "Bọc trong Lặp"), hoặc chọn biến khác bằng {x}.');
+  const other = wf([loop('l', { count: 2, alias: 'i' }, [branch('b', { kind: 'compare', left: 'loop.index', op: 'eq', right: '1' }, [record('t', 'Task', 'tk', [])])])]);
+  assert.deepEqual(errorsOf(other).find((x) => x.nodeId === 'b').suggestion, { option: 'left', from: 'loop.index', to: 'i.index' });
+});
+
+test('validation: Master-Detail hint names the loop option that is in use', () => {
+  const md = (cfg) => wf([loop('l', { alias: 'x', ...cfg }, [acc()]), record('c', 'Contact', 'con', [lookup('acc', 'current', 'masterdetail')])]);
+  assert.match(warningsOf(md({ count: 0 })).find((x) => x.nodeId === 'c').message, /đặt "Số lần lặp" ≥ 1\.$/);
+  assert.match(warningsOf(md({ mode: 'range', min: 0, max: 2 })).find((x) => x.nodeId === 'c').message, /đặt "Ít nhất" ≥ 1\.$/);
+});
+
+test('validation: a missing sub-member names the field\'s members', () => {
+  const w = wf([record('a', 'Account', 'acc', [{ name: 'Geo__c', type: 'geolocation' }]), record('c', 'Contact', 'con', [tplField('T', '{{acc.Geo__c.latitude}} {{acc.Geo__c.lat}}')])]);
+  const errors = errorsOf(w);
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0].message, 'Field "T": field "Geo__c" của bước "acc" chỉ có latitude, longitude; không có "lat".');
+});

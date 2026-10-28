@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { analyzeScope, refChoices, refsTo, loopMinIterations, tokenize, stripPath, hasUnclosed, closest } from '../shared/scope.js';
-import { scopeCatalog } from '../server/workflow/schema.js';
+import { scopeCatalog, validateWorkflow } from '../server/workflow/schema.js';
 import { NODE_TYPES } from '../server/workflow/nodes.js';
 import { describeGenerators } from '../server/generators/index.js';
 import { wf, record, loop, branch } from './helpers.js';
@@ -90,7 +90,8 @@ test('scope: disabled step is hidden as disabled and its own references are flag
   const scope = scopeOf(w);
   assert.equal(stateOf(scope, 'use', 'off'), '-disabled');
   assert.equal(stateOf(scope, 'use', 'inside'), '-disabled');
-  assert.equal(stateOf(scope, 'use', 'dl'), '-disabled');
+  // A loop variable used outside its loop is outsideLoop, even when the loop is turned off (review fix).
+  assert.equal(stateOf(scope, 'use', 'dl'), '-outsideLoop');
   assert.equal(scope.at.off.disabled, true);
   assert.equal(scope.refs.find((x) => x.nodeId === 'use').code, 'disabled');
   assert.ok(scope.refs.filter((x) => x.nodeId !== 'use').every((x) => x.disabled));
@@ -141,9 +142,10 @@ test('scope: refChoices lists usable parents nearest first, then the rest with a
   const choices = refChoices(scope, 'here');
   assert.deepEqual(choices.map((c) => `${c.name}:${c.usable ? c.certainty : `-${c.reason}`}:${c.note}`), ['b:last:bản ghi cuối', 'a:always:', 'c:-after:chạy sau bước này']);
   assert.deepEqual(scope.refs.map((x) => `${x.field}:${x.mode}:${x.source}:${x.certainty}`), ['fields.P:ref:b:last']);
-  // A mode 'fixed' Lookup has no ref to check (the option is hidden).
+  // A mode 'fixed' Lookup has no ref to check (the option is hidden): listed with `hidden`, so renames follow it.
   const fixed = scopeOf(wf([r('x', 'x', [{ name: 'P', type: 'lookup', options: { mode: 'fixed', ref: 'zzz', ids: ['001'] } }])]));
-  assert.deepEqual(fixed.refs, []);
+  assert.deepEqual(fixed.refs.map((x) => `${x.path}:${x.hidden}`), ['zzz:true']);
+  assert.deepEqual(validateWorkflow(wf([r('x', 'x', [{ name: 'P', type: 'lookup', options: { mode: 'fixed', ref: 'zzz', ids: ['001'] } }])])).errors, []);
 });
 
 test('scope: helpers — loopMinIterations, tokenize, stripPath, hasUnclosed, closest', () => {
@@ -160,4 +162,28 @@ test('scope: helpers — loopMinIterations, tokenize, stripPath, hasUnclosed, cl
   assert.equal(closest('acco', ['acc', 'con']), 'acc');
   assert.equal(closest('name', ['Name', 'Nam']), 'Name');
   assert.equal(closest('i', ['z']), null);
+});
+
+test('scope: analysis stays linear — a 1000-step workflow is analysed well under a second (review fix)', () => {
+  // Quadratic versions took ~1.5 s here (each step copied the visible set and listed every hidden source).
+  const steps = [];
+  for (let l = 0; l < 50; l++) {
+    const body = [];
+    for (let k = 0; k < 19; k++) {
+      const fields = [];
+      for (let f = 0; f < 10; f++) fields.push(f % 2 ? { name: `F${f}`, type: 'text' } : tpl(`F${f}`, `{{l${l}.index}} {{r${l}_${Math.max(0, k - 1)}.F1}} {{this.F1}}`));
+      body.push(r(`r${l}_${k}`, `r${l}_${k}`, fields));
+    }
+    steps.push(loop(`L${l}`, { count: 2, alias: `l${l}` }, body));
+  }
+  const w = wf(steps);
+  analyzeScope(w, catalog); // warm-up
+  const t0 = performance.now();
+  const scope = analyzeScope(w, catalog);
+  const ms = performance.now() - t0;
+  assert.equal(Object.keys(scope.at).length, 1000);
+  assert.ok(scope.refs.length >= 14000);
+  assert.ok(ms < 1000, `analyzeScope took ${ms.toFixed(0)} ms for 1000 steps`);
+  // Lazy per-step lists still work on a big workflow.
+  assert.equal(scope.at.r49_18.visible[0].source, 'r49_17');
 });

@@ -187,7 +187,7 @@ export function prepareWorkflow(wf) {
     const stepById = new Map(steps.map(({ step }) => [step.id, step]));
     const seen = new Set();
     for (const ref of scope.refs) {
-      if (ref.disabled || !ref.code) continue;
+      if (ref.disabled || ref.hidden || !ref.code) continue;
       const key = `${ref.nodeId}|${ref.field}|${ref.path}|${ref.code}`;
       if (seen.has(key)) continue;
       seen.add(key);
@@ -308,6 +308,9 @@ export function referenceIssue(ref, scope, step) {
           message = `biến lặp "${s}" chỉ có ${src.members.map((m) => m.key).join(', ')}; không có "${ref.missing ?? ref.member}".`;
         } else if (src?.origin === 'org' || src?.nodeType === 'query') {
           message = `Query "${s}" không lấy field "${ref.missing}". Thêm ${ref.missing} vào "Field cần lấy" của bước Query.`;
+        } else if (ref.memberOf) {
+          const hint = suggest ? suggest.split('.').pop() : null;
+          message = `field "${ref.memberOf}" của bước "${s}" chỉ có ${ref.validMembers.join(', ')}; không có "${ref.missing}".${hint ? ` Ý bạn là "${hint}"?` : ''}`;
         } else if (ref.viaThis) {
           message = `bước này không có field "${ref.missing}". Chọn field khác bằng {x}.`;
         } else {
@@ -338,7 +341,9 @@ export function referenceIssue(ref, scope, step) {
           : `bước "${s}" đang tắt. Bật lại bước đó (Ctrl+/) hoặc chọn biến khác.`;
         break;
       case 'outsideLoop':
-        message = `${show(ref.path)} chỉ dùng được bên trong vòng lặp "${s}". Kéo bước này vào trong vòng lặp "${s}", hoặc bỏ biến này.`;
+        message = ref.noLoop
+          ? `${show(ref.path)} chỉ dùng được bên trong một vòng lặp, nhưng bước này không nằm trong vòng lặp nào. Bọc bước này trong Lặp (menu ⋯ → "Bọc trong Lặp"), hoặc chọn biến khác bằng {x}.`
+          : `${show(ref.path)} chỉ dùng được bên trong vòng lặp "${s}". Kéo bước này vào trong vòng lặp "${s}", hoặc bỏ biến này.`;
         break;
       case 'thisBelow':
         message = `${show(ref.path)} chỉ thấy field phía trên. Kéo field "${ref.member.split('.')[0]}" lên trên "${fieldName}" (nút ↑).`;
@@ -380,7 +385,7 @@ export function referenceIssue(ref, scope, step) {
 
 function maybeMessage(ref, s, isLookup, isMD) {
   if (ref.why?.loop) {
-    return `vòng lặp "${ref.why.loop}" có thể chạy 0 lần nên "${s}" có thể chưa có bản ghi.${isMD ? ' Master-Detail sẽ báo lỗi khi chạy; đặt "Ít nhất" ≥ 1.' : ''}`;
+    return `vòng lặp "${ref.why.loop}" có thể chạy 0 lần nên "${s}" có thể chưa có bản ghi.${isMD ? ` Master-Detail sẽ báo lỗi khi chạy; đặt ${ref.why.range ? '"Ít nhất"' : '"Số lần lặp"'} ≥ 1.` : ''}`;
   }
   return `"${s}" chỉ được tạo trên một số nhánh trước khi tới đây, nên có thể chưa có (${isLookup ? 'field này trống' : 'giá trị trống'}, hoặc là bản ghi của lần lặp trước). Đặt bước này ngay sau "${s}" nếu cần luôn có giá trị.${isMD ? ' Master-Detail sẽ báo lỗi khi chạy nếu chưa có bản ghi cha.' : ''}`;
 }

@@ -105,9 +105,10 @@ export function referenceOptions(step, catalog, { includeHidden = false } = {}) 
   for (const def of type?.options ?? []) {
     if (!isRefOption(def)) continue;
     const values = { ...Object.fromEntries((type.options ?? []).map((d) => [d.key, d.default])), ...c };
-    if (!includeHidden && !shown(def, values)) continue;
+    const isShown = shown(def, values);
+    if (!includeHidden && !isShown) continue;
     out.push({
-      field: def.key, option: def.key, mode: def.vars ?? 'ref', def, value: c[def.key],
+      field: def.key, option: def.key, mode: def.vars ?? 'ref', def, value: c[def.key], hidden: !isShown,
       set: (v) => { (step.config ??= {})[def.key] = v; },
     });
   }
@@ -123,9 +124,10 @@ export function referenceOptions(step, catalog, { includeHidden = false } = {}) 
     }
     for (const def of ft?.options ?? []) {
       if (!isRefOption(def)) continue;
-      if (!includeHidden && !shown(def, values)) continue;
+      const isShown = shown(def, values);
+      if (!includeHidden && !isShown) continue;
       out.push({
-        field: `fields.${f.name}`, option: def.key, mode: def.vars ?? 'ref', def, value: values[def.key],
+        field: `fields.${f.name}`, option: def.key, mode: def.vars ?? 'ref', def, value: values[def.key], hidden: !isShown,
         stored: opts[def.key], fieldIndex, fieldName: f.name,
         set: (v) => { f.options = { ...(f.options ?? {}), [def.key]: v }; },
       });
@@ -257,9 +259,11 @@ const NOTES = {
  * @returns {{
  *   partial: false,
  *   sources: Record<stepId, source>,
- *   at: Record<stepId, { self, disabled, visible: [{ source, certainty, note? }], hidden: [{ source, reason, note }] }>,
- *   refs: [{ nodeId, field, option, mode, path, name, member, fieldIndex?, disabled, source, certainty?, reason?,
+ *   at: Record<stepId, { self, disabled, state(sourceId), varSource(name), visible: [{ source, certainty, note? }], hidden: [{ source, reason, note }] }>,
+ *   (visible / hidden are computed on first access)
+ *   refs: [{ nodeId, field, option, mode, path, name, member, fieldIndex?, disabled, hidden?, source, certainty?, reason?,
  *            code?, level?, suggestion?, why? }]
+ *   (`hidden`: the option is hidden by its showIf — not validated, but still followed by renames)
  * }}
  */
 export function analyzeScope(wf, catalog) {
@@ -313,107 +317,197 @@ export function analyzeScope(wf, catalog) {
     return out;
   };
 
+  // Downstream state is a persistent chain (each set pushes a node onto the current head), so a
+  // step only keeps a pointer to the head instead of a copy: the analysis stays linear in the
+  // workflow size. Lookups use the chain tree's DFS intervals; `visible`/`hidden` are built
+  // lazily, only for the steps a UI asks about.
   let seq = 0;
-  const raw = new Map(); // stepId → { S, vars, others, off }
-  function walk(list, S, vars, others, off) {
+  const ROOT = { id: null, entry: null, prev: null, kids: [] };
+  const nodesOf = new Map(); // source id → chain nodes setting it
+  const push = (head, id, entry) => {
+    const n = { id, entry, prev: head, kids: [] };
+    head.kids.push(n);
+    if (!nodesOf.has(id)) nodesOf.set(id, []);
+    nodesOf.get(id).push(n);
+    return n;
+  };
+  /** Entries added on top of `base` up to `head`, latest per id. */
+  const addedSince = (head, base) => {
+    const out = new Map();
+    for (let n = head; n && n !== base; n = n.prev) if (!out.has(n.id)) out.set(n.id, n.entry);
+    return out;
+  };
+  const raw = new Map(); // stepId → { head, vars, others, off }
+  function walk(list, head, vars, others, off) {
     for (const step of Array.isArray(list) ? list : []) {
       if (!isStep(step)) continue;
       const stepOff = off || step.disabled === true;
-      if (!raw.has(step.id)) raw.set(step.id, { S: new Map(S), vars, others, off: stepOff });
+      if (!raw.has(step.id)) raw.set(step.id, { head, vars, others, off: stepOff });
       const type = typeOf(step);
       const keys = slotsOf(step);
       const flow = type?.flow ?? { kind: keys.length ? 'branch' : 'sequence' };
-      const added = new Map();
+      let added = null;
       if (flow.kind === 'loop' && keys.length) {
         const body = flow.body ?? keys[0];
         const src = sources[step.id];
-        const inner = new Map(S);
         const innerVars = src?.kind === 'vars' && src.visibleIn?.inside === body ? [...vars, { id: step.id, name: src.name, seq: ++seq }] : vars;
-        walk(step.slots?.[body], inner, innerVars, others, stepOff);
+        const inner = addedSince(walk(step.slots?.[body], head, innerVars, others, stepOff), head);
         const minFn = typeof type.minIterations === 'function' ? type.minIterations : MIN_ITERATIONS[step.type];
         const once = (minFn ? minFn(step.config ?? {}) : 0) >= 1;
         const loopName = src?.name ?? step.id;
+        added = new Map();
         for (const [id, e] of inner) {
-          if (S.has(id)) continue;
-          added.set(id, once ? { ...e, certainty: worse('last', e.certainty) } : { ...e, certainty: 'maybe', why: e.why ?? { loop: loopName, loopId: step.id } });
+          added.set(id, once ? { ...e, certainty: worse('last', e.certainty) } : { ...e, certainty: 'maybe', why: e.why ?? { loop: loopName, loopId: step.id, range: (step.config?.mode ?? 'fixed') === 'range' } });
         }
       } else if (keys.length && flow.kind !== 'sequence') {
         const alts = flow.alternatives ?? keys;
         const results = alts.map((key, i) => {
           const others2 = new Set(others);
           alts.forEach((k, j) => { if (j !== i) definedIn(step.slots?.[k], others2); });
-          const inner = new Map(S);
-          walk(step.slots?.[key], inner, vars, others2, stepOff);
-          return inner;
+          return addedSince(walk(step.slots?.[key], head, vars, others2, stepOff), head);
         });
-        const ids = new Set(results.flatMap((r) => [...r.keys()].filter((id) => !S.has(id))));
+        const ids = new Set(results.flatMap((r) => [...r.keys()]));
+        added = new Map();
         for (const id of ids) {
           const all = results.every((r) => r.has(id));
           const entries = results.map((r) => r.get(id)).filter(Boolean);
           const e = entries[0];
           const certainty = all ? entries.map((x) => x.certainty).reduce(worse) : 'maybe';
           const why = certainty === 'maybe' ? entries.find((x) => x.why)?.why ?? (all ? undefined : { branch: step.id }) : undefined;
-          added.set(id, { ...e, certainty, ...(why ? { why } : {}) });
+          const { why: _w, ...rest } = e;
+          added.set(id, { ...rest, certainty, ...(why ? { why } : {}) });
         }
       } else if (keys.length) {
-        for (const key of keys) walk(step.slots?.[key], S, vars, others, stepOff);
+        for (const key of keys) head = walk(step.slots?.[key], head, vars, others, stepOff);
       }
       // Turned-off containers contribute nothing to the steps after them.
-      if (!stepOff) for (const [id, e] of added) S.set(id, e);
+      if (added && !stepOff) for (const [id, e] of added) head = push(head, id, e);
       const own = sources[step.id];
-      if (own && own.visibleIn === 'downstream' && !stepOff) S.set(step.id, { certainty: 'always', seq: ++seq });
+      if (own && own.visibleIn === 'downstream' && !stepOff) head = push(head, step.id, { certainty: 'always', seq: ++seq });
+    }
+    return head;
+  }
+  walk(wf?.steps, ROOT, [], new Set(), false);
+
+  // DFS intervals of the chain tree: node a is on the path to b iff tin[a] <= tin[b] <= tout[a].
+  {
+    let clock = 0;
+    const stack = [[ROOT, 0]];
+    ROOT.tin = clock++;
+    while (stack.length) {
+      const top = stack[stack.length - 1];
+      const [n, k] = top;
+      if (k < n.kids.length) {
+        top[1]++;
+        const c = n.kids[k];
+        c.tin = clock++;
+        stack.push([c, 0]);
+      } else {
+        n.tout = clock++;
+        stack.pop();
+      }
     }
   }
-  walk(wf?.steps, new Map(), [], new Set(), false);
+  const entryAt = (head, id) => {
+    let best = null;
+    for (const n of nodesOf.get(id) ?? []) {
+      if (n.tin <= head.tin && head.tin <= n.tout && (!best || n.tin > best.tin)) best = n;
+    }
+    return best?.entry ?? null;
+  };
+  const allSources = Object.values(sources);
 
   const at = {};
-  for (const [id, r] of raw) {
-    const visible = [];
-    const hidden = [];
-    const seen = new Set();
-    const names = new Set();
-    for (let i = r.vars.length - 1; i >= 0; i--) {
-      const v = r.vars[i];
-      if (seen.has(v.id)) continue;
-      seen.add(v.id);
-      if (names.has(v.name)) {
-        hidden.push({ source: v.id, reason: 'shadowed', note: `bị vòng lặp "${v.name}" bên trong che` });
-        continue;
+  for (const [id, r] of raw) at[id] = makeAt(id, r);
+
+  function makeAt(id, r) {
+    let visible = null;
+    let hidden = null;
+    const varByName = (name) => {
+      for (let i = r.vars.length - 1; i >= 0; i--) if (r.vars[i].name === name) return r.vars[i];
+      return null;
+    };
+    /** { certainty, why? } when visible, else { reason }. */
+    const state = (sid) => {
+      const s = sources[sid];
+      if (!s) return { reason: 'after' };
+      if (s.kind === 'vars' && s.visibleIn !== 'downstream') {
+        // Outside the loop body first: a turned-off loop's variable used elsewhere is "outside".
+        if (!r.vars.some((v) => v.id === sid)) return { reason: 'outsideLoop' };
+        return varByName(s.name)?.id === sid ? { certainty: 'always' } : { reason: 'shadowed' };
       }
-      names.add(v.name);
-      visible.push({ source: v.id, certainty: 'always', seq: v.seq });
-    }
-    for (const [sid, e] of r.S) {
-      if (seen.has(sid)) continue;
-      seen.add(sid);
-      visible.push({ source: sid, certainty: e.certainty, seq: e.seq, ...(e.why ? { why: e.why } : {}) });
-    }
-    visible.sort((a, b) => b.seq - a.seq);
-    for (const v of visible) {
-      delete v.seq;
-      if (v.certainty === 'maybe') v.note = v.why?.loop ? `vòng lặp "${v.why.loop}" có thể chạy 0 lần` : 'chỉ được tạo ở một số nhánh phía trên';
-      if (v.certainty === 'last') v.note = 'bản ghi cuối';
-    }
-    for (const s of Object.values(sources)) {
-      if (seen.has(s.nodeId)) continue;
-      let reason;
-      if (s.disabled) reason = 'disabled';
-      else if (s.kind === 'vars' && s.visibleIn !== 'downstream') reason = 'outsideLoop';
-      else if (r.others.has(s.nodeId)) reason = 'otherBranch';
-      else reason = 'after';
-      const note = reason === 'outsideLoop' ? `chỉ có bên trong vòng lặp "${s.name}"` : s.nodeId === id && reason === 'after' ? NOTES.self : NOTES[reason];
-      hidden.push({ source: s.nodeId, reason, note });
-    }
-    at[id] = { self: id, disabled: r.off, visible, hidden };
+      const e = sid === id ? null : entryAt(r.head, sid);
+      if (e) return { certainty: e.certainty, ...(e.why ? { why: e.why } : {}) };
+      if (s.disabled) return { reason: 'disabled' };
+      if (r.others.has(sid)) return { reason: 'otherBranch' };
+      return { reason: 'after' };
+    };
+    const noteOf = (sid, st) => {
+      const s = sources[sid];
+      if (st.reason === 'outsideLoop') return `chỉ có bên trong vòng lặp "${s.name}"`;
+      if (st.reason === 'shadowed') return `bị vòng lặp "${s.name}" bên trong che`;
+      if (st.reason === 'after' && sid === id) return NOTES.self;
+      return NOTES[st.reason];
+    };
+    return {
+      self: id,
+      disabled: r.off,
+      state,
+      /** Innermost visible loop variable called `name`, as a source. */
+      varSource: (name) => {
+        const v = varByName(name);
+        return v ? sources[v.id] : null;
+      },
+      get visible() {
+        if (visible) return visible;
+        const list = [];
+        const seen = new Set();
+        const names = new Set();
+        for (let i = r.vars.length - 1; i >= 0; i--) {
+          const v = r.vars[i];
+          if (seen.has(v.id) || names.has(v.name)) continue;
+          seen.add(v.id);
+          names.add(v.name);
+          list.push({ source: v.id, certainty: 'always', seq: v.seq });
+        }
+        for (let n = r.head; n && n !== ROOT; n = n.prev) {
+          if (seen.has(n.id)) continue;
+          seen.add(n.id);
+          list.push({ source: n.id, certainty: n.entry.certainty, seq: n.entry.seq, ...(n.entry.why ? { why: n.entry.why } : {}) });
+        }
+        list.sort((a, b) => b.seq - a.seq);
+        for (const v of list) {
+          delete v.seq;
+          if (v.certainty === 'maybe') v.note = v.why?.loop ? `vòng lặp "${v.why.loop}" có thể chạy 0 lần` : 'chỉ được tạo ở một số nhánh phía trên';
+          if (v.certainty === 'last') v.note = 'bản ghi cuối';
+        }
+        visible = list;
+        return visible;
+      },
+      get hidden() {
+        if (hidden) return hidden;
+        const shown = new Set(this.visible.map((v) => v.source));
+        hidden = [];
+        for (const s of allSources) {
+          if (shown.has(s.nodeId)) continue;
+          const st = state(s.nodeId);
+          hidden.push({ source: s.nodeId, reason: st.reason ?? 'after', note: noteOf(s.nodeId, st.reason ? st : { reason: 'after' }) });
+        }
+        return hidden;
+      },
+    };
   }
 
+  const loopKeys = new Set(allSources.filter((x) => x.kind === 'vars').flatMap((x) => x.members.map((m) => m.key)));
   const refs = [];
   for (const { step, off } of steps) {
     const here = at[step.id];
     if (!here) continue;
-    for (const o of referenceOptions(step, cat)) {
+    for (const o of referenceOptions(step, cat, { includeHidden: true })) {
       for (const { path } of pathsIn(o.mode, o.value)) {
-        refs.push({ ...resolveRef({ step, here, o, path, sources, byName }), disabled: off });
+        const ref = { ...resolveRef({ step, here, o, path, sources, byName, loopKeys }), disabled: off };
+        if (o.hidden) ref.hidden = true;
+        refs.push(ref);
       }
     }
   }
@@ -422,12 +516,7 @@ export function analyzeScope(wf, catalog) {
 }
 
 /** State of source `id` at `here`: { certainty, why? } or { reason }. */
-function stateAt(here, id) {
-  const v = here.visible.find((x) => x.source === id);
-  if (v) return { certainty: v.certainty, ...(v.why ? { why: v.why } : {}) };
-  const hdn = here.hidden.find((x) => x.source === id);
-  return { reason: hdn?.reason ?? 'after' };
-}
+const stateAt = (here, id) => here.state(id);
 
 function resolveMember(members, parts) {
   let level = members;
@@ -445,7 +534,7 @@ function resolveMember(members, parts) {
   return { ok: true };
 }
 
-function resolveRef({ step, here, o, path, sources, byName }) {
+function resolveRef({ step, here, o, path, sources, byName, loopKeys }) {
   const parts = String(path).split('.');
   const [name, ...rest] = parts;
   const member = rest.join('.');
@@ -493,10 +582,18 @@ function resolveRef({ step, here, o, path, sources, byName }) {
   }
 
   // A loop variable in scope wins (like the executor), then a record alias, then any loop variable.
-  const visibleVar = here.visible.map((v) => sources[v.source]).find((s) => s?.kind === 'vars' && s.name === name);
+  const visibleVar = here.varSource(name);
   const candidates = byName.get(name) ?? [];
   const src = visibleVar ?? candidates.find((s) => s.kind !== 'vars') ?? candidates.find((s) => !s.disabled) ?? candidates[0];
   if (!src) {
+    // `loop.index` with no loop of that name: a loop variable shape. Point at the enclosing loop,
+    // or say the step is not inside any loop.
+    const varShaped = rest.length === 1 && (loopKeys.has(rest[0]) || ['index', 'index0', 'count'].includes(rest[0]));
+    if (varShaped) {
+      const inner = here.visible.map((v) => sources[v.source]).find((x) => x?.kind === 'vars' && x.members.some((m) => m.key === rest[0]));
+      if (inner) return fail('unknownName', { suggestion: { option: o.option, from: path, to: `${inner.name}.${rest[0]}` } });
+      return fail('outsideLoop', { noLoop: true });
+    }
     const visibleNames = here.visible.map((v) => sources[v.source]?.name);
     const hint = closest(name, [...visibleNames, ...(o.fieldIndex !== undefined ? ['this'] : [])]) ?? closest(name, [...byName.keys()]);
     return fail('unknownName', hint ? { suggestion: { option: o.option, from: path, to: [hint, ...rest].join('.') } } : {});
@@ -527,7 +624,9 @@ function resolveRef({ step, here, o, path, sources, byName }) {
         if (src.open) return { ...base, ...withSrc, certainty: st.certainty, code: 'openMember', level: 'warning', missing: r.missing };
         const hint = r.candidates.length ? closest(r.missing, r.candidates.filter((k) => !k.startsWith('$'))) : null;
         const to = hint ? [name, ...rest.slice(0, r.depth), hint, ...rest.slice(r.depth + 1)].join('.') : null;
-        return fail('unknownMember', { ...withSrc, missing: r.missing, ...(to ? { suggestion: { option: o.option, from: path, to } } : {}) });
+        // A sub-member (Geo__c.lat): name the field and its members instead of "add the field".
+        const sub = r.depth > 0 ? { memberOf: rest.slice(0, r.depth).join('.'), validMembers: r.candidates } : {};
+        return fail('unknownMember', { ...withSrc, missing: r.missing, ...sub, ...(to ? { suggestion: { option: o.option, from: path, to } } : {}) });
       }
     }
   }
@@ -562,6 +661,7 @@ export function refChoices(scope, stepId, accepts = { lookupParent: true }) {
 }
 
 /** References (from analyzeScope) that point at `sourceId`, optionally at one member. */
-export function refsTo(scope, sourceId, member) {
-  return (scope?.refs ?? []).filter((r) => r.source === sourceId && (member === undefined || r.member === member || r.member.startsWith(`${member}.`)));
+export function refsTo(scope, sourceId, member, { includeHidden = false } = {}) {
+  return (scope?.refs ?? []).filter((r) => r.source === sourceId && (includeHidden || !r.hidden)
+    && (member === undefined || r.member === member || r.member.startsWith(`${member}.`)));
 }
