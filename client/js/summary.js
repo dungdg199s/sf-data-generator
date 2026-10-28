@@ -4,6 +4,7 @@
 
 import { nodeType, queryResultOf } from './store.js';
 import { selectFields, soqlSobject } from '/shared/soql.js';
+import { exposesOf } from '/shared/scope.js';
 
 const opLabel = (type, key, value) => nodeType(type)?.options.find((o) => o.key === key)?.choices?.find((x) => x.value === value)?.label ?? value;
 const PICK_MODE = { random: 'ngẫu nhiên', unique: 'không lặp', sequential: 'lần lượt' };
@@ -14,6 +15,10 @@ export function stepSummary(step) {
     case 'record':
       return `${c.sobject || '?'} × ${c.count ?? 1} · ${(c.fields ?? []).length} field`;
     case 'loop': {
+      // Each record of a pool (0010): "Mỗi bản ghi trong accs → acc · {{loop.index}}".
+      if (c.mode === 'each') {
+        return c.from ? `Mỗi bản ghi trong ${c.from} → ${c.itemAlias || '?'} · {{${c.alias || 'loop'}.index}}` : 'Mỗi bản ghi trong ? · chọn pool';
+      }
       // Same fallbacks as the executor (server/workflow/executor.js) for a missing value.
       const times = (c.mode ?? 'fixed') === 'range' ? `${c.min ?? 1}–${c.max ?? 1} lần` : `${c.count ?? 0} lần`;
       return `${times} · {{${c.alias || 'loop'}.index}}`;
@@ -45,12 +50,17 @@ export function stepSummary(step) {
 
 /**
  * The name shown next to the type label: the name the step exposes (`exposes.name` of the
- * catalogue — record / pool alias, loop variable with its default); a Record without alias shows none.
+ * catalogue — record / pool alias, loop variable with its default); a Record without alias shows
+ * none. With several names in effect, the last one set: a Lặp `each` shows the record it loops
+ * over (`itemAlias`, design 0010), the name the steps inside use.
  */
 export function stepAlias(step) {
-  const name = nodeType(step?.type)?.exposes?.name;
-  if (!name?.key) return '';
-  return step.config?.[name.key] || name.default || '';
+  const active = exposesOf(nodeType(step?.type), step?.config);
+  for (let i = active.length - 1; i >= 0; i--) {
+    const key = active[i].ex.name?.key;
+    if (key && step.config?.[key]) return step.config[key];
+  }
+  return active[0]?.ex.name?.default || '';
 }
 
 /** "Record "acc"", "Lặp "i"", "Rẽ nhánh" — for toasts and dialogs. */

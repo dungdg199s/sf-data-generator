@@ -7,7 +7,7 @@ import {
   state, subscribe, updateWorkflow, select, undo, nodeType, slotKeys, locate, stepById, newId, suggestAlias, workflowRevision, currentScope,
   suggestPoolAlias, suggestPickAlias,
 } from './store.js';
-import { analyzeScope, refChoices } from '/shared/scope.js';
+import { analyzeScope, refChoices, sourceStep } from '/shared/scope.js';
 import {
   insertStep, removeStep, moveStep, wrapStep, cloneSteps, collectIds, collectAliases,
   defaultInsertTarget, neighbourTarget, findStep, walkSteps, slotList, subtreeIds,
@@ -96,6 +96,41 @@ function fillPick(wf, step, selected) {
   step.config.alias = suggestPickAlias(from.name);
 }
 
+/**
+ * "⋯ → Lặp qua từng bản ghi" on a Record, Query or Chọn bản ghi card (design 0010): a Lặp
+ * `each` right after the step, over its records, with the record named after the pool
+ * (accs → acc, acc → acc2) and a loop variable that does not shadow an enclosing one. One undo
+ * step; the new loop is selected and flashed.
+ */
+export function addEachLoopAfter(id) {
+  const at = locate(id);
+  const from = at?.step.config?.alias;
+  if (!from) return null;
+  const target = { parentId: at.parentId, slot: at.slot, index: at.index + 1 };
+  const step = newStep('loop', target);
+  Object.assign(step.config, { mode: 'each', from, itemAlias: suggestPickAlias(from, undefined, 'itemAlias') });
+  if (updateWorkflow((wf) => insertStep(wf, target, step)) === false) return null;
+  select({ kind: 'step', id: step.id });
+  reveal(step.id, { flash: true });
+  return step;
+}
+
+/**
+ * Lặp switched to "Mỗi bản ghi trong pool" (design 0010): fill an empty `from` with the nearest
+ * usable pool above (the rule of a new Chọn bản ghi) and an empty `itemAlias` from it.
+ * → the names filled, { from?, itemAlias? }.
+ */
+export function fillEach(wf, step) {
+  const c = (step.config ??= {});
+  const filled = {};
+  if (!c.from) {
+    const pools = refChoices(analyzeScope(wf, state.meta), step.id, { pool: true }).filter((x) => x.usable);
+    if (pools[0]) c.from = filled.from = pools[0].name;
+  }
+  if (!c.itemAlias && c.from) c.itemAlias = filled.itemAlias = suggestPickAlias(c.from, step.id, 'itemAlias');
+  return filled;
+}
+
 /** Insert a new step (default target: the "first free slot" rule) and select it. */
 export function addStep(type, target = defaultTarget()) {
   const step = newStep(type, target);
@@ -114,7 +149,8 @@ export function addStep(type, target = defaultTarget()) {
 /** References from outside `step` to variables it (or a step inside it) provides. */
 function outsideRefs(step) {
   const inside = subtreeIds(step, slotKeys);
-  return currentScope().refs.filter((r) => inside.has(r.source) && !inside.has(r.nodeId));
+  const scope = currentScope();
+  return scope.refs.filter((r) => inside.has(sourceStep(scope, r.source)) && !inside.has(r.nodeId));
 }
 
 /** The step to select after removing `id`: next sibling, else previous, else the parent. */
@@ -157,8 +193,11 @@ function toastWithUndo(message) {
 function doRemove(at, keepChildren) {
   const step = at.step;
   const nextSel = keepChildren ? (slotKeys(step.type).flatMap((k) => slotList(step, k))[0]?.id ?? selectionAfterRemove(at)) : selectionAfterRemove(at);
-  const refs = keepChildren ? currentScope().refs.filter((r) => r.source === step.id && r.nodeId !== step.id) : outsideRefs(step);
-  const srcName = refs.length ? currentScope().sources[refs[0].source]?.name ?? refs[0].source : '';
+  const scope = currentScope();
+  // Bỏ vỏ: references to what the container provided (its loop variable, the record a Lặp
+  // `each` loops over) break.
+  const refs = keepChildren ? scope.refs.filter((r) => sourceStep(scope, r.source) === step.id && r.nodeId !== step.id) : outsideRefs(step);
+  const srcName = refs.length ? scope.sources[refs[0].source]?.name ?? refs[0].source : '';
   updateWorkflow((wf) => removeStep(wf, step.id, { keepChildren, slotKeys }));
   select(nextSel ? { kind: 'step', id: nextSel } : null);
   if (nextSel) reveal(nextSel);

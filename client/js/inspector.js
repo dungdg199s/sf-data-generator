@@ -13,9 +13,9 @@ import {
   suggestPoolAlias, suggestPickAlias, queryResultOf,
 } from './store.js';
 import { setStepAlias, renameField, insertStep } from '/shared/workflow-tree.js';
-import { refChoices, refsTo, referenceOptions } from '/shared/scope.js';
+import { refChoices, refsTo, referenceOptions, exposesList } from '/shared/scope.js';
 import { buildSoql, QUERY_DEFAULTS, SAMPLE_ROWS } from '/shared/soql.js';
-import { deleteStep, duplicateStep, toggleDisabled, newStep } from './ops.js';
+import { deleteStep, duplicateStep, toggleDisabled, newStep, fillEach } from './ops.js';
 import { placesText } from './variables.js';
 import { applySuggestion, closePicker } from './var-picker.js';
 
@@ -375,15 +375,16 @@ async function openFieldPicker(sobject, current, apply) {
 }
 
 function onStepOption(step, key, v, form, meta) {
-  const setAliasInput = (next) => {
-    const input = form.querySelector('[data-key="alias"]');
+  const setAliasInput = (next, nameKey = 'alias') => {
+    const input = form.querySelector(`[data-key="${nameKey}"]`);
     if (input) input.value = next;
   };
+  let filled = null;
   updateWorkflow((wf) => {
     const c = (step.config ??= {});
-    const follow = (next) => {
-      setStepAlias(wf, step.id, next, { memo: aliasMemo, slotKeys, catalog: state.meta, scope: currentScope() });
-      setAliasInput(next);
+    const follow = (next, nameKey = 'alias') => {
+      setStepAlias(wf, step.id, next, { memo: aliasMemo, slotKeys, catalog: state.meta, scope: currentScope(), key: nameKey });
+      setAliasInput(next, nameKey);
     };
     if (key === 'sobject' && step.type === 'record') {
       // Keep the alias in sync while it is still the auto-suggested one.
@@ -400,14 +401,27 @@ function onStepOption(step, key, v, form, meta) {
       const auto = !c.alias || c.alias === suggestPickAlias(c.from, step.id);
       c.from = v;
       if (auto && v) follow(suggestPickAlias(v, step.id));
-    } else if (key === nodeType(step.type)?.exposes?.name?.key) {
-      // References follow only to a valid, free name (a loop variable: inside its body only);
-      // while the field is empty or matches another alias mid-typing, they stay put.
-      setStepAlias(wf, step.id, v, { memo: aliasMemo, slotKeys, catalog: state.meta, scope: currentScope() });
+    } else if (key === 'mode' && step.type === 'loop') {
+      // "Mỗi bản ghi trong pool" (0010): fill the empty pool and record names; the values of
+      // the other modes stay (hidden), so switching back loses nothing.
+      c.mode = v;
+      if (v === 'each') filled = fillEach(wf, step);
+    } else if (key === 'from' && step.type === 'loop') {
+      // The record name follows the pool while it is still the suggested one (accs → acc).
+      const auto = !c.itemAlias || c.itemAlias === suggestPickAlias(c.from, step.id, 'itemAlias');
+      c.from = v;
+      if (auto && v) follow(suggestPickAlias(v, step.id, 'itemAlias'), 'itemAlias');
+    } else if (exposesList(nodeType(step.type)).some((ex) => ex.name?.key === key)) {
+      // References follow only to a valid, free name (a loop variable or the record looped over:
+      // inside its body only); while the field is empty or matches another alias mid-typing,
+      // they stay put.
+      setStepAlias(wf, step.id, v, { memo: aliasMemo, slotKeys, catalog: state.meta, scope: currentScope(), key });
     } else c[key] = v;
   }, { source: 'inspector', coalesceKey: meta?.coalesceKey ?? `${step.id}:${key}` });
   // Card summary/alias changed; the process view re-renders, the inspector keeps focus.
   fillPathDefaults(step, key, form);
+  // Pool / record names filled in: show them (the mode select loses nothing by a re-render).
+  if (filled && Object.keys(filled).length) updateWorkflow(() => {}, { source: 'inspector-structure', history: false });
   if (step.type === 'query') {
     refreshSoqlBox(step);
     // Switching between builder and SOQL shows / hides the "SOQL sẽ chạy" line.
@@ -453,9 +467,16 @@ function fillPathDefaults(step, changedKey, form) {
  */
 function parentChoices(step, accepts, referenceTo, mode) {
   const targets = (Array.isArray(referenceTo) ? referenceTo : []).map((x) => String(x).toLowerCase());
+  const pools = Boolean(accepts?.pool);
   const list = refChoices(currentScope(), step.id, accepts).map((c) => {
-    // "acc (Account)", "accs (Account · đọc từ org)", "acc2 (Account · chọn từ accs)".
-    const detail = c.nodeType === 'query' ? `${c.sobject || '?'} · đọc từ org` : c.nodeType === 'pick' ? `${c.sobject || '?'} · chọn từ ${c.from ?? '?'}` : c.sobject;
+    // "acc (Account)", "accs (Account · đọc từ org)", "acc2 (Account · chọn từ accs)",
+    // "acc (Account · bản ghi đang lặp)"; a pool list (Chọn bản ghi / Lặp `from`) says where the
+    // records come from: "đọc từ org", "đã sinh", "đã chọn" (design 0010).
+    const so = c.sobject || '?';
+    const detail = c.nodeType === 'query' ? `${so} · đọc từ org`
+      : c.current === 'item' ? `${so} · bản ghi đang lặp`
+        : c.nodeType === 'pick' ? (pools ? `${so} · đã chọn` : `${so} · chọn từ ${c.from ?? '?'}`)
+          : pools ? `${so} · đã sinh` : c.sobject;
     // A Lookup imported from the org knows which sObjects it points to (referenceTo).
     if (c.usable && targets.length && c.sobject && !targets.includes(c.sobject.toLowerCase())) {
       return { alias: c.name, sobject: c.sobject, detail, usable: false, note: `là ${c.sobject}, field này trỏ tới ${referenceTo.join(', ')}` };
@@ -464,13 +485,18 @@ function parentChoices(step, accepts, referenceTo, mode) {
     if (c.usable && mode === 'current' && c.current === 'none') {
       return { alias: c.name, sobject: c.sobject, detail, usable: false, note: 'pool nhiều bản ghi: chọn "Ngẫu nhiên trong pool" hoặc thêm bước Chọn bản ghi' };
     }
+    // "Ngẫu nhiên trong pool" of the record a Lặp `each` loops over: one record, not a pool.
+    if (c.usable && mode === 'random' && c.current === 'item') {
+      return { alias: c.name, sobject: c.sobject, detail, usable: false, note: `bản ghi đang lặp, không phải pool: chọn pool "${c.from ?? '?'}"` };
+    }
     return {
       alias: c.name,
       sobject: c.sobject,
       detail,
       nodeType: c.nodeType,
+      current: c.current,
       usable: c.usable,
-      note: c.usable ? (c.certainty === 'maybe' ? 'có thể trống' : c.certainty === 'last' ? 'bản ghi cuối' : '') : c.note ?? '',
+      note: c.usable ? (c.certainty === 'maybe' ? (pools ? 'có thể chưa có' : 'có thể trống') : c.certainty === 'last' ? 'bản ghi cuối' : '') : c.note ?? '',
     };
   });
   return [...list.filter((c) => c.usable), ...list.filter((c) => !c.usable)];
@@ -710,7 +736,10 @@ function renderImportList(node, described, box, modal) {
       const records = aliases.filter((a) => fits(a) && a.nodeType !== 'query');
       const pools = aliases.filter((a) => fits(a) && a.nodeType === 'query');
       let pre = '';
-      if (records.length === 1) pre = records[0].alias;
+      // Inside a Lặp `each`, the record looped over of that sObject (nearest first) wins (0010).
+      const items = records.filter((a) => a.current === 'item');
+      if (items.length) pre = items[0].alias;
+      else if (records.length === 1) pre = records[0].alias;
       else if (!records.length && pools.length === 1) pre = pools[0].alias;
       else if (!records.length && !pools.length && f.referenceTo?.length) pre = `${NEW_QUERY}${f.referenceTo[0]}`;
       const usable = aliases.filter((a) => a.usable);

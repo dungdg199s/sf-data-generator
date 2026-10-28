@@ -238,10 +238,13 @@ export function suggestPoolAlias(sobject, exceptStepId) {
   return uniqueAlias(preset ?? `${baseAlias(sobject)}s`, exceptStepId);
 }
 
-/** Alias for a Chọn bản ghi step picking from `from`: accs → acc, users → user (acc2 when taken). */
-export function suggestPickAlias(from, exceptStepId) {
+/**
+ * Alias for a Chọn bản ghi step picking from `from`: accs → acc, users → user (acc2 when taken).
+ * Also the record a Lặp `each` loops over (design 0010, `key` 'itemAlias').
+ */
+export function suggestPickAlias(from, exceptStepId, key = 'alias') {
   const base = from && from.length > 1 && from.endsWith('s') ? from.slice(0, -1) : from || 'rec';
-  return uniqueAlias(base, exceptStepId);
+  return uniqueAlias(base, exceptStepId, key);
 }
 
 function baseAlias(sobject) {
@@ -249,10 +252,10 @@ function baseAlias(sobject) {
   return base.length > 4 ? base.slice(0, 3) : base;
 }
 
-function uniqueAlias(name, exceptStepId) {
+function uniqueAlias(name, exceptStepId, key = 'alias') {
   const taken = collectAliases(state.workflow, state.meta);
   for (const s of allSteps(state.workflow, slotKeys)) if (s.type === 'loop') taken.add(s.config?.alias || 'loop');
-  const own = stepById(exceptStepId)?.config?.alias;
+  const own = stepById(exceptStepId)?.config?.[key];
   if (own) taken.delete(own);
   if (!taken.has(name)) return name;
   for (let i = 2; ; i++) if (!taken.has(`${name}${i}`)) return `${name}${i}`;

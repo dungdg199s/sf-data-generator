@@ -12,6 +12,7 @@ import {
   state, subscribe, select, nodeType, fieldType, slotKeys, locate, stepById, setCollapsed, runKey,
 } from './store.js';
 import { allSteps, slotList, walkSteps } from '/shared/workflow-tree.js';
+import { exposesOf } from '/shared/scope.js';
 import { stepSummary, stepAlias, statChip, stepLabel } from './summary.js';
 import * as ops from './ops.js';
 import { openField, openSheet } from './inspector.js';
@@ -453,6 +454,9 @@ export function openAddMenuAtDefault() {
   openAddMenu(anchor, target);
 }
 
+/** A step whose records a Lặp `each` can loop over: a pool (`exposes.pool`) named by `alias` (catalogue). */
+const isPoolStep = (step) => exposesOf(nodeType(step.type), step.config).some(({ ex }) => ex.pool === true && ex.name?.key === 'alias');
+
 export function openStepMenu(anchor, id) {
   const step = stepById(id);
   if (!step) return;
@@ -463,6 +467,12 @@ export function openStepMenu(anchor, id) {
     { label: 'Xuống', kbd: 'Alt+↓', onSelect: () => ops.moveBy(id, 1) },
     { label: 'Bọc trong Lặp', onSelect: () => ops.wrapIn(id, 'loop') },
     { label: 'Bọc trong Rẽ nhánh', onSelect: () => ops.wrapIn(id, 'branch') },
+    // Design 0010: a Lặp over each record of this step's pool, right after it.
+    isPoolStep(step)
+      ? step.config?.alias
+        ? { label: 'Lặp qua từng bản ghi', title: `Thêm bước Lặp ngay sau bước này, chạy một lần cho mỗi bản ghi của "${step.config.alias}".`, onSelect: () => ops.addEachLoopAfter(id) }
+        : { label: 'Lặp qua từng bản ghi', disabled: true, title: 'Đặt alias cho bước này trước.' }
+      : null,
     container
       ? { label: 'Bỏ vỏ (giữ các bước bên trong)', disabled: !ops.canUnwrap(step), title: ops.canUnwrap(step) ? undefined : 'Chỉ bỏ vỏ được khi một nhánh trống.', onSelect: () => ops.unwrap(id) }
       : null,

@@ -122,7 +122,7 @@ export function groupsFor(stepId, fieldIndex) {
     const src = scope.sources[v.source];
     if (!src) continue;
     const g = {
-      id: src.nodeId, nodeType: src.nodeType, name: src.name, label: src.label || src.sobject || '', items: [],
+      id: src.id ?? src.nodeId, nodeType: src.nodeType, name: src.name, label: src.label || src.sobject || '', items: [],
       ...(v.certainty === 'last' ? { badge: BADGES.last[0], badgeTitle: BADGES.last[1] } : {}),
       ...(v.certainty === 'maybe' ? { badge: 'có thể trống', badgeTitle: v.note ?? '' } : {}),
     };
@@ -130,8 +130,11 @@ export function groupsFor(stepId, fieldIndex) {
     const fields = src.current === 'none' ? [] : src.members.filter((m) => !m.builtin);
     if (src.current === 'none') g.note = 'không có bản ghi hiện tại: dùng bước Chọn bản ghi';
     if (src.current === 'picked') g.note = 'bản ghi vừa chọn';
-    for (const b of builtins) g.items.push(item(g, b, [b.key], src.nodeId));
-    for (const { m, keys } of flatten(fields)) g.items.push(item(g, m, keys, src.nodeId));
+    if (src.current === 'item') g.note = 'bản ghi đang lặp';
+    // The record a Lặp `each` loops over (0010) shows the first record of its pool as sample.
+    const sampleId = src.current === 'item' ? src.root ?? src.nodeId : src.nodeId;
+    for (const b of builtins) g.items.push(item(g, b, [b.key], sampleId));
+    for (const { m, keys } of flatten(fields)) g.items.push(item(g, m, keys, sampleId));
     groups.push(g);
   }
   for (const hdn of here?.hidden ?? []) {

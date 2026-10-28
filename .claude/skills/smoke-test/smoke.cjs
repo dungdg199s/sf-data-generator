@@ -32,6 +32,9 @@
 //  13. screen layout (0009): issues bar docked under the canvas (F8, collapse kept after reload, expands on a
 //      failed run), top bar rows / no overflow with a long (mocked) org label, the "⋯" menu (Mẫu, Seed chip),
 //      bottom sheet keeps the selected card above it and closes on run, one-row results header with "⤓ Tải"
+//  14. Lặp "Mỗi bản ghi trong pool" (0010): the sample previews 15 Contacts ("5 lần lặp"), "⋯ → Lặp qua từng
+//      bản ghi" on the Query inserts a filled each-loop (one undo), switching a Lặp to each fills pool and name,
+//      a Contact moved out of the loop gets the outsideLoop error
 // The flows run in parallel, one browser context each (independent storage): see SKILL.md.
 // Usage: node .claude/skills/smoke-test/smoke.cjs [screenshotDir]
 // Needs Playwright with a Chromium build available (require('playwright')).
@@ -929,6 +932,74 @@ async function flowLayoutNarrow() {
   await m.context().close();
 }
 
+/**
+ * Flow 14: Lặp "Mỗi bản ghi trong pool" without an org (design 0010): the sample previews 15
+ * Contacts with "5 lần lặp" on the loop; "⋯ → Lặp qua từng bản ghi" on the Query inserts a filled
+ * each-loop (one undo); switching a new Lặp to "Mỗi bản ghi trong pool" fills pool and name;
+ * a Contact moved out of the loop gets the outsideLoop error on AccountId.
+ */
+async function flowEach() {
+  const page = await newPage('each');
+  await page.goto(base);
+  await page.waitForSelector('.step-card');
+  await page.click('#sample-items .palette-item:has-text("Contact cho mỗi Account có sẵn")');
+  const loopCard = '.step-card[data-id="eachAcc"]';
+  await page.waitForSelector(loopCard);
+  check(await page.textContent(`${loopCard} .alias`) === 'acc', 'the each-loop card does not show the record name "acc"');
+  check(await page.textContent(`${loopCard} .sum`) === 'Mỗi bản ghi trong accs → acc · {{loop.index}}', `each-loop summary: ${await page.textContent(`${loopCard} .sum`)}`);
+  await page.keyboard.press('Control+Enter');
+  const chip = await page.waitForSelector(`${loopCard} .stat`, { timeout: 3000 }).catch(() => null);
+  check(chip && (await chip.textContent()) === '5 lần lặp', `each-loop chip: ${chip && await chip.textContent()}`);
+  check(/Contact: 15/.test(await page.textContent('#results-summary')), 'the each-loop sample did not generate 15 Contacts');
+
+  // ⋯ on the Query card → "Lặp qua từng bản ghi": a filled Lặp right after it, selected.
+  await page.click('.step-card[data-id="accs"] .menu-btn');
+  await page.click('.popup [role="menuitem"]:has-text("Lặp qua từng bản ghi")');
+  await page.waitForSelector('#inspector select[data-key="from"]');
+  const filled = await page.evaluate(() => ({
+    mode: document.querySelector('#inspector select[data-key="mode"]').value,
+    from: document.querySelector('#inspector select[data-key="from"]').value,
+    item: document.querySelector('#inspector input[data-key="itemAlias"]').value,
+    count: document.querySelector('#inspector [data-key="count"]').closest('.form-row').hidden,
+    next: (() => { const ids = [...document.querySelectorAll('#process .step[data-step]')].map((e) => e.dataset.step); return ids[ids.indexOf('accs') + 1]; })(),
+    selected: document.querySelector('.step-card.selected')?.dataset.id,
+  }));
+  check(filled.mode === 'each' && filled.from === 'accs' && filled.item === 'acc2' && filled.count, `⋯ → Lặp qua từng bản ghi: ${JSON.stringify(filled)}`);
+  check(filled.selected && filled.selected === filled.next, `the new each-loop is not selected right after accs (${JSON.stringify(filled)})`);
+  const fromText = await page.$eval('#inspector select[data-key="from"] option:checked', (o) => o.textContent);
+  check(fromText === 'accs (Account · đọc từ org)', `"Lặp qua pool" option: ${fromText}`);
+  await page.keyboard.press('Escape');
+  await page.click('#btn-undo');
+  check(!(await page.$(`.step-card[data-id="${filled.selected}"]`)), 'one undo did not remove the inserted each-loop');
+
+  // A Lặp from the palette switched to "Mỗi bản ghi trong pool": pool and name are filled.
+  await page.click('.step-card[data-id="accs"] .type');
+  await page.click('#palette-items .palette-item[data-type="loop"]');
+  await page.waitForSelector('#inspector select[data-key="mode"]');
+  await page.selectOption('#inspector select[data-key="mode"]', 'each');
+  await page.waitForFunction(() => document.querySelector('#inspector input[data-key="itemAlias"]')?.value === 'acc2', null, { timeout: 3000 }).catch(() => {});
+  const switched = await page.evaluate(() => [document.querySelector('#inspector select[data-key="from"]').value, document.querySelector('#inspector input[data-key="itemAlias"]').value]);
+  check(switched.join() === 'accs,acc2', `switching to each did not fill from / itemAlias (${switched})`);
+  await page.click('#btn-undo');
+  await page.click('#btn-undo');
+
+  // Renaming the record looped over moves the references inside the body.
+  await page.click(`${loopCard} .type`);
+  await page.fill('#inspector input[data-key="itemAlias"]', 'a');
+  const con = await page.evaluate(() => JSON.parse(localStorage.getItem('sfdg.workflow.v2')).steps[1].slots.body[0].config.fields);
+  check(con.find((f) => f.name === 'AccountId')?.options.ref === 'a' && /\{\{a\.Name\}\}/.test(con.find((f) => f.name === 'Title')?.options.template), `itemAlias rename did not follow: ${JSON.stringify(con)}`);
+  await page.click('#btn-undo');
+
+  // The Contact moved out of the loop: AccountId points at "acc" outside its loop.
+  await page.click('.step-card[data-id="con"] .type');
+  await page.keyboard.press('Alt+ArrowUp');
+  const err = await page.waitForSelector('.step-card[data-id="con"].has-error', { timeout: 3000 }).catch(() => null);
+  check(err, 'the Contact moved out of the each-loop has no error badge');
+  const issue = await page.textContent('#issues');
+  check(/"acc" là bản ghi đang lặp của bước Lặp phía trên, chỉ dùng được bên trong vòng lặp đó/.test(issue), 'no outsideLoop message for the record looped over');
+  await page.context().close();
+}
+
 (async () => {
   // A Playwright error outside a flow's promise (e.g. in an event handler) fails the run.
   process.on('uncaughtException', (e) => { console.error('SMOKE FAILED\n' + e); process.exit(1); });
@@ -943,7 +1014,7 @@ async function flowLayoutNarrow() {
     check(orgs.status === 503 && /smoke:/.test((await orgs.json()).error), 'the smoke server is not using the sf CLI stub');
     // Independent flows, one context each, in parallel. A flow that throws (timed-out wait) is
     // reported and the others still finish.
-    const flows = { flowEditing, flowPicker, flowFiles, flowDark, flowLayoutWide, flowLayoutNarrow };
+    const flows = { flowEditing, flowPicker, flowFiles, flowDark, flowLayoutWide, flowLayoutNarrow, flowEach };
     const results = await Promise.allSettled(Object.values(flows).map((f) => f()));
     results.forEach((r, i) => { if (r.status === 'rejected') errors.push(`${Object.keys(flows)[i]}: ${r.reason}`); });
   } catch (e) {
