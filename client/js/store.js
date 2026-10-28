@@ -77,11 +77,12 @@ export function updateWorkflow(fn, { source = 'app', coalesceKey = null, history
   return result;
 }
 
+/** Another workflow (Mới, Mở…, Mẫu): source 'replace', so views start from its beginning. */
 export function replaceWorkflow(wf, { history = true } = {}) {
   updateWorkflow((cur) => {
     for (const k of Object.keys(cur)) delete cur[k];
     Object.assign(cur, wf);
-  }, { history });
+  }, { history, source: 'replace' });
   state.selection = null;
   emit('app', 'selection');
 }

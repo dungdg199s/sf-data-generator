@@ -12,7 +12,7 @@ import { h, icoTile } from './dom.js';
 import { state, subscribe, select, nodeType, fieldType, slotKeys, stepById, setCollapsed } from './store.js';
 import { allSteps, slotList } from '/shared/workflow-tree.js';
 import {
-  stepSummary, stepAlias, statChip, stepLabel, addPointLabel, issuesByStep, innerIssues, innerCount,
+  stepSummary, stepAlias, statChip, stepLabel, addPointLabel, issuesByStep, innerIssues, innerCount, emptySlotLabel,
 } from './summary.js';
 import * as ops from './ops.js';
 import { openField, openSheet } from './inspector.js';
@@ -79,7 +79,7 @@ function render() {
   const steps = state.workflow.steps ?? [];
   root.replaceChildren(
     h('div', { class: 'seq seq-root' },
-      startCard(),
+      startCard(steps.filter(isStep).length + 1),
       steps.length
         ? renderSeq(steps, null, null, 1)
         : h('div', { class: 'add-point big', ...targetAttrs({ parentId: null, slot: null, index: 0 }) },
@@ -99,7 +99,7 @@ function targetOf(el) {
   return { parentId: el.dataset.parent || null, slot: el.dataset.slot || null, index: Number(el.dataset.index) };
 }
 
-function startCard() {
+function startCard(rootSize) {
   const wf = state.workflow;
   const max = wf.settings?.maxRecords ?? state.meta?.limits.maxRecordsDefault;
   return h(
@@ -109,6 +109,8 @@ function startCard() {
       'data-id': START_ID,
       role: 'treeitem',
       'aria-level': '1',
+      'aria-posinset': '1',
+      'aria-setsize': String(rootSize),
       tabindex: '-1',
       'data-type': 'start',
       onclick: () => {
@@ -126,8 +128,12 @@ const isStep = (step) => step && typeof step === 'object' && !Array.isArray(step
 
 function renderSeq(list, parentId, slot, level) {
   const out = [];
+  // aria-posinset / aria-setsize among the real steps; at the root the Start card is item 1.
+  const offset = parentId === null ? 1 : 0;
+  const setsize = list.filter(isStep).length + offset;
+  let pos = offset;
   list.forEach((step, index) => {
-    out.push(addPoint({ parentId, slot, index }, list), isStep(step) ? renderStep(step, level, { parentId, slot, index }) : invalidStep(step));
+    out.push(addPoint({ parentId, slot, index }, list), isStep(step) ? renderStep(step, level, { parentId, slot, index, posinset: ++pos, setsize }) : invalidStep(step));
   });
   out.push(addPoint({ parentId, slot, index: list.length }, list));
   return out;
@@ -168,6 +174,8 @@ function renderStep(step, level, at) {
       'data-id': step.id,
       role: 'treeitem',
       'aria-level': String(level),
+      'aria-posinset': String(at.posinset),
+      'aria-setsize': String(at.setsize),
       'aria-expanded': container ? String(!collapsed) : undefined,
       tabindex: '-1',
       onclick: (e) => {
@@ -223,7 +231,6 @@ function renderStep(step, level, at) {
 function renderSlot(step, def, level, labelled) {
   const list = slotList(step, def.key);
   const target = { parentId: step.id, slot: def.key, index: 0 };
-  const where = labelled ? `vào nhánh ${def.label}` : 'vào vòng lặp';
   return h(
     'div',
     { class: `slot slot-${def.key}`, 'data-slot-of': step.id, 'data-slot-key': def.key },
@@ -231,7 +238,7 @@ function renderSlot(step, def, level, labelled) {
     list.length
       ? h('div', { class: 'seq' }, renderSeq(list, step.id, def.key, level))
       : h('div', { class: 'slot-empty-wrap' },
-        h('button', { class: 'slot-empty', ...targetAttrs(target), title: 'Thêm bước ở đây (/)', 'aria-label': `Thêm bước ${where}`, onclick: (e) => openAddMenu(e.currentTarget, target) }, `+ ${def.empty || 'Thêm bước'}`),
+        h('button', { class: 'slot-empty', ...targetAttrs(target), title: 'Thêm bước ở đây (/)', 'aria-label': emptySlotLabel(def), onclick: (e) => openAddMenu(e.currentTarget, target) }, `+ ${def.empty || 'Thêm bước'}`),
         def.hint ? h('div', { class: 'slot-hint' }, def.hint) : null),
     h('div', { class: 'slot-msg', hidden: true }),
   );
@@ -391,6 +398,8 @@ function onTreeKey(e) {
       if (stepEl.classList.contains('collapsed')) return setCollapsed([current.dataset.id], false);
       return go(stepEl.querySelector(':scope > .step-body .step-card'));
     case 'Enter': {
+      // Only on the card itself: Enter on its ⋯ / ▾ or on a "+" activates that button.
+      if (!e.target.matches('.step-card')) return undefined;
       const input = document.querySelector('#inspector input, #inspector select, #inspector textarea');
       if (input && current) {
         e.preventDefault();

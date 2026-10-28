@@ -15,7 +15,7 @@ import { h, icoTile } from './dom.js';
 import { state, subscribe, select, nodeType, stepById, setCollapsed } from './store.js';
 import { layout, START_ID } from './layout.js';
 import {
-  stepSummary, stepAlias, statChip, stepLabel, addPointLabel, issuesByStep, innerIssues, innerCount,
+  stepSummary, stepAlias, statChip, stepLabel, addPointLabel, issuesByStep, innerIssues, innerCount, emptySlotLabel,
 } from './summary.js';
 import * as ops from './ops.js';
 import { openSheet } from './inspector.js';
@@ -87,7 +87,22 @@ export function initCanvas() {
   root.addEventListener('dragover', onPaletteDragOver);
   root.addEventListener('dragleave', (e) => { if (!root.contains(e.relatedTarget)) highlightDrop(null); });
   root.addEventListener('drop', onPaletteDrop);
-  new ResizeObserver(() => { if (active() && lay) cull(); }).observe(root);
+  // The viewport changes size (results panel, issues bar, sheet, window): a selected card that was
+  // fully visible stays visible; otherwise only the elements are updated.
+  let size = null;
+  new ResizeObserver(() => {
+    if (!active() || !lay) return;
+    const was = size;
+    size = { w: root.clientWidth, h: root.clientHeight };
+    const r = rects.get(selectedId());
+    if (r && was) {
+      const sx = r.x * zoom + pan.x;
+      const sy = r.y * zoom + pan.y;
+      const seen = sx >= 0 && sy >= 0 && sx + Math.min(r.w, FOCUS_W) * zoom <= was.w && sy + r.h * zoom <= was.h;
+      if (seen && showRect(r)) return;
+    }
+    cull();
+  }).observe(root);
 
   document.getElementById('btn-zoom-in').onclick = () => zoomBy(ZOOM_STEP);
   document.getElementById('btn-zoom-out').onclick = () => zoomBy(1 / ZOOM_STEP);
@@ -96,6 +111,8 @@ export function initCanvas() {
 
   subscribe(({ kind, source }) => {
     if (!active()) return;
+    // Another workflow (Mới, Mở…, Mẫu): start again at 100 % with its Start card at the left.
+    if (kind === 'workflow' && source === 'replace') placed = false;
     // Typing in the inspector: one rebuild per frame at most, not one per keystroke.
     if (kind === 'workflow' && source === 'inspector') scheduleRender();
     else if (kind === 'workflow' || kind === 'all' || kind === 'view' || kind === 'result') render();
@@ -140,7 +157,7 @@ function render() {
   els.clear();
   issues = issuesByStep();
   if (!placed) placeInitial();
-  applyTransform();
+  applyNow(); // the elements exist before focus is put back on one of them
   if (focusKey) {
     const el = els.get(focusKey);
     if (el) (el.matches('button') ? el : el.closest('[tabindex]') ?? el).focus({ preventScroll: true });
@@ -212,6 +229,10 @@ function cull() {
       const el = it.make();
       el.dataset.key = it.key;
       Object.assign(el.style, { left: `${r.x}px`, top: `${r.y}px`, width: `${r.w}px`, height: `${r.h}px` });
+      // One tab stop for the whole tree (the selected card): its buttons and the "+" are reached
+      // with the keys ("/", ContextMenu, ← →, F8), and the DOM order of culled elements is not
+      // the reading order.
+      for (const b of el.matches('button') ? [el] : el.querySelectorAll('button')) b.tabIndex = -1;
       (it.layer === 'under' ? under : over).append(el);
       els.set(it.key, el);
       decorateEl(el);
@@ -225,13 +246,29 @@ function cull() {
   }
 }
 
+const KEEP_VISIBLE = 120; // px of the diagram that panning always leaves on screen
+
+/** Pan never loses the diagram: at least KEEP_VISIBLE px of its box stay in the viewport. */
+function clampPan() {
+  if (!lay) return;
+  const W = root.clientWidth;
+  const H = root.clientHeight;
+  const w = lay.width * zoom;
+  const hh = lay.height * zoom;
+  const kx = Math.min(KEEP_VISIBLE, w, W);
+  const ky = Math.min(KEEP_VISIBLE, hh, H);
+  pan = { x: Math.min(W - kx, Math.max(kx - w, pan.x)), y: Math.min(H - ky, Math.max(ky - hh, pan.y)) };
+}
+
 let cullFrame = 0;
 function applyTransform() {
+  clampPan();
   world.style.transform = `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`;
   root.style.backgroundSize = `${20 * zoom}px ${20 * zoom}px`;
   root.style.backgroundPosition = `${pan.x}px ${pan.y}px`;
   zoomLabel.textContent = `${Math.round(zoom * 100)}%`;
   zoomLabel.title = `Thu phóng ${Math.round(zoom * 100)}%. Bấm để về 100%.`;
+  zoomLabel.setAttribute('aria-label', `Thu phóng ${Math.round(zoom * 100)}%, bấm để về 100%`);
   if (!cullFrame) cullFrame = requestAnimationFrame(() => { cullFrame = 0; cull(); });
 }
 
@@ -264,6 +301,8 @@ function startCard() {
       'data-type': 'start',
       role: 'treeitem',
       'aria-level': '1',
+      'aria-posinset': '1',
+      'aria-setsize': String(lay.rootSize),
       tabindex: '-1',
       onclick: (e) => cardClick(e, START_ID),
     },
@@ -307,17 +346,20 @@ function cardEl(n) {
     'data-type': step.type,
     role: 'treeitem',
     'aria-level': String(n.level),
+    'aria-posinset': String(n.posinset),
+    'aria-setsize': String(n.setsize),
     'aria-expanded': n.container ? String(!n.collapsed) : undefined,
     tabindex: '-1',
     onclick: (e) => cardClick(e, step.id),
   };
   // A frame header is one row, like a Quy trình card; other cards have three short rows.
   if (head) return h('div', attrs, parts.type, parts.alias, parts.sum, parts.chip, parts.badges, parts.off, parts.sample, parts.menu, parts.toggle);
+  // The alias goes on the summary row, so the type label keeps the first row ("Query (đọc org)").
   return h(
     'div',
     attrs,
-    h('div', { class: 'dg-row' }, parts.type, parts.alias, parts.badges, parts.menu, parts.toggle),
-    parts.sum,
+    h('div', { class: 'dg-row' }, parts.type, parts.badges, parts.menu, parts.toggle),
+    h('div', { class: 'dg-row' }, parts.alias, parts.sum),
     h('div', { class: 'dg-tags' }, parts.note, parts.chip, parts.off, parts.sample),
   );
 }
@@ -362,10 +404,9 @@ function emptyEl(e) {
   if (e.root) {
     return h('button', { class: 'add-first dg-empty', title: 'Thêm bước ở đây (/)', ...targetAttrs(null, null, 0), onclick: (ev) => openAddMenu(ev.currentTarget, target) }, '+ Thêm bước đầu tiên');
   }
-  const where = e.def?.label ? `vào nhánh ${e.def.label}` : 'vào vòng lặp';
   return h(
     'button',
-    { class: 'slot-empty dg-empty', title: 'Thêm bước ở đây (/)', 'aria-label': `Thêm bước ${where}`, ...targetAttrs(e.parentId, e.slot, 0), onclick: (ev) => openAddMenu(ev.currentTarget, target) },
+    { class: 'slot-empty dg-empty', title: 'Thêm bước ở đây (/)', 'aria-label': emptySlotLabel(e.def), ...targetAttrs(e.parentId, e.slot, 0), onclick: (ev) => openAddMenu(ev.currentTarget, target) },
     h('span', {}, `+ ${e.def?.empty || 'Thêm bước'}`),
     e.def?.hint ? h('small', { class: 'slot-hint' }, e.def.hint) : null,
   );
@@ -419,8 +460,8 @@ function decorateCard(card) {
     } else select({ kind: 'workflow' });
   };
   card.querySelector('.badges').replaceChildren(
-    errors ? h('button', { class: 'badge', title: `${errors} lỗi — bấm để xem`, onclick: jump }, String(errors)) : '',
-    warnings ? h('button', { class: 'badge warn', title: `${warnings} cảnh báo — bấm để xem`, onclick: jump }, String(warnings)) : '',
+    errors ? h('button', { class: 'badge', tabindex: '-1', title: `${errors} lỗi — bấm để xem`, onclick: jump }, String(errors)) : '',
+    warnings ? h('button', { class: 'badge warn', tabindex: '-1', title: `${warnings} cảnh báo — bấm để xem`, onclick: jump }, String(warnings)) : '',
   );
   const note = card.querySelector('.dg-note[data-count]');
   if (note) {
@@ -451,34 +492,60 @@ function visibleHeight() {
   if (!document.body.classList.contains('sheet-open')) return H;
   const insp = document.getElementById('inspector');
   const top = root.getBoundingClientRect().top;
-  return Math.max(80, Math.min(H, window.innerHeight - insp.offsetHeight - top));
+  return Math.max(0, Math.min(H, window.innerHeight - insp.offsetHeight - top));
+}
+
+/** The zoom bar over the viewport's top right corner (viewport coordinates), or null. */
+function zoomBarRect() {
+  const bar = wrap.querySelector('.dg-zoom');
+  const z = bar?.getBoundingClientRect();
+  if (!z?.width) return null;
+  const v = root.getBoundingClientRect();
+  return { left: z.left - v.left, top: z.top - v.top, right: z.right - v.left, bottom: z.bottom - v.top };
 }
 
 /**
- * Pan so that a world rectangle is visible. `center`: centre it when it is not fully visible
- * (switching views, reveal); otherwise the smallest pan (keyboard moves).
+ * Pan so that a world rectangle is visible: inside the viewport, above the bottom sheet and not
+ * under the zoom bar. `center`: centre it when it is not fully visible (switching views,
+ * reveal); otherwise the smallest pan (keyboard moves). When the visible height is smaller than
+ * the card (landscape phone with the sheet open), the card's top is shown.
  */
 function showRect(r, { center = false } = {}) {
   const W = root.clientWidth;
   const H = visibleHeight();
   const w = Math.min(r.w, FOCUS_W);
-  const sx = r.x * zoom + pan.x;
-  const sy = r.y * zoom + pan.y;
   const sw = w * zoom;
   const sh = r.h * zoom;
-  const M = EDGE_MARGIN;
-  const fully = sx >= M && sy >= M && sx + sw <= W - M && sy + sh <= H - M;
-  if (fully) return false;
-  if (center) {
-    pan = { x: Math.round(W / 2 - (r.x + w / 2) * zoom), y: Math.round(H / 2 - (r.y + r.h / 2) * zoom) };
-  } else {
+  const M = Math.max(0, Math.min(EDGE_MARGIN, (H - sh) / 2, (W - sw) / 2));
+  const bar = zoomBarRect();
+  const at = (p) => ({ sx: r.x * zoom + p.x, sy: r.y * zoom + p.y });
+  const covered = (p) => {
+    const { sx, sy } = at(p);
+    return bar && sx < bar.right && sx + sw > bar.left - M && sy < bar.bottom + M && sy + sh > bar.top;
+  };
+  const fits = (p) => {
+    const { sx, sy } = at(p);
+    return sx >= M && sx + sw <= W - M && (sh > H ? sy >= 0 && sy <= M : sy >= M && sy + sh <= H - M) && !covered(p);
+  };
+  if (fits(pan)) return false;
+  let next;
+  if (center) next = { x: W / 2 - (r.x + w / 2) * zoom, y: H / 2 - (r.y + r.h / 2) * zoom };
+  else {
     let { x, y } = pan;
+    const { sx, sy } = at(pan);
     if (sx + sw > W - M) x -= sx + sw - (W - M);
-    if (sx + (x - pan.x) < M) x = M - r.x * zoom;
+    if (r.x * zoom + x < M) x = M - r.x * zoom;
     if (sy + sh > H - M) y -= sy + sh - (H - M);
-    if (sy + (y - pan.y) < M) y = M - r.y * zoom;
-    pan = { x: Math.round(x), y: Math.round(y) };
+    if (r.y * zoom + y < M) y = M - r.y * zoom;
+    next = { x, y };
   }
+  if (sh > H) next.y = M - r.y * zoom; // taller than what is visible: show its top
+  // Under the zoom bar: move the card left of it, or below it when there is no room on the left.
+  if (covered(next)) {
+    if (bar.left - M - sw >= M) next.x = bar.left - M - sw - r.x * zoom;
+    else next.y = bar.bottom + M - r.y * zoom;
+  }
+  pan = { x: Math.round(next.x), y: Math.round(next.y) };
   applyNow();
   return true;
 }
@@ -591,6 +658,7 @@ function swallowClickAfterPan(e) {
 function onBackgroundClick(e) {
   if (e.target.closest('.step-card, button, .dg-invalid')) return;
   select(null);
+  root.focus({ preventScroll: true }); // + / − / 0 keep working after a click on the background
 }
 
 function onWheel(e) {
@@ -618,6 +686,7 @@ export function focusSelected() {
   if (!active() || !lay) return;
   const id = selectedId() ?? START_ID;
   ensureVisible(id);
+  cull();
   cardElement(id)?.focus({ preventScroll: true });
 }
 
@@ -626,6 +695,7 @@ export function revealStep(id, { flash = false, focus = true, block = 'center' }
   if (ops.expandAncestors(id)) setCollapsed([], false); // persists + re-renders
   if (!lay) return;
   ensureVisible(id, { center: block === 'center' });
+  cull(); // the card exists even when no pan was needed (a render just replaced the elements)
   const card = cardElement(id);
   if (!card) return;
   if (focus && !document.activeElement?.closest('#inspector input, #inspector textarea, #inspector select')) card.focus({ preventScroll: true });
@@ -677,6 +747,8 @@ function onKey(e) {
       if (cur.collapsed) return setCollapsed([cur.id], false);
       return go(order[idx + 1]?.parentId === cur.id ? order[idx + 1] : null);
     case 'Enter': {
+      // Only on the card itself: Enter on its ⋯ / ▾ or on a "+" activates that button.
+      if (!e.target.matches('.step-card')) return undefined;
       const input = document.querySelector('#inspector input, #inspector select, #inspector textarea');
       if (input && cur) {
         e.preventDefault();

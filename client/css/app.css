@@ -683,7 +683,8 @@ input:focus, select:focus, textarea:focus { border-color: var(--color-accent); }
 .dg-card .type-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .dg-card .alias { min-width: 0; max-width: 72px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: none; }
 .dg-card .dg-row .badges { margin-left: auto; }
-.dg-card .dg-sum { flex: none; padding-left: var(--space-0-5); }
+.dg-card > .dg-sum { flex: none; padding-left: var(--space-0-5); }
+.dg-card .dg-row > .alias { max-width: 96px; }
 .dg-card .dg-tags { display: flex; align-items: center; gap: var(--space-1); min-width: 0; overflow: hidden; min-height: 18px; }
 .dg-card .dg-note { font-size: var(--text-xs); color: var(--color-text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .dg-card button.icon { min-width: var(--control-h-sm); min-height: var(--control-h-sm); }
@@ -1032,6 +1033,14 @@ dialog .actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap
   body.sheet-open .process { scroll-padding-bottom: var(--sheet-overlap, var(--sheet-h)); }
   body.sheet-open .process::after { content: ''; display: block; height: var(--sheet-overlap, var(--sheet-h)); }
   body.sheet-open .toast { bottom: calc(var(--sheet-h) + var(--space-3)); }
+}
+/* Sơ đồ on touch-size screens: 32 px targets on cards and the zoom bar (design 0003 đợt B review). */
+@media (max-width: 900px) {
+  .dg-card button.icon, .dg-zoom button { min-width: var(--control-h-md); min-height: var(--control-h-md); }
+}
+/* Phones and landscape phones: the zoom bar is only ⤢ (pinch zooms), so it covers less of the diagram. */
+@media (max-width: 720px), (max-width: 900px) and (max-height: 500px) {
+  .dg-zoom #btn-zoom-out, .dg-zoom #btn-zoom-in, .dg-zoom .dg-zoom-level { display: none; }
 }
 /* Short narrow screens (landscape phone): the "Thu gọn / Mở tất cả" row would leave less than one
    card of canvas above the sheet; its actions are in the ⋯ menu (main.js, same media query). */

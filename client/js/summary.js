@@ -91,6 +91,12 @@ export function statChip(step, byStep) {
 /** Name of a step in labels: its alias, else its type label. */
 export const stepName = (step) => stepAlias(step) || nodeType(step.type)?.label || step.type;
 
+/** aria-label of the box of an empty slot: the catalogue's `empty` text, else "… vào nhánh <label>". */
+export function emptySlotLabel(def) {
+  if (def?.empty) return def.empty;
+  return def?.label ? `Thêm bước vào nhánh ${def.label}` : 'Thêm bước ở đây';
+}
+
 /** aria-label of the "+" at `index` of `list`: "Thêm bước sau "acc"" (both views). */
 export function addPointLabel(list, index) {
   const isStep = (s) => s && typeof s === 'object' && !Array.isArray(s);

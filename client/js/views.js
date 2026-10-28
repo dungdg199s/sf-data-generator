@@ -3,8 +3,9 @@
 // opens collapsed frames around it, brings it into view and moves focus along when focus was in
 // the view. Not an undoable edit, and the workflow does not change.
 //
-// The choice is saved in localStorage['sfdg.view'] above 720 px. Phones always open in Quy trình;
-// Sơ đồ is in their ⋯ menu, and choosing it there is not saved.
+// The choice is saved in localStorage['sfdg.view'] except on phones: ≤ 720 px wide, or a landscape
+// phone (≤ 900 px wide and ≤ 500 px tall: the screens where the switch is in the ⋯ menu). Phones
+// always open in Quy trình; choosing Sơ đồ there is not saved.
 
 import { state, emit, loadView, saveView, saveCollapsed } from './store.js';
 import * as processView from './process.js';
@@ -17,7 +18,7 @@ export const VIEWS = [
   { value: 'canvas', label: 'Sơ đồ' },
 ];
 
-const PHONE = window.matchMedia('(max-width: 720px)');
+const PHONE = window.matchMedia('(max-width: 720px), (max-width: 900px) and (max-height: 500px)');
 
 const rootOf = (view) => document.getElementById(view === 'canvas' ? 'canvas' : 'process');
 

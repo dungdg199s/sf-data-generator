@@ -1026,12 +1026,23 @@ async function flowEach() {
   await page.context().close();
 }
 
-/** Flow 15: the Sơ đồ view (design 0003 đợt B). Own contexts (wide, then phone). */
+/** Flow 15: the Sơ đồ view (design 0003 đợt B, + review fixes). Own contexts (wide, then phone). */
 async function flowCanvas() {
   const page = await newPage('canvas');
+  // The empty-slot labels come from the catalogue (review nit): a different `empty` text for Lặp.
+  await page.route('**/api/meta', async (route) => {
+    const meta = await (await route.fetch()).json();
+    meta.nodeTypes.find((t) => t.type === 'loop').slots[0].empty = 'Thêm bước vào thân Lặp';
+    await route.fulfill({ json: meta });
+  });
   await page.goto(base);
   await page.fill('#wf-name', 'Sơ đồ'); // an edit writes the autosave the checks read
   await page.waitForSelector('#process .step-card[data-id="con"]');
+  // Enter on a focused ⋯ opens the step menu, not the inspector (review S5, Quy trình).
+  await page.focus('#process .step-card[data-id="con"] .menu-btn');
+  await page.keyboard.press('Enter');
+  check(await page.isVisible('.popup'), 'Quy trình: Enter on a focused ⋯ did not open the step menu');
+  await page.keyboard.press('Escape');
   await page.click('#process .step-card[data-id="con"] .type');
   await page.keyboard.press('m');
   await page.waitForSelector('#canvas .step-card[data-id="con"]');
@@ -1042,68 +1053,146 @@ async function flowCanvas() {
     const v = document.getElementById('canvas').getBoundingClientRect();
     return { inside: r.left >= v.left && r.top >= v.top && r.right <= v.right && r.bottom <= v.bottom, selected: c.classList.contains('selected'), focused: document.activeElement === c };
   }, id);
+  const focusedId = () => page.evaluate(() => document.activeElement?.closest?.('#canvas .step-card')?.dataset.id ?? document.activeElement?.tagName);
   const v = await inView('con');
   check(v?.inside && v.selected && v.focused, `M: con not selected / focused / inside the diagram (${JSON.stringify(v)})`);
   const sw = await page.evaluate(() => ({
     process: document.querySelectorAll('#process *').length, hidden: document.getElementById('process').hidden,
     pressed: document.querySelector('.view-switch [data-view="canvas"]').getAttribute('aria-pressed'), saved: localStorage.getItem('sfdg.view'),
     tree: document.getElementById('canvas').getAttribute('role'),
+    // One tab stop in the tree (review): the selected card; "+", ⋯ and badges are reached with keys.
+    tabStops: [...document.querySelectorAll('#canvas [tabindex], #canvas button')].filter((e) => e.tabIndex >= 0).map((e) => e.dataset.id ?? e.className),
+    posinset: document.querySelector('#canvas .step-card[data-id="con"]').getAttribute('aria-posinset'),
+    zoomLabel: document.getElementById('btn-zoom-reset').getAttribute('aria-label'),
   }));
-  check(sw.process === 0 && sw.hidden && sw.pressed === 'true' && sw.saved === 'canvas' && sw.tree === 'tree', `switch state ${JSON.stringify(sw)}`);
-  // "+" on the connector after con → Record, selected, inside the loop body after con.
+  check(sw.process === 0 && sw.hidden && sw.pressed === 'true' && sw.saved === 'canvas' && sw.tree === 'tree' && sw.tabStops.join() === 'con' && sw.posinset === '1' && /100%/.test(sw.zoomLabel), `switch state ${JSON.stringify(sw)}`);
+  // Enter on a focused "+" opens its menu (review S5) → Record, added right after con.
   const count = () => page.evaluate(() => (JSON.stringify(JSON.parse(localStorage.getItem('sfdg.workflow.v2')).steps).match(/"type":"record"/g) ?? []).length);
   const before = await count();
-  await page.click('#canvas button.dg-add[aria-label="Thêm bước sau \\"con\\""]');
+  await page.focus('#canvas button.dg-add[aria-label="Thêm bước sau \\"con\\""]');
+  await page.keyboard.press('Enter');
+  await page.waitForSelector('.popup', { timeout: 2000 }).catch(() => errors.push('Enter on a focused "+" did not open the menu'));
   await page.click('.popup [role="menuitem"][data-type="record"]');
   const added = await page.waitForFunction(() => {
     const id = document.querySelector('#canvas .step-card.selected')?.dataset.id;
     const wf = JSON.parse(localStorage.getItem('sfdg.workflow.v2'));
-    const find = (list) => { for (const s of list) { const i = list.indexOf(s); for (const k of Object.keys(s.slots ?? {})) { const at = s.slots[k].findIndex((x) => x.id === id); if (at >= 0) return { prev: s.slots[k][at - 1]?.id, type: s.slots[k][at].type }; const deep = find(s.slots[k]); if (deep) return deep; } void i; } return null; };
+    const find = (list) => { for (const s of list) { for (const k of Object.keys(s.slots ?? {})) { const at = s.slots[k].findIndex((x) => x.id === id); if (at >= 0) return { prev: s.slots[k][at - 1]?.id, type: s.slots[k][at].type }; const deep = find(s.slots[k]); if (deep) return deep; } } return null; };
     return id && id !== 'con' && find(wf.steps);
-  }, null, { timeout: 3000 }).then((h) => h.jsonValue()).catch(() => null);
+  }, null, { timeout: 3000 }).then((x) => x.jsonValue()).catch(() => null);
   check(added?.prev === 'con' && added.type === 'record' && (await count()) === before + 1, `"+" after con did not add a Record there (${JSON.stringify(added)})`);
   const newId = await page.$eval('#canvas .step-card.selected', (c) => c.dataset.id);
-  check((await inView(newId))?.inside, 'the new step is not inside the diagram viewport');
+  const nv = await inView(newId);
+  check(nv?.inside && nv.focused, `the new step is not inside the viewport / focused (${JSON.stringify(nv)})`);
   await page.keyboard.press('Delete');
   await page.waitForFunction((id) => !document.querySelector(`#canvas .step-card[data-id="${id}"]`), newId, { timeout: 3000 }).catch(() => errors.push('Delete did not remove the step from the diagram'));
   check((await count()) === before, 'Delete did not remove the added Record');
-  // Tree keys: ↑ from con goes to its loop (the step before it in reading order).
-  await page.focus('#canvas .step-card[data-id="con"]');
-  await page.click('#canvas .step-card[data-id="con"] .type');
+  // Focus survives every re-render (review B1): Delete, ↑, Alt+↓ (moves the loop), Ctrl+Z.
+  check((await focusedId()) === 'con', `after Delete focus is on ${await focusedId()} (con expected)`);
   await page.keyboard.press('ArrowUp');
-  const up = await page.$eval('#canvas .step-card.selected', (c) => ({ type: c.dataset.type, focused: document.activeElement === c }));
+  const up = await page.$eval('#canvas .step-card.selected', (c) => ({ id: c.dataset.id, type: c.dataset.type, focused: document.activeElement === c }));
   check(up.type === 'loop' && up.focused, `↑ from con: ${JSON.stringify(up)}`);
+  await page.keyboard.press('Alt+ArrowDown');
+  check((await focusedId()) === up.id, `after Alt+↓ focus is on ${await focusedId()} (${up.id} expected)`);
+  await page.keyboard.press('Control+z');
+  check((await focusedId()) === up.id, `after Ctrl+Z focus is on ${await focusedId()} (${up.id} expected)`);
+  // F8 to a warning (an empty Lặp from the palette) selects and focuses its card.
+  await page.click('#palette-items .palette-item[data-type="loop"]');
+  const loopId = await page.$eval('#canvas .step-card.selected', (c) => c.dataset.id);
+  await page.waitForSelector('#issues:not([hidden])');
+  await page.keyboard.press('Home');
+  await page.keyboard.press('F8');
+  check((await focusedId()) === loopId, `after F8 focus is on ${await focusedId()} (${loopId} expected)`);
+  const emptyLabel = () => page.$eval('.view:not([hidden]) .slot-empty', (b) => b.getAttribute('aria-label')).catch(() => null);
+  check(await emptyLabel() === 'Thêm bước vào thân Lặp', `Sơ đồ: empty body label ${await emptyLabel()} (catalogue text expected)`);
+  await page.keyboard.press('m');
+  await page.waitForSelector('#process .slot-empty');
+  check(await emptyLabel() === 'Thêm bước vào thân Lặp', `Quy trình: empty body label ${await emptyLabel()} (catalogue text expected)`);
+  await page.keyboard.press('m');
+  await page.waitForSelector(`#canvas .step-card[data-id="${loopId}"]:focus`, { timeout: 2000 }).catch(() => errors.push('M back to Sơ đồ: the selected card has no focus'));
+  await page.keyboard.press('Delete');
+  // The results panel opening (Ctrl+Enter) shrinks the diagram: the selected card stays in view (review nit).
+  await page.click('#canvas .step-card[data-id="con"] .type');
+  // con just above the bottom edge first, so the smaller diagram would cut it off.
+  const low = await page.evaluate(() => {
+    const c = document.querySelector('#canvas .step-card[data-id="con"]').getBoundingClientRect();
+    const v = document.getElementById('canvas').getBoundingClientRect();
+    return { x: v.left + v.width / 2, y: v.top + v.height / 2, dy: c.bottom - (v.bottom - 30) };
+  });
+  await page.mouse.move(low.x, low.y);
+  await page.mouse.wheel(0, low.dy);
+  await page.keyboard.press('Control+Enter');
+  await page.waitForSelector('#canvas .step-card[data-id="con"] .stat');
+  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+  check((await inView('con'))?.inside, 'the results panel hid the selected card of the diagram');
   if (outDir) await page.screenshot({ path: path.join(outDir, 'smoke-1440-canvas.png') });
   await page.emulateMedia({ colorScheme: 'dark' });
   check(await page.evaluate(() => getComputedStyle(document.body).backgroundColor) === BG.dark, 'Sơ đồ: dark scheme not applied');
   if (outDir) await page.screenshot({ path: path.join(outDir, 'smoke-1440-canvas-dark.png') });
+  // M with the Start card selected, there and back: focus follows (review B1).
+  await page.keyboard.press('Home');
   await page.keyboard.press('m');
-  await page.waitForSelector('#process .step[data-type="loop"] > .step-card.selected', { timeout: 3000 });
-  check(await page.evaluate(() => document.getElementById('canvas-wrap').hidden && !document.querySelector('#canvas [data-key]')), 'Quy trình: the diagram kept its DOM');
+  await page.waitForSelector('#process .start-card.selected');
+  await page.keyboard.press('m');
+  await page.waitForSelector('#canvas .step-card[data-id="__start"]');
+  check((await focusedId()) === '__start', `M with Start selected: focus on ${await focusedId()}`);
+  // Background click focuses the diagram, so "+" zooms from the keyboard (review nit).
+  const corner = await page.evaluate(() => { const v = document.getElementById('canvas').getBoundingClientRect(); return { x: v.left + 12, y: v.bottom - 12 }; });
+  await page.mouse.click(corner.x, corner.y);
+  await page.keyboard.press('+');
+  check(await page.textContent('#btn-zoom-reset') === '125%', `+ after a background click: zoom ${await page.textContent('#btn-zoom-reset')}`);
+  // Another workflow starts at 100 % with its Start card at the left, wherever the old one was panned (review S2).
+  for (let i = 0; i < 6; i++) await page.mouse.wheel(500, 300);
+  await page.click('#sample-items .palette-item:has-text("Contact cho Account có sẵn")');
+  await page.waitForFunction(() => document.querySelector('.dg-world').style.transform.startsWith('translate(0px'), null, { timeout: 2000 }).catch(() => errors.push('loading a sample kept the old pan'));
+  check((await inView('__start'))?.inside && await page.textContent('#btn-zoom-reset') === '100%', 'after loading a sample the Start card is not in view at 100 %');
+  // Type labels are not cut ("Query (đọc org)" next to its alias and badge, review nit).
+  const cut = await page.$$eval('#canvas .type-label', (els) => els.filter((e) => e.scrollWidth > e.clientWidth + 0.5).map((e) => e.textContent));
+  check(!cut.length && await page.isVisible('#canvas .step-card[data-type="query"]'), `truncated type labels: ${cut}`);
+  // Panning far away leaves part of the diagram on screen (review S2).
+  await page.mouse.move(low.x, low.y);
+  for (let i = 0; i < 30; i++) await page.mouse.wheel(-3000, -3000);
+  const left = await page.evaluate(() => {
+    const v = document.getElementById('canvas').getBoundingClientRect();
+    return [...document.querySelectorAll('#canvas .step-card')].some((c) => { const r = c.getBoundingClientRect(); return r.right > v.left && r.left < v.right && r.bottom > v.top && r.top < v.bottom; });
+  });
+  check(left, 'panning far away left no card on screen');
   await page.context().close();
 
   // Phone: the saved Sơ đồ is not applied; the ⋯ menu offers it and does not save it.
   const m = await newPage('canvas 390', { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
-  await seedStorage(m, { workflow: null });
   await m.addInitScript(() => { if (!localStorage.getItem('smoke.view')) { localStorage.setItem('sfdg.view', 'canvas'); localStorage.setItem('smoke.view', '1'); } });
   await m.goto(base);
   await m.waitForSelector('#process .step-card[data-id="con"]');
   await m.click('#btn-more');
   await m.click('.popup [role="menuitemradio"]:has-text("Sơ đồ")');
   await m.waitForSelector('#canvas .step-card[data-id="__start"]');
-  const phone = await m.evaluate(() => ({ overflow: document.documentElement.scrollWidth - innerWidth, saved: localStorage.getItem('sfdg.view') }));
-  check(phone.overflow <= 0, `390px Sơ đồ overflows by ${phone.overflow}px`);
+  const phone = await m.evaluate(() => ({ overflow: document.documentElement.scrollWidth - innerWidth, zoomButtons: [...document.querySelectorAll('.dg-zoom button')].filter((b) => b.offsetWidth).map((b) => b.offsetWidth) }));
+  check(phone.overflow <= 0 && phone.zoomButtons.join() === '32', `390px Sơ đồ: overflow ${phone.overflow}px, zoom bar ${phone.zoomButtons} (only ⤢, 32 px)`);
   await m.tap('#canvas .step-card[data-id="__start"] .type');
   await m.waitForSelector('#inspector.open');
   await settle(m);
-  const sheet = await m.evaluate(() => ({ card: document.querySelector('#canvas .step-card.selected').getBoundingClientRect().bottom, sheet: document.getElementById('inspector').getBoundingClientRect().top }));
+  const sheet = await m.evaluate(() => ({ card: document.querySelector('#canvas .step-card.selected').getBoundingClientRect().bottom, sheet: document.getElementById('inspector').getBoundingClientRect().top, menu: document.querySelector('#canvas .step-card .menu-btn')?.offsetWidth }));
   check(sheet.card <= sheet.sheet + 0.5, `390px Sơ đồ: the selected card is under the sheet (${JSON.stringify(sheet)})`);
   if (outDir) await m.screenshot({ path: path.join(outDir, 'smoke-390-canvas.png') });
-  await m.click('.sheet-close');
+  // 844 × 390 (landscape phone, sheet open): the selected card's top is shown above the sheet and not
+  // under the zoom bar (review S3).
+  await m.setViewportSize({ width: 844, height: 390 });
+  await settle(m);
+  await m.keyboard.press('End');
+  await m.waitForFunction(() => document.querySelector('#canvas .step-card.selected')?.dataset.id === 'con');
+  await m.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+  const land = await m.evaluate(() => {
+    const r = (s) => document.querySelector(s).getBoundingClientRect();
+    const c = r('#canvas .step-card.selected');
+    const z = r('.dg-zoom');
+    return { top: c.top, canvas: r('#canvas').top, sheet: r('#inspector').top, underBar: c.left < z.right && c.right > z.left && c.top < z.bottom && c.bottom > z.top, menu: document.querySelector('#canvas .step-card.selected .menu-btn').offsetWidth };
+  });
+  check(land.top >= land.canvas - 0.5 && land.top + 24 <= land.sheet && !land.underBar && land.menu >= 32, `844×390 Sơ đồ: selected card hidden or small targets (${JSON.stringify(land)})`);
+  // A landscape phone counts as a phone: choosing Quy trình there is not saved either.
   await m.click('#btn-more');
   await m.click('.popup [role="menuitemradio"]:has-text("Quy trình")');
   await m.waitForSelector('#process .step-card');
-  check(await m.evaluate(() => localStorage.getItem('sfdg.view')) === 'canvas', 'a view chosen on a phone was saved');
+  check(await m.evaluate(() => localStorage.getItem('sfdg.view')) === 'canvas', 'a view chosen on a (landscape) phone was saved');
   await m.context().close();
 }
 
@@ -1121,7 +1210,10 @@ async function flowCanvas() {
     check(orgs.status === 503 && /smoke:/.test((await orgs.json()).error), 'the smoke server is not using the sf CLI stub');
     // Independent flows, one context each, in parallel. A flow that throws (timed-out wait) is
     // reported and the others still finish.
-    const flows = { flowEditing, flowPicker, flowFiles, flowDark, flowLayoutWide, flowLayoutNarrow, flowEach, flowCanvas };
+    let flows = { flowEditing, flowPicker, flowFiles, flowDark, flowLayoutWide, flowLayoutNarrow, flowEach, flowCanvas };
+    // SMOKE_ONLY=flowCanvas,flowEach runs only those flows (while working on one area).
+    const only = process.env.SMOKE_ONLY?.split(',').filter(Boolean);
+    if (only?.length) flows = Object.fromEntries(Object.entries(flows).filter(([n]) => only.includes(n)));
     const results = await Promise.allSettled(Object.values(flows).map((f) => f()));
     results.forEach((r, i) => { if (r.status === 'rejected') errors.push(`${Object.keys(flows)[i]}: ${r.reason}`); });
   } catch (e) {
