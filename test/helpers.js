@@ -17,3 +17,18 @@ export function branch(id, config = {}, yes = [], no = []) {
 }
 
 export const NOW = Date.parse('2025-06-15T12:00:00Z');
+
+/** Query step (design 0006): builder config by default. */
+export function query(id, alias, config = {}) {
+  return { id, type: 'query', config: { sobject: 'Account', alias, ...config } };
+}
+
+/** Chọn bản ghi step (design 0006). */
+export function pick(id, alias, from, config = {}) {
+  return { id, type: 'pick', config: { from, alias, ...config } };
+}
+
+/** Rows as the server's pre-fetch hands them to the executor: { [stepId]: { records } }. */
+export function rows(records, sobject = 'Account') {
+  return { records, sobject };
+}

@@ -61,7 +61,8 @@ export function newStep(type, target, around = []) {
   const step = {
     id: newId(type === 'record' ? 'r' : type === 'loop' ? 'l' : type === 'branch' ? 'b' : 's'),
     type,
-    config: Object.fromEntries((def?.options ?? []).filter((o) => o.default !== '' && o.default !== undefined).map((o) => [o.key, structuredClone(o.default)])),
+    // `initial` (a new step's value) wins over `default` (the value used when the key is missing).
+    config: Object.fromEntries((def?.options ?? []).map((o) => [o.key, o.initial ?? o.default]).filter(([, v]) => v !== '' && v !== undefined).map(([k, v]) => [k, structuredClone(v)])),
   };
   if (def?.slots?.length) step.slots = Object.fromEntries(def.slots.map((s) => [s.key, []]));
   if (type === 'record') {

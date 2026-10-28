@@ -173,10 +173,17 @@ export function collectIds(wf) {
   return ids;
 }
 
-/** Aliases of record steps (the names other steps reference). */
+/**
+ * Step types whose `alias` names a record or pool other steps reference: one namespace
+ * (Record; Query and Chọn bản ghi of design 0006 — the types whose `exposes` is a record named
+ * by `alias` in server/workflow/nodes.js).
+ */
+export const ALIAS_TYPES = new Set(['record', 'query', 'pick']);
+
+/** Aliases of record / pool steps (the names other steps reference). */
 export function collectAliases(wf) {
   const out = new Set();
-  walkSteps(wf?.steps, (s) => { if (s.type === 'record' && s.config?.alias) out.add(s.config.alias); });
+  walkSteps(wf?.steps, (s) => { if (ALIAS_TYPES.has(s.type) && s.config?.alias) out.add(s.config.alias); });
   return out;
 }
 
@@ -212,6 +219,11 @@ function legacyReferenceOptions(step) {
   });
   if (step.type === 'branch' && typeof step.config?.left === 'string') {
     out.push({ field: 'left', option: 'left', mode: 'path', value: step.config.left, set: (v) => { step.config.left = v; } });
+  }
+  if (step.type === 'pick') {
+    for (const [key, mode] of [['from', 'ref'], ['filterValue', 'template']]) {
+      if (typeof step.config?.[key] === 'string') out.push({ field: key, option: key, mode, value: step.config[key], set: (v) => { step.config[key] = v; } });
+    }
   }
   return out;
 }
@@ -327,7 +339,7 @@ export function setStepAlias(wf, id, value, { memo = new Map(), slotKeys, catalo
   const current = effective(c.alias);
   if (good(current) || (!memo.has(id) && owns(current))) memo.set(id, current);
   // A record without alias is referenced by its id (like the executor): the first alias takes them along.
-  if (!isLoop && !c.alias && !memo.has(id) && owns(String(step.id))) memo.set(id, String(step.id));
+  if (step.type === 'record' && !c.alias && !memo.has(id) && owns(String(step.id))) memo.set(id, String(step.id));
   const from = memo.get(id);
   const to = effective(value);
   if (!from || from === to || !good(to) || !owns(from)) {
@@ -354,7 +366,7 @@ export function setStepAlias(wf, id, value, { memo = new Map(), slotKeys, catalo
 
 /**
  * Is `name` used by another step in a way that clashes with step `at` (from findStep)?
- * Record alias: another record alias or any loop variable. Loop variable: a record alias, or
+ * Record / pool alias: another such alias or any loop variable. Loop variable: a record alias, or
  * the variable of an enclosing loop or of a loop inside this one (shadowing).
  */
 function aliasTaken(wf, at, name, slotKeys) {
@@ -362,8 +374,8 @@ function aliasTaken(wf, at, name, slotKeys) {
   let taken = false;
   walkSteps(wf.steps, (s) => {
     if (taken || s === self) return !taken;
-    if (s.type === 'record' && s.config?.alias === name) taken = true;
-    else if (s.type === 'loop' && self.type === 'record' && (s.config?.alias || 'loop') === name) taken = true;
+    if (ALIAS_TYPES.has(s.type) && s.config?.alias === name) taken = true;
+    else if (s.type === 'loop' && self.type !== 'loop' && (s.config?.alias || 'loop') === name) taken = true;
     return !taken;
   }, slotKeys);
   if (taken || self.type !== 'loop') return taken;
@@ -385,7 +397,7 @@ export function cloneSteps(steps, { ids = new Set(), aliases = new Set(), makeId
     const entry = { id: s.id, copyId: makeId(s.id, ids) };
     ids.add(entry.copyId);
     s.id = entry.copyId;
-    if (s.type === 'record' && s.config?.alias) {
+    if (ALIAS_TYPES.has(s.type) && s.config?.alias) {
       const next = nextName(s.config.alias, aliases);
       aliases.add(next);
       aliasMap.set(s.config.alias, next);

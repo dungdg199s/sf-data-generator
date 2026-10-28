@@ -94,3 +94,23 @@ function mapField(f, sobject) {
       return null;
   }
 }
+
+/**
+ * Every field of an sObject for the Query step's "Chọn field…" dialog (design 0006), not only
+ * createable ones: Id first, then the name field, then by label.
+ */
+export function mapQueryFields(describe) {
+  const all = describe.fields ?? [];
+  const nameField = all.find((f) => f.nameField)?.name ?? null;
+  const rank = (f) => (f.name === 'Id' ? 0 : f.name === nameField ? 1 : 2);
+  const fields = all.map((f) => ({
+    name: f.name,
+    label: f.label ?? f.name,
+    type: f.type,
+    ...(f.referenceTo?.length ? { referenceTo: [...f.referenceTo] } : {}),
+    ...(f.relationshipName ? { relationshipName: f.relationshipName } : {}),
+    filterable: f.filterable !== false,
+    sortable: f.sortable !== false,
+  })).sort((a, b) => rank(a) - rank(b) || String(a.label).localeCompare(String(b.label)));
+  return { sobject: describe.name, label: describe.label ?? describe.name, nameField, fields };
+}

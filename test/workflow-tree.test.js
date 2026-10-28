@@ -260,3 +260,25 @@ test('setStepAlias: the first alias of a record moves the references made throug
   assert.equal(fieldsOf(wf, 'c')[0].options.template, '{{acc.Name}}');
   assert.equal(fieldsOf(wf, 'c')[1].options.ref, 'acc');
 });
+
+test('Query / Chọn bản ghi aliases (0006): one namespace with records; renames follow from, filterValue, Lookup and templates; copies get new names', () => {
+  const catalog = scopeCatalog();
+  const q = { id: 'q', type: 'query', config: { sobject: 'Account', alias: 'accs' } };
+  const p = { id: 'p', type: 'pick', config: { from: 'accs', alias: 'acc', filter: 'compare', filterField: 'Id', filterValue: '{{acc0.Id}}' } };
+  const c = r('c', 'con', [{ name: 'AccountId', type: 'lookup', options: { mode: 'random', ref: 'accs' } }, { name: 'T', type: 'template', options: { template: '{{acc.Name}} {{accs.$count}}' } }]);
+  const wf = tree([{ id: 'q0', type: 'query', config: { alias: 'acc0s' } }, { id: 'p0', type: 'pick', config: { from: 'acc0s', alias: 'acc0' } }, q, p, c]);
+  assert.deepEqual([...collectAliases(wf)].sort(), ['acc', 'acc0', 'acc0s', 'accs', 'con']);
+  assert.equal(setStepAlias(wf, 'q', 'accounts', { catalog }), true);
+  assert.equal(p.config.from, 'accounts');
+  assert.equal(c.config.fields[0].options.ref, 'accounts');
+  assert.equal(c.config.fields[1].options.template, '{{acc.Name}} {{accounts.$count}}');
+  setStepAlias(wf, 'p0', 'parent', { catalog });
+  assert.equal(p.config.filterValue, '{{parent.Id}}');
+  // Not into another step's alias (a record's).
+  assert.equal(setStepAlias(wf, 'p', 'con', { catalog }), false);
+  assert.equal(c.config.fields[1].options.template, '{{acc.Name}} {{accounts.$count}}');
+  setStepAlias(wf, 'p', 'acc', { catalog }); // back to the free name (the field is mid-typing)
+  // Ctrl+D on a Query + Chọn bản ghi pair: both get new aliases, the copy's `from` follows.
+  const { steps: [q2, p2] } = cloneSteps([q, p], { ids: collectIds(wf), aliases: collectAliases(wf), catalog });
+  assert.deepEqual([q2.config.alias, p2.config.alias, p2.config.from], ['accounts2', 'acc2', 'accounts2']);
+});

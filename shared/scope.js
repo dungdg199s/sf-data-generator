@@ -1,7 +1,8 @@
 // Variable scope analysis (design 0005): which variables a step can use, and what every
 // reference in the workflow points at. One pure function, `analyzeScope`, is the single source
 // of truth for validation (server/workflow/schema.js), the Lookup "Bản ghi cha" dropdown, the
-// variable picker and rename/delete propagation (browser). Pure: no DOM, no I/O, no imports.
+// variable picker and rename/delete propagation (browser). Pure: no DOM, no I/O; imports only
+// shared/soql.js (the field list of a Query step).
 //
 // It knows nothing about specific step types: the catalogue says what each type provides
 // (`exposes`) and how its slots run (`flow`), see server/workflow/nodes.js:
@@ -23,6 +24,8 @@
 //   outsideLoop — a loop variable of a loop whose body does not contain the step
 //   shadowed    — a loop variable hidden by an inner loop with the same name
 //   disabled    — the source, or a container around it, is turned off
+
+import { selectFields, soqlSobject } from './soql.js';
 
 /** Template token `{{path}}` (also served as meta.syntax.templateToken; server/workflow/paths.js re-exports it). */
 export const TEMPLATE_TOKEN_SOURCE = '\\{\\{\\s*([\\w.$]+)\\s*\\}\\}';
@@ -190,7 +193,7 @@ function sourceName(step, ex) {
 /** Members of a SELECT field list (`Owner.Name` → member Owner with member Name). */
 function selectMembers(fields) {
   const list = Array.isArray(fields) ? fields : String(fields ?? '').split(/[\s,]+/);
-  const root = [{ key: 'Id', valueType: 'any' }];
+  const root = [];
   for (const raw of list) {
     const parts = String(raw?.name ?? raw ?? '').trim().split('.').filter(Boolean);
     let level = root;
@@ -238,7 +241,13 @@ function buildSource(step, type, cat, off) {
       return m;
     });
   } else if (ex.members === 'select') {
-    src.members = selectMembers(c.fields);
+    // Query (0006): builder fields (Id always first) or the SELECT list of hand-written SOQL;
+    // FIELDS(...) / TYPEOF make the list open (unknown fields are only a warning).
+    const sel = selectFields(c);
+    src.members = selectMembers(sel.fields);
+    if (sel.open) src.open = true;
+    src.sobject = soqlSobject(c);
+    if (ex.label?.key === 'sobject') src.label = src.sobject;
   } else if (Array.isArray(ex.members)) {
     src.members = ex.members.map((m) => ({ ...m }));
   }
@@ -299,7 +308,13 @@ export function analyzeScope(wf, catalog) {
     for (const [key, refName] of s._from) {
       const from = (byName.get(refName) ?? []).find((x) => x.kind === 'record' && x !== s);
       if (!from) continue;
-      if (key === 'members') s.members = [...from.members.filter((m) => !m.builtin), ...s.members];
+      // A pick (0006) remembers its pool and the step the rows come from (a Query or a Record).
+      s.from = from.name;
+      s.root = from.root ?? from.nodeId;
+      if (key === 'members') {
+        s.members = [...from.members.filter((m) => !m.builtin), ...s.members];
+        if (from.open) s.open = true;
+      }
       if (key === 'label') s.label = from.label;
       if (key === 'origin') s.origin = from.origin;
       if (key === 'label' && from.sobject !== undefined) s.sobject = from.sobject;
@@ -643,7 +658,7 @@ function resolveRef({ step, here, o, path, sources, byName, loopKeys }) {
 export function refChoices(scope, stepId, accepts = { lookupParent: true }) {
   const ok = (s) => s && Object.entries(accepts ?? { lookupParent: true }).every(([k, v]) => s[k] === v);
   const here = scope?.at?.[stepId];
-  const pick = (s, extra) => ({ source: s.nodeId, name: s.name, sobject: s.sobject, label: s.label, nodeType: s.nodeType, origin: s.origin, ...extra });
+  const pick = (s, extra) => ({ source: s.nodeId, name: s.name, sobject: s.sobject, label: s.label, nodeType: s.nodeType, origin: s.origin, current: s.current, ...(s.from ? { from: s.from } : {}), ...extra });
   const out = [];
   const seen = new Set();
   for (const v of here?.visible ?? []) {

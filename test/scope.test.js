@@ -187,3 +187,23 @@ test('scope: analysis stays linear — a 1000-step workflow is analysed well und
   // Lazy per-step lists still work on a big workflow.
   assert.equal(scope.at.r49_18.visible[0].source, 'r49_17');
 });
+
+test('scope (0006, real catalogue): SOQL members, open FIELDS(), pools for pick.from and Lookup labels', () => {
+  const w = wf([
+    { id: 'q', type: 'query', config: { mode: 'soql', alias: 'pbes', soql: 'SELECT Id, UnitPrice, Product2.Name FROM PricebookEntry ORDER BY Id' } },
+    { id: 'o', type: 'query', config: { mode: 'soql', alias: 'opens', soql: 'SELECT FIELDS(STANDARD) FROM Account LIMIT 200' } },
+    { id: 'p', type: 'pick', config: { from: 'pbes', alias: 'pbe' } },
+    { id: 'p2', type: 'pick', config: { from: 'opens', alias: 'open1' } },
+    r('c', 'con', [tpl('T', '{{pbe.Product2.Name}} {{pbe.Nope}} {{open1.Whatever}}')]),
+  ]);
+  const scope = analyzeScope(w, catalog);
+  assert.deepEqual([scope.sources.q.sobject, scope.sources.q.label], ['PricebookEntry', 'PricebookEntry']);
+  assert.deepEqual(scope.sources.q.members.map((m) => m.key), ['Id', 'UnitPrice', 'Product2', '$count']);
+  assert.equal(scope.sources.o.open, true);
+  assert.deepEqual([scope.sources.p.from, scope.sources.p.root, scope.sources.p.origin, scope.sources.p.sobject], ['pbes', 'q', 'org', 'PricebookEntry']);
+  assert.deepEqual(scope.refs.filter((x) => x.nodeId === 'c').map((x) => `${x.path}:${x.code ?? 'ok'}`), ['pbe.Product2.Name:ok', 'pbe.Nope:unknownMember', 'open1.Whatever:openMember']);
+  const pools = refChoices(scope, 'c', { pool: true }).filter((x) => x.usable);
+  assert.deepEqual(pools.map((x) => `${x.name}:${x.nodeType}${x.from ? `<${x.from}` : ''}`), ['open1:pick<opens', 'pbe:pick<pbes', 'opens:query', 'pbes:query']);
+  // A pool used by nothing but the picks is fine; a loop variable is not a pool.
+  assert.ok(!refChoices(wf([loop('l', { count: 1 }, [{ id: 'x', type: 'pick', config: { from: '', alias: 'a' } }])]), 'x', { pool: true }).length);
+});

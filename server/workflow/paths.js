@@ -3,6 +3,8 @@
 //   this.$n         → number of the record being generated (n in alias#n)
 //   <alias>.Field   → latest record produced by the record step with that alias
 //   <alias>.$n      → number of that record
+//   <pool>.$count   → number of records in the pool (Query rows, design 0006)
+//   <pick>.Field    → field of the record a Chọn bản ghi step picked (the same object as in the pool)
 //   <loopAlias>.index / .index0 / .count → loop variables (default loop alias is "loop")
 // Which references are valid where is decided by shared/scope.js (analyzeScope) at validation time.
 
@@ -28,11 +30,27 @@ export function resolvePath(path, scope, record, self = {}) {
     const rec = scope.current[head];
     if (rest[0] === '$n') return rec?.ref ? refNumber(rec.ref) : undefined;
     base = rec?.fields;
-  } else return undefined;
-  let v = base;
-  for (const key of rest) {
+  } else if (rest[0] === '$count' && scope.all && head in scope.all) return scope.all[head].length;
+  else return undefined;
+  return getPath(base, rest);
+}
+
+/** `obj` followed along `keys` (an array, or a dotted path such as `Account.Type`). */
+export function getPath(obj, keys) {
+  let v = obj;
+  for (const key of Array.isArray(keys) ? keys : String(keys ?? '').split('.').filter(Boolean)) {
     if (v === null || v === undefined) return undefined;
     v = v[key];
   }
   return v;
+}
+
+/** Text of a template with every `{{path}}` replaced (missing → '', `{ $ref }` → the ref). */
+export function renderTemplate(template, scope, record, self = {}) {
+  return String(template ?? '').replace(new RegExp(TEMPLATE_TOKEN, 'g'), (_, path) => {
+    const v = resolvePath(path, scope, record, self);
+    if (v === undefined || v === null) return '';
+    if (typeof v === 'object' && v.$ref) return v.$ref;
+    return String(v);
+  });
 }

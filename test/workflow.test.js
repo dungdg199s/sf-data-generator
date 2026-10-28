@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { runWorkflow } from '../server/workflow/executor.js';
 import { validateWorkflow, WorkflowError } from '../server/workflow/schema.js';
-import { wf, record, loop, branch, NOW } from './helpers.js';
+import { wf, record, loop, branch, query, pick, rows, NOW } from './helpers.js';
 
 const accountFields = [{ name: 'Name', type: 'text', options: { mode: 'company' } }];
 const lookup = (ref, mode = 'current', type = 'lookup') => ({ name: 'AccountId', type, options: { mode, ref } });
@@ -338,4 +338,203 @@ test('validation: a missing sub-member names the field\'s members', () => {
   const errors = errorsOf(w);
   assert.equal(errors.length, 1);
   assert.equal(errors[0].message, 'Field "T": field "Geo__c" của bước "acc" chỉ có latitude, longitude; không có "lat".');
+});
+
+// ---------- Query and Chọn bản ghi (design 0006) ----------
+
+const ACCS = [
+  { Id: '001000000000001AAA', Name: 'Acme', Industry: 'Banking' },
+  { Id: '001000000000002AAA', Name: 'Globex', Industry: 'Retail' },
+  { Id: '001000000000003AAA', Name: 'Initech', Industry: 'Banking' },
+];
+const CONS = [
+  { Id: '003A', AccountId: '001000000000001AAA', LastName: 'An' },
+  { Id: '003B', AccountId: '001000000000002AAA', LastName: 'Bình' },
+  { Id: '003C', AccountId: '001000000000001AAA', LastName: 'Chi' },
+];
+
+test('query pool feeds lookups with real Ids and rows are not output records', () => {
+  const w = wf([
+    query('q', 'accs', { fields: ['Id', 'Name', 'Industry'] }),
+    record('c', 'Contact', 'con', [{ name: 'LastName', type: 'text', options: { mode: 'lastName' } }, lookup('accs', 'random'), tplField('Title', '{{accs.$count}} accounts')], { count: 6 }),
+  ]);
+  assert.deepEqual(validateWorkflow(w).errors, []);
+  const r = runWorkflow(w, { seed: 4, now: NOW, queryResults: { q: rows(ACCS) } });
+  assert.deepEqual(r.stats.bySobject, { Contact: 6 });
+  assert.ok(r.records.every((x) => ACCS.some((a) => a.Id === x.fields.AccountId)), 'Lookup gives the real Id string');
+  assert.ok(r.records.every((x) => x.fields.Title === '3 accounts'));
+  assert.deepEqual(r.stats.byStep.q, { runs: 1, records: 0, rows: 3 });
+  // A Query does not draw from the rng: removing it (and its Lookup) leaves the other values as they were.
+  const plain = runWorkflow(wf([record('c', 'Contact', 'con', [{ name: 'LastName', type: 'text', options: { mode: 'lastName' } }, lookup('acc', 'fixed')], { count: 6 })].map((s) => ({ ...s, config: { ...s.config, fields: [s.config.fields[0], { name: 'AccountId', type: 'lookup', options: { mode: 'fixed', ids: ACCS.map((a) => a.Id) } }] } }))), { seed: 4, now: NOW });
+  assert.deepEqual(r.records.map((x) => [x.fields.LastName, x.fields.AccountId]), plain.records.map((x) => [x.fields.LastName, x.fields.AccountId]));
+  // The executor never reads the org: without pre-fetched rows the step fails with its id.
+  assert.throws(() => runWorkflow(w, { seed: 1 }), (e) => e instanceof WorkflowError && e.issues[0].nodeId === 'q' && /chưa có dữ liệu/.test(e.issues[0].message));
+});
+
+test('pick random, unique and sequential are reproducible with a seed', () => {
+  const make = (mode, n = 6) => wf([query('q', 'accs'), loop('l', { count: n }, [pick('p', 'acc', 'accs', { mode }), record('c', 'Contact', 'con', [tplField('Title', '{{acc.Name}}'), lookup('acc')])])]);
+  const names = (mode, seed, n) => runWorkflow(make(mode, n), { seed, now: NOW, queryResults: { q: rows(ACCS) } }).records.map((x) => x.fields.Title);
+  for (const mode of ['random', 'unique', 'sequential']) {
+    assert.deepEqual(validateWorkflow(make(mode)).errors, [], mode);
+    assert.deepEqual(names(mode, 7, 6), names(mode, 7, 6), `${mode} is reproducible`);
+  }
+  assert.deepEqual(names('sequential', 1, 5), ['Acme', 'Globex', 'Initech', 'Acme', 'Globex']);
+  const unique = names('unique', 3, 3);
+  assert.deepEqual([...unique].sort(), ['Acme', 'Globex', 'Initech'], 'unique uses every row once');
+  // The picked record is the pool row itself: the Lookup gives its real Id, {{acc.Id}} works.
+  const r = runWorkflow(make('random', 4), { seed: 2, now: NOW, queryResults: { q: rows(ACCS) } });
+  for (const x of r.records) assert.equal(ACCS.find((a) => a.Name === x.fields.Title).Id, x.fields.AccountId);
+  assert.deepEqual(r.stats.byStep.p, { runs: 4, records: 0, picked: 4 });
+  assert.equal(r.samples.p.Name, r.records[0].fields.Title);
+});
+
+test('pick filter with {{acc.Id}} selects children of the current parent', () => {
+  const w = wf([
+    query('q', 'accs'),
+    query('qc', 'cons', { sobject: 'Contact', fields: ['Id', 'AccountId', 'LastName'] }),
+    loop('l', { count: 8 }, [
+      pick('p', 'acc', 'accs', { mode: 'sequential' }),
+      pick('pc', 'con', 'cons', { filter: 'compare', filterField: 'AccountId', filterOp: 'eq', filterValue: '{{acc.Id}}' }),
+      record('o', 'Opportunity', 'opp', [tplField('Name', '{{acc.Name}} / {{con.LastName}}'), { name: 'ContactId__c', type: 'lookup', options: { ref: 'con' } }]),
+    ]),
+  ]);
+  assert.deepEqual(validateWorkflow(w).errors, []);
+  const r = runWorkflow(w, { seed: 5, now: NOW, queryResults: { q: rows(ACCS), qc: rows(CONS, 'Contact') } });
+  for (const x of r.records) {
+    const [accName, conName] = x.fields.Name.split(' / ');
+    const con = CONS.find((c) => c.LastName === conName);
+    assert.equal(ACCS.find((a) => a.Name === accName).Id, con.AccountId, x.fields.Name);
+    assert.equal(x.fields.ContactId__c, con.Id);
+  }
+  // Initech has no contact: its iterations are skipped (8 sequential picks → Initech 2 times).
+  assert.equal(r.records.length, 6);
+  assert.equal(r.stats.byStep.pc.skipped, 2);
+});
+
+test('pick onEmpty skip warns once, error fails with nodeId', () => {
+  const w = (onEmpty) => wf([
+    query('q', 'accs'),
+    loop('l', { count: 5 }, [
+      pick('p', 'acc', 'accs', { filter: 'compare', filterField: 'Industry', filterValue: 'Banking', mode: 'unique', onEmpty }),
+      record('c', 'Contact', 'con', [lookup('acc')]),
+    ]),
+    record('after', 'Task', 'task', []),
+  ]);
+  const r = runWorkflow(w('skip'), { seed: 1, queryResults: { q: rows(ACCS) } });
+  assert.equal(r.stats.bySobject.Contact, 2, 'two Banking accounts, then the rest of each iteration is skipped');
+  assert.equal(r.stats.bySobject.Task, 1, 'the step after the loop still runs');
+  const warns = r.warnings.filter((x) => x.code === 'pickSkipped');
+  assert.equal(warns.length, 1);
+  assert.equal(warns[0].nodeId, 'p');
+  assert.equal(warns[0].message, 'Bước Chọn bản ghi "acc": 3/5 lần không có bản ghi phù hợp nên đã bỏ qua các bước phía sau. Đổi điều kiện lọc, tăng LIMIT của Query, hoặc chọn "Báo lỗi và dừng" nếu đây là lỗi.');
+  assert.throws(() => runWorkflow(w('error'), { seed: 1, queryResults: { q: rows(ACCS) } }), (e) => e instanceof WorkflowError
+    && e.issues[0].nodeId === 'p'
+    && e.issues[0].message === 'Bước Chọn bản ghi "acc": không còn bản ghi nào trong "accs" thỏa điều kiện (lần thứ 3). Tăng LIMIT của Query, đổi điều kiện lọc, hoặc chọn cách chọn "Ngẫu nhiên (có thể lặp lại)".');
+  // At the top level a skip ends the run (no later steps).
+  const top = wf([query('q', 'accs'), pick('p', 'acc', 'accs'), record('c', 'Contact', 'con', [lookup('acc')])]);
+  const empty = runWorkflow(top, { seed: 1, queryResults: { q: rows([]) } });
+  assert.equal(empty.records.length, 0);
+  assert.equal(empty.warnings.filter((x) => x.code === 'pickSkipped').length, 1);
+});
+
+test('pick from a record pool keeps $ref', () => {
+  const w = wf([
+    acc('a', { count: 4 }),
+    loop('l', { count: 6 }, [pick('p', 'one', 'acc'), record('c', 'Contact', 'con', [lookup('one'), tplField('Title', 'of {{one.Name}}')])]),
+  ]);
+  assert.deepEqual(validateWorkflow(w).errors, []);
+  const r = runWorkflow(w, { seed: 9, now: NOW });
+  const accounts = r.records.filter((x) => x.sobject === 'Account');
+  for (const c of r.records.filter((x) => x.sobject === 'Contact')) {
+    const parent = accounts.find((x) => x.ref === c.fields.AccountId.$ref);
+    assert.ok(parent, 'the Lookup is a $ref to a generated Account');
+    assert.equal(c.fields.Title, `of ${parent.fields.Name}`);
+  }
+});
+
+test('validation: query config errors carry nodeId and field', () => {
+  const byField = (w) => Object.fromEntries(errorsOf(w).map((e) => [`${e.nodeId}:${e.field}`, e.message]));
+  const builder = byField(wf([query('q', 'accs', { sobject: 'Acc ount', fields: ['Id', 'Owner Name'], where: 'AccountId = {{acc.Id}}', orderBy: 'Id', limit: 5000 })]));
+  assert.equal(builder['q:sobject'], 'Chưa nhập sObject hợp lệ (API name).');
+  assert.equal(builder['q:fields'], 'Field "Owner Name" không hợp lệ. Dùng API name; field quan hệ viết Owner.Name.');
+  assert.equal(builder['q:where'], 'Bước Query không dùng được {{…}}: query chỉ chạy một lần trước khi sinh dữ liệu. Muốn lọc theo bản ghi khác (ví dụ {{acc.Id}}), dùng bộ lọc ở bước Chọn bản ghi.');
+  assert.equal(builder['q:limit'], 'Số bản ghi tối đa phải là số nguyên từ 1 đến 2000.');
+  const soql = byField(wf([query('q', 'accs', { mode: 'soql', soql: 'UPDATE Account SET Name = 1' })]));
+  assert.equal(soql['q:soql'], 'SOQL phải bắt đầu bằng SELECT. Bước Query chỉ đọc dữ liệu.');
+  const warned = warningsOf(wf([query('q', 'accs', { mode: 'soql', soql: 'SELECT Name FROM Account' }), pick('p', 'acc', 'accs')])).filter((x) => x.nodeId === 'q').map((x) => x.code);
+  assert.deepEqual(warned, ['noOrderBy', 'noId']);
+  assert.match(errorsOf(wf([query('q', '')]))[0].message, /^Đặt alias để bước khác dùng được pool này \(ví dụ accs\)\.$/);
+  // More than 20 Query steps: an error on the 21st.
+  const many = wf(Array.from({ length: 21 }, (_, i) => query(`q${i}`, `p${i}`)));
+  const tooMany = errorsOf(many);
+  assert.equal(tooMany.length, 1);
+  assert.equal(tooMany[0].nodeId, 'q20');
+  assert.match(tooMany[0].message, /quá 20 bước Query/);
+});
+
+test('validation: pick needs an upstream pool', () => {
+  const none = errorsOf(wf([pick('p', 'acc', '')]));
+  assert.deepEqual([none[0].field, none[0].message], ['from', 'Chưa chọn pool. Chọn alias của bước Query hoặc Record ở phía trên.']);
+  const below = errorsOf(wf([pick('p', 'acc', 'accs'), query('q', 'accs')])).find((x) => x.nodeId === 'p');
+  assert.equal(below.field, 'from');
+  assert.match(below.message, /^Pool "accs" phải nằm phía trước bước này trong workflow\./);
+  const unknown = errorsOf(wf([query('q', 'accs'), pick('p', 'acc', 'acs')])).find((x) => x.nodeId === 'p');
+  assert.match(unknown.message, /^Không có bước nào có alias "acs"\. Ý bạn là "accs"\?/);
+  const filter = errorsOf(wf([query('q', 'accs'), pick('p', 'acc', 'accs', { filter: 'compare' })]));
+  assert.deepEqual(filter.map((e) => [e.field, e.message]), [['filterField', 'Chưa nhập field để lọc, ví dụ AccountId hoặc Account.Type.']]);
+  // A loop variable is not a pool.
+  assert.ok(errorsOf(wf([loop('l', { count: 1 }, [pick('p', 'acc', 'loop')])])).some((e) => e.nodeId === 'p' && e.field === 'from'));
+});
+
+test('validation: template using a field the query does not select is an error (0007)', () => {
+  const w = wf([query('q', 'accs', { fields: ['Id', 'Name'] }), pick('p', 'acc', 'accs'), record('c', 'Contact', 'con', [tplField('Title', '{{acc.Industry}} {{acc.Name}} {{acc.Id}}')])]);
+  const errors = errorsOf(w);
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0].field, 'fields.Title');
+  assert.equal(errors[0].message, 'Field "Title": Template dùng {{acc.Industry}} nhưng Query "accs" không lấy field Industry. Thêm Industry vào "Field cần lấy" của bước Query.');
+  // {{accs.Name}} straight on the pool: no current record.
+  const direct = errorsOf(wf([query('q', 'accs'), record('c', 'Contact', 'con', [tplField('Title', '{{accs.Name}}')])]));
+  assert.equal(direct[0].code, 'noCurrent');
+  assert.equal(direct[0].message, 'Field "Title": {{accs.Name}}: "accs" là pool nhiều bản ghi nên không biết lấy bản ghi nào. Thêm bước Chọn bản ghi từ "accs" rồi dùng {{acc.Name}}; {{accs.$count}} thì dùng được.');
+});
+
+test('validation: Lookup "current" into a Query pool is an error; a Query nobody uses and a Query in a loop warn', () => {
+  const cur = errorsOf(wf([query('q', 'accs'), record('c', 'Contact', 'con', [lookup('accs')])]));
+  assert.equal(cur[0].field, 'fields.AccountId');
+  assert.equal(cur[0].message, 'Field "AccountId": Query "accs" là một pool nhiều bản ghi, không có "bản ghi hiện tại". Chọn "Ngẫu nhiên trong pool", hoặc thêm bước Chọn bản ghi rồi trỏ Lookup vào alias của nó.');
+  const warns = warningsOf(wf([loop('l', { count: 2 }, [query('q', 'accs')])])).filter((x) => x.nodeId === 'q');
+  assert.deepEqual(warns.map((x) => x.code), ['queryInLoop', 'poolUnused']);
+  assert.equal(warns[1].message, 'Chưa có bước nào dùng pool "accs". Thêm bước Chọn bản ghi hoặc chọn "accs" ở một field Lookup.');
+});
+
+test('validation: aliases are unique across record, query and pick', () => {
+  const w = wf([acc('a'), query('q', 'acc'), pick('p', 'acc', 'acc'), loop('l', { alias: 'accs2' }, [query('q2', 'accs2')])]);
+  const msgs = errorsOf(w).map((e) => `${e.nodeId}:${e.field}:${e.message}`).join('\n');
+  assert.match(msgs, /q:alias:Alias "acc" đã được dùng ở bước khác/);
+  assert.match(msgs, /p:alias:Alias "acc" đã được dùng ở bước khác/);
+  assert.match(msgs, /l:alias:Tên biến lặp "accs2" trùng alias của một bước Query \(đọc org\)/);
+});
+
+test('field type "Lấy từ biến" keeps the value type', () => {
+  const w = wf([
+    query('q', 'pbes', { sobject: 'PricebookEntry', fields: ['Id', 'UnitPrice'] }),
+    pick('p', 'pbe', 'pbes'),
+    record('o', 'OpportunityLineItem', 'oli', [{ name: 'UnitPrice', type: 'copy', options: { path: 'pbe.UnitPrice' } }, { name: 'Text', type: 'template', options: { template: '{{pbe.UnitPrice}}' } }, { name: 'N', type: 'copy', options: {} }]),
+  ]);
+  assert.deepEqual(validateWorkflow(w).errors, []);
+  const r = runWorkflow(w, { seed: 1, queryResults: { q: rows([{ Id: '01u1', UnitPrice: 12.5 }], 'PricebookEntry') } });
+  assert.deepEqual(r.records[0].fields, { UnitPrice: 12.5, Text: '12.5', N: 1 });
+  const bad = errorsOf(wf([record('o', 'Lead', 'ld', [{ name: 'X', type: 'copy', options: { path: 'nope.Y' } }])]));
+  assert.equal(bad[0].code, 'unknownName');
+});
+
+test('a v2 loop without "count" runs 0 times, which is also the catalogue default the inspector shows', async () => {
+  const { nodeTypeMap } = await import('../server/workflow/nodes.js');
+  const count = nodeTypeMap.get('loop').options.find((o) => o.key === 'count');
+  const max = nodeTypeMap.get('loop').options.find((o) => o.key === 'max');
+  const w = wf([{ id: 'l', type: 'loop', config: {}, slots: { body: [acc()] } }, { id: 'r', type: 'loop', config: { mode: 'range', min: 1 }, slots: { body: [record('x', 'Lead', 'ld', [])] } }]);
+  const { stats } = runWorkflow(w, { seed: 1 });
+  assert.equal(stats.byStep.l.iterations, count.default);
+  assert.equal(stats.byStep.r.iterations, max.default, 'range without max runs min..1');
+  assert.deepEqual([count.default, count.initial, max.default, max.initial], [0, 3, 1, 5]);
 });

@@ -2,12 +2,14 @@ import { opt } from './common.js';
 
 // Lookup values are emitted as { $ref: 'alias#n' } placeholders. They are resolved to real
 // record Ids at insert time (server/sf/insert.js) once the parent record exists in the org.
+// A record read from the org (Query pool, or picked from one: `existing`, design 0006) gives its
+// real Id as a plain string, which insert.js sends as is.
 // mode 'fixed' picks from existing org Ids the user pastes in, so no placeholder is needed.
 
 const MODES = [
-  { value: 'current', label: 'Bản ghi gần nhất của bước được chọn' },
-  { value: 'random', label: 'Ngẫu nhiên trong các bản ghi đã sinh' },
-  { value: 'fixed', label: 'Id có sẵn trong org' },
+  { value: 'current', label: 'Bản ghi hiện tại của alias' },
+  { value: 'random', label: 'Ngẫu nhiên trong pool (đã sinh hoặc đọc từ org)' },
+  { value: 'fixed', label: 'Id nhập tay' },
 ];
 
 function makeReference(type, label, nullable) {
@@ -20,9 +22,9 @@ function makeReference(type, label, nullable) {
     nullable,
     options: [
       opt('mode', 'Lấy từ', 'select', 'current', { choices: MODES }),
-      opt('ref', 'Bản ghi cha (alias)', 'ref', '', {
+      opt('ref', 'Bản ghi cha / pool (alias)', 'ref', '', {
         showIf: { key: 'mode', in: ['current', 'random'] },
-        help: 'Alias của một bước Record ở phía trên.',
+        help: 'Alias của bước Record, Query hoặc Chọn bản ghi ở phía trên. Bản ghi đọc từ org cho ra Id thật.',
       }),
       opt('ids', 'Danh sách Id', 'list', [], { showIf: { key: 'mode', in: ['fixed'] }, help: 'Mỗi dòng một Id 15/18 ký tự.' }),
       opt('referenceTo', 'Trỏ tới sObject', 'list', [], {
@@ -43,7 +45,12 @@ function makeReference(type, label, nullable) {
         }
         return null;
       }
-      return { $ref: rng.pick(pool).ref };
+      const rec = rng.pick(pool);
+      if (rec.existing) {
+        if (!rec.id) throw new Error(`Field ${fieldName}: pool "${o.ref}" không có cột Id. Thêm Id vào SELECT của bước Query.`);
+        return rec.id;
+      }
+      return { $ref: rec.ref };
     },
   };
 }

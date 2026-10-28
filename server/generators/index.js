@@ -32,6 +32,7 @@ const GENERATORS = [
   reference.masterdetail,
   misc.geolocation,
   misc.template,
+  misc.copy,
   misc.constant,
 ];
 

@@ -1,5 +1,5 @@
 import { opt, roundTo } from './common.js';
-import { resolvePath, TEMPLATE_TOKEN } from '../workflow/paths.js';
+import { resolvePath, renderTemplate } from '../workflow/paths.js';
 
 export const geolocation = {
   type: 'geolocation',
@@ -40,12 +40,27 @@ export const template = {
     }),
   ],
   generate(o, { scope, record, n }) {
-    return String(o.template).replace(new RegExp(TEMPLATE_TOKEN, 'g'), (_, path) => {
-      const v = resolvePath(path, scope, record, { n });
-      if (v === undefined || v === null) return '';
-      if (typeof v === 'object' && v.$ref) return v.$ref;
-      return String(v);
-    });
+    return renderTemplate(o.template, scope, record, { n });
+  },
+};
+
+// Copies a variable with its type kept (design 0006/0007: `{{pbe.UnitPrice}}` through a
+// Template is a string; OpportunityLineItem.UnitPrice needs the number).
+export const copy = {
+  type: 'copy',
+  label: 'Lấy từ biến (giữ kiểu)',
+  category: 'Other',
+  valueType: 'any',
+  sfTypes: [],
+  options: [
+    opt('path', 'Biến', 'string', 'this.$n', {
+      vars: 'path',
+      help: 'Bấm {x} để chọn, ví dụ pbe.UnitPrice. Giữ nguyên kiểu số / đúng-sai (Template luôn ra chuỗi).',
+    }),
+  ],
+  generate(o, { scope, record, n }) {
+    const v = resolvePath(o.path, scope, record, { n });
+    return v === undefined ? null : v;
   },
 };
 

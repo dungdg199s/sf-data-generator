@@ -9,14 +9,15 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { describeGenerators, VALUE_TYPES } from './generators/index.js';
-import { serializableNodeTypes, STEP_CATEGORIES, LIMITS } from './workflow/nodes.js';
+import { serializableNodeTypes, STEP_CATEGORIES, LIMITS, QUERY_PRESETS } from './workflow/nodes.js';
 import { TEMPLATE_TOKEN } from './workflow/paths.js';
-import { validateWorkflow, insertBlockedReason, WorkflowError } from './workflow/schema.js';
+import { validateWorkflow, prepareWorkflow, insertBlockedReason, WorkflowError } from './workflow/schema.js';
 import { runWorkflow } from './workflow/executor.js';
 import { createSfCli } from './sf/cli.js';
 import { createSfClient } from './sf/client.js';
-import { mapDescribe } from './sf/describe-map.js';
+import { mapDescribe, mapQueryFields } from './sf/describe-map.js';
 import { insertRecords } from './sf/insert.js';
+import { createQueryCache, prefetchQueries } from './sf/query.js';
 
 const ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CLIENT_DIR = path.join(ROOT_DIR, 'client');
@@ -32,7 +33,7 @@ const MIME = {
   '.ico': 'image/x-icon',
 };
 
-export function createApp({ cli = createSfCli(), client } = {}) {
+export function createApp({ cli = createSfCli(), client, queryCache = createQueryCache() } = {}) {
   const sfClient = client ?? createSfClient({ cli });
 
   const routes = [
@@ -44,25 +45,49 @@ export function createApp({ cli = createSfCli(), client } = {}) {
         nodeTypes: serializableNodeTypes(),
         stepCategories: STEP_CATEGORIES,
         limits: LIMITS,
+        queryPresets: QUERY_PRESETS,
         syntax: { templateToken: TEMPLATE_TOKEN, valueTypes: VALUE_TYPES },
       }),
     ],
-    ['POST', /^\/api\/validate$/, (_m, body) => validateWorkflow(body?.workflow)],
+    ['POST', /^\/api\/validate$/, (_m, body) => validateWorkflow(body?.workflow, { derived: true })],
     [
       'POST',
       /^\/api\/run$/,
       async (_m, body) => {
-        if (body?.target?.kind === 'org') {
+        const insert = body?.target?.kind === 'org';
+        if (insert) {
           // A v1 workflow whose conversion copied or cut steps runs differently from what the
           // user built; preview is allowed (with warnings), inserting is not until it is saved as v2.
           const blocked = insertBlockedReason(body.workflow);
           if (blocked) throw httpError(422, blocked);
-        }
-        const result = runWorkflow(body?.workflow, { seed: body?.seed, maxRecords: body?.maxRecords });
-        const response = { seed: result.seed, stats: result.stats, warnings: result.warnings, records: result.records };
-        if (body?.target?.kind === 'org') {
           if (!body.target.org) throw httpError(400, 'Chưa chọn org để insert.');
+        }
+        const { workflow, errors } = prepareWorkflow(body?.workflow);
+        if (errors.length) throw new WorkflowError(errors);
+        // Query steps are read first (design 0006): when inserting always from the target org
+        // (never sample rows), when previewing from `org` if one is selected.
+        const org = insert ? body.target.org : typeof body?.org === 'string' && body.org ? body.org : null;
+        const pre = await prefetchQueries({
+          client: sfClient,
+          org,
+          workflow,
+          cache: queryCache,
+          refresh: !insert && body?.refreshQueries === true,
+          expect: insert && body?.expectQueries && typeof body.expectQueries === 'object' ? body.expectQueries : null,
+          preview: !insert,
+        });
+        const result = runWorkflow(body.workflow, { seed: body?.seed, maxRecords: body?.maxRecords, queryResults: pre.results });
+        const response = {
+          seed: result.seed,
+          stats: result.stats,
+          warnings: [...result.warnings, ...pre.warnings],
+          records: result.records,
+          queries: pre.queries,
+          samples: result.samples,
+        };
+        if (insert) {
           response.insert = await insertRecords(sfClient, body.target.org, result.records);
+          queryCache.invalidateOrg(body.target.org); // the next preview sees the records just created
         }
         return response;
       },
@@ -71,13 +96,20 @@ export function createApp({ cli = createSfCli(), client } = {}) {
     [
       'GET',
       /^\/api\/orgs\/([^/]+)\/sobjects$/,
-      async ([, org]) => {
+      async ([, org], _body, params) => {
+        // ?for=query: objects a Query step can read; default: objects a Record step can create.
+        const forQuery = params.get('for') === 'query';
         const r = await sfClient.describeGlobal(decodeURIComponent(org));
         return r.sobjects
-          .filter((s) => s.createable && !s.deprecatedAndHidden)
+          .filter((s) => (forQuery ? s.queryable : s.createable) && !s.deprecatedAndHidden)
           .map((s) => ({ name: s.name, label: s.label, custom: s.custom }))
           .sort((a, b) => a.label.localeCompare(b.label));
       },
+    ],
+    [
+      'GET',
+      /^\/api\/orgs\/([^/]+)\/sobjects\/([A-Za-z0-9_]+)\/fields$/,
+      async ([, org, name]) => mapQueryFields(await sfClient.describe(decodeURIComponent(org), name)),
     ],
     [
       'GET',
@@ -93,7 +125,7 @@ export function createApp({ cli = createSfCli(), client } = {}) {
         const route = routes.find(([method, re]) => method === req.method && re.test(url.pathname));
         if (!route) throw httpError(404, 'Không có API này.');
         const body = req.method === 'POST' ? await readJson(req) : undefined;
-        const data = await route[2](url.pathname.match(route[1]), body);
+        const data = await route[2](url.pathname.match(route[1]), body, url.searchParams);
         return sendJson(res, 200, data);
       }
       return await serveStatic(url.pathname, res);
@@ -101,7 +133,8 @@ export function createApp({ cli = createSfCli(), client } = {}) {
       if (e instanceof WorkflowError) return sendJson(res, 422, { error: 'Workflow chưa hợp lệ.', issues: e.issues });
       const status = e.status ?? 500;
       if (!e.status) console.error(e); // unexpected errors only; known ones (sf missing, 4xx) go to the client
-      return sendJson(res, status, { error: e.message });
+      // 409 (org data changed) and Salesforce errors of a Query step name the step in `issues`.
+      return sendJson(res, status, e.issues ? { error: e.message, issues: e.issues } : { error: e.message });
     }
   };
 }

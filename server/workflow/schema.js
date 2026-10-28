@@ -7,6 +7,7 @@
 // migrated with shared/migrate-v1.js first, and the conversion is reported as warnings.
 
 import { NODE_TYPES, nodeTypeMap, CONDITION_OPS, LIMITS } from './nodes.js';
+import { checkSoql, checkBuilder, isFieldPath, buildSoql, soqlSobject, selectFields, builderLimit } from '../../shared/soql.js';
 import { getGenerator, describeGenerators } from '../generators/index.js';
 import { migrateV1, describeReport, reportNeedsReview } from '../../shared/migrate-v1.js';
 import { analyzeScope, referenceOptions, hasUnclosed } from '../../shared/scope.js';
@@ -32,10 +33,35 @@ export class WorkflowError extends Error {
   }
 }
 
-/** → { errors, warnings } for a v1 or v2 workflow. */
-export function validateWorkflow(wf) {
-  const { errors, warnings } = prepareWorkflow(wf);
-  return { errors, warnings };
+/**
+ * → { errors, warnings } for a v1 or v2 workflow; with `{ derived: true }` (POST /api/validate)
+ * also `derived[stepId]`, what the server works out from a Query / Chọn bản ghi config (design
+ * 0006): the SOQL it will run, the sObject and the fields of the pool.
+ */
+export function validateWorkflow(wf, { derived = false } = {}) {
+  const { workflow, errors, warnings } = prepareWorkflow(wf);
+  if (!derived) return { errors, warnings };
+  return { errors, warnings, derived: workflow ? deriveSteps(workflow) : {} };
+}
+
+/** { [stepId]: { soql, sobject, fields } } for Query steps, { sobject, fields, from } for Chọn bản ghi. */
+export function deriveSteps(workflow) {
+  const out = {};
+  let scope = null;
+  const visit = (list) => {
+    for (const st of Array.isArray(list) ? list : []) {
+      if (!st || typeof st !== 'object') continue;
+      if (st.type === 'query') out[st.id] = { soql: buildSoql(st.config ?? {}), sobject: soqlSobject(st.config ?? {}), fields: selectFields(st.config ?? {}).fields };
+      if (st.type === 'pick') {
+        scope ??= analyzeScope(workflow, scopeCatalog());
+        const src = scope.sources[st.id];
+        out[st.id] = { sobject: src?.sobject ?? '', fields: (src?.members ?? []).filter((m) => !m.builtin).map((m) => m.key), from: st.config?.from ?? '' };
+      }
+      for (const children of Object.values(st.slots ?? {})) visit(children);
+    }
+  };
+  visit(workflow.steps);
+  return out;
 }
 
 /**
@@ -124,32 +150,66 @@ export function prepareWorkflow(wf) {
   visit(workflow.steps, 0, false);
   if (errors.length) return { workflow, errors, warnings, migration };
 
-  // Aliases: unique across the whole tree, disabled steps included (so turning one back on
-  // cannot create a clash).
+  // Aliases: one namespace for Record, Query and Chọn bản ghi (every type exposing a record
+  // named by its `alias`), unique across the whole tree, disabled steps included (so turning one
+  // back on cannot create a clash). Loop variables must not reuse them.
   const aliasOwner = new Map();
-  for (const { step } of steps) {
-    const alias = step.type === 'record' ? step.config?.alias : step.type === 'loop' ? (step.config?.alias || 'loop') : null;
-    if (!alias) continue;
+  const namedByAlias = (step) => {
+    const ex = nodeTypeMap.get(step.type)?.exposes;
+    return ex?.kind === 'record' && ex.name?.key === 'alias';
+  };
+  for (const { step, off } of steps) {
+    const isLoop = step.type === 'loop';
+    if (!isLoop && !namedByAlias(step)) continue;
+    const alias = isLoop ? (step.config?.alias || 'loop') : step.config?.alias;
+    if (!alias) {
+      // A Record falls back to its id; a pool (Query) or a picked record needs a name.
+      if (step.type !== 'record' && !off) err(`Đặt alias để bước khác dùng được ${step.type === 'query' ? 'pool này (ví dụ accs)' : 'bản ghi này (ví dụ acc)'}.`, step.id, 'alias');
+      continue;
+    }
     if (!ALIAS.test(alias) || RESERVED_ALIASES.has(alias)) {
       err(`Alias "${alias}" không hợp lệ (chỉ chữ, số, gạch dưới; không bắt đầu bằng số; không dùng "this").`, step.id, 'alias');
       continue;
     }
-    if (step.type === 'record' && aliasOwner.has(alias)) err(`Alias "${alias}" đã được dùng ở bước khác. Đổi alias của một trong hai bước.`, step.id, 'alias');
-    if (step.type === 'record' && !aliasOwner.has(alias)) aliasOwner.set(alias, step.id);
+    if (isLoop) continue;
+    if (aliasOwner.has(alias)) err(`Alias "${alias}" đã được dùng ở bước khác. Đổi alias của một trong hai bước.`, step.id, 'alias');
+    else aliasOwner.set(alias, step);
   }
   for (const { step } of steps) {
-    if (step.type === 'loop' && aliasOwner.has(step.config?.alias || 'loop')) {
-      err(`Tên biến lặp "${step.config?.alias || 'loop'}" trùng alias của một bước Record. Đổi một trong hai tên.`, step.id, 'alias');
+    const owner = step.type === 'loop' ? aliasOwner.get(step.config?.alias || 'loop') : null;
+    if (owner) {
+      err(`Tên biến lặp "${step.config?.alias || 'loop'}" trùng alias của một bước ${nodeTypeMap.get(owner.type)?.label ?? owner.type}. Đổi một trong hai tên.`, step.id, 'alias');
     }
   }
 
   // Per-step config (turned-off steps are not checked: they do not run).
   const catalog = scopeCatalog();
   const scope = analyzeScope(workflow, catalog);
+  const insideLoop = new Set();
+  {
+    const mark = (list, inLoop) => {
+      for (const st of list ?? []) {
+        if (!st || typeof st !== 'object') continue;
+        if (inLoop) insideLoop.add(st.id);
+        for (const [key, children] of Object.entries(st.slots ?? {})) {
+          if (Array.isArray(children)) mark(children, inLoop || (st.type === 'loop' && key === 'body'));
+        }
+      }
+    };
+    mark(workflow.steps, false);
+  }
+  let queries = 0;
   for (const { step, off } of steps) {
     if (off) continue;
     const c = step.config ?? {};
     if (step.type === 'record') validateRecord(step, c, { err, warn, scope });
+    if (step.type === 'query') {
+      if (++queries === LIMITS.maxQueryNodes + 1) {
+        err(`Workflow có quá ${LIMITS.maxQueryNodes} bước Query. Gộp các query cùng sObject lại (lọc bằng bước Chọn bản ghi).`, step.id);
+      }
+      validateQuery(step, c, { err, warn, scope, inLoop: insideLoop.has(step.id) });
+    }
+    if (step.type === 'pick') validatePick(step, c, { err });
     if (step.type === 'loop') {
       const mode = c.mode ?? 'fixed';
       const check = (key) => {
@@ -203,6 +263,13 @@ export function prepareWorkflow(wf) {
         }
       }
     }
+    // A Query pool nobody reads (no Lookup, Chọn bản ghi or template refers to it).
+    for (const { step, off } of steps) {
+      if (off || step.type !== 'query' || !step.config?.alias) continue;
+      if (scope.refs.some((r) => r.source === step.id && !r.disabled && !r.hidden)) continue;
+      const a = step.config.alias;
+      warn(`Chưa có bước nào dùng pool "${a}". Thêm bước Chọn bản ghi hoặc chọn "${a}" ở một field Lookup.`, step.id, undefined, { code: 'poolUnused' });
+    }
   }
 
   return { workflow, errors, warnings, migration };
@@ -246,9 +313,51 @@ function validateRecord(step, c, { err, warn, scope }) {
     }
     if (REF_TYPES.has(f.type) && (f.options?.mode ?? 'current') !== 'fixed') {
       if (!f.options?.ref) err(`Field "${f.name}": chưa chọn bản ghi cha. Chọn một bước Record phía trên trong ô "Bản ghi cha".`, step.id, key);
-      else checkReferenceTo(step, f, key, { warn, scope });
+      else {
+        const pool = (f.options?.mode ?? 'current') === 'current' && Object.values(scope.sources).find((s) => s.lookupParent && s.name === f.options.ref && s.current === 'none');
+        if (pool) {
+          err(`Field "${f.name}": Query "${pool.name}" là một pool nhiều bản ghi, không có "bản ghi hiện tại". Chọn "Ngẫu nhiên trong pool", hoặc thêm bước Chọn bản ghi rồi trỏ Lookup vào alias của nó.`, step.id, key, { code: 'currentOfPool', path: pool.name, option: 'mode' });
+        }
+        checkReferenceTo(step, f, key, { warn, scope });
+      }
     }
   }
+}
+
+/** Query step (design 0006): builder or hand-written SOQL, read-only, within LIMITS. */
+function validateQuery(step, c, { err, warn, inLoop }) {
+  const mode = c.mode ?? 'builder';
+  if (mode === 'builder') {
+    if (!API_NAME.test(String(c.sobject ?? 'Account'))) err('Chưa nhập sObject hợp lệ (API name).', step.id, 'sobject');
+    const raw = c.fields;
+    if (raw !== undefined && !Array.isArray(raw) && typeof raw !== 'string') err('"fields" phải là một danh sách tên field.', step.id, 'fields');
+    else {
+      const list = Array.isArray(raw) ? raw : raw === undefined ? [] : String(raw).split(/[\n,;]/);
+      const bad = list.map((x) => String(x ?? '').trim()).filter(Boolean).find((x) => !isFieldPath(x));
+      if (bad !== undefined) err(`Field "${bad}" không hợp lệ. Dùng API name; field quan hệ viết Owner.Name.`, step.id, 'fields');
+    }
+    const limit = builderLimit(c);
+    if (!Number.isInteger(limit) || limit < 1 || limit > LIMITS.maxQueryRows) err(`Số bản ghi tối đa phải là số nguyên từ 1 đến ${LIMITS.maxQueryRows}.`, step.id, 'limit');
+    for (const i of checkBuilder(c)) err(i.message, step.id, i.field, { code: i.code });
+  } else if (mode === 'soql') {
+    for (const i of checkSoql(c.soql)) (i.level === 'error' ? err : warn)(i.message, step.id, 'soql', { code: i.code });
+  } else err(`Cách nhập "${mode}" không hợp lệ.`, step.id, 'mode');
+  if (inLoop) warn('Query nằm trong vòng lặp vẫn chỉ đọc org một lần, trước khi sinh dữ liệu. Nên đặt Query ngay sau Bắt đầu.', step.id, undefined, { code: 'queryInLoop' });
+}
+
+const PICK_MODES = new Set(['random', 'unique', 'sequential']);
+
+/** Chọn bản ghi (design 0006). Whether `from` is usable here is checked by analyzeScope (refs). */
+function validatePick(step, c, { err }) {
+  if (!c.from) err('Chưa chọn pool. Chọn alias của bước Query hoặc Record ở phía trên.', step.id, 'from');
+  if (!PICK_MODES.has(c.mode ?? 'random')) err(`Cách chọn "${c.mode}" không hợp lệ.`, step.id, 'mode');
+  const filter = c.filter ?? 'none';
+  if (filter === 'compare') {
+    if (!String(c.filterField ?? '').trim()) err('Chưa nhập field để lọc, ví dụ AccountId hoặc Account.Type.', step.id, 'filterField');
+    else if (!isFieldPath(c.filterField)) err(`Field "${c.filterField}" không hợp lệ. Dùng API name; field quan hệ viết Account.Type.`, step.id, 'filterField');
+    if (!CONDITION_OPS.some((o) => o.value === (c.filterOp ?? 'eq'))) err('Phép so sánh không hợp lệ.', step.id, 'filterOp');
+  } else if (filter !== 'none') err(`Cách lọc "${filter}" không hợp lệ.`, step.id, 'filter');
+  if (!['skip', 'error'].includes(c.onEmpty ?? 'skip')) err(`Lựa chọn "${c.onEmpty}" không hợp lệ.`, step.id, 'onEmpty');
 }
 
 /** A Lookup imported from the org (referenceTo) whose parent step creates another sObject. */
@@ -278,7 +387,28 @@ export function referenceIssue(ref, scope, step) {
   const isMD = fieldName !== null && (step?.config?.fields ?? []).find((f) => f?.name === fieldName)?.type === 'masterdetail';
   let message;
 
-  if (ref.mode === 'ref') {
+  if (ref.mode === 'ref' && ref.option === 'from') {
+    // A pool option (Chọn bản ghi `from`, design 0006; Lặp `each` of 0010 reuses it).
+    switch (ref.code) {
+      case 'unknownName':
+        message = `Không có bước nào có alias "${ref.path}".${suggest ? ` Ý bạn là "${suggest}"?` : ''} Chọn pool khác trong danh sách hoặc thêm bước Query/Record có alias này ở phía trên.`;
+        break;
+      case 'after':
+        message = `Pool "${s}" phải nằm phía trước bước này trong workflow. Kéo bước "${s}" lên phía trên hoặc chọn pool khác.`;
+        break;
+      case 'otherBranch':
+        message = `Pool "${s}" nằm ở nhánh còn lại của bước Rẽ nhánh phía trên nên không chạy cùng lượt với bước này. Đưa "${s}" ra trước bước Rẽ nhánh hoặc chọn pool khác.`;
+        break;
+      case 'disabled':
+        message = `Bước "${s}" đang tắt. Bật lại bước đó (Ctrl+/) hoặc chọn pool khác.`;
+        break;
+      case 'maybe':
+        message = maybeMessage(ref, s, true, false);
+        break;
+      default:
+        return null;
+    }
+  } else if (ref.mode === 'ref') {
     switch (ref.code) {
       case 'unknownName':
         message = `không có bước Record nào có alias "${ref.path}".${suggest ? ` Ý bạn là "${suggest}"?` : ''} Chọn bản ghi cha trong danh sách "Bản ghi cha".`;
@@ -307,7 +437,9 @@ export function referenceIssue(ref, scope, step) {
         if (src?.kind === 'vars') {
           message = `biến lặp "${s}" chỉ có ${src.members.map((m) => m.key).join(', ')}; không có "${ref.missing ?? ref.member}".`;
         } else if (src?.origin === 'org' || src?.nodeType === 'query') {
-          message = `Query "${s}" không lấy field "${ref.missing}". Thêm ${ref.missing} vào "Field cần lấy" của bước Query.`;
+          // For a Chọn bản ghi, name the Query its rows come from.
+          const q = src.root !== undefined ? scope.sources[src.root]?.name ?? s : s;
+          message = `Template dùng ${show(ref.path)} nhưng Query "${q}" không lấy field ${ref.missing}. Thêm ${ref.missing} vào "Field cần lấy" của bước Query.`;
         } else if (ref.memberOf) {
           const hint = suggest ? suggest.split('.').pop() : null;
           message = `field "${ref.memberOf}" của bước "${s}" chỉ có ${ref.validMembers.join(', ')}; không có "${ref.missing}".${hint ? ` Ý bạn là "${hint}"?` : ''}`;
@@ -315,7 +447,9 @@ export function referenceIssue(ref, scope, step) {
           message = `bước này không có field "${ref.missing}". Chọn field khác bằng {x}.`;
         } else {
           const hint = suggest ? suggest.split('.').slice(1).join('.') : null;
-          message = `bước "${s}"${what} không có field "${ref.missing}".${hint ? ` Ý bạn là "${hint}"?` : ''} Thêm field đó vào bước "${s}" hoặc chọn field khác bằng {x}.`;
+          // A Chọn bản ghi from a Record pool: the field is added on that Record step.
+          const owner = src?.root !== undefined ? scope.sources[src.root]?.name ?? s : s;
+          message = `bước "${s}"${what} không có field "${ref.missing}".${hint ? ` Ý bạn là "${hint}"?` : ''} Thêm field đó vào bước "${owner}" hoặc chọn field khác bằng {x}.`;
         }
         break;
       case 'wholeRecord':
@@ -365,9 +499,11 @@ export function referenceIssue(ref, scope, step) {
       case 'noIdYet':
         message = `"${s}" là bản ghi được sinh ra nên chưa có Id trước khi insert. Muốn nối bản ghi con với "${s}" thì dùng field Lookup; {{${s}.Id}} chỉ có với bản ghi đọc từ org (Query, Chọn bản ghi).`;
         break;
-      case 'noCurrent':
-        message = `"${s}" là danh sách bản ghi đọc từ org, không có bản ghi hiện tại. Thêm bước Chọn bản ghi lấy từ "${s}" rồi dùng alias của bước đó.`;
+      case 'noCurrent': {
+        const one = s.length > 1 && s.endsWith('s') ? s.slice(0, -1) : `${s}1`;
+        message = `${show(ref.path)}: "${s}" là pool nhiều bản ghi nên không biết lấy bản ghi nào. Thêm bước Chọn bản ghi từ "${s}" rồi dùng ${show(`${one}.${ref.member || 'Name'}`)}; ${show(`${s}.$count`)} thì dùng được.`;
         break;
+      }
       case 'openMember':
         message = `chưa chắc "${s}" có field "${ref.missing}" (danh sách field chưa đầy đủ); kiểm tra lại câu truy vấn.`;
         break;

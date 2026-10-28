@@ -37,3 +37,34 @@ test('real jsforce: expired token is refreshed via the sf CLI and the call retri
     server.close();
   }
 });
+
+test('real jsforce: query follows nextRecordsUrl and stops at maxFetch, never calls queryAll', async () => {
+  const seen = [];
+  const page = (from, n) => Array.from({ length: n }, (_, i) => ({ attributes: { type: 'Account', url: '/x' }, Id: `001${String(from + i).padStart(3, '0')}`, Name: `A${from + i}` }));
+  const server = http.createServer((req, res) => {
+    seen.push(req.url);
+    res.setHeader('Content-Type', 'application/json');
+    if (req.url.startsWith('/services/data/v62.0/query?q=')) {
+      return res.end(JSON.stringify({ totalSize: 7, done: false, nextRecordsUrl: '/services/data/v62.0/query/01gNEXT-3', records: page(0, 3) }));
+    }
+    if (req.url === '/services/data/v62.0/query/01gNEXT-3') {
+      return res.end(JSON.stringify({ totalSize: 7, done: false, nextRecordsUrl: '/services/data/v62.0/query/01gNEXT-6', records: page(3, 3) }));
+    }
+    res.statusCode = 404;
+    return res.end(JSON.stringify([{ errorCode: 'NOT_FOUND', message: req.url }]));
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  try {
+    const instanceUrl = `http://127.0.0.1:${server.address().port}`;
+    const cli = { getConnection: async () => ({ accessToken: 't', instanceUrl, apiVersion: '62.0' }) };
+    const res = await createSfClient({ cli }).query('dev', 'SELECT Id, Name FROM Account ORDER BY Id', { maxFetch: 5, timeoutMs: 5000 });
+    assert.equal(res.records.length, 5);
+    assert.equal(res.totalSize, 7);
+    assert.equal(res.records[4].Id, '001004');
+    assert.equal(seen.length, 2, 'stopped after the page that reached maxFetch');
+    assert.equal(decodeURIComponent(seen[0].split('?q=')[1]), 'SELECT Id, Name FROM Account ORDER BY Id');
+    assert.ok(seen.every((u) => !u.includes('queryAll')));
+  } finally {
+    server.close();
+  }
+});

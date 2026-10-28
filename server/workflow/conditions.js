@@ -6,13 +6,20 @@ import { resolvePath } from './paths.js';
 export function evaluateCondition(config, scope, rng) {
   if ((config.kind ?? 'chance') === 'chance') return rng.bool(Number(config.probability ?? 0.5));
 
-  const left = resolvePath(config.left, scope, undefined);
-  const right = config.right;
+  return compareValues(resolvePath(config.left, scope, undefined), config.op, config.right);
+}
+
+/**
+ * Compare two values with one of CONDITION_OPS (server/workflow/nodes.js): numerically when
+ * both are numbers (or numeric strings), else as strings. Shared by Rẽ nhánh and the filter of
+ * Chọn bản ghi (design 0006).
+ */
+export function compareValues(left, op, right) {
   const ln = toNumber(left);
   const rn = toNumber(right);
   const numeric = ln !== null && rn !== null;
 
-  switch (config.op) {
+  switch (op) {
     case 'eq':
       return numeric ? ln === rn : String(left ?? '') === String(right ?? '');
     case 'neq':
@@ -34,7 +41,7 @@ export function evaluateCondition(config, scope, rng) {
     case 'divisibleBy':
       return numeric && rn !== 0 && ln % rn === 0;
     default:
-      throw new Error(`Phép so sánh "${config.op}" không hợp lệ.`);
+      throw new Error(`Phép so sánh "${op}" không hợp lệ.`);
   }
 }
 

@@ -52,5 +52,24 @@ export function createSfClient({ cli, createConnection = (options) => new Connec
      * Callers send at most 200 records per call (see server/sf/insert.js).
      */
     create: (target, sobject, records) => call(target, (conn) => conn.sobject(sobject).create(records, { allOrNone: false })),
+    /**
+     * Read-only SOQL (Query step, design 0006) through the REST `/query` endpoint: jsforce follows
+     * nextRecordsUrl (queryMore) until `maxFetch` rows. Never `scanAll` (that would be queryAll,
+     * which also returns deleted records). → { records, totalSize, done }.
+     * A query running longer than `timeoutMs` is reported as QUERY_TIMEOUT (status 504).
+     */
+    query: (target, soql, { maxFetch, timeoutMs } = {}) => call(target, (conn) => withTimeout(
+      Promise.resolve(conn.query(soql, { autoFetch: true, maxFetch })),
+      timeoutMs,
+    )),
   };
+}
+
+function withTimeout(promise, ms) {
+  if (!ms) return promise;
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(Object.assign(new Error(`query took longer than ${ms} ms`), { errorCode: 'QUERY_TIMEOUT' })), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
