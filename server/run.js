@@ -17,9 +17,12 @@ import { randomBytes } from 'node:crypto';
 import { WorkflowError } from './workflow/schema.js';
 import { LIMITS } from './workflow/nodes.js';
 import { createInserter, BATCH_SIZE } from './sf/insert.js';
+import { TICK } from './workflow/executor.js';
 
 export const YIELD_EVERY = 1000;
 export const PROGRESS_INTERVAL_MS = 250;
+/** Longest stretch of synchronous generation between two looks at the event loop / Dừng. */
+export const YIELD_AFTER_MS = 50;
 
 const nextTick = () => new Promise((resolve) => setImmediate(resolve));
 const aliasOf = (ref) => String(ref).slice(0, String(ref).lastIndexOf('#'));
@@ -81,9 +84,10 @@ export async function executeRun({
   // ---------- pass 1: preview / dry pass ----------
   const kept = [];
   const keptBySobject = {};
-  let it = run.records();
+  let it = run.records({ ticks: true });
   let end;
   let n = 0;
+  let lastYield = clock();
   try {
     for (;;) {
       const step = it.next();
@@ -92,13 +96,20 @@ export async function executeRun({
         break;
       }
       const rec = step.value;
-      const k = (keptBySobject[rec.sobject] ?? 0);
-      if (collect || k < previewRows) {
-        kept.push(rec);
-        keptBySobject[rec.sobject] = k + 1;
+      // Yield every YIELD_EVERY records, or after YIELD_AFTER_MS (TICK: steps without records).
+      let breathe = false;
+      if (rec === TICK) breathe = clock() - lastYield >= YIELD_AFTER_MS;
+      else {
+        const k = (keptBySobject[rec.sobject] ?? 0);
+        if (collect || k < previewRows) {
+          kept.push(rec);
+          keptBySobject[rec.sobject] = k + 1;
+        }
+        breathe = ++n % YIELD_EVERY === 0 || (n % 64 === 0 && clock() - lastYield >= YIELD_AFTER_MS);
       }
-      if (++n % YIELD_EVERY === 0) {
+      if (breathe) {
         await nextTick();
+        lastYield = clock();
         if (signal?.aborted) {
           it.return();
           return finish();
@@ -112,6 +123,7 @@ export async function executeRun({
   const total = end.stats.total;
   const bySobject = end.stats.bySobject;
   const resultBase = () => ({
+    ...(runId ? { runId } : {}),
     seed: run.seed,
     now: run.now,
     warnings: [...run.warnings, ...extraWarnings, ...end.warnings],
@@ -122,6 +134,9 @@ export async function executeRun({
   });
 
   if (!target) return done(resultBase());
+  // A Dừng (or a closed connection) that arrived while pass 1 ran synchronously is only seen
+  // once the event loop turns: look right before writing anything.
+  await nextTick();
   if (signal?.aborted) return finish(resultBase());
 
   // ---------- pass 2: insert ----------
@@ -142,16 +157,27 @@ export async function executeRun({
     signal,
     onBatch: (s) => { if (due()) emit(insertProgress(s)); },
   });
-  it = run.records();
+  it = run.records({ ticks: true });
   let pushed = 0;
   let summary;
+  lastYield = clock();
   try {
     for (;;) {
       if (signal?.aborted || inserter.stopped) break;
       const step = it.next();
       if (step.done) break;
+      if (step.value === TICK) {
+        if (clock() - lastYield >= YIELD_AFTER_MS) {
+          await nextTick();
+          lastYield = clock();
+        }
+        continue;
+      }
       await inserter.push(step.value);
-      if (++pushed % YIELD_EVERY === 0) await nextTick();
+      if (++pushed % YIELD_EVERY === 0) {
+        await nextTick();
+        lastYield = clock();
+      }
     }
     it.return();
     summary = await inserter.end();
@@ -180,6 +206,7 @@ export async function executeRun({
   function finish(base) {
     const live = it.live;
     const result = base ?? {
+      ...(runId ? { runId } : {}),
       seed: run.seed,
       now: run.now,
       warnings: [...run.warnings, ...extraWarnings],
@@ -191,7 +218,7 @@ export async function executeRun({
     result.cancelled = true;
     if (target) {
       const t = result.stats.total;
-      result.insert = { inserted: 0, failed: 0, errorsTotal: 0, errors: [], errorGroups: [], ids: {}, bySobject: {}, notSent: t, cancelled: true, stopped: null, total: t };
+      result.insert = { inserted: 0, failed: 0, errorsTotal: 0, errors: [], errorGroups: [], errorGroupsOther: null, ids: {}, bySobject: {}, notSent: t, cancelled: true, stopped: null, total: t };
     }
     return done(result);
   }

@@ -129,3 +129,27 @@ test('run registry: cancel by id, unknown or closed ids are refused; API call es
   assert.equal(reg.cancel(h.id), false);
   assert.equal(estimateApiCalls({ Account: 40000, Contact: 160000, Task: 1 }), 1001);
 });
+
+// ---------- review fixes ----------
+
+test('a Dừng that arrives while pass 1 runs synchronously is seen before plan: nothing is written', async () => {
+  const controller = new AbortController();
+  const client = fakeClient();
+  const emit = (e) => { if (e.type === 'start') setImmediate(() => controller.abort()); };
+  const end = await executeRun({ run: createRun(accCon(100), { seed: 1 }), target: 'dev', sfClient: client, signal: controller.signal, emit, progressIntervalMs: 0 });
+  assert.equal(client.calls.length, 0);
+  assert.equal(end.result.insert.cancelled, true);
+  assert.equal(end.result.insert.inserted, 0);
+});
+
+test('generation without records still yields to the event loop and honours Dừng (time budget, not only every 1 000 records)', async () => {
+  const controller = new AbortController();
+  // ~1.5 M step visits before the first record.
+  const w = wf([loop('l', { count: 100000 }, [loop('m', { count: 7 }, [{ id: 'b', type: 'branch', config: { kind: 'chance', probability: 0.5 }, slots: { true: [], false: [] } }])]), record('a', 'Account', 'acc')]);
+  setTimeout(() => controller.abort(), 20);
+  const t0 = Date.now();
+  const end = await executeRun({ run: createRun(w, { seed: 1 }), signal: controller.signal, emit: () => {} });
+  assert.equal(end.result.cancelled, true);
+  assert.equal(end.result.stats.total, 0);
+  assert.ok(Date.now() - t0 < 400, `stopped after ${Date.now() - t0} ms`);
+});

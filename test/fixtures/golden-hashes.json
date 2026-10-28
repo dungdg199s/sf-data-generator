@@ -68,5 +68,15 @@
     "records": "bda0ed8a1981907bbfd28d8728b3f6d9d99019488f9d2818ffd7fa3bad7f91e9",
     "count": 8,
     "byStep": "8fe1554911783b7ef016034ba4ceab09c59096111df054cd1a8dda30c37f350e"
+  },
+  "random Lookup into a pick alias, and a copy of a Lookup (added after review; recorded with the old executor) @42": {
+    "records": "66e5d1b6e6a4315136265efc017171bcc173b776c4b506e8f0e98611195bf3af",
+    "count": 25,
+    "byStep": "4d33d718c823a53d16f4fe922aef5a9b23a92d9448113a12b87dd6a3f60b324e"
+  },
+  "random Lookup into a pick alias, and a copy of a Lookup (added after review; recorded with the old executor) @7": {
+    "records": "175c625653676473e683e781eb3101f88ddd0cefb911f7eb350f25c4ea03946b",
+    "count": 25,
+    "byStep": "4d33d718c823a53d16f4fe922aef5a9b23a92d9448113a12b87dd6a3f60b324e"
   }
 }

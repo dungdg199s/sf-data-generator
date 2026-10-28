@@ -57,7 +57,8 @@ function countPool(alias) {
 /**
  * Validates `input` (v1 or v2) once and prepares a streamable run.
  * → { seed, now, maxRecords, warnings, referencedAliases, keptPools, columnsBySobject, records }
- *   records(): Generator yielding { ref, sobject, alias, nodeId, fields } in generation order.
+ *   records(): Generator yielding { ref, sobject, alias, nodeId, fields } in generation order
+ *   (records({ ticks: true }) also yields TICK now and then, see below).
  *   Its return value (the `done` result) is { warnings, samples, stats: { total, bySobject,
  *   byStep } }; `generator.live` holds the same counters while it runs (progress events) and
  *   `generator.pools` the record pools by alias.
@@ -84,7 +85,7 @@ export function createRun(input, opts = {}) {
     /** Record aliases whose pool keeps whole records (read by Chọn bản ghi `from`, …). */
     keptPools: readers,
     columnsBySobject: columnsBySobject(workflow),
-    records: () => generate(workflow, { seed, now, maxRecords, queryResults, keptPools: readers }),
+    records: ({ ticks = false } = {}) => generate(workflow, { seed, now, maxRecords, queryResults, keptPools: readers, ticks }),
   };
 }
 
@@ -105,7 +106,15 @@ function columnsBySobject(workflow) {
   return out;
 }
 
-function generate(workflow, { seed, now, maxRecords, queryResults, keptPools }) {
+/**
+ * Yielded by records({ ticks: true }) every TICK_EVERY step visits: lets the driver look at the
+ * clock and the cancel signal while a workflow runs many steps without producing records. Draws
+ * nothing from the rng, so the records are the same with or without ticks.
+ */
+export const TICK = Symbol('tick');
+const TICK_EVERY = 5000;
+
+function generate(workflow, { seed, now, maxRecords, queryResults, keptPools, ticks = false }) {
   const live = { total: 0, bySobject: {}, byStep: {} };
   const rootScope = { current: {}, all: {}, vars: {} };
   const it = run();
@@ -244,6 +253,7 @@ function generate(workflow, { seed, now, maxRecords, queryResults, keptPools }) 
       for (const step of steps ?? []) {
         if (step.disabled === true) continue;
         if (++visits > LIMITS.maxSteps) fail(step, `Workflow chạy quá ${LIMITS.maxSteps} bước. Kiểm tra lại số lần lặp lồng nhau.`);
+        if (ticks && visits % TICK_EVERY === 0) yield TICK;
         const c = step.config ?? {};
         const stat = (byStep[step.id] ??= { runs: 0, records: 0 });
         stat.runs++;

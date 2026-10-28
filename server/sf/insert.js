@@ -11,7 +11,8 @@
 //
 // Memory: only the Ids (and failures) of refs that `keepId(ref)` accepts outlive their window
 // (aliases a Lookup points at, preview rows); `errors` keeps the first MAX_ERRORS_REPORTED
-// records while `errorGroups` counts every failure.
+// records while `errorGroups` counts every failure (grouped by message pattern — Ids and quoted
+// values masked — at most MAX_ERROR_GROUPS groups, the rest summed in `errorGroupsOther`).
 //
 // Stopping: `signal` (Dừng, closed connection) is checked before each call, and the call in flight
 // is always awaited, so `inserted` is exact. Fail fast: when the first FAIL_FAST_BATCHES calls of
@@ -22,6 +23,18 @@ export const INSERT_WINDOW = 2000; // ≈ 1 MB; keeps almost every call a full 2
 export const FAIL_FAST_BATCHES = 3;
 export const MAX_ERRORS_REPORTED = 1000;
 const GROUP_EXAMPLES = 3;
+export const MAX_ERROR_GROUPS = 100;
+
+/**
+ * Group key of an error message: record Ids (15/18 characters with a digit) and quoted values
+ * vary per record ("duplicates value on record with id: 003…"), so they are masked; the group
+ * keeps the first raw message as its example.
+ */
+export function errorPattern(message) {
+  return String(message)
+    .replace(/"[^"]*"|'[^']*'/g, '"…"')
+    .replace(/\b(?=[A-Za-z0-9]*\d)[A-Za-z0-9]{15}(?:[A-Za-z0-9]{3})?\b/g, '<Id>');
+}
 export const SKIPPED_MESSAGE = 'Bỏ qua vì bản ghi cha lỗi.';
 export const NO_PARENT_MESSAGE = 'Không xác định được Id bản ghi cha.';
 
@@ -67,7 +80,7 @@ function describeFailure(res, record) {
  * @param signal  AbortSignal: stop before the next call
  * @param onBatch ({ inserted, failed, bySobject }) after every call (and skipped records)
  * → { push(record): Promise<void>, end(): Promise<summary>, stopped (getter) }
- *   summary: { inserted, failed, errorsTotal, errors, errorGroups, ids, bySobject, notSent, cancelled, stopped }
+ *   summary: { inserted, failed, errorsTotal, errors, errorGroups, errorGroupsOther, ids, bySobject, notSent, cancelled, stopped }
  */
 export function createInserter(client, target, {
   window = INSERT_WINDOW, keepId = () => true, signal, onBatch, failFast = FAIL_FAST_BATCHES, maxErrors = MAX_ERRORS_REPORTED, batchSize = BATCH_SIZE,
@@ -76,6 +89,7 @@ export function createInserter(client, target, {
   const failedRefs = new Set(); // kept failures of earlier windows
   const errors = [];
   const groups = new Map();
+  const otherGroups = { groups: 0, count: 0, keys: new Set() }; // beyond MAX_ERROR_GROUPS
   const bySobject = {}; // sObject → { inserted, failed }
   const firstCalls = new Map(); // sObject → { calls, anySuccess } (fail fast)
   let errorsTotal = 0;
@@ -93,13 +107,20 @@ export function createInserter(client, target, {
     counts(record.sobject).failed++;
     const e = { ref: record.ref, sobject: record.sobject, ...(record.nodeId ? { nodeId: record.nodeId } : {}), message, ...extra };
     if (errors.length < maxErrors) errors.push(e);
-    const key = `${record.sobject}\u0000${record.nodeId ?? ''}\u0000${extra.field ?? ''}\u0000${message}`;
+    const key = `${record.sobject}\u0000${record.nodeId ?? ''}\u0000${extra.field ?? ''}\u0000${errorPattern(message)}`;
     const g = groups.get(key);
     if (g) {
       g.count++;
       if (g.refs.length < GROUP_EXAMPLES) g.refs.push(record.ref);
-    } else {
+    } else if (groups.size < MAX_ERROR_GROUPS) {
       groups.set(key, { sobject: record.sobject, ...(record.nodeId ? { nodeId: record.nodeId } : {}), ...(extra.field ? { field: extra.field } : {}), message, count: 1, refs: [record.ref] });
+    } else {
+      // Counted, not listed. The key set is bounded too: past 10 000 distinct keys only the count grows.
+      otherGroups.count++;
+      if (!otherGroups.keys.has(key) && otherGroups.keys.size < 10000) {
+        otherGroups.keys.add(key);
+        otherGroups.groups++;
+      }
     }
   }
 
@@ -154,6 +175,8 @@ export function createInserter(client, target, {
       for (const [sobject, group] of bySo) {
         for (let i = 0; i < group.length; i += batchSize) {
           const chunk = group.slice(i, i + batchSize);
+          // Let a pending Dừng / closed connection reach the signal before every call.
+          await new Promise((resolve) => setImmediate(resolve));
           if (signal?.aborted) cancelled = true;
           if (cancelled || stopped) {
             notSent += pending.length - countHandled(pending, windowIds, windowFailed);
@@ -166,6 +189,7 @@ export function createInserter(client, target, {
             results = chunk.map(() => ({ success: false, errors: [{ message: e.message }] }));
           }
           let ok = 0;
+          let failedHere = 0;
           let firstFailure = null;
           chunk.forEach((r, idx) => {
             const res = results?.[idx];
@@ -178,15 +202,17 @@ export function createInserter(client, target, {
               windowFailed.add(r.ref);
               const f = describeFailure(res, r);
               firstFailure ??= { ...f, nodeId: r.nodeId };
+              failedHere++;
               fail(r, f.message, f.field ? { field: f.field } : {});
             }
           });
-          const fc = firstCalls.get(sobject) ?? { calls: 0, anySuccess: false };
+          const fc = firstCalls.get(sobject) ?? { calls: 0, anySuccess: false, failed: 0 };
           fc.calls++;
+          fc.failed += failedHere; // records Salesforce refused (not the children skipped because of them)
           if (ok) fc.anySuccess = true;
           firstCalls.set(sobject, fc);
           if (!fc.anySuccess && fc.calls >= failFast) {
-            stopped = { reason: 'allFailing', sobject, nodeId: firstFailure?.nodeId, message: firstFailure?.message, batches: fc.calls, records: counts(sobject).failed };
+            stopped = { reason: 'allFailing', sobject, nodeId: firstFailure?.nodeId, message: firstFailure?.message, batches: fc.calls, records: fc.failed };
           }
           progress();
         }
@@ -222,6 +248,8 @@ export function createInserter(client, target, {
         errorsTotal,
         errors,
         errorGroups: [...groups.values()].sort((a, b) => b.count - a.count),
+        // Groups past MAX_ERROR_GROUPS: how many more (at least) and how many records they hold.
+        errorGroupsOther: otherGroups.count ? { groups: otherGroups.groups, count: otherGroups.count } : null,
         ids: Object.fromEntries(idByRef),
         bySobject,
         notSent,

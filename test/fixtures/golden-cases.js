@@ -73,6 +73,22 @@ export const GOLDEN_CASES = [
       record('after', 'Lead', 'lead', [lookup('X__c', 'acc', 'random')], { count: 2 }),
     ]),
   },
+  {
+    name: 'random Lookup into a pick alias, and a copy of a Lookup (added after review; recorded with the old executor)',
+    workflow: wf([
+      record('acc', 'Account', 'acc', [name], { count: 6 }),
+      loop('l', { mode: 'range', min: 4, max: 9 }, [
+        pick('p', 'pa', 'acc', { mode: 'random' }),
+        record('con', 'Contact', 'con', [lookup('AccountId', 'pa'), lookup('Other__c', 'pa', 'random')]),
+        record('opp', 'Opportunity', 'opp', [
+          lookup('ContactId', 'con', 'random'),
+          { name: 'AccountId', type: 'copy', options: { path: 'con.AccountId' } },
+          { name: 'Ref__c', type: 'copy', options: { path: 'con.Other__c' } },
+        ]),
+      ]),
+      record('task', 'Task', 'task', [lookup('WhatId', 'pa', 'random'), { name: 'WhoId', type: 'copy', options: { path: 'opp.ContactId' } }], { count: 3 }),
+    ]),
+  },
 ];
 
 export const GOLDEN_SEEDS = [42, 7];

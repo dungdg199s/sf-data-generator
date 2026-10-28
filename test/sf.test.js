@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createSfCli } from '../server/sf/cli.js';
 import { createSfClient } from '../server/sf/client.js';
-import { insertRecords, toSObject, createInserter } from '../server/sf/insert.js';
+import { insertRecords, toSObject, createInserter, errorPattern, MAX_ERROR_GROUPS } from '../server/sf/insert.js';
 import { createRun } from '../server/workflow/executor.js';
 import { mapDescribe, mapQueryFields } from '../server/sf/describe-map.js';
 import { createQueryCache, prefetchQueries, fingerprint } from '../server/sf/query.js';
@@ -457,4 +457,26 @@ test('errors are capped at 1000 but groups count everything', async () => {
   assert.equal(res.errors.length, 1000);
   assert.deepEqual(res.errorGroups.map((g) => [g.count, g.refs.length]), [[1300, 3]]);
   assert.equal(res.inserted, 1300);
+});
+
+test('fail fast: stopped.records counts what Salesforce refused, not the children skipped because of it', async () => {
+  const client = fakeClient({ fail: (_r, s) => (s === 'Account' ? [{ statusCode: 'X', message: 'nope' }] : null) });
+  const records = [];
+  for (let i = 1; i <= 600; i++) records.push(acc(i), con(i, i));
+  const res = await insertRecords(client, 'dev', records, { window: 2000 });
+  assert.equal(res.stopped.reason, 'allFailing');
+  assert.equal(res.stopped.records, 600, 'three calls of 200 Accounts');
+  assert.ok(res.failed > 600, 'skipped Contacts are failures too, just not "refused"');
+});
+
+test('error groups: Ids and quoted values are masked in the key, at most 100 groups plus a counted remainder', async () => {
+  assert.equal(errorPattern('duplicate value found: Email duplicates value on record with id: 003000000000123'), 'duplicate value found: Email duplicates value on record with id: <Id>');
+  assert.equal(errorPattern("bad value for restricted picklist field: 'Foo'"), 'bad value for restricted picklist field: "…"');
+  assert.equal(errorPattern('REQUIRED_FIELD_MISSING: Required fields are missing: [LastName]'), 'REQUIRED_FIELD_MISSING: Required fields are missing: [LastName]');
+  // Every record a different, unmaskable message: 300 patterns.
+  const client = fakeClient({ fail: (r) => [{ statusCode: 'FIELD_CUSTOM_VALIDATION_EXCEPTION', message: `rule ${r.Name} broke` }] });
+  const res = await insertRecords(client, 'dev', Array.from({ length: 300 }, (_, i) => acc(i + 1)), { failFast: 99 });
+  assert.equal(res.errorGroups.length, MAX_ERROR_GROUPS);
+  assert.deepEqual(res.errorGroupsOther, { groups: 200, count: 200 });
+  assert.equal(res.errorGroups.reduce((n, g) => n + g.count, 0) + res.errorGroupsOther.count, res.errorsTotal);
 });

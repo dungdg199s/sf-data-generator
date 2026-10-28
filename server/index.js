@@ -35,6 +35,7 @@ const MIME = {
 
 const STREAMED = Symbol('streamed'); // a route that wrote the response itself
 const NDJSON = 'application/x-ndjson';
+const RUN_SNAPSHOTS = 10;
 
 /** Host names the API answers to (DNS-rebinding guard); `HOST` adds its own. */
 const LOCAL_HOSTS = ['localhost', '127.0.0.1', '[::1]', '::1'];
@@ -78,14 +79,14 @@ export function createApp({ cli = createSfCli(), client, queryCache = createQuer
   const runs = createRunRegistry();
 
   /** Checks shared by /api/run and /api/export, then the Query pre-fetch (0006): all before any header is sent. */
-  async function prepareRun(body, { insert }) {
+  async function prepareRun(body, { insert, pinned = null }) {
     if (body?.now !== undefined && !(typeof body.now === 'number' && Number.isFinite(body.now))) throw httpError(400, 'Tham số now không hợp lệ.');
     const { workflow, errors } = prepareWorkflow(body?.workflow);
     if (errors.length) throw new WorkflowError(errors);
     // Query steps are read first (design 0006): when inserting always from the target org
     // (never sample rows), when previewing from `org` if one is selected.
     const org = insert ? body.target.org : typeof body?.org === 'string' && body.org ? body.org : null;
-    const pre = await prefetchQueries({
+    const pre = pinned ? { results: pinned, queries: [], warnings: [] } : await prefetchQueries({
       client: sfClient,
       org,
       workflow,
@@ -96,6 +97,14 @@ export function createApp({ cli = createSfCli(), client, queryCache = createQuer
     });
     const run = createRun(body.workflow, { seed: body?.seed, now: body?.now, maxRecords: body?.maxRecords, queryResults: pre.results });
     return { run, pre, workflow };
+  }
+
+  // Query rows of recent runs (runId → queryResults), for /api/export of that run. Small LRU:
+  // a run reads at most LIMITS.maxQueryNodes × maxQueryRows rows.
+  const runSnapshots = new Map();
+  function rememberRun(id, results) {
+    runSnapshots.set(id, results);
+    while (runSnapshots.size > RUN_SNAPSHOTS) runSnapshots.delete(runSnapshots.keys().next().value);
   }
 
   /** The next preview sees the records just created (also after a stopped insert). */
@@ -141,30 +150,48 @@ export function createApp({ cli = createSfCli(), client, queryCache = createQuer
         res.off('close', onEarlyClose);
         if (gone || res.destroyed) return STREAMED;
 
-        if (!String(req.headers.accept ?? '').includes(NDJSON)) {
-          // One JSON body with every record (scripts, tests); same sinks as the stream.
-          const end = await executeRun({ run, target, sfClient, start, collect: true, ...runOptions }).finally(() => target && invalidateAfterInsert(target));
-          if (end.type === 'error') throw end.issues ? new WorkflowError(end.issues) : httpError(500, end.error);
-          return end.result;
-        }
-
-        // NDJSON: one event per line while the run goes on (design 0004).
+        // Every run gets an id: Dừng (cancel), and the export of this very run (Query rows kept).
         const handle = runs.open();
-        res.writeHead(200, { 'Content-Type': `${NDJSON}; charset=utf-8`, 'Cache-Control': 'no-cache', 'X-Content-Type-Options': 'nosniff' });
-        res.flushHeaders?.();
+        if (pre.queries.length) rememberRun(handle.id, pre.results);
         // Closing the tab (or losing the connection) stops the run after the call in flight.
         const onClose = () => { if (!res.writableEnded) runs.cancel(handle.id); };
         res.on('close', onClose);
+        const finish = async () => {
+          handle.close();
+          res.off('close', onClose);
+          // The next preview sees the records just created; answer first, then clear the cache.
+          if (target) await invalidateAfterInsert(target);
+        };
+
+        if (!String(req.headers.accept ?? '').includes(NDJSON)) {
+          // One JSON body with every record (scripts, tests); same sinks as the stream.
+          let end;
+          try {
+            end = await executeRun({ run, target, sfClient, signal: handle.signal, start: { ...start, runId: handle.id }, collect: true, ...runOptions });
+          } catch (e) {
+            await finish();
+            throw e;
+          }
+          if (end.type === 'error') {
+            await finish();
+            throw end.issues ? new WorkflowError(end.issues) : httpError(500, end.error);
+          }
+          sendJson(res, 200, end.result);
+          await finish();
+          return STREAMED;
+        }
+
+        // NDJSON: one event per line while the run goes on (design 0004).
+        res.writeHead(200, { 'Content-Type': `${NDJSON}; charset=utf-8`, 'Cache-Control': 'no-cache', 'X-Content-Type-Options': 'nosniff' });
+        res.flushHeaders?.();
         try {
           await executeRun({
             run, target, sfClient, signal: handle.signal, start: { ...start, runId: handle.id }, ...runOptions,
             emit: (ev) => { if (!res.destroyed) res.write(`${JSON.stringify(ev)}\n`); },
           });
         } finally {
-          handle.close();
-          res.off('close', onClose);
-          if (target) await invalidateAfterInsert(target);
           res.end();
+          await finish();
         }
         return STREAMED;
       },
@@ -173,7 +200,13 @@ export function createApp({ cli = createSfCli(), client, queryCache = createQuer
       'POST',
       /^\/api\/runs\/([^/]+)\/cancel$/,
       ([, runId]) => {
-        if (!runs.cancel(decodeURIComponent(runId))) throw httpError(404, 'Lần chạy này đã kết thúc.');
+        let id;
+        try {
+          id = decodeURIComponent(runId);
+        } catch {
+          id = null; // malformed escape: no such run
+        }
+        if (!id || !runs.cancel(id)) throw httpError(404, 'Lần chạy này đã kết thúc.');
         return { ok: true };
       },
     ],
@@ -188,8 +221,12 @@ export function createApp({ cli = createSfCli(), client, queryCache = createQuer
           throw httpError(400, 'Thiếu seed hoặc now của lần chạy. Bấm Xem trước rồi tải lại.');
         }
         let run;
+        // The export of a finished run (preview or insert) uses the Query rows that run used, even
+        // when the org changed since (an insert clears the query cache): the file is exactly the data
+        // that was shown / inserted.
+        const pinned = typeof body.runId === 'string' ? runSnapshots.get(body.runId) : null;
         try {
-          ({ run } = await prepareRun(body, { insert: false }));
+          ({ run } = await prepareRun(body, { insert: false, pinned }));
         } catch (e) {
           if (e.status === 409) e.message = 'Dữ liệu đọc từ org đã đổi so với lần chạy này. Bấm Xem trước lại rồi tải.';
           throw e;

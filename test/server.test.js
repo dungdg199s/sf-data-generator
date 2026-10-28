@@ -444,3 +444,87 @@ test('cross-site requests are refused: foreign Origin / Sec-Fetch-Site / Host (4
     close();
   }
 });
+
+test('JSON mode stops when the client disconnects', async () => {
+  let calls = 0;
+  const { url, close } = await appWith({ create: async (_t, _s, recs) => { calls++; await new Promise((r) => setTimeout(r, 40)); return recs.map(() => ({ success: true, id: '001x' })); } });
+  try {
+    const ac = new AbortController();
+    const req = fetch(`${url}/api/run`, { method: 'POST', signal: ac.signal, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ workflow: wf([record('a', 'Account', 'acc', [], { count: 3000 })]), seed: 1, target: { kind: 'org', org: 'dev' } }) });
+    while (calls < 2) await new Promise((r) => setTimeout(r, 5));
+    ac.abort();
+    await req.catch(() => {});
+    const at = calls;
+    await new Promise((r) => setTimeout(r, 400));
+    assert.ok(calls <= at + 1, `${calls} calls after the disconnect at ${at} (15 without the fix)`);
+  } finally {
+    close();
+  }
+});
+
+test('error groups are bounded: Ids in messages are masked, at most 100 groups, the done line stays small', async () => {
+  let n = 0;
+  const { url, close } = await appWith({ create: async (_t, _s, recs) => recs.map((_, i) => (i === 0 ? { success: true, id: `003${++n}` }
+    : { success: false, errors: [{ statusCode: 'DUPLICATE_VALUE', message: `duplicate value found: Email duplicates value on record with id: 003000000${String(++n).padStart(6, '0')}`, fields: [] }] })) });
+  try {
+    const res = await fetch(`${url}/api/run`, { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson' }, body: JSON.stringify({ workflow: wf([record('c', 'Contact', 'con', [{ name: 'LastName', type: 'text', options: {} }], { count: 40000 })]), seed: 1, target: { kind: 'org', org: 'dev' } }) });
+    const last = (await res.text()).trim().split('\n').at(-1);
+    const ins = JSON.parse(last).result.insert;
+    assert.equal(ins.errorsTotal, 39800);
+    assert.equal(ins.errorGroups.length, 1);
+    assert.equal(ins.errorGroups[0].count, 39800);
+    assert.match(ins.errorGroups[0].message, /with id: 003000000\d{6}$/, 'the example keeps the raw message');
+    assert.ok(last.length < 400000, `done line ${last.length} bytes (7 MB before)`);
+  } finally {
+    close();
+  }
+});
+
+test('export after an insert uses the Query rows that run used (no 409 although the org changed)', async () => {
+  const accounts = [{ attributes: { type: 'Account' }, Id: '001000000000001AAA', Name: 'Acme' }];
+  let idn = 0;
+  const { url, close } = await appWith({
+    identity: async (o) => o,
+    query: async () => ({ records: accounts.map((r) => structuredClone(r)), totalSize: accounts.length, done: true }),
+    create: async (_t, sobject, recs) => recs.map((r) => {
+      const id = `001${String(++idn).padStart(15, '0')}`;
+      accounts.push({ attributes: { type: sobject }, Id: id, Name: r.Name });
+      return { success: true, id };
+    }),
+  });
+  try {
+    const w = wf([query('q', 'accs', { fields: ['Id', 'Name'] }), record('a', 'Account', 'acc', [{ name: 'Name', type: 'text', options: { mode: 'company' } }, { name: 'ParentId', type: 'lookup', options: { mode: 'random', ref: 'accs' } }], { count: 3 })]);
+    const nd = async (body) => JSON.parse((await (await fetch(`${url}/api/run`, { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson' }, body: JSON.stringify(body) })).text()).trim().split('\n').at(-1)).result;
+    const p = await nd({ workflow: w, seed: 1, org: 'dev' });
+    const expectQueries = Object.fromEntries(p.queries.map((q) => [q.nodeId, q.fingerprint]));
+    const r = await nd({ workflow: w, seed: p.seed, now: p.now, target: { kind: 'org', org: 'dev' }, expectQueries });
+    assert.equal(r.insert.inserted, 3);
+    assert.match(r.runId, /^r[0-9a-f]{8}$/);
+    const exq = Object.fromEntries(r.queries.map((q) => [q.nodeId, q.fingerprint]));
+    const body = { workflow: w, seed: r.seed, now: r.now, org: 'dev', expectQueries: exq, format: 'json' };
+    const stale = await fetch(`${url}/api/export`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    assert.equal(stale.status, 409, 'without the run id the changed org is still detected');
+    const ok = await fetch(`${url}/api/export`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...body, runId: r.runId }) });
+    assert.equal(ok.status, 200);
+    assert.deepEqual(await ok.json(), r.records, 'exactly what was inserted');
+  } finally {
+    close();
+  }
+});
+
+test('a malformed cancel id is a 404; the response ends before the query cache is cleared', async () => {
+  const bad = await fetch(`${base}/api/runs/%E0%A4%A/cancel`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+  assert.equal(bad.status, 404);
+  let release;
+  const slowIdentity = new Promise((r) => { release = r; });
+  const { url, close } = await appWith({ identity: async (o) => { await slowIdentity; return o; }, create: async (_t, _s, recs) => recs.map(() => ({ success: true, id: '001x' })) });
+  try {
+    const res = await fetch(`${url}/api/run`, { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson' }, body: JSON.stringify({ workflow: wf([record('a', 'Account', 'acc', [], { count: 2 })]), seed: 1, target: { kind: 'org', org: 'dev' } }) });
+    const text = await Promise.race([res.text(), new Promise((r) => setTimeout(() => r('timeout'), 1000))]);
+    assert.notEqual(text, 'timeout', 'the stream ended while the cache invalidation still waits');
+    assert.equal(JSON.parse(text.trim().split('\n').at(-1)).result.insert.inserted, 2);
+  } finally {
+    release();
+    close();
+  }
+});
