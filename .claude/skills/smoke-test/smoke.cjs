@@ -195,6 +195,14 @@ const V1_ORPHAN = {
     await page.click(`${title} .var-btn`);
     await page.waitForSelector('.var-picker .vp-item');
     check(await page.evaluate(() => document.activeElement?.classList.contains('var-search')), '{x} did not focus the picker search');
+    // ARIA: the listbox holds only groups/options, the popup is not a dialog, aria-controls points at it.
+    const aria = await page.evaluate((sel) => {
+      const lb = document.querySelector('.var-picker [role="listbox"]');
+      const bad = [...lb.querySelectorAll(':scope > *')].filter((n) => n.getAttribute('role') !== 'group').length
+        + [...lb.querySelectorAll('[role="group"] > *')].filter((n) => !['option'].includes(n.getAttribute('role')) && !n.classList.contains('vp-head') && !n.classList.contains('vp-more')).length;
+      return { bad, dialog: Boolean(document.querySelector('.var-picker[role="dialog"]')), controls: document.querySelector(sel).getAttribute('aria-controls') === lb.id };
+    }, tplInput);
+    check(aria.bad === 0 && !aria.dialog && aria.controls, `picker ARIA structure (${JSON.stringify(aria)})`);
     await page.keyboard.type('indu');
     const activeAfterSearch = await page.$eval('.var-picker .vp-item.active', (el) => el.dataset.path).catch(() => null);
     check(activeAfterSearch === 'acc.Industry', `"indu" did not highlight acc.Industry (${activeAfterSearch})`);
@@ -202,7 +210,8 @@ const V1_ORPHAN = {
     check(!(await page.$('.var-picker')), 'picker still open after Enter');
     check((await page.inputValue(tplInput)) === '{{acc.Industry}}', `insert gave ${await page.inputValue(tplInput)}`);
     check(await page.evaluate((sel) => document.activeElement === document.querySelector(sel), tplInput), 'focus did not return to the template field');
-    check(await page.isVisible(`${title} .var-chip[data-path="acc.Industry"][data-type="record"]`), 'no record-coloured chip for acc.Industry');
+    check(!(await page.$eval(tplInput, (el) => el.hasAttribute('aria-controls'))), 'aria-controls left on the field while the picker is closed');
+    check(await page.waitForSelector(`${title} .var-chip[data-path="acc.Industry"][data-type="record"]`, { timeout: 2000 }).catch(() => null), 'no record-coloured chip for acc.Industry');
     await page.keyboard.type(' #{{');
     await page.waitForSelector('.var-picker .vp-item');
     await page.keyboard.type('in');
@@ -210,7 +219,8 @@ const V1_ORPHAN = {
     check(firstIn === 'loop.index', `"{{in" should put loop.index first (${firstIn})`);
     await page.keyboard.press('Enter');
     check((await page.inputValue(tplInput)) === '{{acc.Industry}} #{{loop.index}}', `autocomplete gave ${await page.inputValue(tplInput)}`);
-    check(await page.isVisible(`${title} .var-chip[data-path="loop.index"][data-type="loop"]`), 'no loop-coloured chip for loop.index');
+    check(await page.waitForSelector(`${title} .var-chip[data-path="loop.index"][data-type="loop"]`, { timeout: 2000 }).catch(() => null), 'no loop-coloured chip for loop.index');
+    check((await page.$$eval(`${title} .var-chip[tabindex="0"]`, (n) => n.length)) === 1, 'the chip strip should be a single tab stop');
     await page.keyboard.type(' {{acc.Nmae}}');
     await page.waitForSelector(`${title} .var-chip.has-error[data-path="acc.Nmae"]`, { timeout: 3000 });
     check(await page.isVisible('.step-card[data-id="con"].has-error'), 'card "con" has no error badge for the broken reference');
@@ -228,6 +238,59 @@ const V1_ORPHAN = {
     const followed = await page.evaluate(() => JSON.stringify(JSON.parse(localStorage.getItem('sfdg.workflow.v2'))).match(/"name":"Title","type":"template","options":\{"template":"([^"]*)"/)?.[1]);
     check(followed === '{{acc.Industry__c}} #{{loop.index}} {{acc.Name}}', `field rename did not follow (${followed})`);
     check(/Đã cập nhật 1 tham chiếu: acc.Industry → acc.Industry__c/.test(await page.textContent('#toast')), 'no rename toast');
+    // One undo restores both the name and the references.
+    await page.click('#btn-undo');
+    const undone = await page.evaluate(() => JSON.stringify(JSON.parse(localStorage.getItem('sfdg.workflow.v2'))));
+    check(undone.includes('"name":"Industry","type":"picklist"') && undone.includes('"template":"{{acc.Industry}} #{{loop.index}} {{acc.Name}}"'), 'one Ctrl+Z did not undo the field rename and its references together');
+
+    // Renaming the field that owns a chip strip keeps the strip live; $n chips are neutral; ⊗ on unresolved error chips.
+    await page.click('.step-card[data-id="con"] .type');
+    const titleName = await page.$(`${title} input[aria-label="Tên field"]`);
+    await titleName.fill('Title2');
+    await titleName.press('Tab');
+    const title2 = '#inspector .field-card[data-field="fields.Title2"]';
+    await page.click(`${title2} input[data-key="template"]`);
+    await page.keyboard.press('End');
+    await page.keyboard.type(' {{zzz.Name}} {{this.$n}}');
+    await page.keyboard.press('Escape');
+    const stale = await page.waitForSelector(`${title2} .var-chip.has-error[data-path="zzz.Name"]`, { timeout: 3000 }).catch(() => null);
+    check(stale, 'chip strip did not follow the renamed field (no red chip for zzz.Name)');
+    if (stale) check(await stale.evaluate((el) => getComputedStyle(el, '::before').content !== 'none'), 'no ⊗ icon on an unresolved error chip');
+    check(await page.$(`${title2} .var-chip[data-path="this.$n"][data-type="start"]`), '{{this.$n}} chip is not neutral (start)');
+    // Editing referenceTo refreshes the "Bản ghi cha" list.
+    const accountId = '#inspector .field-card[data-field="fields.AccountId"]';
+    await page.click(`${accountId} .actions button[title="Tùy chọn"]`);
+    await page.fill(`${accountId} textarea[data-key="referenceTo"]`, 'Lead');
+    const refText = await page.$eval(`${accountId} select[data-key="ref"] option[value="acc"]`, (o) => o.textContent);
+    check(/trỏ tới Lead/.test(refText), `"Bản ghi cha" did not refresh after referenceTo (${refText})`);
+
+    // Path fields (branch "Giá trị"): a valid default outside loops, no opening on focus, Tab never inserts untouched.
+    await page.evaluate(() => {
+      const rec = { id: 'a', type: 'record', config: { sobject: 'Account', alias: 'acc', fields: [{ name: 'Name', type: 'text', options: {} }] } };
+      const top = { id: 'top', type: 'branch', config: { kind: 'chance', probability: 0.5 }, slots: { true: [], false: [] } };
+      const inner = { id: 'B', type: 'branch', config: { kind: 'compare', left: '', op: 'eq', right: '1' }, slots: { true: [], false: [] } };
+      localStorage.setItem('sfdg.workflow.v2', JSON.stringify({ version: 2, name: 'p', steps: [rec, top, { id: 'L', type: 'loop', config: { count: 2, alias: 'loop' }, slots: { body: [inner] } }] }));
+    });
+    await page.reload();
+    await page.waitForSelector('.step-card[data-id="top"]');
+    await page.click('.step-card[data-id="top"] .type');
+    await page.selectOption('#inspector select[data-key="kind"]', 'compare');
+    const leftSel = '#inspector input[data-key="left"]';
+    check((await page.inputValue(leftSel)) === 'acc.Name', `compare outside loops kept an invalid default (${await page.inputValue(leftSel)})`);
+    await page.click('.step-card[data-id="B"] .type');
+    await page.focus('#inspector select[data-key="kind"]');
+    await page.keyboard.press('Tab');
+    check(!(await page.$('.var-picker')), 'the path picker opened on focus');
+    await page.keyboard.press('Tab');
+    check((await page.inputValue(leftSel)) === '', 'Tab through an empty path field inserted a variable');
+    await page.click(leftSel);
+    await page.waitForSelector('.var-picker .vp-item');
+    await page.keyboard.press('Tab');
+    check((await page.inputValue(leftSel)) === '' && !(await page.$('.var-picker')), 'Tab accepted the first row without typing');
+    await page.click(leftSel);
+    await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('Tab');
+    check((await page.inputValue(leftSel)) !== '', 'Tab after moving the selection did not insert');
 
     // Migration of a v1 autosave on load.
     const v1Text = JSON.stringify(V1_SAMPLE);

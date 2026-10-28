@@ -22,6 +22,20 @@ export function renderOptions(defs, values, onChange, ctx = {}) {
   const rows = [];
   const current = { ...Object.fromEntries(defs.map((d) => [d.key, d.default])), ...values };
 
+  // `ref` dropdowns may depend on sibling options (Lookup referenceTo): rebuild them in place.
+  const refreshRefs = (changed) => {
+    if (!ctx.refChoices) return;
+    for (const { def, row } of rows) {
+      if (def.kind !== 'ref' || def.key === changed) continue;
+      const old = row.querySelector(`[data-key="${CSS.escape(def.key)}"]`);
+      if (!old) continue;
+      const next = renderControl(def, current[def.key], old._set, old.id, ctx, current);
+      next.dataset.key = def.key;
+      next._set = old._set;
+      next.className = old.className;
+      old.replaceWith(next);
+    }
+  };
   const refreshVisibility = () => {
     for (const { def, row } of rows) row.hidden = def.showIf ? !def.showIf.in.includes(current[def.showIf.key]) : false;
   };
@@ -32,15 +46,21 @@ export function renderOptions(defs, values, onChange, ctx = {}) {
       current[def.key] = v;
       onChange(def.key, v, meta);
       refreshVisibility();
+      refreshRefs(def.key);
     };
     const control = renderControl(def, values?.[def.key], set, id, ctx, current);
     control.dataset.key = def.key;
+    control._set = set;
     let field = control;
     let strip = null;
     if (def.vars && ctx.vars && (def.kind === 'string' || def.kind === undefined)) {
+      // Getters, not a spread: the field can be renamed while this form stays on screen.
+      const vctx = ctx.vars;
       ({ wrap: field, strip } = attachVarPicker(control, {
-        ...ctx.vars,
-        field: ctx.vars.field ?? def.key,
+        get stepId() { return vctx.stepId; },
+        get fieldIndex() { return vctx.fieldIndex; },
+        get fieldName() { return vctx.fieldName; },
+        get field() { return vctx.field ?? def.key; },
         option: def.key,
         mode: def.vars,
         unsaved: values?.[def.key] === undefined || values?.[def.key] === '',

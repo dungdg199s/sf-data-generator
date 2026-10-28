@@ -675,7 +675,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--color-accent); }
   background: var(--color-danger-subtle); color: var(--color-danger-text); font-style: normal;
 }
 .var-chip.has-error .var-src { color: var(--color-danger-text); }
-.var-chip.has-error .ico, .var-chip.has-error.unknown::before { display: none; }
+.var-chip.has-error .ico { display: none; } /* replaced by the ⊗ below, also on unresolved chips */
 .var-chip.has-error::before {
   content: ''; width: 12px; height: 12px; background: currentColor;
   -webkit-mask: var(--ico-error) center / contain no-repeat; mask: var(--ico-error) center / contain no-repeat;

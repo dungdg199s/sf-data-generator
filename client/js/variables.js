@@ -167,7 +167,18 @@ function optionLabel(step, key) {
   return state.meta?.nodeTypes.find((t) => t.type === step.type)?.options.find((o) => o.key === key)?.label ?? key;
 }
 
+const refIndex = new WeakMap(); // scope → Map("nodeId|field|option|path" → ref)
 /** The analysed reference at one place of the workflow (for chip colours / tooltips). */
 export function refAt(nodeId, field, option, path) {
-  return currentScope().refs.find((r) => r.nodeId === nodeId && r.field === field && r.option === option && r.path === path) ?? null;
+  const scope = currentScope();
+  let index = refIndex.get(scope);
+  if (!index) {
+    index = new Map();
+    for (const r of scope.refs) {
+      const k = `${r.nodeId}|${r.field}|${r.option}|${r.path}`;
+      if (!index.has(k)) index.set(k, r);
+    }
+    refIndex.set(scope, index);
+  }
+  return index.get(`${nodeId}|${field}|${option}|${path}`) ?? null;
 }

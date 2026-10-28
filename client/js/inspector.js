@@ -15,7 +15,6 @@ import { refChoices, refsTo, referenceOptions } from '/shared/scope.js';
 import { deleteStep, duplicateStep, toggleDisabled } from './ops.js';
 import { placesText } from './variables.js';
 import { applySuggestion, closePicker } from './var-picker.js';
-import { stepAlias } from './summary.js';
 
 let root;
 const expanded = new Set(); // `${stepId}:${fieldIndex}` with options panel open
@@ -130,17 +129,50 @@ function onStepOption(step, key, v, form, meta) {
       c.sobject = v;
       if (auto) {
         const next = suggestAlias(v, step.id);
-        setStepAlias(wf, step.id, next, { memo: aliasMemo, slotKeys, catalog: state.meta });
+        setStepAlias(wf, step.id, next, { memo: aliasMemo, slotKeys, catalog: state.meta, scope: currentScope() });
         const input = form.querySelector('[data-key="alias"]');
         if (input) input.value = next;
       }
     } else if (key === 'alias' && (step.type === 'record' || step.type === 'loop')) {
       // References follow only to a valid, free name (a loop variable: inside its body only);
       // while the field is empty or matches another alias mid-typing, they stay put.
-      setStepAlias(wf, step.id, v, { memo: aliasMemo, slotKeys, catalog: state.meta });
+      setStepAlias(wf, step.id, v, { memo: aliasMemo, slotKeys, catalog: state.meta, scope: currentScope() });
     } else c[key] = v;
   }, { source: 'inspector', coalesceKey: meta?.coalesceKey ?? `${step.id}:${key}` });
   // Card summary/alias changed; the process view re-renders, the inspector keeps focus.
+  fillPathDefaults(step, key, form);
+}
+
+/**
+ * A `vars: 'path'` option that just became visible (e.g. "So sánh giá trị") and still holds its
+ * catalogue default: if the default does not resolve here (`loop.index` outside any loop), use a
+ * variable that does — the innermost loop's index, else the first field of the nearest record.
+ */
+function fillPathDefaults(step, changedKey, form) {
+  const defs = (nodeType(step.type)?.options ?? []).filter((d) => d.vars === 'path' && d.showIf?.key === changedKey);
+  for (const def of defs) {
+    const value = step.config?.[def.key];
+    if (value !== undefined && value !== '' && value !== def.default) continue;
+    if (!def.showIf.in.includes(step.config?.[changedKey])) continue;
+    const scope = currentScope();
+    const ref = scope.refs.find((r) => r.nodeId === step.id && r.option === def.key);
+    if (ref && !ref.code) continue;
+    const here = scope.at[step.id];
+    let next = null;
+    for (const v of here?.visible ?? []) {
+      const src = scope.sources[v.source];
+      if (!src || v.certainty === 'maybe') continue;
+      const member = src.kind === 'vars' ? src.members[0] : src.members.find((m) => !m.builtin);
+      if (member) {
+        next = `${src.name}.${member.key}`;
+        break;
+      }
+    }
+    const input = form.querySelector(`[data-key="${CSS.escape(def.key)}"]`);
+    if (!next || !input) continue;
+    input.value = next;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  }
 }
 
 /**
@@ -330,10 +362,13 @@ let renameFrom = null;
 function followFieldRename(step, from, to) {
   renameFrom = to;
   if (!from || !to || from === to) return;
-  const res = updateWorkflow((wf) => renameField(wf, step.id, from, to, { catalog: state.meta }), { source: 'inspector-structure' });
+  // Dry run first: history: false always emits, and a re-render on blur would steal the focus.
+  if (!renameField(structuredClone(state.workflow), step.id, from, to, { catalog: state.meta }).count) return;
+  // history: false — the references move in the same undo step as the name (one Ctrl+Z undoes both).
+  const res = updateWorkflow((wf) => renameField(wf, step.id, from, to, { catalog: state.meta }), { source: 'inspector-structure', history: false });
   if (!res?.count) return;
-  const name = stepAlias(step) || step.id;
-  toast(`Đã cập nhật ${res.count} tham chiếu: ${name}.${from} → ${name}.${to}. Ctrl+Z để hoàn tác.`, 5000);
+  const pairs = res.names.map((n) => `${n}.${from} → ${n}.${to}`).join(', ');
+  toast(`Đã cập nhật ${res.count} tham chiếu: ${pairs}. Ctrl+Z để hoàn tác.`, 5000);
 }
 
 function removeField(step, index) {

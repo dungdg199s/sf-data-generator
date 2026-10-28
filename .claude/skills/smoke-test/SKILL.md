@@ -35,6 +35,13 @@ It starts the server on a random port 3900–3989 and drives headless Chromium t
    Typing `{{acc.Nmae}}` turns that chip red after validation, the `con` card gets the error badge and the
    card shows "Ý bạn là "Name""; "Sửa thành …" fixes it and the badge goes. Renaming `Industry` to
    `Industry__c` on `acc` (then Tab) updates the template and shows the "Đã cập nhật 1 tham chiếu" toast.
+   One click on ↶ undoes the rename and the references together. Renaming `Title` to `Title2` keeps its chip strip live
+   (a new `{{zzz.Name}}` turns red, with the ⊗ icon), `{{this.$n}}` gets the neutral `start` colour, and the strip is a
+   single tab stop. The picker's listbox only holds groups/options, it has no `role=dialog`, and the field has
+   `aria-controls` only while it is open. Typing `Lead` into "Trỏ tới sObject" of `AccountId` refreshes "Bản ghi cha".
+   Then a seeded workflow checks branch "Giá trị" (path mode): switching a root branch to "So sánh giá trị" fills
+   `acc.Name` (not the invalid `loop.index`); tabbing into and out of an empty "Giá trị" neither opens the picker nor
+   inserts; clicking it opens the list and Tab without typing inserts nothing; ↓ then Tab inserts.
 6. **v1 autosave.** A `sfdg.workflow.v1` autosave is migrated on load (toast), `sfdg.workflow.v2` is
    written and the v1 key is left untouched.
 7. **Malformed v2 autosave.** The sample is shown with a recovery toast and a "Tải bản lưu" button; the

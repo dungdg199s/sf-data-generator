@@ -17,12 +17,25 @@ let uid = 0;
 let open = null; // { el, input, opts, mode, query, items, active, replace, render }
 const strips = new Set(); // live chip strips, refreshed on validation and run results
 
-subscribe(({ kind }) => {
-  if (kind !== 'issues' && kind !== 'result' && kind !== 'workflow') return;
-  for (const s of strips) {
+// Strips are redrawn at most once per animation frame, however many events arrive.
+const dirty = new Set();
+let frame = 0;
+function schedule(strip) {
+  dirty.add(strip);
+  if (!frame) frame = requestAnimationFrame(flush);
+}
+function flush() {
+  frame = 0;
+  for (const s of dirty) {
     if (!s.input.isConnected) strips.delete(s);
     else s.refresh();
   }
+  dirty.clear();
+}
+
+subscribe(({ kind }) => {
+  if (kind !== 'issues' && kind !== 'result' && kind !== 'workflow') return;
+  for (const s of strips) schedule(s);
   if (open && kind === 'result') open.render();
   if (open && !open.input.isConnected) closePicker();
 });
@@ -37,8 +50,7 @@ export function attachVarPicker(input, opts) {
   input.classList.add('var-field');
   input.setAttribute('role', 'combobox');
   input.setAttribute('aria-autocomplete', 'list');
-  input.setAttribute('aria-expanded', 'false');
-  input.setAttribute('aria-controls', listId);
+  input.setAttribute('aria-expanded', 'false'); // aria-controls is set only while the list exists
   input.spellcheck = false;
   let unsaved = Boolean(opts.unsaved);
   const state0 = { listId, opts, get unsaved() { return unsaved; }, set unsaved(v) { unsaved = v; } };
@@ -54,30 +66,31 @@ export function attachVarPicker(input, opts) {
   }, '{x}');
   const wrap = h('div', { class: 'var-input' }, input, btn);
 
-  const chips = h('div', { class: 'var-chips', 'aria-label': 'Biến đã chèn' });
+  // One tab stop for the whole strip; ←/→ (Home/End) move between chips (roving tabindex).
+  const chips = h('div', { class: 'var-chips', role: 'toolbar', 'aria-label': 'Biến đã chèn', onkeydown: (e) => chipKey(e, chips) });
   const preview = h('div', { class: 'var-preview', hidden: true });
   const strip = h('div', { class: 'var-strip' }, chips, preview);
-  const refresh = () => renderStrip(input, opts, chips, preview);
-  strips.add({ input, refresh });
-  refresh();
+  const entry = { input, refresh: () => renderStrip(input, opts, chips, preview) };
+  strips.add(entry);
+  entry.refresh();
 
   input.addEventListener('input', () => {
     if (!input._varInsert) unsaved = false;
-    refresh();
+    schedule(entry);
     if (opts.mode === 'template') autocomplete(input);
     else if (open?.input === input && !open.searchFocused) {
       open.auto = pathRange(input);
       open.query = open.auto.query;
+      open.touched = true;
       open.render();
-    } else if (!input.value && document.activeElement === input) openPicker(input, { auto: pathRange(input) });
+    }
   });
   input.addEventListener('keydown', (e) => onFieldKey(e, input));
+  // Path fields open like a combobox on a click (or ↓ / Ctrl+Space), never on focus alone, so
+  // tabbing through the form cannot pick a variable.
   input.addEventListener('click', () => {
     if (opts.mode === 'template') autocomplete(input, { onlyUpdate: true });
-    else if (!input.value && open?.input !== input) openPicker(input, { auto: pathRange(input) });
-  });
-  input.addEventListener('focus', () => {
-    if (opts.mode === 'path' && !input.value) setTimeout(() => { if (document.activeElement === input && !open) openPicker(input, { auto: pathRange(input) }); }, 0);
+    else if (open?.input !== input) openPicker(input, { auto: pathRange(input) });
   });
   input.addEventListener('blur', () => {
     // Autocomplete mode lives in the field: leaving it closes the list (clicks inside the
@@ -94,13 +107,30 @@ function renderStrip(input, opts, chips, preview) {
   const issues = [...state.issues.errors, ...state.issues.warnings].filter((i) => i.nodeId === opts.stepId && i.field === opts.field);
   const hasToken = parts.some((p) => p.kind === 'token');
   chips.hidden = !hasToken;
+  const focused = chips.contains(document.activeElement) ? document.activeElement.dataset.path : null;
   chips.replaceChildren(...(hasToken ? parts.map((p) => (p.kind === 'text' ? h('span', { class: 'var-text' }, JSON.stringify(p.text)) : chip(p, input, opts, issues))) : []));
+  const list = [...chips.querySelectorAll('.var-chip')];
+  const keep = list.find((c) => c.dataset.path === focused) ?? list[0];
+  if (keep) keep.tabIndex = 0;
+  if (focused && keep) keep.focus();
   const value = opts.fieldName !== undefined ? previewOf(opts.stepId, opts.fieldName) : null;
   preview.hidden = value === null;
   preview.textContent = value === null ? '' : `Lần xem trước: ${formatSample(value)}`;
 }
 
 const stripPathLocal = (v) => v.trim().replace(/^\{\{\s*([\s\S]*?)\s*\}\}$/, '$1').trim();
+
+function chipKey(e, chips) {
+  const all = [...chips.querySelectorAll('.var-chip')];
+  const i = all.indexOf(document.activeElement);
+  if (i === -1) return;
+  const to = { ArrowRight: i + 1, ArrowDown: i + 1, ArrowLeft: i - 1, ArrowUp: i - 1, Home: 0, End: all.length - 1 }[e.key];
+  if (to === undefined) return;
+  e.preventDefault();
+  const next = all[Math.max(0, Math.min(all.length - 1, to))];
+  for (const c of all) c.tabIndex = c === next ? 0 : -1;
+  next.focus();
+}
 
 function chip(part, input, opts, issues) {
   const issue = issues.find((i) => i.path === part.path && (!i.option || i.option === opts.option));
@@ -109,7 +139,8 @@ function chip(part, input, opts, issues) {
   const src = ref?.source !== undefined ? scope.sources[ref.source] : null;
   const [name, ...rest] = part.path.split('.');
   const known = Boolean(src) && ref.code !== 'unknownName';
-  const type = ref?.viaThis ? stepById(opts.stepId)?.type : src?.nodeType;
+  // Built-ins ($n) are neutral (start colour, docs/ui-design-system.md §3); this.* takes the step's colour.
+  const type = rest[0]?.startsWith('$') ? 'start' : ref?.viaThis ? stepById(opts.stepId)?.type : src?.nodeType;
   let title;
   if (issue) title = issue.message;
   else if (!known) title = `Chưa khớp biến nào: ${part.path}`;
@@ -125,6 +156,7 @@ function chip(part, input, opts, issues) {
       class: `var-chip${issue ? (state.issues.errors.includes(issue) ? ' has-error' : ' has-warning') : ''}${known ? '' : ' unknown'}`,
       'data-type': known ? type : undefined,
       'data-path': part.path,
+      tabindex: '-1',
       title,
       onmousedown: (e) => e.preventDefault(),
       onclick: () => {
@@ -184,13 +216,14 @@ function autocomplete(input, { onlyUpdate = false } = {}) {
   if (mine) {
     open.auto = range;
     open.query = range.query;
+    if (!onlyUpdate) open.touched = true;
     open.render();
     return;
   }
-  if (!onlyUpdate) openPicker(input, { auto: range });
+  if (!onlyUpdate) openPicker(input, { auto: range, touched: true });
 }
 
-function openPicker(input, { focusSearch = false, auto = null, replace = null } = {}) {
+function openPicker(input, { focusSearch = false, auto = null, replace = null, touched = false } = {}) {
   if (open && open.input !== input) closePicker();
   const vp = input._varPicker;
   const selection = { start: input.selectionStart ?? input.value.length, end: input.selectionEnd ?? input.value.length };
@@ -209,15 +242,22 @@ function openPicker(input, { focusSearch = false, auto = null, replace = null } 
     'aria-controls': vp.listId,
     'aria-autocomplete': 'list',
   });
-  const list = h('div', { class: 'vp-list', role: 'listbox', id: vp.listId, 'aria-label': 'Biến dùng được' });
+  // The listbox holds only groups and options; the empty message and the "not usable" list
+  // sit next to it in the same scroll area. No role=dialog: it is a combobox popup, focus stays
+  // in the field or the search box.
+  const list = h('div', { role: 'listbox', id: vp.listId, 'aria-label': 'Biến dùng được' });
+  const extra = h('div');
+  const scroll = h('div', { class: 'vp-list' }, list, extra);
   const foot = h('div', { class: 'vp-foot' }, '↑↓ chọn · Enter chèn · Esc đóng');
   const hint = h('div', { class: 'vp-foot vp-hint', hidden: Boolean(state.result) }, 'Bấm ▶ Xem trước (Ctrl+Enter) để thấy giá trị mẫu.');
-  const el = h('div', { class: 'var-picker', role: 'dialog', 'aria-label': 'Chọn biến' }, search, list, foot, hint);
+  const el = h('div', { class: 'var-picker' }, search, scroll, foot, hint);
   el.addEventListener('mousedown', (e) => { if (e.target !== search) e.preventDefault(); });
   document.body.append(el);
-  open = { el, input, search, list, hint, opts: vp.opts, auto, replace, selection, query: auto?.query ?? '', active: null, items: [], searchFocused: false, hiddenOpen: false, render: null };
+  // `touched`: the user typed (e.g. "{{" in a template) or moved the selection; only then may
+  // Tab accept the active row.
+  open = { el, input, search, list, extra, scroll, hint, opts: vp.opts, auto, replace, selection, query: auto?.query ?? '', active: null, items: [], searchFocused: false, hiddenOpen: false, touched, render: null };
   open.render = () => renderList(open);
-  search.addEventListener('input', () => { open.query = search.value; open.active = null; open.render(); });
+  search.addEventListener('input', () => { open.query = search.value; open.active = null; open.touched = true; open.render(); });
   search.addEventListener('keydown', (e) => { listKey(e); }); // Ctrl+Enter falls through to the global preview shortcut
   search.addEventListener('focus', () => { open && (open.searchFocused = true); });
   search.addEventListener('blur', () => {
@@ -226,6 +266,7 @@ function openPicker(input, { focusSearch = false, auto = null, replace = null } 
     setTimeout(() => { if (open && !open.el.contains(document.activeElement) && document.activeElement !== open.input) closePicker(); }, 0);
   });
   input.setAttribute('aria-expanded', 'true');
+  input.setAttribute('aria-controls', vp.listId);
   open.render();
   position(open);
   if (focusSearch) search.focus();
@@ -245,6 +286,7 @@ export function closePicker({ focus = false } = {}) {
   open = null;
   el.remove();
   input.setAttribute('aria-expanded', 'false');
+  input.removeAttribute('aria-controls');
   input.removeAttribute('aria-activedescendant');
   document.removeEventListener('mousedown', outside, true);
   window.removeEventListener('resize', reposition);
@@ -308,17 +350,19 @@ function renderList(p) {
     ));
   }
   const hiddenShown = q ? hidden.filter((x) => x.text.toLowerCase().includes(q.toLowerCase())) : hidden;
+  const after = [];
   if (!nodes.length) {
-    nodes.push(h('div', { class: 'vp-empty' }, q
+    after.push(h('div', { class: 'vp-empty' }, q
       ? `Không có biến nào khớp "${q}".`
       : 'Chưa có biến nào dùng được ở đây. Biến đến từ: field phía trên trong bước này (this), bước Record chạy trước, hoặc bước Lặp bao quanh.'));
   }
   if (hiddenShown.length) {
     const det = h('details', { class: 'vp-hidden', open: p.hiddenOpen }, h('summary', {}, `Không dùng được ở đây (${hiddenShown.length})`), hiddenShown.map((x) => h('div', { class: 'vp-off' }, x.text)));
     det.addEventListener('toggle', () => { p.hiddenOpen = det.open; });
-    nodes.push(det);
+    after.push(det);
   }
   p.list.replaceChildren(...nodes);
+  p.extra.replaceChildren(...after);
   if (!p.items.some((x) => x.path === p.active)) p.active = p.items[0]?.path ?? null;
   highlight(p);
 }
@@ -347,6 +391,7 @@ function listKey(e) {
   const i = p.items.findIndex((x) => x.path === p.active);
   const go = (n) => {
     if (!p.items.length) return;
+    p.touched = true;
     p.active = p.items[Math.max(0, Math.min(p.items.length - 1, n))].path;
     highlight(p);
   };
@@ -360,7 +405,8 @@ function listKey(e) {
     case 'End': if (!p.searchFocused && !p.auto) return false; stop(); go(p.items.length - 1); return true;
     case 'Enter':
     case 'Tab':
-      if (e.ctrlKey || e.metaKey || !p.active) {
+      // Enter always accepts; Tab only after typing or moving the selection, Shift+Tab never.
+      if (e.ctrlKey || e.metaKey || !p.active || (e.key === 'Tab' && (e.shiftKey || !p.touched))) {
         if (e.key === 'Tab') closePicker();
         return false;
       }
