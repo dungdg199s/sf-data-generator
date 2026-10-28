@@ -78,7 +78,7 @@ Từ [0003](design/0003-process-mode.md), workflow là **cây các bước** (ve
 | `settings.maxRecords` | không | Giới hạn bản ghi mỗi lần chạy (trần cứng 200 000) |
 | `steps` | có | Dãy bước gốc, chạy từ trên xuống |
 | `steps[].id` | có | Duy nhất trong **cả cây**. Là `nodeId` trong lỗi và trong `records[]` |
-| `steps[].type` | có | `record`, `loop`, `branch` |
+| `steps[].type` | có | `record`, `query`, `pick`, `loop`, `branch` |
 | `steps[].config` | không | Cấu hình của bước (bảng dưới) |
 | `steps[].slots` | không | Chỉ cho loại bước có `slots` trong meta. Object `{ <slot key>: [bước…] }`; thiếu slot nghĩa là dãy rỗng |
 | `steps[].disabled` | không | `true`: bỏ qua bước này và mọi bước con khi chạy |
@@ -91,13 +91,19 @@ Bản cũ của app không đọc được file version 2.
 | `type` | Bước con (`slots`) | `config` |
 | --- | --- | --- |
 | `record` | – | `sobject` (API name), `alias`, `count` (mặc định 1), `fields[]` |
-| `loop` | `body` | `mode`: `fixed` (`count`) hoặc `range` (`min`, `max`); `alias` của biến lặp (mặc định `loop`) |
+| `query` ([0006](design/0006-query-pick-nodes.md)) | – | `mode`: `builder` (`sobject`, `fields[]` chuỗi tên field, `where`, `orderBy` mặc định `Id`, `limit` 1–2000 mặc định 200) hoặc `soql` (`soql`); `alias` (tên pool, bắt buộc) |
+| `pick` (0006) | – | `from` (alias của pool phía trên), `alias` (bắt buộc), `mode`: `random` \| `unique` \| `sequential`; `filter`: `none` \| `compare` (`filterField`, `filterOp`, `filterValue` nhận `{{…}}`); `onEmpty`: `skip` \| `error` |
+| `loop` | `body` | `mode`: `fixed` (`count`) hoặc `range` (`min`, `max`); `alias` của biến lặp (mặc định `loop`). Thiếu `count` = 0 lần, thiếu `max` = 1 |
 | `branch` | `true` (Đúng), `false` (Sai) | `kind`: `chance` (`probability`) hoặc `compare` (`left`, `op`, `right`) |
 
 Danh mục nằm ở `server/workflow/nodes.js` và được `GET /api/meta` trả về (`nodeTypes[]`): mỗi loại có `label`,
 `category` (`data` hoặc `control`, nhãn nhóm trong `stepCategories`), `description`, `slots` (`key`, `label`, và tùy chọn
 `empty` = nhãn nút trong ô rỗng, `hint` = dòng gợi ý dưới nút) và `options`. Thứ tự trong `slots` là thứ tự đọc
 (Đúng trước Sai). Option có `summary: true` được dùng cho dòng tóm tắt chung trên thẻ của loại bước không có tóm tắt riêng.
+`default` của option là giá trị bước dùng khi **thiếu** khóa đó (executor, inspector và thẻ đều theo nó); `initial`, nếu có,
+là giá trị của bước mới thêm từ UI (Lặp mới chạy 3 lần, `count` mặc định 0). `needsOrg: true` (Query): thẻ hiện "chưa chọn org"
+khi chưa chọn org. `/api/meta` còn có `queryPresets` (giá trị builder theo sObject: `User`, `Product2`, `Pricebook2`,
+`PricebookEntry`, `RecordType`, `Case`, `Task`, `Event`).
 
 Từ [0005](design/0005-variable-picker.md), mỗi loại bước còn khai báo cách chạy các slot và biến nó cung cấp; phân tích
 phạm vi (`analyzeScope` trong `shared/scope.js`) chỉ đọc hai khóa này, không biết riêng về `loop` hay `branch`:
@@ -133,6 +139,21 @@ chỉ thấy các field ở phía trên.
   `chance` chọn nhánh Đúng với xác suất `probability`. `compare` so sánh `left` (một đường dẫn tham chiếu; viết
   `loop.index` hay `{{loop.index}}` đều được) với `right` (giá trị cố định). Nếu cả hai là số thì so theo số, không thì so theo chuỗi.
   Phép so sánh: `eq`, `neq`, `gt`, `gte`, `lt`, `lte`, `contains`, `empty`, `notEmpty`, `divisibleBy`.
+- `query` ([0006](design/0006-query-pick-nodes.md)): executor **không** gọi org. Server đọc mọi bước Query đang bật trước
+  (theo thứ tự đọc, tuần tự; xem [org-connection.md](org-connection.md#đọc-dữ-liệu-query)) rồi đưa các dòng vào executor.
+  Mỗi lần chạy qua, bước gán pool `<alias>` = các dòng (bản ghi `existing` có `id` thật, `ref` = `accs#1`…), **không** có bản
+  ghi hiện tại, không sinh bản ghi, không dùng `rng`. Query nằm trong Lặp vẫn chỉ đọc org một lần (có cảnh báo).
+  Chưa chọn org khi xem trước: `min(LIMIT, 5)` dòng mẫu tất định (`Id` = `mẫu:accs#1`, `Name` = `Account mẫu 1`, field khác
+  `<field> mẫu 1`, `Owner.Name` thành object lồng) kèm cảnh báo.
+- `pick`: ứng viên = pool `from` lúc đó (Query: các dòng; Record: mọi bản ghi đã sinh tới lúc đó; Chọn bản ghi: mọi bản ghi
+  đã chọn). Lọc `compare`: vế trái là `filterField` của ứng viên (đường dẫn có dấu chấm), vế phải là `filterValue` thay
+  `{{…}}` như template; so sánh như Rẽ nhánh. `random` = `rng.pick`; `unique` = không lặp lại trong lần chạy; `sequential`
+  = lần lượt, quay vòng, không dùng `rng` (con trỏ riêng theo giá trị lọc). Bản ghi được chọn (chính object trong pool) thành
+  bản ghi hiện tại của `alias` và được thêm vào pool `alias`. Không có gì để chọn: `onEmpty: skip` bỏ qua phần còn lại của
+  lượt hiện tại (lên tới thân Lặp gần nhất: sang lần lặp sau; ở gốc: dừng lần chạy) và cuối lần chạy có **một** cảnh báo
+  ghi số lần bỏ qua; `error` báo lỗi gắn bước.
+- Lookup tới bản ghi `existing` (dòng Query, hoặc bản ghi chọn từ Query) cho ra **chuỗi Id thật**; bản ghi sinh ra vẫn là
+  `{ "$ref" }`. Lookup `current` vào alias của Query là lỗi (pool không có bản ghi hiện tại).
 - Bản ghi đã sinh (`<alias>` hiện tại và danh sách mọi bản ghi của alias) dùng chung cho cả lần chạy; biến lặp theo phạm vi.
 - Thứ tự gọi `rng` giống executor version 1, nên workflow v1 chuyển sang v2 sinh đúng dữ liệu cũ với cùng seed, **trừ ở các
   bước bị nhân bản** khi chuyển (xem [Version 1 (cũ) và chuyển đổi](#version-1-cũ-và-chuyển-đổi)): bản sao có trạng thái riêng.
@@ -146,11 +167,16 @@ chỉ thấy các field ở phía trên.
 | `this.$n` | Số thứ tự của bản ghi đang sinh: `n` trong `<alias>#n` (đếm theo alias, từ 1) |
 | `<alias>.Field` | Field của bản ghi hiện tại của bước record có alias đó. Field kiểu Geolocation có member con: `<alias>.Loc.latitude` |
 | `<alias>.$n` | `n` của bản ghi hiện tại của alias đó |
+| `<pool>.$count` | Số bản ghi của pool (Query: số dòng đọc được) |
+| `<pick>.Field` | Field của bản ghi bước Chọn bản ghi vừa chọn; field quan hệ của Query lồng được: `acc.Owner.Name` |
 | `<loopAlias>.index` / `.index0` / `.count` | Biến lặp (từ 1 / từ 0 / tổng số lần) |
 
 Template dùng `{{path}}` (regex `\{\{\s*([\w.$]+)\s*\}\}`, khai báo một lần ở `shared/scope.js` và gửi qua
 `meta.syntax.templateToken`). Field và biến lặp so khớp **có phân biệt hoa thường**, giống lúc chạy.
-Alias của bước record phải là duy nhất trên **cả cây** (kể cả bước đang tắt), không trùng tên biến lặp và không được là `this`.
+Alias của Record, Query và Chọn bản ghi dùng **chung một không gian tên**: duy nhất trên **cả cây** (kể cả bước đang tắt),
+không trùng tên biến lặp và không được là `this`. Query và Chọn bản ghi bắt buộc có alias (Record thiếu alias thì dùng `id`).
+Alias của Query là pool nên không có bản ghi hiện tại: chỉ dùng được trong Lookup "Ngẫu nhiên trong pool", `from` của Chọn
+bản ghi và `{{accs.$count}}`; `{{accs.Name}}` là lỗi `noCurrent`.
 
 ### Phạm vi biến (`analyzeScope`)
 
@@ -200,6 +226,14 @@ Tham chiếu hỏng là **lỗi** (chặn Xem trước và Insert, HTTP 422 khi 
 | `openMember` | cảnh báo | Field lạ của nguồn có `open: true` |
 | `unclosed` | cảnh báo | Template có `{{` không thành token, sẽ được giữ nguyên là chữ |
 | `wrongSobject` | cảnh báo | Lookup có `referenceTo` (điền khi Import từ org) nhưng bước cha sinh sObject khác |
+| `currentOfPool` | lỗi | Lookup "Bản ghi hiện tại" trỏ vào alias của Query (0006) |
+
+Kiểm tra riêng của Query và Chọn bản ghi (0006, câu chữ theo bảng "Thông báo" của doc đó, "node" đổi thành "bước"):
+Query builder (`sobject`, `fields` là API name hoặc `Owner.Name`, `limit` 1–2000, không `{{…}}`, không ORDER BY/LIMIT trong
+`where`, không LIMIT trong `orderBy`), SOQL (`notSelect`, `noFrom`, `forClause`, `template` là lỗi; `noOrderBy`, `noId`,
+`subquery` là cảnh báo), quá 20 bước Query (lỗi ở bước thứ 21), `queryInLoop` và `poolUnused` (cảnh báo), alias thiếu; Chọn
+bản ghi thiếu `from`, thiếu `filterField` khi lọc. `from` không dùng được ở đây dùng mã của phạm vi (`unknownName`, `after`,
+`otherBranch`, `disabled`) với câu nói về "pool". Template dùng field mà Query không lấy là lỗi `unknownMember` (0007).
 
 Câu thông báo đúng như bảng "Thông báo lỗi" của [0005](design/0005-variable-picker.md) (đổi "node" thành "bước").
 
@@ -231,11 +265,22 @@ Câu thông báo đúng như bảng "Thông báo lỗi" của [0005](design/0005
   Lặp có thêm `iterations` (tổng số lần lặp), Rẽ nhánh có thêm `true` / `false` (số lần đi mỗi nhánh). Bước tắt và bước
   chưa chạy lần nào không có mục. UI hiện các số này thành chip trên thẻ (`12 bản ghi`, `15 lần lặp`, `Đúng 4 · Sai 8`).
 - `insert` chỉ có khi request gửi `target: { "kind": "org", "org": "<alias hoặc username>" }`.
+- `queries` (0006): mỗi bước Query đã đọc `{ nodeId, alias, sobject, soql, org, source: "org" | "cache" | "sample",
+  fetchedAt, count, totalSize, truncated, fingerprint, fields, records }`. Các dòng này **không** nằm trong `records`/`stats`
+  và không bao giờ được insert. `samples`: bản ghi đầu tiên mỗi bước Chọn bản ghi đã chọn (giá trị mẫu cho bảng chọn biến).
+  `stats.byStep` của Query có `rows`, của Chọn bản ghi có `picked` và `skipped`.
+
+Request `/api/run` có thêm: `org` (org để Query đọc khi **xem trước**; bị bỏ qua khi có `target` vì lúc insert Query luôn đọc
+`target.org`; không có thì dùng dòng mẫu), `refreshQueries` (`true`: bỏ qua cache, đọc lại org), `expectQueries`
+(`{ <nodeId>: fingerprint }` hoặc `{ <nodeId>: { fingerprint, count, fetchedAt } }` của lần xem trước; khác thì **409**
+`{ error, issues }` và không ghi gì). Lỗi Salesforce do config Query sai (`INVALID_TYPE`, `INVALID_FIELD`, `MALFORMED_QUERY`,
+`INVALID_QUERY_FILTER_OPERATOR`, quá 30 giây) là 422 với issue gắn đúng ô; lỗi Salesforce khác là 502 kèm `issues: [{ nodeId }]`.
 
 Lỗi validate trả về HTTP 422: `{ "error": "...", "issues": [{ "message", "nodeId", "field" }] }`.
 Issue về tham chiếu biến có thêm `code`, `path` (đường dẫn bị lỗi, ví dụ `acc.Nmae`), `option` (khóa option chứa nó, ví dụ
 `template`, `left`, `ref`) và có thể có `suggestion: { option, from, to }` (UI hiện nút "Sửa thành {{acc.Name}}").
-`POST /api/validate` trả `{ errors, warnings }` cùng dạng; phạm vi biến không gửi kèm vì trình duyệt tự tính bằng `shared/scope.js`.
+`POST /api/validate` trả `{ errors, warnings, derived }`; phạm vi biến không gửi kèm vì trình duyệt tự tính bằng `shared/scope.js`.
+`derived[<id>]` (0006): Query `{ soql, sobject, fields }` (câu SOQL server sẽ chạy), Chọn bản ghi `{ sobject, fields, from }`.
 `nodeId` là id bước. `field` có dạng `alias`, `count`, … cho option của bước; `fields.<Name>` cho field của record;
 `slots.<key>` cho một ô bước con (ví dụ `slots.body`: vòng lặp chưa có bước nào). Lỗi không gắn với bước nào thì không
 có `nodeId`.

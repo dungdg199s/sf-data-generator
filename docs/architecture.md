@@ -23,15 +23,17 @@ Trình duyệt (client/)                         Server Node.js (server/)
 2. Người dùng dựng các bước ở chế độ Quy trình (chế độ Sơ đồ là đợt B của [0003](design/0003-process-mode.md), chưa làm).
    Mỗi lần sửa, UI gọi `POST /api/validate` (debounce 400 ms) để hiện lỗi/cảnh báo gắn đúng bước, field và ô bước con.
 3. Khi bấm **Xem trước** hoặc **Insert vào org**, UI gửi toàn bộ workflow JSON lên `POST /api/run`.
-   Server validate lại, chạy executor, và nếu `target.kind === 'org'` thì insert.
+   Server validate lại, **đọc trước** các bước Query (`server/sf/query.js` qua jsforce `conn.query`, hoặc dòng mẫu khi chưa
+   chọn org; cache 10 phút và dấu vân tay, [0006](design/0006-query-pick-nodes.md)), chạy executor với các dòng đó
+   (`queryResults`), và nếu `target.kind === 'org'` thì insert.
 
 ## Các phần ở server
 
 | Thư mục | Trách nhiệm | Ghi chú |
 | --- | --- | --- |
 | `server/generators/` | Mỗi kiểu field Salesforce một generator, tự khai báo option | Registry trong `index.js`; xử lý chung `nullRatio`/`unique` |
-| `server/workflow/` | Danh mục loại bước, validate, chạy workflow | Executor là hàm thuần: không I/O, không gọi org. Nhận cả v1 (chuyển sang v2 trước) |
-| `server/sf/` | sf CLI (chỉ lấy token), jsforce connection, map describe → field, insert | Không lưu credential; token chỉ giữ trong bộ nhớ |
+| `server/workflow/` | Danh mục loại bước, validate, chạy workflow | Executor là hàm thuần: không I/O, không gọi org; dữ liệu Query được đọc trước ở `server/sf/query.js` và truyền vào. Nhận cả v1 (chuyển sang v2 trước) |
+| `server/sf/` | sf CLI (chỉ lấy token), jsforce connection, map describe → field, đọc trước Query (cache, dấu vân tay), insert | Không lưu credential; token và dòng đã đọc chỉ giữ trong bộ nhớ |
 | `server/random.js` | PRNG có seed (mulberry32) | Cùng workflow + seed ⇒ cùng dữ liệu |
 
 ## Module dùng chung (`shared/`)
@@ -43,6 +45,7 @@ thư mục này ở `/shared/…` với cùng cách chặn path traversal như `
 | --- | --- |
 | `shared/workflow-tree.js` | Duyệt/tìm bước, chèn, di chuyển, xóa (bỏ vỏ), bọc, nhân bản (đổi alias nội bộ), đổi alias và tên field kéo theo tham chiếu (`renameAlias`, `setStepAlias`, `renameField`, theo mọi option có `vars`/`kind: 'ref'`), quy tắc chèn mặc định, đích của Alt+↑/↓ |
 | `shared/migrate-v1.js` | Chuyển workflow v1 (đồ thị) sang v2 (cây) và mô tả báo cáo chuyển đổi |
+| `shared/soql.js` | SOQL của bước Query ([0006](design/0006-query-pick-nodes.md)): dựng câu từ builder, đọc danh sách field / sObject của SOQL tự viết, kiểm tra chỉ đọc (`checkSoql`, `checkBuilder`), dòng mẫu khi chưa chọn org |
 | `shared/scope.js` | `analyzeScope(wf, catalog)` ([0005](design/0005-variable-picker.md)): nguồn biến, biến dùng được ở từng bước (`always`/`last`/`maybe`) và lý do bị ẩn (`after`/`otherBranch`/`outsideLoop`/`shadowed`/`disabled`), mọi tham chiếu đã phân giải; `refChoices` cho ô "Bản ghi cha"; regex token `{{…}}` (`TEMPLATE_TOKEN_SOURCE`) |
 
 Thứ tự slot được truyền vào qua tham số `slotKeys(type)`: server lấy từ `nodeTypeMap`, client lấy từ `state.meta`.
@@ -80,6 +83,10 @@ Thứ tự slot được truyền vào qua tham số `slotKeys(type)`: server l�
 | `maxCountPerNode` | 100 000 | Số lần lặp / số bản ghi tối đa của một node |
 | `maxSteps` | 2 000 000 | Chặn workflow lặp lồng nhau chạy quá lâu |
 | `maxDepth` | 32 | Số cấp Lặp / Rẽ nhánh lồng nhau tối đa |
+| `maxQueryRows` | 2 000 | LIMIT tối đa và `maxFetch` của một bước Query |
+| `maxQueryNodes` | 20 | Số bước Query tối đa mỗi workflow |
+| `queryTimeoutMs` | 30 000 | Thời gian tối đa của một query |
+| `queryCacheTtlMs` | 600 000 | Thời gian dùng lại dòng đã đọc (10 phút); cache tối đa 50 mục |
 
 Migration v1 cũng giới hạn số bước nhân bản (`2 × số node + 50`) để workflow hiểm hóc không làm treo trình duyệt.
 
@@ -95,7 +102,7 @@ Migration v1 cũng giới hạn số bước nhân bản (`2 × số node + 50`)
 | `client/js/forms.js` | Dựng form từ option schema (`showIf`, các `kind`); gắn bảng chọn biến cho option có `vars` |
 | `client/js/var-picker.js` | Bảng chọn biến (nút `{x}`, gõ `{{`, Ctrl+Space), tìm kiếm, phím tắt, ARIA, chèn bằng `execCommand('insertText')`; dải chip dưới ô và dòng "Lần xem trước" |
 | `client/js/variables.js` | Dữ liệu cho bảng chọn: nhóm biến theo bước từ `currentScope()` và meta (nhóm `this` dựng từ thứ tự field hiện tại), giá trị mẫu từ lần xem trước, chỗ đang dùng một biến (toast khi xóa/đổi tên) |
-| `client/js/results.js` | Bảng kết quả theo sObject, lỗi insert, tải JSON/CSV |
+| `client/js/results.js` | Bảng kết quả theo sObject, tab chỉ đọc `↓ alias` cho dòng Query đã đọc, "⟳ Đọc lại", lỗi insert, tải JSON/CSV |
 | `client/js/main.js` | Khởi động, toolbar, phím tắt, validate trực tiếp, chạy/insert |
 | `client/js/theme.js` | Nút chuyển giao diện Sáng / Tối / Theo hệ thống: `data-theme` trên `<html>`, nhớ trong `sfdg.theme`; script thường trong `<head>` để áp dụng trước lần vẽ đầu |
 | `client/js/dom.js` | Helper DOM `h()`, toast, tải file, `icoTile()` (ô icon loại bước) |

@@ -30,10 +30,11 @@ Option chung (registry tự thêm, generator không cần khai báo):
 | `date` | Date | `from`, `to` | `YYYY-MM-DD` |
 | `datetime` | Date/Time | `from`, `to` | ISO 8601 UTC |
 | `time` | Time | `from`, `to` (HH:MM), `stepMinutes` | `HH:MM:00.000Z` |
-| `lookup` | Lookup Relationship | `mode` (current, random, fixed), `ref` (Bản ghi cha), `ids`, `referenceTo` (sObject mà field trỏ tới, điền khi Import từ org; lọc danh sách Bản ghi cha và cảnh báo khi chọn bước sinh sObject khác). Bản ghi cha phải ở phía trên (xem [workflow-schema.md](workflow-schema.md#phạm-vi-biến-analyzescope)) | `{ "$ref": "acc#3" }` hoặc Id có sẵn |
+| `lookup` | Lookup Relationship | `mode`: `current` "Bản ghi hiện tại của alias", `random` "Ngẫu nhiên trong pool (đã sinh hoặc đọc từ org)", `fixed` "Id nhập tay"; `ref` "Bản ghi cha / pool (alias)": alias của bước Record, Query hoặc Chọn bản ghi ở phía trên ([0006](design/0006-query-pick-nodes.md); `current` không dùng được với Query vì pool không có bản ghi hiện tại); `ids`; `referenceTo` (sObject mà field trỏ tới, điền khi Import từ org; lọc danh sách Bản ghi cha và cảnh báo khi chọn bước sinh sObject khác). Bản ghi cha phải ở phía trên (xem [workflow-schema.md](workflow-schema.md#phạm-vi-biến-analyzescope)) | `{ "$ref": "acc#3" }` với bản ghi được sinh; **chuỗi Id thật** với bản ghi đọc từ org (Query, hoặc Chọn bản ghi từ Query); Id nhập tay với `fixed` |
 | `masterdetail` | Master-Detail | như `lookup`; báo lỗi nếu chưa có bản ghi cha | như trên |
 | `geolocation` | Geolocation | `latMin`, `latMax`, `lngMin`, `lngMax`, `scale` | `{ latitude, longitude }` (khi insert tách thành `X__Latitude__s` / `X__Longitude__s`) |
 | `template` | (ghép giá trị) | `template` (`vars: 'template'`, có bảng chọn biến) với `{{this.F}}`, `{{alias.F}}`, `{{loop.index}}`, `{{this.$n}}`, `{{alias.$n}}`. Mặc định `{{this.$n}}` (ra `1`, `2`, `3`…). Tham chiếu hỏng hoặc ngoài phạm vi là lỗi validate | chuỗi |
+| `copy` | Lấy từ biến (giữ kiểu) | `path` (`vars: 'path'`, mặc định `this.$n`): một biến, ví dụ `pbe.UnitPrice`. Khác Template (luôn ra chuỗi), giá trị giữ nguyên kiểu: số, đúng/sai, Id (0007: "giữ kiểu số khi lấy từ tham chiếu") | giá trị của biến (null nếu không có) |
 | `constant` | (cố định) | `value` (không nhận biến; muốn ghép biến thì dùng Template) | chuỗi |
 
 Mốc thời gian (`from`/`to` của date/datetime) nhận `YYYY-MM-DD`, ISO đầy đủ, hoặc mốc tương đối:
@@ -79,7 +80,15 @@ Khóa thêm của option ([0005](design/0005-variable-picker.md)):
 - `vars: 'template' | 'path'`: option nhận biến. UI gắn bảng chọn biến (nút `{x}`, gõ `{{`, Ctrl+Space) và dải chip;
   validate kiểm tra mọi tham chiếu trong option đó.
 - `accepts` (chỉ với `kind: 'ref'`, không bắt buộc): lọc nguồn theo cờ của `exposes`, ví dụ `{ "pool": true }`. Mặc định
-  là mọi nguồn có `lookupParent: true`.
+  là mọi nguồn có `lookupParent: true`. `placeholder` / `empty` (không bắt buộc): chữ của dòng trống khi có / chưa có
+  nguồn nào (Chọn bản ghi: `— chọn pool —` / `— chưa có pool nào —`).
+- `suggest` ([0006](design/0006-query-pick-nodes.md)): trợ giúp lấy **từ org** (khác `vars` là biến trong workflow); khi chưa
+  chọn org thì không có gợi ý, nút bị khóa với title `Chọn org ở thanh trên trước`.
+  `{ kind: 'sobject', purpose: 'query' | 'create' }` → datalist sObject (`GET /api/orgs/:org/sobjects?for=query` hoặc danh
+  sách createable); `{ kind: 'fields', sobjectKey }` → nút "Chọn field…" (`GET /api/orgs/:org/sobjects/:name/fields`);
+  `{ kind: 'poolFields', poolKey }` → datalist field của pool (từ `members` của nguồn trong `analyzeScope`).
+- `initial` (option của bước): giá trị khi thêm bước mới từ UI; `default` là giá trị khi thiếu khóa (xem
+  [workflow-schema.md](workflow-schema.md#bước)). `rows` / `monospace` cho `kind: 'text'` (ô SOQL).
 
 `GET /api/meta` trả thêm `syntax: { templateToken, valueTypes: [{ value, label }] }` (nhãn tiếng Việt của `valueType`).
 

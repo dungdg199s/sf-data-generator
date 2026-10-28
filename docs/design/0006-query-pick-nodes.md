@@ -1,6 +1,6 @@
 # 0006 — Node Query và Chọn bản ghi: dùng bản ghi có sẵn trong org
 
-- **Trạng thái:** Đã duyệt (2026-10-27, xem [0007](0007-tong-hop-0003-0006.md))
+- **Trạng thái:** Đã làm (duyệt 2026-10-27, xem [0007](0007-tong-hop-0003-0006.md); làm trên cây v2 của 0003 và hợp đồng `exposes` của 0005, xem [Đã làm](#đã-làm))
 - **Ngày:** 2026-10-27
 - **Liên quan:** [0001](0001-workflow-editor-ux.md) (việc tiếp theo "Lookup tới bản ghi có sẵn trong org bằng SOQL"),
   [0002](0002-jsforce-api.md) (`conn.query` đã có sẵn trong jsforce), [0003](0003-process-mode.md) (chế độ Quy trình, JSON v2),
@@ -917,4 +917,86 @@ Theo bảng đồng bộ hợp đồng trong `.claude/agents/implementer.md` và
 
 ## Đã làm
 
-(Chưa làm. Khi code xong thì cập nhật commit hoặc PR, chỗ nào khác với thiết kế và vì sao.)
+Đợt 4 của [0007](0007-tong-hop-0003-0006.md), làm **sau** 0003 đợt A và 0005, nên mọi chỗ viết cho đồ thị v1 được chuyển sang
+cây v2: Query và Chọn bản ghi là bước thường trong `steps`/`slots` (`category: 'data'`, `slots: []`), thêm bằng palette hoặc
+menu "+" của chế độ Quy trình (không có canvas), pre-fetch duyệt mọi bước Query **không tắt** theo thứ tự đọc.
+
+Commit trên nhánh `claude/salesforce-data-generator-xt3u27`:
+
+| Commit | Nội dung |
+| --- | --- |
+| `aa9c8ba` Add Query and Chọn bản ghi steps: SOQL helpers, validation, executor and pre-fetch | Bước 1–7: `shared/soql.js`, danh mục + `LIMITS` + `QUERY_PRESETS`, validate, executor, `server/sf/query.js` (pre-fetch, cache, dấu vân tay, ánh xạ lỗi), `client.query`, endpoint, field type "Lấy từ biến", sửa mặc định số lần lặp; test |
+| `f181163` Add the Query and Chọn bản ghi UI | Bước 8–11: inspector, Import từ org, forms (`suggest`), kết quả, hộp xác nhận, 409, mẫu mới, smoke test luồng 5c |
+| (commit tài liệu) | Bước 12: `workflow-schema.md`, `field-types.md`, `org-connection.md`, `architecture.md`, `ui-design-system.md`, `CLAUDE.md` (mức kiến trúc), skill `add-node-type`/`smoke-test`, doc này, 0007, README |
+
+**Đã có:** mọi mục của kế hoạch 1–12, gồm cả câu hỏi mở 8 (0007: "Có", xem quyết định 12) và các quyết định nhỏ của 0007
+(cache 10 phút + "⟳ Đọc lại", 409, `onEmpty` mặc định "Bỏ qua", 2 000 dòng mỗi Query).
+
+**Khác với thiết kế, và quyết định ở chỗ doc chưa rõ** (theo đề xuất của doc này hoặc 0007):
+
+1. **Hàm SOQL ở `shared/soql.js`**, không phải `server/workflow/soql.js`: `analyzeScope` (ở `shared/`) cần `selectFields`
+   cho member của Query (0005 đã ghi "nếu `analyzeScope` ở `shared/` thì `selectFields` cũng phải đặt ở `shared/`"). Vì vậy dòng
+   "SOQL sẽ chạy" dùng thẳng `buildSoql` (cùng hàm server chạy, hiện ngay khi gõ). `/api/validate` vẫn trả `derived` đúng dạng
+   doc (Query: `soql`, `sobject`, `fields`; Chọn bản ghi: `sobject`, `fields`, `from`, lấy từ `scope.sources`).
+2. **Hợp đồng nguồn theo 0005/0007**, không theo bản nháp này: Query là `kind: 'record'`, `current: 'none'`, `pool: true`,
+   `origin: 'org'`, `members: 'select'`, builtin `$count`; Chọn bản ghi `current: 'picked'`, `members`/`label`/`origin` =
+   `{ fromSource: 'from' }`. Không có `kind: 'pool'`/`lookupTarget` (giả định 2 của [0010](0010-lap-theo-ban-ghi.md)). Chọn bản ghi
+   **không** kế thừa builtin (`$count`, `$n`) của nguồn (giả định 7 của 0010); kế thừa `open` của Query có `FIELDS(...)`.
+3. **Pool của Query trong executor** đúng như giả định 4 của 0010: `scope.all[alias]` là mảng dựng một lần mỗi lần chạy, mỗi
+   phần tử `{ ref: 'accs#1', sobject, alias, nodeId, id, existing: true, fields }`; Query không đặt `scope.current`.
+4. **Pool giữ bản ghi đầy đủ** (mâu thuẫn 1 của 0007): 0004 chưa làm nên mọi pool vẫn giữ bản ghi đầy đủ như trước. Khi làm 0004,
+   alias là `from` của một Chọn bản ghi (và của Lặp `each` của 0010) phải giữ bản ghi đầy đủ; test `pick from a record pool keeps
+   $ref` khóa hành vi này.
+5. **"Bỏ qua các bước phía sau" trên cây:** dừng phần còn lại của lượt hiện tại **tới thân Lặp gần nhất** (sang lần lặp sau),
+   đi xuyên qua Rẽ nhánh; ở dãy gốc thì dừng lần chạy. Cách này giống "chuỗi phía sau" của đồ thị v1 (chuỗi đi qua điểm gộp tới
+   hết thân vòng lặp). Option có thêm help `Bỏ qua: các bước còn lại của lượt này không chạy (trong Lặp thì sang lần lặp sau).`
+6. **Template dùng field Query không lấy là lỗi** `unknownMember` (0007 mâu thuẫn 3), câu của doc này:
+   `Field "Title": Template dùng {{acc.Industry}} nhưng Query "accs" không lấy field Industry. Thêm Industry vào "Field cần lấy" của bước Query.`
+   (với Chọn bản ghi, câu nêu tên Query gốc). Nút sửa nhanh "Thêm `<Field>` vào SELECT" chưa làm.
+7. **Câu chữ:** "node" đổi thành "bước" ở mọi câu của bảng "Thông báo". Thêm hoặc chỉnh:
+   - `Pool "accs" phải nằm phía trước bước này trong workflow. Kéo bước "accs" lên phía trên hoặc chọn pool khác.` (thêm cách sửa);
+     `unknownName`/`otherBranch`/`disabled` của `from` dùng câu "pool" của 0010 để Lặp `each` dùng chung;
+   - `{{accs.Name}}` (`noCurrent`) đổi sang câu của doc này, thay câu tạm của 0005; gợi ý alias bỏ chữ `s` cuối (`acc`);
+   - LIMIT trong ô ORDER BY: `Đặt LIMIT ở ô "Số bản ghi tối đa (LIMIT)", không viết trong "Sắp xếp (ORDER BY)".`; `FOR UPDATE`
+     viết trong WHERE dùng câu `forClause` gắn ô `where`; `MALFORMED_QUERY`/`INVALID_QUERY_FILTER_OPERATOR` ở chế độ SOQL nói
+     `Kiểm tra ô "SOQL"`; tên field lỗi trong `pick.filterField`: `Field "x" không hợp lệ. Dùng API name; field quan hệ viết Account.Type.`;
+   - tên biến lặp trùng alias nói rõ loại bước (`… trùng alias của một bước Query (đọc org)`);
+   - quá 30 giây là lỗi 422 gắn bước Query (không phải 502), vì người dùng sửa được bằng WHERE.
+8. **`expectQueries`** nhận chuỗi fingerprint (như doc) hoặc `{ fingerprint, count, fetchedAt }`; UI gửi dạng object để câu 409
+   ghi được "lúc xem trước có 200 bản ghi (đọc 10:32)". Lỗi CLI (org chưa đăng nhập) khi xem trước thêm câu "Hoặc chọn
+   "— không kết nối —"…" và `issues: [{ nodeId }]`. Lỗi có `issues` (409, 502 của Query) được gửi kèm `issues`.
+9. **Cache** khóa theo `(org, SOQL, maxFetch)` (thêm `maxFetch` để Query SOQL không LIMIT với trần khác không dùng nhầm).
+10. **Hộp "Chọn field…"** giữ lại các đường dẫn gõ tay mà describe không liệt kê (ví dụ `Account.Owner.Name`) ở cuối danh sách,
+    để không mất công sức (nguyên tắc 5). Danh sách mới là một bước undo riêng.
+11. **Import từ org:** mỗi sObject chọn qua "＋ … có sẵn" thêm **một** Query (theo preset) ở đầu `steps` gốc, cùng bước undo với
+    field; parent là Query thì `mode: 'random'`. Thứ tự chọn sẵn đúng như doc (Record/Chọn bản ghi khớp → Query khớp → "＋").
+12. **Câu hỏi mở 8 (giữ kiểu số):** làm field type mới `copy` "Lấy từ biến (giữ kiểu)" (option `path`, `vars: 'path'`, mặc định
+    `this.$n`), không đổi hành vi của Template (Template vẫn luôn ra chuỗi).
+13. **Thẻ Query khi chưa chọn org:** nhãn ngắn `chưa chọn org` (title đầy đủ "Chưa chọn org: Xem trước dùng bản ghi mẫu…") vì
+    câu dài che mất tóm tắt trên thẻ hẹp. Chip số liệu: `200 bản ghi đọc từ org` / `5 bản ghi mẫu`; Chọn bản ghi: `chọn 20 lần · bỏ qua 7`.
+14. **Đổi sObject của Query:** áp preset cho ô còn ở mặc định/preset cũ; không có preset mà có org thì sau 0,5 giây lấy
+    `nameField` từ `/fields` (chỉ khi sObject có trong danh sách queryable), không tạo bước undo riêng.
+15. **Giá trị mẫu cho bảng chọn biến** (0005 chờ 0006): Query lấy từ `queries[].records[0]`, Chọn bản ghi từ `samples` (khóa mới
+    của kết quả `/api/run`: bản ghi đầu tiên mỗi bước Chọn bản ghi đã chọn).
+16. **Hộp xác nhận insert** trước đây in chữ `null` khi không có cảnh báo production (lỗi cũ của `replaceChildren`); đã sửa.
+17. **Sửa nhỏ đi kèm (yêu cầu riêng):** inspector hiện 3 cho một Lặp v2 viết tay không có `count`, còn executor chạy `count ?? 0`.
+    Chọn theo `workflow-schema.md` (migration ghi rõ "`count: 0` — giá trị executor dùng"): giữ executor, đổi ý nghĩa `default`
+    của option thành "giá trị khi thiếu khóa" (`count` 0, `max` 1 — `max` cũng lệch: hiện 5, chạy 1), thêm `initial` (3, 5) cho
+    bước mới thêm từ UI. Test `a v2 loop without "count" runs 0 times…` và kiểm tra meta.
+
+**Test:** thêm `test/soql.test.js` (6 test); `test/workflow.test.js` (Query pool và Id thật, Query không dùng rng, ba cách chọn
+tái lập theo seed, lọc theo `{{acc.Id}}`, `onEmpty`, pool Record giữ `$ref`, validate Query/Chọn bản ghi, template field không
+lấy, Lookup `current` vào pool, alias chung, field type `copy`, mặc định số lần lặp); `test/sf.test.js` (client.query + timeout,
+pre-fetch không org, đọc tuần tự + cảnh báo 0 dòng / bị cắt, ánh xạ lỗi, cache, 409, Id có sẵn gửi ngay đợt đầu,
+`mapQueryFields`); `test/jsforce.test.js` (jsforce thật theo `nextRecordsUrl`, dừng ở `maxFetch`, không `queryAll`);
+`test/server.test.js` (`/api/run` có Query, mẫu khi không org, 422 trên ô, insert dùng lại dòng đã xem / 409, hai endpoint mới,
+`derived`, meta 0006); `test/scope.test.js` và `test/workflow-tree.test.js` (danh mục thật, đổi tên kéo theo `from`/`filterValue`,
+nhân bản). Hai test cũ **được sửa có chủ đích**: phép kiểm meta trong `test/server.test.js` (danh sách bước thêm `query`, `pick`;
+nhãn `ref` mới), và `test/samples.test.js` (có mẫu thứ ba không có bản v1; thêm test mẫu đó xem trước được không cần org).
+Tổng 173 test, đều qua. Smoke test thêm luồng 5c: `SMOKE OK` (~8,5 giây, dưới trần 10 giây).
+
+**Chưa làm / để sau:**
+
+- Nút sửa nhanh "Thêm `<Field>` vào SELECT" cho lỗi template dùng field Query không lấy.
+- Sự kiện tiến độ `Đang đọc Query…` và `queries[]` trong sự kiện đầu khi chạy dạng stream (0004).
+- Lặp "mỗi bản ghi trong pool" ([0010](0010-lap-theo-ban-ghi.md)), chọn N bản ghi / trọng số, Update/Upsert/Delete.

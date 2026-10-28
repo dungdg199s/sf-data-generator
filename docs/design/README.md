@@ -16,7 +16,7 @@ viết và cập nhật các file này theo skill `design-doc`; người viết 
 | [0003](0003-process-mode.md) | Chế độ Quy trình (kiểu Power Automate), workflow JSON v2 dạng cây | Đã duyệt (đợt A đã làm, đã sửa sau review) |
 | [0004](0004-streaming-execution.md) | Chạy dạng luồng: nghiên cứu khả thi và thiết kế | Đã duyệt |
 | [0005](0005-variable-picker.md) | Quét và chọn biến từ UI | Đã làm |
-| [0006](0006-query-pick-nodes.md) | Node Query và Chọn bản ghi | Đã duyệt |
+| [0006](0006-query-pick-nodes.md) | Node Query và Chọn bản ghi | Đã làm |
 | [0007](0007-tong-hop-0003-0006.md) | Tổng hợp 0003–0006: mâu thuẫn, thứ tự triển khai, quyết định cần chốt | Đã duyệt |
 | [0008](0008-ui-design-system.md) | Chuẩn hoá bảng màu và phong cách UI (design system) | Đã làm |
 | [0009](0009-bo-cuc-man-hinh.md) | Bố cục màn hình: danh sách lỗi, thanh trên, bottom sheet, panel kết quả | Đã duyệt |

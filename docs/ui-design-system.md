@@ -108,8 +108,8 @@ Mỗi loại có 4 token. Thành phần không dùng trực tiếp `--step-recor
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `start` | Bắt đầu | ▷ play | gray | `#6e757f` / `#808790` | `#e8ebf0` / `#292e35` | gray-200 / gray-700 | `#3d434b` / `#d8dde3` |
 | `record` | Record | ⊞ ô vuông có dấu + | teal | `#078e7d` / `#40d9c1` | `#e8faf5` / mix 10% | `#c8f2e9` / mix 20% | `#05675a` / `#8be5d3` |
-| `query` (dự kiến, 0006) | Query (đọc org) | trụ dữ liệu + kính lúp | cyan | `#057da0` / `#54c1e3` | `#e9f8ff` / mix 10% | `#cbeffe` / mix 20% | `#00617d` / `#98ddf5` |
-| `pick` (dự kiến, 0006) | Chọn bản ghi | ◎ hồng tâm | olive | `#656902` / `#b4d35c` | `#f5f7e8` / mix 10% | `#e8ebc9` / mix 20% | `#5a5d04` / `#c5dc8e` |
+| `query` (0006) | Query (đọc org) | trụ dữ liệu + kính lúp | cyan | `#057da0` / `#54c1e3` | `#e9f8ff` / mix 10% | `#cbeffe` / mix 20% | `#00617d` / `#98ddf5` |
+| `pick` (0006) | Chọn bản ghi | ◎ hồng tâm | olive | `#656902` / `#b4d35c` | `#f5f7e8` / mix 10% | `#e8ebc9` / mix 20% | `#5a5d04` / `#c5dc8e` |
 | `loop` | Lặp | ⟲ hai mũi tên vòng | violet | `#6941a1` / `#b484e8` | `#f6f3ff` / mix 10% | `#ebe3ff` / mix 20% | `#663e9e` / `#dec3fe` |
 | `branch` | Rẽ nhánh | nhánh tách đôi | magenta | `#b33879` / `#f08dba` | `#fef1f6` / mix 10% | `#ffddeb` / mix 20% | `#981c62` / `#ffbad7` |
 

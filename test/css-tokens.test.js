@@ -16,8 +16,8 @@ const [TOKENS_RAW, COMPONENTS_RAW] = CSS.split(MARKER);
 const TOKENS = stripComments(TOKENS_RAW);
 const COMPONENTS = stripComments(COMPONENTS_RAW ?? '');
 
-// Step types the UI draws: the server's types, the synthetic Start card, and the planned
-// Query / Chọn bản ghi steps of design doc 0006 (their tokens and icons are ready).
+// Step types the UI draws: the server's types (Query / Chọn bản ghi of design doc 0006 included)
+// and the synthetic Start card.
 const TYPES = [...new Set(['start', ...NODE_TYPES.map((t) => t.type), 'query', 'pick'])];
 
 const PRIMITIVE = /^--(?:gray|blue|red|amber|green|teal|cyan|olive|violet|magenta)-\d+$/;
