@@ -55,7 +55,8 @@ test('GET /api/meta lists field types and step types with slots and categories',
   assert.equal(ref.label, 'Bản ghi cha / pool (alias)');
   // Variables (0005): every step type says how its slots run; record and loop expose variables.
   assert.deepEqual(meta.nodeTypes.map((n) => n.flow.kind), ['sequence', 'sequence', 'sequence', 'loop', 'branch']);
-  assert.deepEqual(meta.nodeTypes.map((n) => n.exposes?.kind ?? null), ['record', 'record', 'record', 'vars', null]);
+  // `exposes` may be a list (0010: the loop's variables, then the record of an each-loop).
+  assert.deepEqual(meta.nodeTypes.map((n) => [n.exposes ?? []].flat().map((x) => x.kind).join('+') || null), ['record', 'record', 'record', 'vars+record', null]);
   assert.ok(meta.nodeTypes.every((n) => Object.values(n).every((v) => typeof v !== 'function')));
   const loopType = meta.nodeTypes.find((n) => n.type === 'loop');
   assert.ok(!('minIterations' in loopType), 'function keys are not served');
@@ -67,6 +68,20 @@ test('GET /api/meta lists field types and step types with slots and categories',
   assert.equal(meta.nodeTypes.find((n) => n.type === 'branch').options.find((o) => o.key === 'left').vars, 'path');
   assert.equal(meta.fieldTypes.find((f) => f.type === 'currency').valueType, 'number');
   assert.deepEqual(meta.fieldTypes.find((f) => f.type === 'geolocation').members.map((m) => m.key), ['latitude', 'longitude']);
+});
+
+test('GET /api/meta: loop has mode each with from and itemAlias shown only for each', async () => {
+  const meta = await (await fetch(base + '/api/meta')).json();
+  const loopType = meta.nodeTypes.find((n) => n.type === 'loop');
+  const opt = (k) => loopType.options.find((o) => o.key === k);
+  assert.deepEqual(loopType.options.map((o) => o.key), ['mode', 'count', 'min', 'max', 'from', 'itemAlias', 'alias']);
+  assert.equal(opt('mode').label, 'Lặp theo');
+  assert.deepEqual(opt('mode').choices.map((c) => `${c.value}:${c.label}`), ['fixed:Số lần cố định', 'range:Số lần ngẫu nhiên trong khoảng', 'each:Mỗi bản ghi trong pool']);
+  assert.deepEqual([opt('from').kind, opt('from').accepts, opt('from').showIf, opt('itemAlias').showIf], ['ref', { pool: true }, { key: 'mode', in: ['each'] }, { key: 'mode', in: ['each'] }]);
+  assert.deepEqual([opt('count').showIf.in, opt('min').showIf.in], [['fixed'], ['range']]);
+  const [vars, item] = loopType.exposes;
+  assert.deepEqual([vars.kind, item.kind, item.key, item.when, item.name.key, item.current, item.pool, item.members], ['vars', 'record', 'item', { key: 'mode', in: ['each'] }, 'itemAlias', 'item', false, { fromSource: 'from' }]);
+  assert.match(loopType.description, /mỗi bản ghi của một pool/);
 });
 
 test('GET /api/meta (0006): Query / Chọn bản ghi options, suggest hints, presets and query limits', async () => {

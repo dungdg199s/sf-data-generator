@@ -207,3 +207,60 @@ test('scope (0006, real catalogue): SOQL members, open FIELDS(), pools for pick.
   // A pool used by nothing but the picks is fine; a loop variable is not a pool.
   assert.ok(!refChoices(wf([loop('l', { count: 1 }, [{ id: 'x', type: 'pick', config: { from: '', alias: 'a' } }])]), 'x', { pool: true }).length);
 });
+
+// ---------- design 0010: Lặp "Mỗi bản ghi trong pool" ----------
+
+const q = (id, alias, fields = ['Id', 'Name']) => ({ id, type: 'query', config: { sobject: 'Account', alias, fields } });
+const each = (id, from, itemAlias, body = [], extra = {}) => loop(id, { mode: 'each', from, itemAlias, ...extra }, body);
+
+test('scope: loopMinIterations is 0 in each mode', () => {
+  assert.equal(loopMinIterations({ mode: 'each', count: 5 }), 0, 'count is ignored in each mode');
+  assert.equal(loopMinIterations({ mode: 'fixed', count: 5 }), 5);
+  assert.equal(catalog.nodeTypes.find((t) => t.type === 'loop').minIterations({ mode: 'each' }), 0);
+});
+
+test('scope: each item alias is visible inside the body with the pool sObject', () => {
+  const w = wf([
+    q('q', 'accs', ['Id', 'Name', 'Industry']),
+    each('l', 'accs', 'acc', [r('con', 'con', [tpl('T', '{{acc.Name}} {{acc.industry}} {{loop.count}}')]), loop('in', { count: 2, alias: 'j' }, [r('deep')])]),
+  ]);
+  const scope = scopeOf(w);
+  const item = scope.sources['l#item'];
+  assert.deepEqual([item.nodeId, item.name, item.sobject, item.current, item.pool, item.origin, item.from, item.root], ['l', 'acc', 'Account', 'item', false, 'org', 'accs', 'q']);
+  // Pool fields, without the pool-level built-in $count.
+  assert.deepEqual(item.members.map((m) => m.key), ['Id', 'Name', 'Industry']);
+  assert.equal(stateOf(scope, 'con', 'l#item'), 'always');
+  assert.equal(stateOf(scope, 'deep', 'l#item'), 'always', 'also in a frame nested in the body');
+  assert.deepEqual(scope.refs.filter((x) => x.nodeId === 'con').map((x) => `${x.path}:${x.source}:${x.code ?? 'ok'}`), ['acc.Name:l#item:ok', 'acc.industry:l#item:ok', 'loop.count:l:ok']);
+  // A Lookup can point at it (nearest first), a pool option cannot.
+  assert.equal(refChoices(scope, 'con').find((x) => x.usable).name, 'acc');
+  assert.ok(!refChoices(scope, 'con', { pool: true }).some((x) => x.name === 'acc'));
+  // A generated pool: fields of the Record and its record-level $n.
+  const g = scopeOf(wf([r('a', 'acc', [tpl('Name', 'x')]), each('l', 'acc', 'a2', [r('o')])]));
+  assert.deepEqual(g.sources['l#item'].members.map((m) => m.key), ['Name', '$n']);
+  assert.equal(g.sources['l#item'].origin, 'generated');
+  // Fixed / range loops do not have the record (no source), even with a stale itemAlias.
+  assert.equal(scopeOf(wf([q('q', 'accs'), loop('l', { mode: 'fixed', count: 1, from: 'accs', itemAlias: 'acc' })])).sources['l#item'], undefined);
+});
+
+test('scope: each item alias is outsideLoop after the loop', () => {
+  const w = wf([q('q', 'accs'), each('l', 'accs', 'acc', [r('in')]), r('after', 'after', [tpl('T', '{{acc.Name}}')])]);
+  const scope = scopeOf(w);
+  assert.equal(stateOf(scope, 'after', 'l#item'), '-outsideLoop');
+  assert.equal(scope.at.after.hidden.find((x) => x.source === 'l#item').note, 'chỉ có bên trong vòng lặp "loop"');
+  assert.equal(stateOf(scope, 'l', 'l#item'), '-outsideLoop', 'not at the loop itself');
+  assert.deepEqual(scope.refs.filter((x) => x.nodeId === 'after').map((x) => x.code), ['outsideLoop']);
+  // Turned off, the loop's record is still "outside" (like a loop variable), not "turned off".
+  const off = scopeOf(wf([q('q', 'accs'), { ...each('l', 'accs', 'acc', [r('in')]), disabled: true }, r('after', 'after', [tpl('T', '{{acc.Name}}')])]));
+  assert.equal(stateOf(off, 'after', 'l#item'), '-outsideLoop');
+});
+
+test('scope: sources created in an each loop are maybe after it', () => {
+  const w = wf([q('q', 'accs'), each('l', 'accs', 'acc', [r('con')]), r('after')]);
+  const scope = scopeOf(w);
+  assert.equal(stateOf(scope, 'after', 'con'), 'maybe');
+  assert.deepEqual(scope.at.after.visible.find((v) => v.source === 'con').why, { loop: 'loop', loopId: 'l', range: false, each: 'accs' });
+  // A missing pool: the record is still declared inside (no knock-on errors), only `from` fails.
+  const bad = scopeOf(wf([each('l', 'nope', 'acc', [r('c', 'c', [tpl('T', '{{acc.Name}}')])])]));
+  assert.deepEqual(bad.refs.map((x) => `${x.nodeId}.${x.field}:${x.code ?? 'ok'}`), ['l.from:unknownName', 'c.fields.T:ok']);
+});

@@ -6,7 +6,8 @@
 //
 // Variables (design 0005): `flow` says how the slots run (`sequence`; `loop` with `body`;
 // `branch` with `alternatives`) and `exposes` what the step provides to other steps (a record
-// alias with its fields, or loop variables). shared/scope.js `analyzeScope` reads both, so a
+// alias with its fields, or loop variables; a list of them, entries with `when` applying only
+// while the config matches: design 0010). shared/scope.js `analyzeScope` reads both, so a
 // new step type only has to declare them. Function-valued keys (`minIterations`) are dropped
 // from /api/meta (`serializableNodeTypes`); the browser gets them from shared/scope.js.
 
@@ -54,6 +55,7 @@ export const QUERY_PRESETS = {
 const BUILDER = { key: 'mode', in: ['builder'] };
 const SOQL = { key: 'mode', in: ['soql'] };
 const FILTER = { key: 'filter', in: ['compare'] };
+const EACH = { key: 'mode', in: ['each'] };
 
 export const STEP_CATEGORIES = [
   { key: 'data', label: 'Dữ liệu' },
@@ -113,7 +115,7 @@ export const NODE_TYPES = [
       label: { key: 'sobject' },
       visibleIn: 'downstream',
       members: 'select',
-      builtins: [{ key: '$count', valueType: 'number', label: 'Số bản ghi đọc được' }],
+      builtins: [{ key: '$count', valueType: 'number', label: 'Số bản ghi đọc được', level: 'pool' }],
       current: 'none',
       pool: true,
       origin: 'org',
@@ -170,6 +172,7 @@ export const NODE_TYPES = [
           { value: 'unique', label: 'Ngẫu nhiên, không lặp lại' },
           { value: 'sequential', label: 'Lần lượt theo thứ tự (quay vòng)' },
         ],
+        help: 'Muốn chạy đúng một lần cho mỗi bản ghi của pool, dùng bước Lặp → "Mỗi bản ghi trong pool".',
       },
       {
         key: 'filter',
@@ -201,36 +204,58 @@ export const NODE_TYPES = [
     type: 'loop',
     label: 'Lặp',
     category: 'control',
-    description: 'Chạy các bước bên trong N lần, rồi đi tiếp xuống bước sau.',
+    description: 'Chạy các bước bên trong nhiều lần: số lần cố định, ngẫu nhiên, hoặc mỗi bản ghi của một pool; rồi đi tiếp xuống bước sau.',
     slots: [{ key: 'body', label: '', empty: 'Thêm bước vào vòng lặp' }],
     flow: { kind: 'loop', body: 'body' },
     minIterations: loopMinIterations,
-    exposes: {
-      kind: 'vars',
-      name: { key: 'alias', default: 'loop' },
-      label: 'Vòng lặp',
-      visibleIn: { inside: 'body' },
-      members: [
-        { key: 'index', valueType: 'number', label: 'Lần lặp hiện tại (từ 1)' },
-        { key: 'index0', valueType: 'number', label: 'Lần lặp hiện tại (từ 0)' },
-        { key: 'count', valueType: 'number', label: 'Tổng số lần lặp' },
-      ],
-    },
+    // Design 0010: `exposes` is a list; an entry with `when` (same shape as showIf) only applies
+    // while the config matches. The first entry is the step's own source (id = step id), the
+    // others get the source id `<stepId>#<key>`.
+    exposes: [
+      {
+        kind: 'vars',
+        name: { key: 'alias', default: 'loop' },
+        label: 'Vòng lặp',
+        visibleIn: { inside: 'body' },
+        members: [
+          { key: 'index', valueType: 'number', label: 'Lần lặp hiện tại (từ 1)' },
+          { key: 'index0', valueType: 'number', label: 'Lần lặp hiện tại (từ 0)' },
+          { key: 'count', valueType: 'number', label: 'Tổng số lần lặp' },
+        ],
+      },
+      {
+        // The record of the pool the body is running for ("Mỗi bản ghi trong pool").
+        key: 'item',
+        when: EACH,
+        kind: 'record',
+        name: { key: 'itemAlias' },
+        label: { fromSource: 'from' },
+        visibleIn: { inside: 'body' },
+        members: { fromSource: 'from' },
+        current: 'item',
+        pool: false,
+        origin: { fromSource: 'from' },
+        lookupParent: true,
+      },
+    ],
     options: [
       {
         key: 'mode',
-        label: 'Số lần',
+        label: 'Lặp theo',
         kind: 'select',
         default: 'fixed',
         choices: [
-          { value: 'fixed', label: 'Cố định' },
-          { value: 'range', label: 'Ngẫu nhiên trong khoảng' },
+          { value: 'fixed', label: 'Số lần cố định' },
+          { value: 'range', label: 'Số lần ngẫu nhiên trong khoảng' },
+          { value: 'each', label: 'Mỗi bản ghi trong pool' },
         ],
       },
       { key: 'count', label: 'Số lần lặp', kind: 'integer', default: 0, initial: 3, min: 0, max: LIMITS.maxCountPerNode, showIf: { key: 'mode', in: ['fixed'] } },
       { key: 'min', label: 'Ít nhất', kind: 'integer', default: 1, min: 0, max: LIMITS.maxCountPerNode, showIf: { key: 'mode', in: ['range'] } },
       { key: 'max', label: 'Nhiều nhất', kind: 'integer', default: 1, initial: 5, min: 0, max: LIMITS.maxCountPerNode, showIf: { key: 'mode', in: ['range'] } },
-      { key: 'alias', label: 'Tên biến lặp', kind: 'string', default: 'loop', help: 'Dùng {{loop.index}} (từ 1), {{loop.index0}} (từ 0), {{loop.count}}.' },
+      { key: 'from', label: 'Lặp qua pool', kind: 'ref', default: '', showIf: EACH, accepts: { pool: true }, placeholder: '— chọn pool —', empty: '— chưa có pool nào phía trên —', help: 'Alias của bước Query, Record hoặc Chọn bản ghi ở phía trên. Thân vòng lặp chạy một lần cho mỗi bản ghi, theo thứ tự của pool.' },
+      { key: 'itemAlias', label: 'Tên bản ghi đang lặp', kind: 'string', default: '', showIf: EACH, help: 'Bên trong vòng lặp dùng {{acc.Name}}, hoặc Lookup "Bản ghi hiện tại" acc.' },
+      { key: 'alias', label: 'Tên biến lặp', kind: 'string', default: 'loop', help: 'Dùng {{loop.index}} (từ 1), {{loop.index0}} (từ 0), {{loop.count}}. Khi lặp theo pool, count = số bản ghi của pool.' },
     ],
   },
   {

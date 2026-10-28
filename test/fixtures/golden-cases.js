@@ -2,7 +2,8 @@
 // turned it into a generator). test/stream.test.js checks that the streamed records are still
 // byte-identical for the same seed and `now`: the palette samples plus nested cases covering
 // random Lookups (count-only pools), Chọn bản ghi from generated and Query pools, branch/loop
-// nesting, unique values and pick "skip".
+// nesting, unique values and pick "skip". Cases added later (the each-loop sample and nested
+// case of design 0010) were recorded when added; adding them changed none of the earlier hashes.
 //
 // To re-record after a deliberate data change: node test/fixtures/golden-record.js > test/fixtures/golden-hashes.json
 
@@ -88,6 +89,27 @@ export const GOLDEN_CASES = [
       ]),
       record('task', 'Task', 'task', [lookup('WhatId', 'pa', 'random'), { name: 'WhoId', type: 'copy', options: { path: 'opp.ContactId' } }], { count: 3 }),
     ]),
+  },
+  {
+    // Design 0010, recorded when each-loops were added (every case above kept its hash).
+    name: 'each loops over generated, Query and pick pools, nested (0010)',
+    workflow: wf([
+      record('acc', 'Account', 'acc', [name], { count: 3 }),
+      query('q', 'accs', { fields: ['Id', 'Name', 'Industry'] }),
+      loop('ea', { mode: 'each', from: 'acc', itemAlias: 'a', alias: 'i' }, [
+        record('opp', 'Opportunity', 'opp', [lookup('AccountId', 'a'), { name: 'Name', type: 'template', options: { template: '{{a.Name}} {{i.index}}/{{i.count}} #{{a.$n}}' } }], { count: 2 }),
+        loop('eq', { mode: 'each', from: 'accs', itemAlias: 'row' }, [
+          branch('b', { kind: 'chance', probability: 0.5 }, [
+            record('task', 'Task', 'task', [lookup('WhatId', 'row'), lookup('WhoId', 'opp'), { name: 'Subject', type: 'template', options: { template: '{{row.Industry}} {{loop.index0}}' } }]),
+          ]),
+        ]),
+      ]),
+      loop('l', { count: 4 }, [pick('p', 'pk', 'accs', { mode: 'random' })]),
+      loop('ep', { mode: 'each', from: 'pk', itemAlias: 'it', alias: 'k' }, [
+        record('con', 'Contact', 'con', [lookup('AccountId', 'it'), lookup('Other__c', 'opp', 'random')]),
+      ]),
+    ]),
+    queryResults: { q: accRows(3) },
   },
 ];
 

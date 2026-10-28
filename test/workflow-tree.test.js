@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   walkSteps, findStep, insertStep, removeStep, moveStep, wrapStep, cloneSteps, renameAlias, setStepAlias, isAliasName, malformedSteps,
-  defaultInsertTarget, neighbourTarget, allSteps, collectAliases, collectIds, renameField, aliasTypes,
+  defaultInsertTarget, neighbourTarget, allSteps, collectAliases, collectIds, renameField, aliasTypes, stepNames,
 } from '../shared/workflow-tree.js';
 import { scopeCatalog } from '../server/workflow/schema.js';
 
@@ -294,4 +294,82 @@ test('alias types come from the catalogue exposes, not a hard-coded list (0006 r
   assert.equal(setStepAlias(wf, 'a', 'row', { catalog }), false, 'another type\'s alias is taken');
   const { steps: [copy] } = cloneSteps([findStep(wf, 'x').step], { aliases: collectAliases(wf, catalog), catalog });
   assert.equal(copy.config.alias, 'row2');
+});
+
+// ---------- design 0010: Lặp "Mỗi bản ghi trong pool" ----------
+
+const query = (id, alias) => ({ id, type: 'query', config: { sobject: 'Account', alias, fields: ['Id', 'Name'] } });
+const each = (id, from, itemAlias, body = [], extra = {}) => loop(id, body, { mode: 'each', from, itemAlias, ...extra });
+const tplF = (name, template) => ({ name, type: 'template', options: { template } });
+const lkF = (name, ref) => ({ name, type: 'lookup', options: { mode: 'current', ref } });
+
+test('the record of an each loop joins the alias namespace (0010)', () => {
+  const catalog = scopeCatalog();
+  const make = () => tree([query('q', 'accs'), each('l', 'accs', 'acc', [r('c', 'con', [lkF('AccountId', 'acc')])]), loop('f', [], { alias: 'i', count: 1, itemAlias: 'stale' })]);
+  const wf = make();
+  assert.deepEqual(stepNames(findStep(wf, 'l').step, catalog), [{ key: 'itemAlias', value: 'acc' }]);
+  assert.deepEqual([...collectAliases(wf, catalog)].sort(), ['acc', 'accs', 'con'], 'a fixed loop\'s leftover itemAlias does not count');
+  // References never move into a taken name: a record alias, another loop's variable, its own.
+  const ref = (w) => findStep(w, 'c').step.config.fields[0].options.ref;
+  for (const [name, why] of [['con', 'a record alias'], ['accs', 'a pool alias'], ['i', 'another loop variable'], ['loop', 'its own loop variable']]) {
+    const w = make();
+    assert.equal(setStepAlias(w, 'l', name, { catalog, key: 'itemAlias', slotKeys }), false, why);
+    assert.equal(ref(w), 'acc', why);
+  }
+  const w = make();
+  assert.equal(setStepAlias(w, 'c', 'acc', { catalog, slotKeys }), false, 'a record cannot take the record name');
+  const w2 = make();
+  assert.equal(setStepAlias(w2, 'l', 'acc', { catalog, slotKeys }), false, 'nor its loop variable');
+  const w3 = make();
+  assert.equal(setStepAlias(w3, 'l', 'a', { catalog, key: 'itemAlias', slotKeys }), true);
+  assert.equal(ref(w3), 'a');
+});
+
+test('renameAlias updates loop from', () => {
+  const catalog = scopeCatalog();
+  const wf = tree([query('q', 'accs'), each('l', 'accs', 'acc', [r('c', 'con', [tplF('T', '{{accs.$count}}')])]), loop('f', [], { count: 1, mode: 'fixed', from: 'accs' })]);
+  assert.equal(setStepAlias(wf, 'q', 'accounts', { catalog, slotKeys }), true);
+  assert.equal(findStep(wf, 'l').step.config.from, 'accounts');
+  assert.equal(findStep(wf, 'f').step.config.from, 'accounts', 'a hidden `from` (fixed mode) follows too, so switching back loses nothing');
+  assert.equal(findStep(wf, 'c').step.config.fields[0].options.template, '{{accounts.$count}}');
+  // Without a catalogue (legacy options) the each loop's `from` still follows.
+  const plain = tree([r('a', 'acc'), each('l', 'acc', 'x')]);
+  renameAlias(plain.steps, 'acc', 'account');
+  assert.equal(plain.steps[1].config.from, 'account');
+});
+
+test('setStepAlias on itemAlias renames references inside the body only', () => {
+  const catalog = scopeCatalog();
+  const inner = r('c', 'con', [lkF('AccountId', 'acc'), tplF('T', '{{acc.Name}} {{loop.index}}')]);
+  // `acc` outside the body is an error the rename must not "fix" into another meaning.
+  const outside = r('o', 'out', [tplF('T', '{{acc.Name}}')]);
+  const wf = tree([query('q', 'accs'), each('l', 'accs', 'acc', [inner, loop('deep', [r('d', 'dd', [lkF('X', 'acc')])], { alias: 'k', count: 1 })]), outside]);
+  const memo = new Map();
+  // Mid-typing ('' then 'a-') references wait on the last good name.
+  assert.equal(setStepAlias(wf, 'l', '', { catalog, key: 'itemAlias', slotKeys, memo }), false);
+  assert.equal(setStepAlias(wf, 'l', 'a-', { catalog, key: 'itemAlias', slotKeys, memo }), false);
+  assert.equal(inner.config.fields[0].options.ref, 'acc');
+  assert.equal(setStepAlias(wf, 'l', 'account', { catalog, key: 'itemAlias', slotKeys, memo }), true);
+  assert.equal(findStep(wf, 'l').step.config.itemAlias, 'account');
+  assert.equal(inner.config.fields[0].options.ref, 'account');
+  assert.equal(inner.config.fields[1].options.template, '{{account.Name}} {{loop.index}}');
+  assert.equal(findStep(wf, 'd').step.config.fields[0].options.ref, 'account', 'nested frames inside the body too');
+  assert.equal(outside.config.fields[0].options.template, '{{acc.Name}}');
+  assert.equal(findStep(wf, 'l').step.config.alias, 'loop', 'the loop variable is untouched');
+  // The alias memo of the loop variable is separate from the record's.
+  assert.equal(setStepAlias(wf, 'l', 'i', { catalog, slotKeys, memo }), true);
+  assert.equal(inner.config.fields[1].options.template, '{{account.Name}} {{i.index}}');
+});
+
+test('cloneSteps gives a copied each loop a new item alias', () => {
+  const catalog = scopeCatalog();
+  const wf = tree([query('q', 'accs'), each('l', 'accs', 'acc', [r('c', 'con', [lkF('AccountId', 'acc'), tplF('T', '{{acc.Name}}')])])]);
+  const { steps: [copy], renamed } = cloneSteps([findStep(wf, 'l').step], { ids: collectIds(wf), aliases: collectAliases(wf, catalog), catalog });
+  assert.deepEqual([copy.config.from, copy.config.itemAlias], ['accs', 'acc2']);
+  const c2 = copy.slots.body[0];
+  assert.deepEqual([c2.config.alias, c2.config.fields[0].options.ref, c2.config.fields[1].options.template], ['con2', 'acc2', '{{acc2.Name}}']);
+  assert.deepEqual(renamed[0].names, [{ key: 'itemAlias', from: 'acc', to: 'acc2' }]);
+  // Copying the pool together with the loop: the copy loops over the copied pool.
+  const both = cloneSteps(wf.steps, { ids: collectIds(wf), aliases: collectAliases(wf, catalog), catalog }).steps;
+  assert.deepEqual([both[0].config.alias, both[1].config.from, both[1].config.itemAlias], ['accs2', 'accs2', 'acc2']);
 });

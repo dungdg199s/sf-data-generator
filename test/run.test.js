@@ -153,3 +153,51 @@ test('generation without records still yields to the event loop and honours Dừ
   assert.equal(end.result.stats.total, 0);
   assert.ok(Date.now() - t0 < 400, `stopped after ${Date.now() - t0} ms`);
 });
+
+// ---------- design 0010: Lặp "Mỗi bản ghi trong pool" ----------
+
+test('each loop: Lookups to the record looped over resolve across insert windows; insert = preview', async () => {
+  const client = fakeClient();
+  // 30 generated Accounts, then 2 Contacts for each, pointing at the record looped over (alias
+  // `a`, pool `acc`). Windows of 10 records with 1 preview row: the Account Ids are kept only
+  // because `acc` is the pool behind `a` (referencedAliases), not as preview rows.
+  const w = wf([
+    record('acc', 'Account', 'acc', [{ name: 'Name', type: 'text', options: { mode: 'company' } }], { count: 30 }),
+    loop('l', { mode: 'each', from: 'acc', itemAlias: 'a' }, [
+      record('c', 'Contact', 'con', [{ name: 'LastName', type: 'text', options: { mode: 'lastName' } }, { name: 'AccountId', type: 'lookup', options: { mode: 'current', ref: 'a' } }], { count: 2 }),
+    ]),
+  ]);
+  const run = createRun(w, { seed: 6, now: NOW });
+  assert.ok(run.referencedAliases.has('acc'), 'the pool behind the record looped over');
+  assert.ok(run.keptPools.has('acc'), 'the pool keeps whole records (each-loop reader)');
+  const { end } = await drive({ run, target: 'dev', sfClient: client, previewRows: 1, insertOptions: { window: 10 } });
+  const ins = end.result.insert;
+  assert.deepEqual([ins.inserted, ins.failed], [90, 0]);
+  const sent = client.calls.flatMap((c) => c.recs.map((r) => ({ sobject: c.sobject, ...r })));
+  // The fake client numbers records in the order it receives them (`A<n>` for an Account).
+  const accountIds = [];
+  let n = 0;
+  for (const c of client.calls) for (const r of c.recs) { n++; if (c.sobject === 'Account') accountIds.push(`A${n}`); }
+  // Same records as the preview (same seed and now), every Contact on its Account, 2 each, in order.
+  const preview = runWorkflow(w, { seed: 6, now: NOW }).records;
+  const accounts = preview.filter((x) => x.sobject === 'Account');
+  assert.deepEqual(sent.filter((x) => x.sobject === 'Account').map((x) => x.Name), accounts.map((x) => x.fields.Name));
+  assert.deepEqual(sent.filter((x) => x.sobject === 'Contact').map((x) => x.LastName), preview.filter((x) => x.sobject === 'Contact').map((x) => x.fields.LastName));
+  assert.deepEqual(sent.filter((x) => x.sobject === 'Contact').map((x) => x.AccountId), accountIds.flatMap((id) => [id, id]));
+});
+
+test('each loop over Query rows: preview and insert give the same records for the same seed', async () => {
+  const qr = { q: { sobject: 'Account', records: [{ Id: '001000000000000AAA', Name: 'X' }, { Id: '001000000000000BBB', Name: 'Y' }] } };
+  const w = wf([
+    { id: 'q', type: 'query', config: { sobject: 'Account', alias: 'accs', fields: ['Id', 'Name'] } },
+    loop('l', { mode: 'each', from: 'accs', itemAlias: 'acc' }, [
+      record('c', 'Contact', 'con', [{ name: 'LastName', type: 'text', options: { mode: 'lastName' } }, { name: 'Title', type: 'template', options: { template: '{{acc.Name}} {{loop.index}}/{{loop.count}}' } }, { name: 'AccountId', type: 'lookup', options: { ref: 'acc' } }], { count: 3 }),
+    ]),
+  ]);
+  const client = fakeClient();
+  const preview = await drive({ run: createRun(w, { seed: 8, now: NOW, queryResults: qr }) });
+  await drive({ run: createRun(w, { seed: 8, now: NOW, queryResults: qr }), target: 'dev', sfClient: client });
+  const sent = client.calls.flatMap((c) => c.recs);
+  assert.deepEqual(sent, preview.end.result.records.map((r) => r.fields));
+  assert.deepEqual(sent.map((x) => `${x.AccountId.slice(-3)} ${x.Title}`), ['AAA X 1/2', 'AAA X 1/2', 'AAA X 1/2', 'BBB Y 2/2', 'BBB Y 2/2', 'BBB Y 2/2']);
+});

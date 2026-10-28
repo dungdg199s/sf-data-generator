@@ -14,7 +14,10 @@
 // - record: generates `count` records, each becoming scope.current[alias]; `n` (alias#n) is
 //   passed to generators for {{this.$n}}.
 // - loop: draws N (rng.int for `range`, even when the body is empty, as v1 did), runs
-//   slots.body N times with a loop variable, then the next step.
+//   slots.body N times with a loop variable, then the next step. `mode: 'each'` (design 0010)
+//   draws nothing: it snapshots the pool scope.all[from] when it starts and runs the body once
+//   per record, in pool order, with that very object as scope.current[itemAlias] (not added to
+//   scope.all); an empty or missing pool runs 0 times, with one warning per step at the end.
 // - branch: always evaluates its condition, runs slots.true or slots.false, then the next step.
 // - query (design 0006): never calls the org. The server reads every Query first
 //   (server/sf/query.js) and passes the rows as `opts.queryResults[stepId]`; the step binds them
@@ -28,7 +31,7 @@
 // Record pools (scope.current / scope.all) are global to the run; loop variables are lexical.
 // Memory (0004 + 0007 conflict 1): the pool of a Record alias is count-only
 // ({ kind: 'generated', length, refAt(i) } → `alias#(i+1)`), unless a step reads whole records
-// of it (shared/scope.js poolUsage `readers`: Chọn bản ghi `from`, …); Query and pick pools are
+// of it (shared/scope.js poolUsage `readers`: Chọn bản ghi `from`, Lặp `each` `from`); Query and pick pools are
 // arrays. A Lookup "random" draws the same single number from a count-only pool as rng.pick.
 // The rng call order is the same as the v1 graph executor, so a migrated v1 workflow
 // produces byte-identical records for the same seed (test/migrate.test.js) — except where the
@@ -132,9 +135,10 @@ function generate(workflow, { seed, now, maxRecords, queryResults, keptPools, ti
     const queryPools = new Map(); // Query step id → pool (rows as existing records), built once per run
     const pickStates = new Map(); // Chọn bản ghi step id → { used, cursors, cache, remaining }
     const samples = {}; // Chọn bản ghi step id → fields of its first pick (variable picker samples)
+    const emptyEach = new Set(); // Lặp `each` step ids that met an empty pool (one warning each)
 
-    function fail(step, message) {
-      throw new WorkflowError([{ message, nodeId: step.id }]);
+    function fail(step, message, field) {
+      throw new WorkflowError([{ message, nodeId: step.id, ...(field ? { field } : {}) }]);
     }
 
     function makeRecord(step, scope) {
@@ -248,6 +252,30 @@ function generate(workflow, { seed, now, maxRecords, queryResults, keptPools, ti
       return rng.pick(cands);
     }
 
+    /**
+     * Lặp `each` (design 0010): the body once per record of the pool as it is now (a snapshot:
+     * records added to it meanwhile are not visited), in pool order, without the rng.
+     */
+    function* runEach(step, c, stat, scope) {
+      const pool = scope.all[c.from];
+      // keptPools comes from the same catalogue rule that makes `from` a pool reader.
+      if (pool && !Array.isArray(pool)) fail(step, `Pool "${c.from}" không giữ bản ghi để lặp (lỗi nội bộ). Báo lại kèm file workflow.`, 'from');
+      const items = pool ? pool.slice() : [];
+      if (items.length > LIMITS.maxCountPerNode) {
+        fail(step, `Pool "${c.from}" có ${items.length.toLocaleString('vi-VN')} bản ghi, quá giới hạn ${LIMITS.maxCountPerNode.toLocaleString('vi-VN')} lần lặp của một bước Lặp. Thu hẹp pool (WHERE/LIMIT của Query) hoặc giảm số bản ghi.`, 'from');
+      }
+      stat.iterations = (stat.iterations ?? 0) + items.length;
+      if (!items.length) emptyEach.add(step.id);
+      const body = step.slots?.body ?? [];
+      if (!body.length) return;
+      const varName = c.alias || 'loop';
+      for (let i = 0; i < items.length; i++) {
+        scope.current[c.itemAlias] = items[i];
+        // A skip inside the body ends this iteration only.
+        yield* runSteps(body, { ...scope, vars: { ...scope.vars, [varName]: { index: i + 1, index0: i, count: items.length } } });
+      }
+    }
+
     /** Yields the records of `steps`; returns SKIP when a Chọn bản ghi step skipped the rest. */
     function* runSteps(steps, scope) {
       for (const step of steps ?? []) {
@@ -266,6 +294,10 @@ function generate(workflow, { seed, now, maxRecords, queryResults, keptPools, ti
             break;
           }
           case 'loop': {
+            if (c.mode === 'each') {
+              yield* runEach(step, c, stat, scope);
+              break;
+            }
             const times = (c.mode ?? 'fixed') === 'range' ? rng.int(Number(c.min ?? 1), Number(c.max ?? 1)) : Number(c.count ?? 0);
             const body = step.slots?.body ?? [];
             const varName = c.alias || 'loop';
@@ -323,6 +355,14 @@ function generate(workflow, { seed, now, maxRecords, queryResults, keptPools, ti
     const visit = (list) => {
       for (const step of list ?? []) {
         const s = byStep[step.id];
+        if (emptyEach.has(step.id)) {
+          runWarnings.push({
+            message: `Bước Lặp "${step.config?.itemAlias || step.config?.alias || 'loop'}": pool "${step.config?.from}" không có bản ghi nào nên các bước bên trong không chạy. Kiểm tra bước "${step.config?.from}" (WHERE của Query hoặc số bản ghi).`,
+            nodeId: step.id,
+            field: 'from',
+            code: 'eachEmpty',
+          });
+        }
         if (step.type === 'pick' && s?.skipped) {
           runWarnings.push({
             message: `Bước Chọn bản ghi "${step.config?.alias}": ${s.skipped}/${s.runs} lần không có bản ghi phù hợp nên đã bỏ qua các bước phía sau. Đổi điều kiện lọc, tăng LIMIT của Query, hoặc chọn "Báo lỗi và dừng" nếu đây là lỗi.`,

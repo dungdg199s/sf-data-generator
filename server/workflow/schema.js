@@ -11,6 +11,7 @@ import { checkSoql, checkBuilder, isFieldPath, buildSoql, soqlSobject, selectFie
 import { getGenerator, describeGenerators } from '../generators/index.js';
 import { migrateV1, describeReport, reportNeedsReview } from '../../shared/migrate-v1.js';
 import { analyzeScope, referenceOptions, hasUnclosed } from '../../shared/scope.js';
+import { stepNames } from '../../shared/workflow-tree.js';
 
 const API_NAME = /^[A-Za-z][A-Za-z0-9_]*$/;
 const ALIAS = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -151,39 +152,44 @@ export function prepareWorkflow(wf) {
   if (errors.length) return { workflow, errors, warnings, migration };
 
   // Aliases: one namespace for Record, Query and Chọn bản ghi (every type exposing a record
-  // named by its `alias`), unique across the whole tree, disabled steps included (so turning one
-  // back on cannot create a clash). Loop variables must not reuse them.
-  const aliasOwner = new Map();
-  const namedByAlias = (step) => {
-    const ex = nodeTypeMap.get(step.type)?.exposes;
-    return ex?.kind === 'record' && ex.name?.key === 'alias';
-  };
+  // named by its `alias`) and the record a Lặp `each` loops over (`itemAlias`, design 0010),
+  // unique across the whole tree, disabled steps included (so turning one back on cannot create
+  // a clash). Loop variables must not reuse them.
+  const catalog = scopeCatalog();
+  const aliasOwner = new Map(); // name → { step, key }
+  const loopVars = new Set(steps.filter(({ step }) => step.type === 'loop').map(({ step }) => step.config?.alias || 'loop'));
   for (const { step, off } of steps) {
     const isLoop = step.type === 'loop';
-    if (!isLoop && !namedByAlias(step)) continue;
-    const alias = isLoop ? (step.config?.alias || 'loop') : step.config?.alias;
-    if (!alias) {
+    const ex = nodeTypeMap.get(step.type)?.exposes;
+    const named = !Array.isArray(ex) && ex?.kind === 'record' && ex.name?.key === 'alias';
+    const each = isLoop && step.config?.mode === 'each';
+    if (isLoop) {
+      const alias = step.config?.alias || 'loop';
+      if (!ALIAS.test(alias) || RESERVED_ALIASES.has(alias)) err(`Alias "${alias}" không hợp lệ (chỉ chữ, số, gạch dưới; không bắt đầu bằng số; không dùng "this").`, step.id, 'alias');
+    } else if (named && !step.config?.alias) {
       // A Record falls back to its id; a pool (Query) or a picked record needs a name.
       if (step.type !== 'record' && !off) err(`Đặt alias để bước khác dùng được ${step.type === 'query' ? 'pool này (ví dụ accs)' : 'bản ghi này (ví dụ acc)'}.`, step.id, 'alias');
-      continue;
     }
-    if (!ALIAS.test(alias) || RESERVED_ALIASES.has(alias)) {
-      err(`Alias "${alias}" không hợp lệ (chỉ chữ, số, gạch dưới; không bắt đầu bằng số; không dùng "this").`, step.id, 'alias');
-      continue;
+    if (each && !step.config?.itemAlias && !off) err('Đặt tên cho bản ghi đang lặp (ví dụ acc) để các bước bên trong dùng {{acc.Name}}.', step.id, 'itemAlias');
+    for (const { key, value } of stepNames(step, catalog)) {
+      if (!ALIAS.test(value) || RESERVED_ALIASES.has(value)) {
+        err(`Alias "${value}" không hợp lệ (chỉ chữ, số, gạch dưới; không bắt đầu bằng số; không dùng "this").`, step.id, key);
+        continue;
+      }
+      if (aliasOwner.has(value)) err(`Alias "${value}" đã được dùng ở bước khác. Đổi alias của một trong hai bước.`, step.id, key);
+      else aliasOwner.set(value, { step, key });
+      if (key === 'itemAlias' && loopVars.has(value)) err(`Tên bản ghi đang lặp "${value}" trùng tên biến lặp. Đổi một trong hai tên.`, step.id, key);
     }
-    if (isLoop) continue;
-    if (aliasOwner.has(alias)) err(`Alias "${alias}" đã được dùng ở bước khác. Đổi alias của một trong hai bước.`, step.id, 'alias');
-    else aliasOwner.set(alias, step);
   }
   for (const { step } of steps) {
     const owner = step.type === 'loop' ? aliasOwner.get(step.config?.alias || 'loop') : null;
-    if (owner) {
-      err(`Tên biến lặp "${step.config?.alias || 'loop'}" trùng alias của một bước ${nodeTypeMap.get(owner.type)?.label ?? owner.type}. Đổi một trong hai tên.`, step.id, 'alias');
+    // A clash with a record looped over is reported on that `itemAlias` (above).
+    if (owner && owner.key === 'alias') {
+      err(`Tên biến lặp "${step.config?.alias || 'loop'}" trùng alias của một bước ${nodeTypeMap.get(owner.step.type)?.label ?? owner.step.type}. Đổi một trong hai tên.`, step.id, 'alias');
     }
   }
 
   // Per-step config (turned-off steps are not checked: they do not run).
-  const catalog = scopeCatalog();
   const scope = analyzeScope(workflow, catalog);
   const insideLoop = new Set();
   {
@@ -212,6 +218,8 @@ export function prepareWorkflow(wf) {
     if (step.type === 'pick') validatePick(step, c, { err });
     if (step.type === 'loop') {
       const mode = c.mode ?? 'fixed';
+      // Whether the pool `from` is usable here is checked by analyzeScope (refs), like Chọn bản ghi.
+      if (mode === 'each' && !c.from) err('Chưa chọn pool để lặp. Chọn alias của một bước Query, Record hoặc Chọn bản ghi ở phía trên.', step.id, 'from');
       const check = (key) => {
         const v = c[key];
         if (v !== undefined && (!Number.isInteger(Number(v)) || v < 0 || v > LIMITS.maxCountPerNode)) {
@@ -223,7 +231,7 @@ export function prepareWorkflow(wf) {
         check('min');
         check('max');
         if (Number(c.min) > Number(c.max)) err('"Ít nhất" lớn hơn "Nhiều nhất".', step.id, 'min');
-      } else err(`Chế độ lặp "${mode}" không hợp lệ.`, step.id, 'mode');
+      } else if (mode !== 'each') err(`Chế độ lặp "${mode}" không hợp lệ.`, step.id, 'mode');
       if (!step.slots?.body?.length) warn('Vòng lặp chưa có bước nào. Bấm "+ Thêm bước vào vòng lặp".', step.id, 'slots.body');
     }
     if (step.type === 'branch') {
@@ -315,6 +323,12 @@ function validateRecord(step, c, { err, warn, scope }) {
       if (!f.options?.ref) err(`Field "${f.name}": chưa chọn bản ghi cha. Chọn một bước Record phía trên trong ô "Bản ghi cha".`, step.id, key);
       else {
         const pool = (f.options?.mode ?? 'current') === 'current' && Object.values(scope.sources).find((s) => s.lookupParent && s.name === f.options.ref && s.current === 'none');
+        // (Outside its loop the reference is already an error: outsideLoop.)
+        const item = f.options?.mode === 'random' && !scope.refs.some((r) => r.nodeId === step.id && r.field === key && r.option === 'ref' && r.code)
+          && Object.values(scope.sources).find((s) => s.name === f.options.ref && s.current === 'item');
+        if (item) {
+          err(`Field "${f.name}": "${item.name}" là bản ghi đang lặp, không phải pool. Chọn "Bản ghi hiện tại của alias", hoặc chọn pool "${item.from || '…'}" nếu muốn ngẫu nhiên.`, step.id, key, { code: 'randomOfItem', path: item.name, option: 'mode' });
+        }
         if (pool) {
           err(`Field "${f.name}": Query "${pool.name}" là một pool nhiều bản ghi, không có "bản ghi hiện tại". Chọn "Ngẫu nhiên trong pool", hoặc thêm bước Chọn bản ghi rồi trỏ Lookup vào alias của nó.`, step.id, key, { code: 'currentOfPool', path: pool.name, option: 'mode' });
         }
@@ -387,14 +401,20 @@ export function referenceIssue(ref, scope, step) {
   const isMD = fieldName !== null && (step?.config?.fields ?? []).find((f) => f?.name === fieldName)?.type === 'masterdetail';
   let message;
 
+  const isLoop = step?.type === 'loop';
   if (ref.mode === 'ref' && ref.option === 'from') {
-    // A pool option (Chọn bản ghi `from`, design 0006; Lặp `each` of 0010 reuses it).
+    // A pool option (Chọn bản ghi `from`, design 0006; Lặp `each`, 0010).
     switch (ref.code) {
       case 'unknownName':
         message = `Không có bước nào có alias "${ref.path}".${suggest ? ` Ý bạn là "${suggest}"?` : ''} Chọn pool khác trong danh sách hoặc thêm bước Query/Record có alias này ở phía trên.`;
         break;
       case 'after':
-        message = `Pool "${s}" phải nằm phía trước bước này trong workflow. Kéo bước "${s}" lên phía trên hoặc chọn pool khác.`;
+        message = isLoop
+          ? `Pool "${s}" nằm sau bước Lặp này nên chưa có bản ghi khi chạy tới đây. Kéo bước "${s}" lên phía trên hoặc chọn pool khác.`
+          : `Pool "${s}" phải nằm phía trước bước này trong workflow. Kéo bước "${s}" lên phía trên hoặc chọn pool khác.`;
+        break;
+      case 'itemNotPool':
+        message = `"${s}" là bản ghi đang lặp${isLoop ? ' của bước Lặp phía trên' : ''}, không phải pool. Chọn pool gốc "${ref.pool || '…'}".`;
         break;
       case 'otherBranch':
         message = `Pool "${s}" nằm ở nhánh còn lại của bước Rẽ nhánh phía trên nên không chạy cùng lượt với bước này. Đưa "${s}" ra trước bước Rẽ nhánh hoặc chọn pool khác.`;
@@ -403,7 +423,9 @@ export function referenceIssue(ref, scope, step) {
         message = `Bước "${s}" đang tắt. Bật lại bước đó (Ctrl+/) hoặc chọn pool khác.`;
         break;
       case 'maybe':
-        message = maybeMessage(ref, s, true, false);
+        message = isLoop
+          ? `Pool "${s}" nằm trong một nhánh rẽ hoặc vòng lặp có thể không chạy, nên có lúc vòng lặp này không chạy lần nào.`
+          : maybeMessage(ref, s, true, false);
         break;
       default:
         return null;
@@ -421,6 +443,10 @@ export function referenceIssue(ref, scope, step) {
         break;
       case 'disabled':
         message = `bước "${s}" đang tắt. Bật lại bước đó (Ctrl+/) hoặc chọn bản ghi cha khác.`;
+        break;
+      case 'outsideLoop':
+        // The record a Lặp `each` loops over (0010), used outside the loop body.
+        message = `"${s}" là bản ghi đang lặp của bước Lặp phía trên, chỉ dùng được bên trong vòng lặp đó. Kéo bước này vào trong vòng lặp hoặc chọn bản ghi cha khác.`;
         break;
       case 'maybe':
         message = maybeMessage(ref, s, true, isMD);
@@ -481,6 +507,10 @@ export function referenceIssue(ref, scope, step) {
           : `bước "${s}" đang tắt. Bật lại bước đó (Ctrl+/) hoặc chọn biến khác.`;
         break;
       case 'outsideLoop':
+        if (src?.current === 'item') {
+          message = `${show(ref.path)}: "${s}" là bản ghi đang lặp của bước Lặp phía trên, chỉ dùng được bên trong vòng lặp đó. Kéo bước này vào trong vòng lặp.`;
+          break;
+        }
         message = ref.noLoop
           ? `${show(ref.path)} chỉ dùng được bên trong một vòng lặp, nhưng bước này không nằm trong vòng lặp nào. Bọc bước này trong Lặp (menu ⋯ → "Bọc trong Lặp"), hoặc chọn biến khác bằng {x}.`
           : `${show(ref.path)} chỉ dùng được bên trong vòng lặp "${s}". Kéo bước này vào trong vòng lặp "${s}", hoặc bỏ biến này.`;
@@ -527,6 +557,9 @@ export function referenceIssue(ref, scope, step) {
 
 function maybeMessage(ref, s, isLookup, isMD) {
   if (ref.why?.loop) {
+    if (ref.why.each !== undefined) {
+      return `vòng lặp "${ref.why.loop}" chạy 0 lần khi pool "${ref.why.each || '?'}" rỗng nên "${s}" có thể chưa có bản ghi.${isMD ? ' Master-Detail sẽ báo lỗi khi chạy nếu pool đó rỗng.' : ''}`;
+    }
     return `vòng lặp "${ref.why.loop}" có thể chạy 0 lần nên "${s}" có thể chưa có bản ghi.${isMD ? ` Master-Detail sẽ báo lỗi khi chạy; đặt ${ref.why.range ? '"Ít nhất"' : '"Số lần lặp"'} ≥ 1.` : ''}`;
   }
   return `"${s}" chỉ được tạo trên một số nhánh trước khi tới đây, nên có thể chưa có (${isLookup ? 'field này trống' : 'giá trị trống'}, hoặc là bản ghi của lần lặp trước). Đặt bước này ngay sau "${s}" nếu cần luôn có giá trị.${isMD ? ' Master-Detail sẽ báo lỗi khi chạy nếu chưa có bản ghi cha.' : ''}`;

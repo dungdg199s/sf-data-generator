@@ -11,7 +11,11 @@
 //              'branch'  (alternatives)   → exactly one of the slots runs
 //   exposes    { kind: 'record' | 'vars', name: { key, default?, fallback? }, label, visibleIn:
 //                'downstream' | { inside: <slot> }, members, builtins?, current, pool, origin,
-//                lookupParent, open? }
+//                lookupParent, open? }, or a list of them (design 0010). An entry with `when`
+//                ({ key, in }, like showIf) only applies while the config matches. The first
+//                entry's source id is the step id; the others' is `<stepId>#<key>` (Lặp `each`:
+//                `<loopId>#item`, the record being looped over: `current: 'item'`, not a pool,
+//                visible inside the body only). `source.nodeId` is always the step id.
 // `catalog` is { nodeTypes, fieldTypes } as served by /api/meta (server: its own catalogue).
 //
 // Certainty of a source at a step (visible):
@@ -21,7 +25,8 @@
 // Reason a source is hidden at a step:
 //   after       — runs after the step, or is the step itself
 //   otherBranch — in the other column of a branch that encloses the step
-//   outsideLoop — a loop variable of a loop whose body does not contain the step
+//   outsideLoop — a loop variable (or the record being looped over, 0010) of a loop whose body
+//                 does not contain the step
 //   shadowed    — a loop variable hidden by an inner loop with the same name
 //   disabled    — the source, or a container around it, is turned off
 
@@ -37,6 +42,8 @@ const worse = (a, b) => (RANK[a] >= RANK[b] ? a : b);
 /** Lowest number of times a loop body runs (0 when it may be skipped). */
 export function loopMinIterations(config = {}) {
   const c = config ?? {};
+  // Each record of a pool (0010): the pool may be empty.
+  if (c.mode === 'each') return 0;
   if ((c.mode ?? 'fixed') === 'range') return Math.max(0, Number(c.min ?? 1)) || 0;
   return Math.max(0, Number(c.count ?? 0)) || 0;
 }
@@ -45,6 +52,10 @@ export function loopMinIterations(config = {}) {
 const MIN_ITERATIONS = { loop: loopMinIterations };
 const VAR_EXAMPLES = {
   loop(c = {}) {
+    if (c.mode === 'each') {
+      const pool = c.from || '?';
+      return { label: `Vòng lặp mỗi bản ghi trong ${pool}`, examples: { index: '1, 2, 3…', index0: '0, 1, 2…', count: `số bản ghi của ${pool}` } };
+    }
     const range = (c.mode ?? 'fixed') === 'range';
     const lo = Number(range ? c.min ?? 1 : c.count ?? 0) || 0;
     const hi = Number(range ? c.max ?? 1 : c.count ?? 0) || 0;
@@ -92,6 +103,31 @@ function catalogMaps(catalog) {
 }
 
 const shown = (def, values) => !def.showIf || def.showIf.in.includes(values[def.showIf.key]);
+
+/**
+ * The `exposes` entries of a step type in effect for `config` (design 0010): a single object is
+ * a one-entry list; an entry with `when` applies only while the config (missing keys: option
+ * defaults) matches. → [{ ex, id }] with `id` the source id for step `stepId`.
+ */
+export function exposesOf(type, config = {}, stepId = '') {
+  const raw = type?.exposes;
+  if (!raw) return [];
+  const list = Array.isArray(raw) ? raw : [raw];
+  const c = config ?? {};
+  const value = (key) => c[key] ?? type.options?.find((o) => o.key === key)?.default;
+  const out = [];
+  list.forEach((ex, i) => {
+    if (ex.when && !ex.when.in.includes(value(ex.when.key))) return;
+    out.push({ ex, id: i === 0 ? stepId : `${stepId}#${ex.key ?? i}` });
+  });
+  return out;
+}
+
+/** Every `exposes` entry a type declares, `when` or not (the names it may give). */
+export function exposesList(type) {
+  const raw = type?.exposes;
+  return raw ? (Array.isArray(raw) ? raw : [raw]) : [];
+}
 const isRefOption = (def) => Boolean(def.vars) || def.kind === 'ref';
 
 /**
@@ -209,10 +245,10 @@ function selectMembers(fields) {
   return root;
 }
 
-function buildSource(step, type, cat, off) {
-  const ex = type.exposes;
+function buildSource(step, type, ex, id, cat, off) {
   const c = step.config ?? {};
   const src = {
+    id,
     nodeId: step.id,
     nodeType: step.type,
     kind: ex.kind,
@@ -292,7 +328,9 @@ export function analyzeScope(wf, catalog) {
       const stepOff = off || step.disabled === true;
       steps.push({ step, off: stepOff });
       const type = typeOf(step);
-      if (type?.exposes && !sources[step.id]) sources[step.id] = buildSource(step, type, cat, stepOff);
+      if (!sources[step.id]) {
+        for (const { ex, id } of exposesOf(type, step.config, step.id)) sources[id] = buildSource(step, type, ex, id, cat, stepOff);
+      }
       for (const k of slotsOf(step)) collect(step.slots?.[k], stepOff);
     }
   };
@@ -306,19 +344,27 @@ export function analyzeScope(wf, catalog) {
   }
   for (const s of Object.values(sources)) {
     for (const [key, refName] of s._from) {
-      const from = (byName.get(refName) ?? []).find((x) => x.kind === 'record' && x !== s);
+      const named = (byName.get(refName) ?? []).filter((x) => x.kind === 'record' && x !== s);
+      const from = named.find((x) => x.pool) ?? named[0];
       if (!from) continue;
-      // A pick (0006) remembers its pool and the step the rows come from (a Query or a Record).
+      // A pick (0006) or the record of a Lặp `each` (0010) remembers its pool and the step the
+      // rows come from (a Query or a Record).
       s.from = from.name;
-      s.root = from.root ?? from.nodeId;
+      s.root = from.root ?? from.id;
       if (key === 'members') {
-        s.members = [...from.members.filter((m) => !m.builtin), ...s.members];
+        // A pick does not inherit built-ins; the record being looped over keeps the record-level
+        // ones ($n of a generated record), not those of the whole pool ($count of a Query).
+        const builtins = s.current === 'item' ? from.members.filter((m) => m.builtin && m.level !== 'pool') : [];
+        s.members = [...from.members.filter((m) => !m.builtin), ...s.members, ...builtins];
         if (from.open) s.open = true;
       }
       if (key === 'label') s.label = from.label;
       if (key === 'origin') s.origin = from.origin;
       if (key === 'label' && from.sobject !== undefined) s.sobject = from.sobject;
     }
+    // A Lặp `each` whose pool is missing still declares its record, without fields: the error is
+    // on `from` only, the steps inside are not flagged as well.
+    if (s.current === 'item' && s.from === undefined) s.unresolved = true;
     delete s._from;
   }
 
@@ -366,13 +412,21 @@ export function analyzeScope(wf, catalog) {
         const body = flow.body ?? keys[0];
         const src = sources[step.id];
         const innerVars = src?.kind === 'vars' && src.visibleIn?.inside === body ? [...vars, { id: step.id, name: src.name, seq: ++seq }] : vars;
-        const inner = addedSince(walk(step.slots?.[body], head, innerVars, others, stepOff), head);
+        // A record the loop provides to its body (0010: the record being looped over) is there
+        // on every iteration, and gone after the loop (not added to what follows).
+        let bodyHead = head;
+        for (const { id: sid } of exposesOf(type, step.config, step.id)) {
+          const s2 = sources[sid];
+          if (sid !== step.id && s2?.kind === 'record' && s2.visibleIn?.inside === body) bodyHead = push(bodyHead, sid, { certainty: 'always', seq: ++seq });
+        }
+        const inner = addedSince(walk(step.slots?.[body], bodyHead, innerVars, others, stepOff), bodyHead);
         const minFn = typeof type.minIterations === 'function' ? type.minIterations : MIN_ITERATIONS[step.type];
         const once = (minFn ? minFn(step.config ?? {}) : 0) >= 1;
         const loopName = src?.name ?? step.id;
+        const mode = step.config?.mode ?? 'fixed';
         added = new Map();
         for (const [id, e] of inner) {
-          added.set(id, once ? { ...e, certainty: worse('last', e.certainty) } : { ...e, certainty: 'maybe', why: e.why ?? { loop: loopName, loopId: step.id, range: (step.config?.mode ?? 'fixed') === 'range' } });
+          added.set(id, once ? { ...e, certainty: worse('last', e.certainty) } : { ...e, certainty: 'maybe', why: e.why ?? { loop: loopName, loopId: step.id, range: mode === 'range', ...(mode === 'each' ? { each: step.config?.from || '' } : {}) } });
         }
       } else if (keys.length && flow.kind !== 'sequence') {
         const alts = flow.alternatives ?? keys;
@@ -452,6 +506,9 @@ export function analyzeScope(wf, catalog) {
         return varByName(s.name)?.id === sid ? { certainty: 'always' } : { reason: 'shadowed' };
       }
       const e = sid === id ? null : entryAt(r.head, sid);
+      // A record visible inside a loop body only (0010): anywhere else it is "outside the loop",
+      // even when the loop is turned off (like loop variables).
+      if (s.visibleIn !== 'downstream') return e ? { certainty: e.certainty } : { reason: 'outsideLoop' };
       if (e) return { certainty: e.certainty, ...(e.why ? { why: e.why } : {}) };
       if (s.disabled) return { reason: 'disabled' };
       if (r.others.has(sid)) return { reason: 'otherBranch' };
@@ -459,7 +516,7 @@ export function analyzeScope(wf, catalog) {
     };
     const noteOf = (sid, st) => {
       const s = sources[sid];
-      if (st.reason === 'outsideLoop') return `chỉ có bên trong vòng lặp "${s.name}"`;
+      if (st.reason === 'outsideLoop') return `chỉ có bên trong vòng lặp "${s.kind === 'vars' ? s.name : sources[s.nodeId]?.name ?? s.name}"`;
       if (st.reason === 'shadowed') return `bị vòng lặp "${s.name}" bên trong che`;
       if (st.reason === 'after' && sid === id) return NOTES.self;
       return NOTES[st.reason];
@@ -504,9 +561,9 @@ export function analyzeScope(wf, catalog) {
         const shown = new Set(this.visible.map((v) => v.source));
         hidden = [];
         for (const s of allSources) {
-          if (shown.has(s.nodeId)) continue;
-          const st = state(s.nodeId);
-          hidden.push({ source: s.nodeId, reason: st.reason ?? 'after', note: noteOf(s.nodeId, st.reason ? st : { reason: 'after' }) });
+          if (shown.has(s.id)) continue;
+          const st = state(s.id);
+          hidden.push({ source: s.id, reason: st.reason ?? 'after', note: noteOf(s.id, st.reason ? st : { reason: 'after' }) });
         }
         return hidden;
       },
@@ -565,13 +622,16 @@ function resolveRef({ step, here, o, path, sources, byName, loopKeys }) {
     const ok = (s) => Object.entries(accepts).every(([k, v]) => s[k] === v);
     const src = (byName.get(path) ?? []).find((s) => ok(s));
     if (!src) {
+      // The record a Lặp `each` loops over (0010) is one record, not a pool.
+      const item = accepts.pool && (byName.get(path) ?? []).find((s) => s.current === 'item');
+      if (item) return fail('itemNotPool', { source: item.id, pool: item.from ?? '' });
       const names = Object.values(sources).filter(ok).map((s) => s.name);
       const hint = closest(path, names);
       return fail('unknownName', hint ? { suggestion: { option: o.option, from: path, to: hint } } : {});
     }
-    const st = src.nodeId === step.id ? { reason: 'after' } : stateAt(here, src.nodeId);
-    if (st.reason) return fail(st.reason, { source: src.nodeId, reason: st.reason });
-    return { ...base, source: src.nodeId, certainty: st.certainty, ...(st.certainty === 'maybe' ? { code: 'maybe', level: 'warning', why: st.why } : {}) };
+    const st = src.id === step.id ? { reason: 'after' } : stateAt(here, src.id);
+    if (st.reason) return fail(st.reason, { source: src.id, reason: st.reason });
+    return { ...base, source: src.id, certainty: st.certainty, ...(st.certainty === 'maybe' ? { code: 'maybe', level: 'warning', why: st.why } : {}) };
   }
 
   // this.Field — fields above the current one in the same record step.
@@ -616,15 +676,16 @@ function resolveRef({ step, here, o, path, sources, byName, loopKeys }) {
     const hint = closest(name, [...visibleNames, ...(o.fieldIndex !== undefined ? ['this'] : [])]) ?? closest(name, [...byName.keys()]);
     return fail('unknownName', hint ? { suggestion: { option: o.option, from: path, to: [hint, ...rest].join('.') } } : {});
   }
-  const withSrc = { source: src.nodeId };
+  const withSrc = { source: src.id };
 
-  if (src.nodeId === step.id && o.fieldIndex !== undefined && src.kind === 'record') {
+  if (src.id === step.id && o.fieldIndex !== undefined && src.kind === 'record') {
     return fail('selfAlias', { ...withSrc, suggestion: { option: o.option, from: path, to: ['this', ...rest].join('.') } });
   }
-  const st = src.nodeId === step.id ? { reason: 'after' } : stateAt(here, src.nodeId);
+  const st = src.id === step.id ? { reason: 'after' } : stateAt(here, src.id);
   if (st.reason) return fail(st.reason, { ...withSrc, reason: st.reason });
 
   if (!rest.length) return fail('wholeRecord', withSrc);
+  if (src.unresolved) return { ...base, ...withSrc, certainty: st.certainty };
   if (src.kind === 'vars') {
     const r = resolveMember(src.members, rest);
     if (!r.ok) {
@@ -665,21 +726,26 @@ function resolveRef({ step, here, o, path, sources, byName, loopKeys }) {
 export function refChoices(scope, stepId, accepts = { lookupParent: true }) {
   const ok = (s) => s && Object.entries(accepts ?? { lookupParent: true }).every(([k, v]) => s[k] === v);
   const here = scope?.at?.[stepId];
-  const pick = (s, extra) => ({ source: s.nodeId, name: s.name, sobject: s.sobject, label: s.label, nodeType: s.nodeType, origin: s.origin, current: s.current, ...(s.from ? { from: s.from } : {}), ...extra });
+  const pick = (s, extra) => ({ source: s.id, name: s.name, sobject: s.sobject, label: s.label, nodeType: s.nodeType, origin: s.origin, current: s.current, ...(s.from ? { from: s.from } : {}), ...extra });
   const out = [];
   const seen = new Set();
   for (const v of here?.visible ?? []) {
     const s = scope.sources[v.source];
     if (!ok(s)) continue;
-    seen.add(s.nodeId);
+    seen.add(s.id);
     out.push(pick(s, { usable: true, certainty: v.certainty, note: v.note ?? '' }));
   }
   for (const s of Object.values(scope?.sources ?? {})) {
-    if (!ok(s) || seen.has(s.nodeId) || s.nodeId === stepId) continue;
-    const h = here?.hidden.find((x) => x.source === s.nodeId);
+    if (!ok(s) || seen.has(s.id) || s.id === stepId) continue;
+    const h = here?.hidden.find((x) => x.source === s.id);
     out.push(pick(s, { usable: false, reason: h?.reason ?? 'after', note: h?.note ?? NOTES.after }));
   }
   return out;
+}
+
+/** Step that provides source `sourceId` (`<loopId>#item` → the loop's id). */
+export function sourceStep(scope, sourceId) {
+  return scope?.sources?.[sourceId]?.nodeId ?? sourceId;
 }
 
 /** References (from analyzeScope) that point at `sourceId`, optionally at one member. */
@@ -711,8 +777,8 @@ export function poolUsage(wf, catalog) {
     for (const step of Array.isArray(list) ? list : []) {
       if (!step || typeof step !== 'object' || step.disabled === true) continue;
       const type = cat.nodeTypes.get(step.type);
-      const ex = type?.exposes;
-      if (ex?.kind === 'record') {
+      for (const { ex } of exposesOf(type, step.config, step.id)) {
+        if (ex.kind !== 'record') continue;
         const c = step.config ?? {};
         const name = c[ex.name?.key] || (ex.name?.fallback === 'id' ? step.id : '');
         const key = ['members', 'label', 'origin'].map((k) => ex[k]?.fromSource).find(Boolean);

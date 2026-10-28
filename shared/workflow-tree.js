@@ -10,7 +10,7 @@
 // An insertion point ("target") is { parentId: null | stepId, slot: null | key, index }:
 // parentId null means the root sequence `wf.steps`.
 
-import { analyzeScope, referenceOptions, refsTo, tokenize, stripPath } from './scope.js';
+import { analyzeScope, referenceOptions, refsTo, tokenize, stripPath, exposesOf, exposesList } from './scope.js';
 
 const ownSlots = (step) => Object.keys(step?.slots ?? {});
 
@@ -185,11 +185,31 @@ export function aliasTypes(catalog) {
   return new Set(types.filter((t) => t.exposes?.kind === 'record' && t.exposes?.name?.key === 'alias').map((t) => t.type));
 }
 
-/** Aliases of record / pool steps (the names other steps reference). */
+const catalogType = (catalog, type) => (catalog?.nodeTypes instanceof Map ? catalog.nodeTypes.get(type) : catalog?.nodeTypes?.find?.((t) => t.type === type));
+
+/**
+ * The names `step` gives in the alias namespace (one namespace, unique across the tree):
+ * [{ key, value }] for every config key naming a record or pool in its `exposes` entries in
+ * effect — `alias` of Record, Query, Chọn bản ghi; `itemAlias` of a Lặp `each` (design 0010).
+ * Without a catalogue (v1 migration): a Record's `alias`.
+ */
+export function stepNames(step, catalog) {
+  const c = step?.config ?? {};
+  if (!Array.isArray(catalog?.nodeTypes) && !(catalog?.nodeTypes instanceof Map)) {
+    return step?.type === 'record' && c.alias ? [{ key: 'alias', value: c.alias }] : [];
+  }
+  const out = [];
+  for (const { ex } of exposesOf(catalogType(catalog, step?.type), c)) {
+    const key = ex.kind === 'record' ? ex.name?.key : null;
+    if (key && c[key]) out.push({ key, value: c[key] });
+  }
+  return out;
+}
+
+/** Aliases of record / pool steps and records looped over (the names other steps reference). */
 export function collectAliases(wf, catalog) {
-  const types = aliasTypes(catalog);
   const out = new Set();
-  walkSteps(wf?.steps, (s) => { if (types.has(s.type) && s.config?.alias) out.add(s.config.alias); });
+  walkSteps(wf?.steps, (s) => { for (const e of stepNames(s, catalog)) out.add(e.value); });
   return out;
 }
 
@@ -226,8 +246,8 @@ function legacyReferenceOptions(step) {
   if (step.type === 'branch' && typeof step.config?.left === 'string') {
     out.push({ field: 'left', option: 'left', mode: 'path', value: step.config.left, set: (v) => { step.config.left = v; } });
   }
-  if (step.type === 'pick') {
-    for (const [key, mode] of [['from', 'ref'], ['filterValue', 'template']]) {
+  if (step.type === 'pick' || (step.type === 'loop' && step.config?.mode === 'each')) {
+    for (const [key, mode] of step.type === 'pick' ? [['from', 'ref'], ['filterValue', 'template']] : [['from', 'ref']]) {
       if (typeof step.config?.[key] === 'string') out.push({ field: key, option: key, mode, value: step.config[key], set: (v) => { step.config[key] = v; } });
     }
   }
@@ -330,90 +350,103 @@ export function renameField(wf, stepId, from, to, { catalog } = {}) {
  * variables only inside the loop body — and, with `catalog`, only where they resolve to this
  * loop (not inside a nested loop of the same name). A record without alias is referenced by its
  * id; the first alias set moves those references. Returns true when references were moved.
+ * `key` (default 'alias'): the config key holding the name — 'itemAlias' for the record a Lặp
+ * `each` loops over (design 0010), renamed like a loop variable: inside the body, only the
+ * references to that record.
  */
-export function setStepAlias(wf, id, value, { memo = new Map(), slotKeys, catalog, scope } = {}) {
+export function setStepAlias(wf, id, value, { memo = new Map(), slotKeys, catalog, scope, key = 'alias' } = {}) {
   const at = findStep(wf, id, slotKeys);
   if (!at) return false;
   const step = at.step;
   const c = (step.config ??= {});
-  const isLoop = step.type === 'loop';
+  const isLoop = step.type === 'loop' && key === 'alias';
+  const entries = exposesList(catalog ? catalogType(catalog, step.type) : null);
+  const index = entries.findIndex((ex) => ex.name?.key === key);
+  const entry = entries[index];
+  // Names visible inside a slot only (loop variable, record looped over) rename inside it.
+  const inside = entry?.visibleIn?.inside ?? (isLoop ? 'body' : null);
+  const sourceId = index > 0 ? `${id}#${entry.key ?? index}` : id;
+  const memoKey = key === 'alias' ? id : `${id}#${key}`;
   const effective = (v) => (isLoop ? v || 'loop' : v);
-  const types = aliasTypes(catalog);
-  const good = (name) => isAliasName(name) && !aliasTaken(wf, at, name, slotKeys, types);
+  const good = (name) => isAliasName(name) && !aliasTaken(wf, at, name, slotKeys, catalog, key);
   // References can follow from the current name when it is unambiguous. A loop variable that
   // shadows an enclosing one still owns the references inside its body.
-  const owns = (name) => isAliasName(name) && (isLoop || !aliasTaken(wf, at, name, slotKeys, types));
-  const current = effective(c.alias);
-  if (good(current) || (!memo.has(id) && owns(current))) memo.set(id, current);
+  const owns = (name) => isAliasName(name) && (isLoop || !aliasTaken(wf, at, name, slotKeys, catalog, key));
+  const current = effective(c[key]);
+  if (good(current) || (!memo.has(memoKey) && owns(current))) memo.set(memoKey, current);
   // A record without alias is referenced by its id (like the executor): the first alias takes them along.
-  const exposes = (catalog?.nodeTypes instanceof Map ? catalog.nodeTypes.get(step.type) : catalog?.nodeTypes?.find?.((t) => t.type === step.type))?.exposes;
-  const byId = catalog ? exposes?.name?.fallback === 'id' : step.type === 'record';
-  if (byId && !c.alias && !memo.has(id) && owns(String(step.id))) memo.set(id, String(step.id));
-  const from = memo.get(id);
+  const byId = key === 'alias' && (catalog ? entries[0]?.name?.fallback === 'id' : step.type === 'record');
+  if (byId && !c.alias && !memo.has(memoKey) && owns(String(step.id))) memo.set(memoKey, String(step.id));
+  const from = memo.get(memoKey);
   const to = effective(value);
   if (!from || from === to || !good(to) || !owns(from)) {
-    c.alias = value;
+    c[key] = value;
     return false;
   }
   let only;
-  if (isLoop && catalog) {
-    // Only the references that resolve to this loop (not those of a shadowing inner loop),
-    // including options hidden by showIf. `scope` (analysis of `wf` as it is) saves a second
-    // analysis when the loop still has the name the references use.
-    const reuse = scope && effective(c.alias) === from;
-    const saved = c.alias;
-    c.alias = from;
+  if (inside && catalog) {
+    // Only the references that resolve to this loop / record (not those of a shadowing inner
+    // loop), including options hidden by showIf. `scope` (analysis of `wf` as it is) saves a
+    // second analysis when the step still has the name the references use.
+    const reuse = scope && effective(c[key]) === from;
+    const saved = c[key];
+    c[key] = from;
     const refs = (reuse ? scope : analyzeScope(wf, catalog)).refs;
-    c.alias = saved;
-    only = new Set(refs.filter((r) => r.source === id).map((r) => `${r.nodeId}|${r.field}|${r.option}`));
+    c[key] = saved;
+    only = new Set(refs.filter((r) => r.source === sourceId).map((r) => `${r.nodeId}|${r.field}|${r.option}`));
   }
-  c.alias = value;
-  renameAlias(isLoop ? step.slots?.body ?? [] : wf.steps, from, to, { catalog, only });
-  memo.set(id, to);
+  c[key] = value;
+  renameAlias(inside ? step.slots?.[inside] ?? [] : wf.steps, from, to, { catalog, only });
+  memo.set(memoKey, to);
   return true;
 }
 
 /**
- * Is `name` used by another step in a way that clashes with step `at` (from findStep)?
- * Record / pool alias: another such alias or any loop variable. Loop variable: a record alias, or
- * the variable of an enclosing loop or of a loop inside this one (shadowing).
+ * Is `name` used by another step in a way that clashes with the name `key` of step `at` (from
+ * findStep)? Record / pool alias or record looped over: another such name or any loop variable.
+ * Loop variable: a record alias, or the variable of an enclosing loop or of a loop inside this
+ * one (shadowing).
  */
-function aliasTaken(wf, at, name, slotKeys, types = aliasTypes()) {
+function aliasTaken(wf, at, name, slotKeys, catalog, key = 'alias') {
   const self = at.step;
+  const selfVar = self.type === 'loop' && key === 'alias';
   let taken = false;
   walkSteps(wf.steps, (s) => {
-    if (taken || s === self) return !taken;
-    if (types.has(s.type) && s.config?.alias === name) taken = true;
-    else if (s.type === 'loop' && self.type !== 'loop' && (s.config?.alias || 'loop') === name) taken = true;
+    if (taken) return false;
+    if (stepNames(s, catalog).some((e) => e.value === name && !(s === self && e.key === key))) taken = true;
+    else if (s.type === 'loop' && !selfVar && (s.config?.alias || 'loop') === name) taken = true;
     return !taken;
   }, slotKeys);
-  if (taken || self.type !== 'loop') return taken;
+  if (taken || !selfVar) return taken;
   const nested = [];
   walkSteps(Object.values(self.slots ?? {}).flat(), (s) => { if (s.type === 'loop') nested.push(s); }, slotKeys);
   return [...at.ancestors, ...nested].some((s) => s.type === 'loop' && (s.config?.alias || 'loop') === name);
 }
 
 /**
- * Deep-copy steps with new ids, and new aliases for every record alias defined inside the
- * copy; references *inside the copy* follow the rename. `ids` and `aliases` (Sets) are the
- * names already taken and are updated. Returns { steps, renamed: [{ id, copyId, alias, newAlias }] }.
+ * Deep-copy steps with new ids, and new names for every record alias (and record looped over)
+ * defined inside the copy; references *inside the copy* follow the rename. `ids` and `aliases`
+ * (Sets) are the names already taken and are updated.
+ * Returns { steps, renamed: [{ id, copyId, alias, newAlias, names? }] } (`names`: other renamed
+ * keys, [{ key, from, to }]).
  */
 export function cloneSteps(steps, { ids = new Set(), aliases = new Set(), makeId = nextId, catalog } = {}) {
   const copy = structuredClone(steps);
-  const types = aliasTypes(catalog);
   const renamed = [];
   const aliasMap = new Map();
   walkSteps(copy, (s) => {
     const entry = { id: s.id, copyId: makeId(s.id, ids) };
     ids.add(entry.copyId);
     s.id = entry.copyId;
-    if (types.has(s.type) && s.config?.alias) {
-      const next = nextName(s.config.alias, aliases);
+    for (const { key, value } of stepNames(s, catalog)) {
+      const next = nextName(value, aliases);
       aliases.add(next);
-      aliasMap.set(s.config.alias, next);
-      entry.alias = s.config.alias;
-      entry.newAlias = next;
-      s.config.alias = next;
+      aliasMap.set(value, next);
+      if (key === 'alias') {
+        entry.alias = value;
+        entry.newAlias = next;
+      } else (entry.names ??= []).push({ key, from: value, to: next });
+      s.config[key] = next;
     }
     renamed.push(entry);
   });

@@ -29,6 +29,16 @@
     "count": 10,
     "byStep": "68d9d1b88a0e399a3c11951950fa1ce75d423700c41040e9a892c0851c032684"
   },
+  "sample: Contact cho mỗi Account có sẵn @42": {
+    "records": "3e2150a4928bbe1057a50d838e875bde9936d42b431fd3d7da84bfbe85045dd0",
+    "count": 15,
+    "byStep": "8089f6fa19cacbb42ba47c30c7530c60d819951cdbfe231ed0c9dbed4e947082"
+  },
+  "sample: Contact cho mỗi Account có sẵn @7": {
+    "records": "0f1565d58454043bd7f855ddfab1b4b9ed9ee9f4e22e5d696384190a07ca875b",
+    "count": 15,
+    "byStep": "8089f6fa19cacbb42ba47c30c7530c60d819951cdbfe231ed0c9dbed4e947082"
+  },
   "random lookups across nested loops and branches @42": {
     "records": "c265e6ca83ac81a174345a0a2b6be2bf72a014225e55afa0513b39aa1f571f37",
     "count": 30,
@@ -78,5 +88,15 @@
     "records": "175c625653676473e683e781eb3101f88ddd0cefb911f7eb350f25c4ea03946b",
     "count": 25,
     "byStep": "4d33d718c823a53d16f4fe922aef5a9b23a92d9448113a12b87dd6a3f60b324e"
+  },
+  "each loops over generated, Query and pick pools, nested (0010) @42": {
+    "records": "41cc82786251408b6257a6ce49bc922a63dd151289883661aeda95629f686641",
+    "count": 16,
+    "byStep": "10be9bf642a1a907fcb5d733f9d27eb8cbf0047ecaec957dd93464fd3a827039"
+  },
+  "each loops over generated, Query and pick pools, nested (0010) @7": {
+    "records": "4aa71a979e611b86157a498fdfc9b3dea2f48bd3940686f479e1dad239b4fa8c",
+    "count": 18,
+    "byStep": "5fab98b367777d8c7114646d45175fdbe77e28f13563930888f2be784b7428a8"
   }
 }

@@ -583,3 +583,193 @@ test('Master-Detail into an empty Query pool names the Query', () => {
   assert.throws(() => runWorkflow(w, { seed: 1, queryResults: { q: rows([]) } }), (e) => e.issues[0].nodeId === 'c'
     && e.issues[0].message === 'Field AccountId: Query "accs" không trả về bản ghi nào. Kiểm tra "Điều kiện (WHERE)" của bước Query hoặc chọn org khác.');
 });
+
+// ---------- design 0010: Lặp "Mỗi bản ghi trong pool" ----------
+
+const each = (id, from, itemAlias, body = [], extra = {}) => loop(id, { mode: 'each', from, itemAlias, ...extra }, body);
+const lk = (name, ref, mode = 'current') => ({ name, type: 'lookup', options: { mode, ref } });
+const issuesAt = (list, nodeId, field) => list.filter((i) => i.nodeId === nodeId && i.field === field).map((i) => i.message);
+const accRows = (n) => rows(Array.from({ length: n }, (_, i) => ({ Id: `001${String(i + 1).padStart(15, '0')}`, Name: `Org ${i + 1}` })));
+
+test('validation: each loop needs an upstream pool (nodeId + field from)', () => {
+  const body = [record('c', 'Contact', 'con', [{ name: 'LastName', type: 'text', options: {} }])];
+  const at = (w) => issuesAt(errorsOf(w), 'l', 'from');
+  assert.deepEqual(at(wf([each('l', '', 'acc', body)])), ['Chưa chọn pool để lặp. Chọn alias của một bước Query, Record hoặc Chọn bản ghi ở phía trên.']);
+  assert.deepEqual(at(wf([each('l', 'accs', 'acc', body)])), ['Không có bước nào có alias "accs". Chọn pool khác trong danh sách hoặc thêm bước Query/Record có alias này ở phía trên.']);
+  assert.deepEqual(at(wf([each('l', 'accs', 'acc', body), query('q', 'accs')])), ['Pool "accs" nằm sau bước Lặp này nên chưa có bản ghi khi chạy tới đây. Kéo bước "accs" lên phía trên hoặc chọn pool khác.']);
+  assert.deepEqual(at(wf([branch('b', {}, [query('q', 'accs')], [each('l', 'accs', 'acc', body)])])), ['Pool "accs" nằm ở nhánh còn lại của bước Rẽ nhánh phía trên nên không chạy cùng lượt với bước này. Đưa "accs" ra trước bước Rẽ nhánh hoặc chọn pool khác.']);
+  assert.deepEqual(at(wf([{ ...query('q', 'accs'), disabled: true }, each('l', 'accs', 'acc', body)])), ['Bước "accs" đang tắt. Bật lại bước đó (Ctrl+/) hoặc chọn pool khác.']);
+  // The record of another each-loop is not a pool; neither for a Chọn bản ghi.
+  const nested = wf([query('q', 'accs'), each('l0', 'accs', 'acc', [each('l', 'acc', 'a2', body, { alias: 'k' }), pick('p', 'pk', 'acc')])]);
+  assert.deepEqual(at(nested), ['"acc" là bản ghi đang lặp của bước Lặp phía trên, không phải pool. Chọn pool gốc "accs".']);
+  assert.deepEqual(issuesAt(errorsOf(nested), 'p', 'from'), ['"acc" là bản ghi đang lặp, không phải pool. Chọn pool gốc "accs".']);
+  // A pool that may not exist is a warning.
+  const maybe = wf([branch('b', {}, [query('q', 'accs')]), each('l', 'accs', 'acc', body)]);
+  assert.deepEqual(issuesAt(errorsOf(maybe), 'l', 'from'), []);
+  assert.deepEqual(issuesAt(warningsOf(maybe), 'l', 'from'), ['Pool "accs" nằm trong một nhánh rẽ hoặc vòng lặp có thể không chạy, nên có lúc vòng lặp này không chạy lần nào.']);
+  // Empty body: the existing warning; a clean each-loop has no other issue.
+  assert.deepEqual(validateWorkflow(wf([query('q', 'accs'), each('l', 'accs', 'acc', body)])), { errors: [], warnings: [] });
+  assert.deepEqual(issuesAt(warningsOf(wf([query('q', 'accs'), each('l', 'accs', 'acc')])), 'l', 'slots.body'), ['Vòng lặp chưa có bước nào. Bấm "+ Thêm bước vào vòng lặp".']);
+});
+
+test('validation: each item alias is unique and differs from loop variables', () => {
+  const body = [record('c', 'Contact', 'con', [{ name: 'LastName', type: 'text', options: {} }])];
+  const at = (w) => issuesAt(errorsOf(w), 'l', 'itemAlias');
+  assert.deepEqual(at(wf([query('q', 'accs'), each('l', 'accs', '', body)])), ['Đặt tên cho bản ghi đang lặp (ví dụ acc) để các bước bên trong dùng {{acc.Name}}.']);
+  assert.deepEqual(at(wf([query('q', 'accs'), each('l', 'accs', '1a', body)])), ['Alias "1a" không hợp lệ (chỉ chữ, số, gạch dưới; không bắt đầu bằng số; không dùng "this").']);
+  assert.deepEqual(at(wf([query('q', 'accs'), each('l', 'accs', 'this', body)])), ['Alias "this" không hợp lệ (chỉ chữ, số, gạch dưới; không bắt đầu bằng số; không dùng "this").']);
+  // The second owner in reading order gets the error (here the Record inside the body).
+  assert.deepEqual(issuesAt(errorsOf(wf([query('q', 'accs'), each('l', 'accs', 'con', body)])), 'c', 'alias'), ['Alias "con" đã được dùng ở bước khác. Đổi alias của một trong hai bước.']);
+  assert.deepEqual(at(wf([query('q', 'accs'), each('l', 'accs', 'accs', body)])), ['Alias "accs" đã được dùng ở bước khác. Đổi alias của một trong hai bước.']);
+  // Same name as a loop variable (its own, or another loop's): once, on itemAlias.
+  const own = errorsOf(wf([query('q', 'accs'), each('l', 'accs', 'loop', body)]));
+  assert.deepEqual(own.map((i) => `${i.nodeId}.${i.field}: ${i.message}`), ['l.itemAlias: Tên bản ghi đang lặp "loop" trùng tên biến lặp. Đổi một trong hai tên.']);
+  assert.deepEqual(at(wf([query('q', 'accs'), loop('o', { count: 1, alias: 'i' }, [each('l', 'accs', 'i', body)])])), ['Tên bản ghi đang lặp "i" trùng tên biến lặp. Đổi một trong hai tên.']);
+  // A turned-off each-loop still owns its name (turning it back on cannot create a clash), but a
+  // missing name is not checked.
+  assert.deepEqual(issuesAt(errorsOf(wf([query('q', 'accs'), { ...each('l', 'accs', 'con', body), disabled: true }, record('c2', 'Contact', 'con', [])])), 'c2', 'alias'), ['Alias "con" đã được dùng ở bước khác. Đổi alias của một trong hai bước.']);
+  assert.deepEqual(errorsOf(wf([query('q', 'accs'), { ...each('l', 'accs', '', body), disabled: true }])), []);
+  // Fixed / range: a leftover itemAlias is not in the namespace.
+  assert.deepEqual(errorsOf(wf([query('q', 'accs'), loop('l', { count: 1, itemAlias: 'accs', from: 'zzz' }, body)])), []);
+});
+
+test('validation: item alias used outside its loop is an error on fields.<Name>', () => {
+  const w = wf([
+    query('q', 'accs'),
+    each('l', 'accs', 'acc', [record('in', 'Contact', 'con', [lk('AccountId', 'acc'), tplField('Title', '{{acc.Name}}')])]),
+    record('out', 'Contact', 'con2', [lk('AccountId', 'acc'), tplField('Title', '{{acc.Name}}')]),
+  ]);
+  const errs = errorsOf(w);
+  assert.deepEqual(issuesAt(errs, 'in', 'fields.AccountId').concat(issuesAt(errs, 'in', 'fields.Title')), []);
+  assert.deepEqual(issuesAt(errs, 'out', 'fields.AccountId'), ['Field "AccountId": "acc" là bản ghi đang lặp của bước Lặp phía trên, chỉ dùng được bên trong vòng lặp đó. Kéo bước này vào trong vòng lặp hoặc chọn bản ghi cha khác.']);
+  assert.deepEqual(issuesAt(errs, 'out', 'fields.Title'), ['Field "Title": {{acc.Name}}: "acc" là bản ghi đang lặp của bước Lặp phía trên, chỉ dùng được bên trong vòng lặp đó. Kéo bước này vào trong vòng lặp.']);
+  assert.ok(errs.filter((i) => i.nodeId === 'out').every((i) => i.code === 'outsideLoop'));
+  // A branch `left` too (no field prefix).
+  const left = errorsOf(wf([query('q', 'accs'), each('l', 'accs', 'acc', [record('in', 'Contact', 'con', [])]), branch('b', { kind: 'compare', left: 'acc.Name', op: 'eq', right: 'x' }, [record('t', 'Task', 't', [])])]));
+  assert.deepEqual(issuesAt(left, 'b', 'left'), ['acc.Name: "acc" là bản ghi đang lặp của bước Lặp phía trên, chỉ dùng được bên trong vòng lặp đó. Kéo bước này vào trong vòng lặp.']);
+});
+
+test('validation: lookup random on an item alias is an error', () => {
+  const w = wf([query('q', 'accs'), each('l', 'accs', 'acc', [record('in', 'Contact', 'con', [lk('AccountId', 'acc', 'random')])])]);
+  const errs = errorsOf(w);
+  assert.deepEqual(issuesAt(errs, 'in', 'fields.AccountId'), ['Field "AccountId": "acc" là bản ghi đang lặp, không phải pool. Chọn "Bản ghi hiện tại của alias", hoặc chọn pool "accs" nếu muốn ngẫu nhiên.']);
+  assert.equal(errs[0].code, 'randomOfItem');
+  // Outside the loop the reference is reported once (outsideLoop), not twice.
+  const out = errorsOf(wf([query('q', 'accs'), each('l', 'accs', 'acc', [record('in', 'Contact', 'con', [])]), record('x', 'Contact', 'x', [lk('AccountId', 'acc', 'random')])]));
+  assert.deepEqual(out.map((i) => i.code), ['outsideLoop']);
+});
+
+test('validation: count/min/max are ignored in each mode', () => {
+  const body = [record('c', 'Contact', 'con', [])];
+  assert.deepEqual(errorsOf(wf([query('q', 'accs'), each('l', 'accs', 'acc', body, { count: -4, min: 9, max: 1 })])), []);
+  assert.deepEqual(errorsOf(wf([query('q', 'accs'), loop('l', { mode: 'fixed', count: -4, from: '', itemAlias: '' }, body)])).map((i) => i.field), ['count']);
+  assert.deepEqual(errorsOf(wf([loop('l', { mode: 'nope' }, body)])).map((i) => `${i.field}: ${i.message}`), ['mode: Chế độ lặp "nope" không hợp lệ.']);
+});
+
+test('each loop runs the body once per record of a record pool, in order', () => {
+  const w = wf([
+    record('a', 'Account', 'acc', accountFields, { count: 3 }),
+    each('l', 'acc', 'a', [record('c', 'Contact', 'con', [lk('AccountId', 'a'), tplField('Title', '{{loop.index}}/{{loop.count}} {{a.Name}} #{{a.$n}}')])]),
+  ]);
+  const { records, stats } = runWorkflow(w, { seed: 3, now: NOW });
+  const accs = records.filter((r) => r.sobject === 'Account');
+  const cons = records.filter((r) => r.sobject === 'Contact');
+  assert.deepEqual(cons.map((c) => c.fields.AccountId), [{ $ref: 'acc#1' }, { $ref: 'acc#2' }, { $ref: 'acc#3' }]);
+  assert.deepEqual(cons.map((c) => c.fields.Title), accs.map((x, i) => `${i + 1}/3 ${x.fields.Name} #${i + 1}`));
+  assert.deepEqual(stats.byStep.l, { runs: 1, records: 3, iterations: 3 });
+  // Every record made so far, across loop runs (same meaning as Lookup "Ngẫu nhiên trong pool").
+  const twice = runWorkflow(wf([loop('o', { count: 2, alias: 'o' }, [record('a', 'Account', 'acc', accountFields, { count: 2 }), each('l', 'acc', 'a', [record('c', 'Contact', 'con', [lk('AccountId', 'a')])])])]), { seed: 1, now: NOW });
+  assert.deepEqual(twice.records.filter((r) => r.sobject === 'Contact').map((c) => c.fields.AccountId.$ref), ['acc#1', 'acc#2', 'acc#1', 'acc#2', 'acc#3', 'acc#4']);
+  assert.equal(twice.stats.byStep.l.iterations, 6);
+});
+
+test('each loop over query rows gives real Ids', () => {
+  const w = wf([
+    query('q', 'accs', { fields: ['Id', 'Name'] }),
+    each('l', 'accs', 'acc', [record('c', 'Contact', 'con', [lk('AccountId', 'acc'), tplField('Title', '{{acc.name}} {{acc.Id}}')], { count: 2 })]),
+  ]);
+  const { records, stats } = runWorkflow(w, { seed: 1, now: NOW, queryResults: { q: accRows(3) } });
+  assert.equal(records.length, 6);
+  assert.deepEqual(records.map((r) => r.fields.AccountId), [1, 1, 2, 2, 3, 3].map((i) => `001${String(i).padStart(15, '0')}`));
+  assert.equal(records[2].fields.Title, `Org 2 001${'2'.padStart(15, '0')}`);
+  assert.equal(stats.byStep.l.iterations, 3);
+});
+
+test('each loop over a pick pool and nested each loops', () => {
+  // The records a Chọn bản ghi picked (with repeats), in pick order.
+  const picks = runWorkflow(wf([
+    query('q', 'accs'),
+    loop('k', { count: 4 }, [pick('p', 'pk', 'accs', { mode: 'sequential' })]),
+    each('l', 'pk', 'it', [record('c', 'Contact', 'con', [lk('AccountId', 'it')])]),
+  ]), { seed: 1, now: NOW, queryResults: { q: accRows(3) } });
+  assert.deepEqual(picks.records.map((r) => r.fields.AccountId.slice(-1)), ['1', '2', '3', '1']);
+  // Nested: every pair (Account × User), inner variable loop2 next to the outer loop.
+  const nested = runWorkflow(wf([
+    query('q', 'accs'),
+    query('u', 'users', { sobject: 'User' }),
+    each('l', 'accs', 'acc', [each('l2', 'users', 'user', [record('t', 'Task', 'task', [lk('WhatId', 'acc'), lk('OwnerId', 'user'), tplField('Subject', '{{loop.index}}.{{loop2.index}}/{{loop2.count}}')])], { alias: 'loop2' })]),
+  ]), { seed: 1, now: NOW, queryResults: { q: accRows(2), u: rows([{ Id: '005A', Name: 'U1' }, { Id: '005B', Name: 'U2' }, { Id: '005C', Name: 'U3' }], 'User') } });
+  assert.deepEqual(nested.records.map((r) => `${r.fields.WhatId.slice(-1)}-${r.fields.OwnerId} ${r.fields.Subject}`), [
+    '1-005A 1.1/3', '1-005B 1.2/3', '1-005C 1.3/3', '2-005A 2.1/3', '2-005B 2.2/3', '2-005C 2.3/3',
+  ]);
+  assert.deepEqual([nested.stats.byStep.l.iterations, nested.stats.byStep.l2.iterations, nested.stats.byStep.l2.runs], [2, 6, 2]);
+});
+
+test('each loop draws nothing from the rng', () => {
+  const tail = record('z', 'Lead', 'lead', [{ name: 'LastName', type: 'text', options: { mode: 'lastName' } }, { name: 'N', type: 'number', options: { min: 1, max: 1e9 } }], { count: 5 });
+  const base = wf([record('a', 'Account', 'acc', accountFields, { count: 2 }), tail]);
+  const withEach = wf([record('a', 'Account', 'acc', accountFields, { count: 2 }), each('l', 'acc', 'a'), each('l2', 'acc', 'b', [], { alias: 'k' }), tail]);
+  const leads = (w) => runWorkflow(w, { seed: 11, now: NOW }).records.filter((r) => r.sobject === 'Lead').map((r) => r.fields);
+  assert.deepEqual(leads(withEach), leads(base));
+  // An empty pool (Query with no rows) draws nothing either.
+  const q0 = (w) => runWorkflow(w, { seed: 11, now: NOW, queryResults: { q: rows([]) } }).records.map((r) => r.fields);
+  assert.deepEqual(q0(wf([query('q', 'accs'), each('l', 'accs', 'acc', [record('c', 'Contact', 'con', [])]), tail])), q0(wf([query('q', 'accs'), tail])));
+});
+
+test('each loop over an empty pool runs 0 times and warns once on from', () => {
+  const w = wf([
+    query('q', 'accs'),
+    loop('o', { count: 3 }, [each('l', 'accs', 'acc', [record('c', 'Contact', 'con', [lk('AccountId', 'acc')])], { alias: 'k' })]),
+  ]);
+  const r = runWorkflow(w, { seed: 1, now: NOW, queryResults: { q: rows([]) } });
+  assert.equal(r.records.length, 0);
+  assert.deepEqual(r.stats.byStep.l, { runs: 3, records: 0, iterations: 0 });
+  const warns = r.warnings.filter((x) => x.code === 'eachEmpty');
+  assert.deepEqual(warns, [{
+    message: 'Bước Lặp "acc": pool "accs" không có bản ghi nào nên các bước bên trong không chạy. Kiểm tra bước "accs" (WHERE của Query hoặc số bản ghi).',
+    nodeId: 'l', field: 'from', code: 'eachEmpty',
+  }]);
+  // A pool that never ran (in a branch not taken): 0 iterations too.
+  const never = runWorkflow(wf([branch('b', { kind: 'chance', probability: 0 }, [record('a', 'Account', 'acc', [])]), each('l', 'acc', 'a', [record('c', 'Contact', 'con', [])])]), { seed: 1, now: NOW });
+  assert.deepEqual([never.records.length, never.stats.byStep.l.iterations, never.warnings.some((x) => x.code === 'eachEmpty')], [0, 0, true]);
+});
+
+test('each loop snapshots the pool when it starts', () => {
+  // A Chọn bản ghi inside the body adds to its own pool; a second loop over that pool only sees
+  // what was there when it started. And records made in the body of a loop over "acc" are not visited.
+  const w = wf([
+    record('a', 'Account', 'acc', accountFields, { count: 2 }),
+    each('l', 'acc', 'x', [record('a2', 'Account', 'acc2', accountFields), pick('p', 'pk', 'acc')]),
+    each('l2', 'pk', 'y', [pick('p2', 'pk2', 'acc'), record('c', 'Contact', 'con', [lk('AccountId', 'y')])], { alias: 'k' }),
+  ]);
+  const r = runWorkflow(w, { seed: 4, now: NOW });
+  assert.equal(r.stats.byStep.l.iterations, 2);
+  assert.equal(r.stats.byStep.l2.iterations, 2);
+  // Record into the pool of the loop itself (same alias as `from`) is refused by validation
+  // (pool aliases are unique), so the snapshot only matters for picks and nested loops.
+  const grow = wf([record('a', 'Account', 'acc', accountFields, { count: 2 }), pick('p0', 'pk', 'acc'), each('l', 'pk', 'x', [pick('p', 'pk2', 'acc')])]);
+  assert.equal(runWorkflow(grow, { seed: 1, now: NOW }).stats.byStep.l.iterations, 1);
+});
+
+test('each loop over more than maxCountPerNode records fails on from', () => {
+  const w = wf([
+    loop('o', { count: 2 }, [record('a', 'Account', 'acc', [], { count: 50001 })]),
+    each('l', 'acc', 'a', [record('c', 'Contact', 'con', [])]),
+  ], { settings: { maxRecords: 200000 } });
+  assert.throws(() => runWorkflow(w, { seed: 1, now: NOW }), (e) => {
+    assert.ok(e instanceof WorkflowError);
+    assert.deepEqual([e.issues[0].nodeId, e.issues[0].field], ['l', 'from']);
+    assert.match(e.issues[0].message, /^Pool "acc" có 100\.002 bản ghi, quá giới hạn 100\.000 lần lặp của một bước Lặp\. Thu hẹp pool \(WHERE\/LIMIT của Query\) hoặc giảm số bản ghi\.$/);
+    return true;
+  });
+});
