@@ -1,39 +1,119 @@
 // Bottom panel: run summary, per-sObject tables, read-only tabs of the rows each Query step read
-// (design 0006: `queries[]` of /api/run, never inserted), insert results, JSON/CSV download.
+// (design 0006: `queries[]` of /api/run, never inserted), insert results, downloads.
+//
+// Streaming (design 0004): a run sends back only the first `limits.previewRows` records of each
+// sObject; the totals come from `stats`. Downloads ask the server to regenerate the run
+// (/api/export, same seed + now as the snapshot taken when the run finished), so the file matches
+// the table even after the workflow was edited. While a run goes on, the download buttons give
+// their place to "Dừng" and a thin <progress> sits on the bottom edge of the header (0009 §4).
+// Insert failures are grouped (sObject, step, message); a group selects its step and field.
 
-import { h, download } from './dom.js';
-import { state, subscribe } from './store.js';
+import { h, download, toast } from './dom.js';
+import { state, subscribe, stepById } from './store.js';
+import { stepAlias } from './summary.js';
+import { api } from './api.js';
 
-const PREVIEW_ROWS = 200;
 const QUERY_TAB = 'q:'; // activeTab of a Query tab: `q:<stepId>`
+const ERRORS_TAB = '__errors';
 let activeTab = null;
-let panel, body, summary;
+let panel, body, summary, progressBar, stopBtn, dlJson, dlCsv;
 let onRefresh = null;
+let onGoTo = null;
+let busyDownload = false;
 
-/** opts.onRefresh: "⟳ Đọc lại" (preview again, reading the org instead of the query cache). */
-export function initResults({ onRefresh: refresh } = {}) {
+/** Thousands with a space, as in the design docs: 200 000. */
+export const fmt = (n) => String(n ?? 0).replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+const previewRows = () => state.meta?.limits?.previewRows ?? 200;
+
+/**
+ * opts.onRefresh: "⟳ Đọc lại" (preview again, reading the org instead of the query cache).
+ * opts.onGoTo(issue): select the step (and field) of an insert error group.
+ */
+export function initResults({ onRefresh: refresh, onGoTo: goTo } = {}) {
   onRefresh = refresh ?? null;
+  onGoTo = goTo ?? null;
   panel = document.getElementById('results');
   body = document.getElementById('results-body');
   summary = document.getElementById('results-summary');
-  document.getElementById('btn-results-toggle').onclick = () => panel.classList.toggle('collapsed');
-  document.getElementById('btn-dl-json').onclick = () => {
-    if (state.result) download(`${fileBase()}.json`, JSON.stringify(state.result.records, null, 2));
-  };
-  document.getElementById('btn-dl-csv').onclick = () => {
-    if (!state.result || !activeTab) return;
+  progressBar = document.getElementById('run-progress');
+  stopBtn = document.getElementById('btn-stop');
+  dlJson = document.getElementById('btn-dl-json');
+  dlCsv = document.getElementById('btn-dl-csv');
+  const toggle = document.getElementById('btn-results-toggle');
+  toggle.onclick = () => panel.classList.toggle('collapsed');
+  dlJson.onclick = () => exportFile('json');
+  dlCsv.onclick = () => {
     const q = activeQuery();
+    // A Query tab: its rows are already here (≤ 2 000, read from the org, never regenerated).
     if (q) download(`${fileBase()}-${q.alias}.csv`, toCsv(queryRecords(q)), 'text/csv');
-    else download(`${fileBase()}-${activeTab}.csv`, toCsv(state.result.records.filter((r) => r.sobject === activeTab)), 'text/csv');
+    else if (activeTab && activeTab !== ERRORS_TAB) exportFile('csv', activeTab);
   };
   subscribe(({ kind }) => kind === 'result' && render());
 }
 
 const fileBase = () => (state.workflow.name || 'workflow').replace(/[^\w.-]+/g, '_');
 
+/** Regenerates the last run on the server and saves it (CSV: one sObject). */
+async function exportFile(format, sobject) {
+  const run = state.resultRun;
+  if (!run || busyDownload) return;
+  const btn = format === 'json' ? dlJson : dlCsv;
+  const label = btn.textContent;
+  busyDownload = true;
+  btn.textContent = 'Đang tạo file…';
+  btn.disabled = true;
+  try {
+    const { blob, filename } = await api.exportFile({
+      workflow: run.workflow, seed: run.seed, now: run.now, format, sobject, org: run.org || undefined, expectQueries: run.expectQueries,
+    });
+    download(filename, blob);
+  } catch (e) {
+    toast(e.message, e.status === 409 ? 8000 : 5000);
+  } finally {
+    busyDownload = false;
+    btn.textContent = label;
+    btn.disabled = false;
+    updateButtons();
+  }
+}
+
+/** Header while a run goes on: summary nodes, progress (value/max, or indeterminate), Dừng. */
+export function showProgress({ parts, value, max, onStop, stopping = false }) {
+  panel.classList.remove('collapsed');
+  summary.replaceChildren(...parts);
+  progressBar.hidden = false;
+  if (max) {
+    progressBar.max = max;
+    progressBar.value = Math.min(value ?? 0, max);
+  } else progressBar.removeAttribute('value');
+  dlJson.hidden = dlCsv.hidden = true;
+  stopBtn.hidden = false;
+  stopBtn.disabled = stopping || !onStop;
+  stopBtn.onclick = onStop ?? null;
+}
+
+/** Back to the idle header (download buttons instead of Dừng). */
+export function endProgress() {
+  progressBar.hidden = true;
+  stopBtn.hidden = true;
+  stopBtn.onclick = null;
+  dlJson.hidden = dlCsv.hidden = false;
+  updateButtons();
+}
+
+/** One-off status text in the header (errors, lost connection). */
 export function showRunning(text) {
   panel.classList.remove('collapsed');
   summary.textContent = text;
+}
+
+/** Chips `<sObject> n` (or `n/total` when totals are given). */
+export function sobjectChips(counts, totals) {
+  return Object.entries(totals ?? counts).map(([s, t]) => {
+    const v = counts?.[s];
+    const n = typeof v === 'object' && v ? v.inserted : v ?? 0;
+    return h('span', { class: 'chip' }, totals ? `${s} ${fmt(n)}/${fmt(t)}` : `${s} ${fmt(n)}`);
+  });
 }
 
 const activeQuery = () => (activeTab?.startsWith(QUERY_TAB) ? state.result?.queries?.find((q) => `${QUERY_TAB}${q.nodeId}` === activeTab) : null);
@@ -65,75 +145,114 @@ function querySummary(queries) {
   ];
 }
 
+function updateButtons() {
+  const r = state.result;
+  const canExport = Boolean(state.resultRun && r?.stats?.total);
+  const hasQueries = Boolean(r?.queries?.length);
+  dlJson.disabled = busyDownload || !canExport;
+  dlCsv.disabled = busyDownload || !(canExport || hasQueries);
+  const tip = state.resultRun ? `Server sinh lại từ seed ${state.resultRun.seed}, ra đúng dữ liệu đang xem.` : '';
+  dlJson.title = tip;
+  dlCsv.title = tip;
+}
+
+function insertSummary(ins) {
+  if (!ins) return '';
+  const note = ins.stopped?.reason === 'allFailing' ? ' · đã dừng vì lỗi hàng loạt' : ins.cancelled ? ' · đã dừng' : '';
+  return h('span', {}, ' · ', h('span', { class: 'ok' }, `insert ${fmt(ins.inserted)}`), ins.failed ? h('span', { class: 'err' }, ` · lỗi ${fmt(ins.failed)}`) : '', note);
+}
+
 function render() {
   const r = state.result;
-  const hasData = Boolean(r?.records?.length || r?.queries?.length);
-  document.getElementById('btn-dl-json').disabled = !hasData;
-  document.getElementById('btn-dl-csv').disabled = !hasData;
+  updateButtons();
   if (!r) {
     summary.textContent = 'Chưa chạy.';
     body.replaceChildren();
     return;
   }
   panel.classList.remove('collapsed');
-  const chips = Object.entries(r.stats.bySobject).map(([s, n]) => h('span', { class: 'chip' }, `${s}: ${n}`));
   summary.replaceChildren(
-    ...chips,
-    ` ${r.stats.total} bản ghi · seed `,
+    ...Object.entries(r.stats.bySobject).map(([s, n]) => h('span', { class: 'chip' }, `${s}: ${fmt(n)}`)),
+    ` ${fmt(r.stats.total)} bản ghi · seed `,
     h('code', {}, String(r.seed)),
     ' ',
     h('button', { class: 'link', title: 'Dùng seed này cho lần chạy sau để ra đúng dữ liệu này', onclick: () => { document.getElementById('seed').value = r.seed; } }, '📌 giữ seed'),
-    ` · ${r.stats.durationMs} ms`,
+    ` · ${fmt(r.stats.durationMs)} ms`,
+    r.cancelled && !r.insert ? ' · đã dừng' : '',
     ...querySummary(r.queries),
-    r.insert ? h('span', {}, ' · ', h('span', { class: 'ok' }, `insert ${r.insert.inserted}`), r.insert.failed ? h('span', { class: 'err' }, ` · lỗi ${r.insert.failed}`) : '') : '',
+    insertSummary(r.insert),
   );
 
   const sobjects = Object.keys(r.stats.bySobject);
   const queryTabs = (r.queries ?? []).map((q) => `${QUERY_TAB}${q.nodeId}`);
-  if (!sobjects.includes(activeTab) && !queryTabs.includes(activeTab) && !(activeTab === '__errors' && r.insert?.errors.length)) activeTab = sobjects[0] ?? queryTabs[0] ?? null;
+  const errorsTotal = r.insert?.errorsTotal ?? r.insert?.errors?.length ?? 0;
+  if (!sobjects.includes(activeTab) && !queryTabs.includes(activeTab) && !(activeTab === ERRORS_TAB && errorsTotal)) activeTab = sobjects[0] ?? queryTabs[0] ?? null;
   const tabs = h(
     'div',
     { class: 'tabs' },
-    sobjects.map((s) => h('button', { class: s === activeTab ? 'active' : '', onclick: () => { activeTab = s; render(); } }, `${s} (${r.stats.bySobject[s]})`)),
+    sobjects.map((s) => h('button', { class: s === activeTab ? 'active' : '', onclick: () => { activeTab = s; render(); } }, `${s} (${fmt(r.stats.bySobject[s])})`)),
     (r.queries ?? []).map((q) => {
       const key = `${QUERY_TAB}${q.nodeId}`;
       return h('button', { class: `tab-query${key === activeTab ? ' active' : ''}`, 'data-query': q.nodeId, 'data-type': 'query', title: 'Bản ghi đọc từ org (chỉ để xem, không insert)', onclick: () => { activeTab = key; render(); } }, `↓ ${q.alias} · ${q.sobject} (${q.count})`);
     }),
-    r.insert?.errors.length ? h('button', { class: `tab-issues${activeTab === '__errors' ? ' active' : ''}`, onclick: () => { activeTab = '__errors'; render(); } }, `Lỗi insert (${r.insert.errors.length})`) : null,
+    errorsTotal ? h('button', { class: `tab-issues${activeTab === ERRORS_TAB ? ' active' : ''}`, onclick: () => { activeTab = ERRORS_TAB; render(); } }, `Lỗi insert (${fmt(errorsTotal)})`) : null,
   );
   const q = activeQuery();
   let content;
-  if (activeTab === '__errors') content = errorTable(r.insert.errors);
+  if (activeTab === ERRORS_TAB) content = errorGroupsView(r.insert);
   else if (q) {
     const when = q.fetchedAt ? new Date(q.fetchedAt).toLocaleTimeString('vi-VN') : '';
     content = h('div', {},
       h('p', { class: 'hint query-hint' }, q.source === 'sample'
         ? 'Bản ghi mẫu (Id giả) vì chưa chọn org. Chọn org để đọc dữ liệu thật.'
         : `Đọc từ org "${q.org}" lúc ${when}, chỉ để xem, không insert. SOQL: ${q.soql}`),
-      dataTable(queryRecords(q), null));
-  } else content = dataTable(r.records.filter((x) => x.sobject === activeTab), r.insert?.ids);
+      dataTable(queryRecords(q), null, q.records.length));
+  } else content = dataTable(r.records.filter((x) => x.sobject === activeTab), r.insert?.ids, r.stats.bySobject[activeTab] ?? 0);
   body.replaceChildren(tabs, content);
 }
 
-function dataTable(records, ids) {
+function dataTable(records, ids, total) {
   const cols = [...new Set(records.flatMap((x) => Object.keys(x.fields)))];
-  const rows = records.slice(0, PREVIEW_ROWS);
+  const rows = records.slice(0, previewRows());
   const table = h(
     'table',
     { class: 'data' },
     h('thead', {}, h('tr', {}, h('th', {}, 'ref'), ids ? h('th', {}, 'Id') : null, cols.map((c) => h('th', {}, c)))),
     h('tbody', {}, rows.map((x) => h('tr', {}, h('td', {}, h('span', { class: 'ref' }, x.ref)), ids ? h('td', {}, ids[x.ref] ?? h('span', { class: 'err' }, '✕')) : null, cols.map((c) => h('td', { title: display(x.fields[c]) }, cell(x.fields[c], ids)))))),
   );
-  return h('div', {}, table, records.length > PREVIEW_ROWS ? h('p', { class: 'hint' }, `Hiển thị ${PREVIEW_ROWS}/${records.length} dòng. Tải CSV/JSON để xem đủ.`) : null);
+  return h('div', {}, table, total > rows.length ? h('p', { class: 'hint table-more' }, `Hiển thị ${fmt(rows.length)}/${fmt(total)} dòng đầu. Tải CSV/JSON để lấy đủ.`) : null);
 }
 
-function errorTable(errors) {
-  return h(
-    'table',
-    { class: 'data' },
-    h('thead', {}, h('tr', {}, h('th', {}, 'ref'), h('th', {}, 'sObject'), h('th', {}, 'Lỗi'))),
-    h('tbody', {}, errors.map((e) => h('tr', {}, h('td', {}, e.ref), h('td', {}, e.sobject), h('td', { class: 'err', style: { whiteSpace: 'normal' } }, e.message)))),
-  );
+/** Insert failures grouped by (sObject, step, field, message); a row selects the step / field. */
+function errorGroupsView(ins) {
+  const groups = ins?.errorGroups ?? [];
+  const errors = ins?.errors ?? [];
+  const stepName = (id) => {
+    const step = id ? stepById(id) : null;
+    return step ? stepAlias(step) || id : id ?? '';
+  };
+  return h('div', {},
+    h('table', { class: 'data error-groups' },
+      h('thead', {}, h('tr', {}, h('th', {}, 'sObject'), h('th', {}, 'Bước'), h('th', {}, 'Lỗi'), h('th', {}, 'Số bản ghi'), h('th', {}, 'Ví dụ'))),
+      h('tbody', {}, groups.map((g) => h('tr', {
+        class: g.nodeId ? 'clickable' : '',
+        tabindex: g.nodeId ? '0' : null,
+        title: g.nodeId ? 'Bấm để chọn bước' : '',
+        onclick: () => g.nodeId && onGoTo?.({ nodeId: g.nodeId, field: g.field }),
+        onkeydown: (e) => { if (e.key === 'Enter' && g.nodeId) onGoTo?.({ nodeId: g.nodeId, field: g.field }); },
+      },
+      h('td', {}, g.sobject),
+      h('td', {}, stepName(g.nodeId)),
+      h('td', { class: 'err wrap' }, g.message),
+      h('td', { class: 'num' }, fmt(g.count)),
+      h('td', {}, g.refs.join(', ')))))),
+    errors.length
+      ? h('details', { class: 'error-details' },
+        h('summary', {}, `Chi tiết từng bản ghi${(ins.errorsTotal ?? errors.length) > errors.length ? ` (${fmt(errors.length)} dòng đầu / ${fmt(ins.errorsTotal)})` : ''}`),
+        h('table', { class: 'data' },
+          h('thead', {}, h('tr', {}, h('th', {}, 'ref'), h('th', {}, 'sObject'), h('th', {}, 'Lỗi'))),
+          h('tbody', {}, errors.map((e) => h('tr', {}, h('td', {}, e.ref), h('td', {}, e.sobject), h('td', { class: 'err wrap' }, e.message))))))
+      : null);
 }
 
 function cell(v, ids) {
@@ -148,7 +267,8 @@ function display(v) {
   return String(v);
 }
 
-export function toCsv(records) {
+/** CSV of the rows of a Query tab (generated records are exported by the server). */
+function toCsv(records) {
   const cols = [...new Set(records.flatMap((x) => Object.keys(x.fields)))];
   const esc = (s) => (/[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s);
   const lines = [['ref', ...cols].join(',')];

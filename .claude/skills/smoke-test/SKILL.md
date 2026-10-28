@@ -24,6 +24,11 @@ It starts the server on a random port 3900–3989 and drives headless Chromium t
    summary shows the Account count, and the sample has no validation errors. Scrolled, the sticky table
    header sits right under the sticky tab row (no gap). The Record and Loop stripes (`border-left-color`)
    differ from each other and from the unknown-type `[data-type]` fallback. Screenshot `smoke-1440.png`.
+3b. **Run progress (design doc 0004).** With `/api/run` held for 250 ms, the results header shows
+   "Đang sinh dữ liệu", the download buttons give their place to **Dừng**, and the `<progress>` is a ≤ 3 px
+   line on the bottom edge of `.results-head`; Dừng drops the request ("Đã dừng") and re-enables Xem
+   trước. Then `con` makes 60 Contacts per run: the Contact tab shows "Hiển thị 200/N dòng đầu" and
+   "Tải CSV (tab hiện tại)" downloads all N rows (header `ref,FirstName,LastName…`) from `/api/export`.
 4. **Alias rename.** Clearing the `acc` alias and typing `account` keeps focus in the input and the
    Lookup `ref` follows the rename (never lost on the empty value); undo restores `acc`.
 5. **Delete toast.** After Delete, the toast's "Hoàn tác" button disappears as soon as another edit
@@ -66,12 +71,14 @@ It starts the server on a random port 3900–3989 and drives headless Chromium t
     thống" returns to the dark background and clears the key. `/api/orgs/**` (describe) is answered 404 so
     the mocked org never reaches the sf CLI; preview (`smoke-1440-dark.png`). With a mocked production org (`/api/orgs`), "⤒ Insert vào org" opens
     the confirmation with the production warning box and a solid red `.danger.solid` "Insert" button
-    (`smoke-1440-dark-insert.png`); "Hủy" closes it. Any `/api/run` request with a `target` is aborted
+    (`smoke-1440-dark-insert.png`): it previews first when needed, so it always says "Sẽ tạo N bản ghi" and the button
+    reads "Insert N bản ghi"; "Hủy" closes it. Any `/api/run` request with a `target` is aborted
     and fails the run, so the smoke test never writes to an org. Then, with a canned preview of the Query sample that
     read the (mocked) org, the confirmation lists "Đọc từ org, không ghi: Account 2 (accs, đọc lúc …)" and says the
-    rows are re-read only after 10 minutes or with "⟳ Đọc lại" (no over-promise, no "null").
+    rows are re-read only after 10 minutes or with "⟳ Đọc lại" (no over-promise, no "null"). The canned preview is
+    an NDJSON stream (`start`, `done`) like the real `/api/run`.
 
-It also fails on any page error or a run over 12 s (typically ~8 s; raised from 10 s with the 0006 flows, which left no margin on a loaded machine).
+It also fails on any page error or a run over 12 s (typically ~9 s with the 0004 flow; raised from 10 s with the 0006 flows, which left no margin on a loaded machine).
 Screenshots (only when a directory is given): `smoke-1440.png`, `smoke-390.png`, `smoke-390-sheet.png`,
 `smoke-390-dark.png`, `smoke-1440-dark.png`, `smoke-1440-dark-insert.png`.
 Requires Playwright with Chromium (`require('playwright')`); exit code 2 means it is not installed.
@@ -85,6 +92,9 @@ PORT=3999 npm start &            # binds 127.0.0.1
 curl -s localhost:3999/api/meta | head -c 400
 curl -s -X POST localhost:3999/api/run -H 'Content-Type: application/json' \
   -d '{"seed":1,"workflow":{"version":2,"steps":[{"id":"l","type":"loop","config":{"count":2},"slots":{"body":[{"id":"a","type":"record","config":{"sobject":"Account","alias":"acc","count":3,"fields":[{"name":"Name","type":"text","options":{"mode":"company"}}]}}]}}]}}'
+# the UI asks for a stream (design 0004): one JSON event per line (start, progress, plan, done | error)
+curl -sN -X POST localhost:3999/api/run -H 'Accept: application/x-ndjson' -H 'Content-Type: application/json' \
+  -d '{"seed":1,"now":1761552000000,"workflow":{"version":2,"steps":[{"id":"a","type":"record","config":{"sobject":"Account","alias":"acc","count":3}}]}}'
 # version 1 (graph) bodies are still accepted; the response then starts with a conversion warning
 curl -s localhost:3999/api/orgs  # 503 + message if the sf CLI is not installed
 ```

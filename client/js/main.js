@@ -12,7 +12,7 @@ import { malformedSteps, allSteps } from '/shared/workflow-tree.js';
 import { initProcess, focusSelected, openAddMenuAtDefault, openStepMenu, paletteDragStart, paletteDragEnd } from './process.js';
 import * as ops from './ops.js';
 import { initInspector, openField } from './inspector.js';
-import { initResults, showRunning } from './results.js';
+import { initResults, showRunning, showProgress, endProgress, sobjectChips } from './results.js';
 import { SAMPLES } from './samples.js';
 import { stepAlias } from './summary.js';
 
@@ -32,7 +32,7 @@ async function boot() {
   renderPalette();
   initProcess();
   initInspector();
-  initResults({ onRefresh: () => run(false, { refresh: true }) });
+  initResults({ onRefresh: () => run(false, { refresh: true }), onGoTo: goToIssue });
   firstRender();
   wireToolbar();
   wireShortcuts();
@@ -246,7 +246,7 @@ function saveFile() {
 
 function updateInsertButton() {
   const btn = $('btn-insert');
-  btn.disabled = !state.org;
+  btn.disabled = !state.org || Boolean(running);
   btn.title = state.org ? `Sinh dữ liệu và insert vào ${state.org}` : 'Chọn org trước';
 }
 
@@ -361,71 +361,249 @@ function setIssues(issues) {
 
 // ---------- run ----------
 
-let running = false;
+/** The run in progress: { insert, runId, controller, stopping, … } (design 0004). */
+let running = null;
 /** The workflow has a Query step that is not turned off (design 0006). */
 const hasQueries = () => allSteps(state.workflow, slotKeys).some((s) => s.type === 'query' && !s.disabled);
+const fmt = (n) => String(n ?? 0).replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+const BATCH = 200;
+
+function readSeed() {
+  const raw = $('seed').value.trim();
+  return raw === '' ? undefined : /^\d+$/.test(raw) ? Number(raw) : raw;
+}
+
+/** The last preview when an insert would repeat it: same workflow, org and (if typed) seed. */
+function matchingPreview(seed) {
+  const r = state.result;
+  if (!r || r.cancelled || !state.resultRun) return null;
+  if (seed !== undefined && String(seed) !== String(r.seed)) return null;
+  return state.lastRunKey === runKey(state.workflow, r.seed) && state.lastRunOrg === state.org ? r : null;
+}
+
+function setRunning(r) {
+  running = r;
+  $('btn-preview').disabled = Boolean(r);
+  if (r) $('btn-insert').disabled = true;
+  else updateInsertButton();
+}
+
+/** Dừng: before the server named the run, drop the request (nothing was written yet). */
+async function stopRun() {
+  const r = running;
+  if (!r || r.stopping) return;
+  r.stopping = true;
+  r.render?.();
+  if (!r.runId) {
+    r.controller.abort();
+    return;
+  }
+  try {
+    await api.cancelRun(r.runId);
+  } catch {
+    // 404: the run just ended; its last event says what happened.
+  }
+}
+
+const leaveGuard = (e) => {
+  e.preventDefault();
+  e.returnValue = '';
+};
 
 /**
  * Preview (insert false) or insert. A preview's Query steps read `state.org` (sample rows without
- * one); an insert reads the target org and, when it repeats the last preview (same workflow, seed
- * and org), sends that preview's fingerprints so the server refuses (409) if the org data changed.
+ * one). Insert always shows how many records it will create: without a matching preview it
+ * previews first, then inserts with that preview's seed and `now` (same data), sending the
+ * preview's Query fingerprints so the server refuses (409) if the org data changed.
  */
 async function run(insert, { refresh = false } = {}) {
-  if (running) return;
-  const seedRaw = $('seed').value.trim();
-  const seed = seedRaw === '' ? undefined : /^\d+$/.test(seedRaw) ? Number(seedRaw) : seedRaw;
-  let expectQueries;
-
-  if (insert) {
-    const org = state.orgs.find((o) => (o.alias ?? o.username) === state.org);
-    const same = state.result && seed !== undefined && state.lastRunKey === runKey(state.workflow, seed) && state.lastRunOrg === state.org;
-    const ok = await confirmInsert(org, same ? state.result : null, seed);
-    if (!ok) return;
-    if (same && state.result.queries?.length) {
-      expectQueries = Object.fromEntries(state.result.queries.map((q) => [q.nodeId, { fingerprint: q.fingerprint, count: q.count, fetchedAt: q.fetchedAt }]));
-    }
+  if (running) {
+    toast('Đang chạy. Bấm "Dừng" nếu muốn chạy lại.');
+    return;
   }
+  const seed = readSeed();
+  if (!insert) {
+    await preview({ seed, refresh });
+    return;
+  }
+  let base = matchingPreview(seed);
+  if (!base) {
+    if (!(await preview({ seed, auto: true }))) return;
+    base = state.result;
+  }
+  const org = state.orgs.find((o) => (o.alias ?? o.username) === state.org);
+  if (!(await confirmInsert(org, base))) return;
+  await insertRun(base);
+}
 
-  running = true;
-  $('btn-preview').disabled = $('btn-insert').disabled = true;
-  showRunning(insert ? `Đang sinh và insert vào ${state.org}…` : refresh ? 'Đang đọc lại org và sinh dữ liệu…' : 'Đang sinh dữ liệu…');
+/** Streams a preview into the results panel. → true when it finished (not stopped, no error). */
+async function preview({ seed, refresh = false, auto = false }) {
+  const r = { insert: false, controller: new AbortController(), generated: 0, bySobject: {} };
+  const label = auto ? 'Đang sinh dữ liệu để xác nhận trước khi insert…' : refresh ? 'Đang đọc lại org và sinh dữ liệu…' : 'Đang sinh dữ liệu…';
+  r.render = () => showProgress({
+    parts: r.stopping ? ['Đang dừng…'] : [r.generated || !hasQueries() ? `${label} ${fmt(r.generated)} bản ghi ` : 'Đang đọc Query…', ...sobjectChips(r.bySobject)],
+    onStop: stopRun,
+    stopping: r.stopping,
+  });
+  setRunning(r);
+  r.render();
+  const workflow = structuredClone(state.workflow);
   try {
-    const result = await api.run(state.workflow, {
-      seed,
-      target: insert ? { kind: 'org', org: state.org } : undefined,
-      org: insert ? undefined : state.org || undefined,
-      refreshQueries: refresh || undefined,
-      expectQueries,
+    const result = await api.runStream({ workflow, seed, org: state.org || undefined, refreshQueries: refresh || undefined }, {
+      signal: r.controller.signal,
+      onEvent: (ev) => {
+        if (ev.type === 'start') r.runId = ev.runId;
+        if (ev.type === 'progress') {
+          r.generated = ev.generated;
+          r.bySobject = ev.bySobject;
+          r.render();
+        }
+      },
     });
-    state.result = result;
-    state.lastRunKey = runKey(state.workflow, result.seed);
-    state.lastRunSteps = JSON.stringify(state.workflow.steps);
-    state.lastRunOrg = state.org;
-    setIssues({ errors: [], warnings: result.warnings });
-    emit('run', 'result');
-    if (insert) toast(result.insert.failed ? `Insert ${result.insert.inserted}, lỗi ${result.insert.failed}. Xem tab "Lỗi insert".` : `Đã insert ${result.insert.inserted} bản ghi.`, 5000);
+    acceptResult(result, workflow);
+    if (result.cancelled) toast('Đã dừng xem trước.');
+    return !result.cancelled;
   } catch (e) {
-    if (e.issues) {
-      setIssues({ errors: e.issues, warnings: state.issues.warnings });
-      const first = e.issues.find((i) => i.nodeId && stepById(i.nodeId));
-      if (first) goToIssue(first);
+    if (e.name === 'AbortError') {
+      showRunning('Đã dừng. Chưa ghi bản ghi nào vào org.');
+      return false;
     }
-    showRunning(`Lỗi: ${e.message}`);
-    toast(e.message, e.status === 409 ? 8000 : 5000);
+    runFailed(e);
+    return false;
   } finally {
-    running = false;
-    $('btn-preview').disabled = false;
-    updateInsertButton();
+    setRunning(null);
+    endProgress();
+  }
+}
+
+/** Shows a finished run and remembers what produced it (downloads regenerate from this snapshot). */
+function acceptResult(result, workflow) {
+  state.result = result;
+  state.resultRun = {
+    workflow,
+    seed: result.seed,
+    now: result.now,
+    org: state.org,
+    expectQueries: result.queries?.length ? Object.fromEntries(result.queries.map((q) => [q.nodeId, { fingerprint: q.fingerprint, count: q.count, fetchedAt: q.fetchedAt }])) : undefined,
+  };
+  state.lastRunKey = runKey(workflow, result.seed);
+  state.lastRunSteps = JSON.stringify(workflow.steps);
+  state.lastRunOrg = state.org;
+  setIssues({ errors: [], warnings: result.warnings });
+  emit('run', 'result');
+}
+
+function runFailed(e) {
+  if (e.issues) {
+    setIssues({ errors: e.issues, warnings: state.issues.warnings });
+    const first = e.issues.find((i) => i.nodeId && stepById(i.nodeId));
+    if (first) goToIssue(first);
+  }
+  const msg = e.lost ? 'Mất kết nối với server. Chạy lại khi server hoạt động.' : e.message;
+  showRunning(`Lỗi: ${msg}`);
+  toast(msg, e.status === 409 ? 8000 : 5000);
+}
+
+const bySobjectText = (counts) => Object.entries(counts ?? {}).filter(([, v]) => (v?.inserted ?? v) > 0).map(([s, v]) => `${s} ${fmt(v?.inserted ?? v)}`).join(', ');
+
+/** Inserts with the seed and `now` of `base` (the confirmed preview): progress, Dừng, summary. */
+async function insertRun(base) {
+  const total = base.stats.total;
+  const org = state.org;
+  const r = { insert: true, controller: new AbortController(), phase: 'generate', generated: 0, inserted: 0, failed: 0, bySobject: {}, insertStart: 0 };
+  r.render = () => {
+    let parts;
+    let value;
+    if (r.stopping) parts = ['Đang dừng sau lô hiện tại…'];
+    else if (r.phase === 'generate') {
+      parts = [`Đang kiểm tra dữ liệu trước khi ghi… ${fmt(r.generated)}/${fmt(total)}`];
+      value = r.generated;
+    } else {
+      const done = r.inserted + r.failed;
+      const pct = total ? Math.floor((done / total) * 100) : 100;
+      let eta = '';
+      // Remaining time from the insert pace, once 3 calls went through.
+      if (done >= 3 * BATCH && done < total) {
+        const perRecord = (Date.now() - r.insertStart) / done;
+        const min = ((total - done) * perRecord) / 60000;
+        eta = min < 1 ? ' · còn dưới 1 phút' : ` · còn khoảng ${Math.round(min)} phút`;
+      }
+      parts = [`Đang insert vào ${org}: ${fmt(done)}/${fmt(total)} (${pct} %)${r.failed ? ` · lỗi ${fmt(r.failed)}` : ''}${eta} `, ...sobjectChips(r.bySobject, base.stats.bySobject)];
+      value = done;
+    }
+    showProgress({ parts, value, max: total || 1, onStop: stopRun, stopping: r.stopping });
+  };
+  setRunning(r);
+  r.render();
+  window.addEventListener('beforeunload', leaveGuard);
+  const workflow = structuredClone(state.workflow);
+  const preview = state.resultRun;
+  try {
+    const result = await api.runStream({
+      workflow, seed: base.seed, now: base.now, target: { kind: 'org', org }, expectQueries: preview?.expectQueries,
+    }, {
+      signal: r.controller.signal,
+      onEvent: (ev) => {
+        if (ev.type === 'start') r.runId = ev.runId;
+        else if (ev.type === 'plan') {
+          r.phase = 'insert';
+          r.insertStart = Date.now();
+        } else if (ev.type === 'progress' && ev.phase === 'generate') r.generated = ev.generated;
+        else if (ev.type === 'progress' && ev.phase === 'insert') {
+          r.phase = 'insert';
+          Object.assign(r, { inserted: ev.inserted, failed: ev.failed, bySobject: ev.bySobject });
+        }
+        if (ev.type !== 'start') r.render();
+      },
+    });
+    acceptResult(result, workflow);
+    const ins = result.insert;
+    const where = bySobjectText(ins.bySobject);
+    if (ins.stopped?.reason === 'allFailing') {
+      const s = ins.stopped;
+      const step = s.nodeId ? stepById(s.nodeId) : null;
+      const msg = `Đã dừng insert: ${s.batches} lô ${s.sobject} đầu tiên (${fmt(s.records)} bản ghi) đều lỗi "${s.message}". Sửa bước "${step ? stepAlias(step) || s.nodeId : s.nodeId}" rồi chạy lại.${ins.inserted ? ` Đã insert ${where}, các bản ghi này vẫn còn trong org.` : ' Chưa ghi bản ghi nào vào org.'}`;
+      showRunning(msg);
+      toast(msg, 12000);
+      if (step) goToIssue({ nodeId: s.nodeId, field: ins.errorGroups?.find((g) => g.nodeId === s.nodeId)?.field });
+    } else if (ins.cancelled) {
+      const msg = ins.inserted
+        ? `Đã dừng. Đã insert ${fmt(ins.inserted)}/${fmt(total)} bản ghi vào ${org} (${where}). Các bản ghi này vẫn còn trong org.`
+        : 'Đã dừng. Chưa ghi bản ghi nào vào org.';
+      showRunning(msg);
+      toast(msg, 10000);
+    } else {
+      toast(ins.failed ? `Insert ${fmt(ins.inserted)}, lỗi ${fmt(ins.failed)}. Xem tab "Lỗi insert".` : `Đã insert ${fmt(ins.inserted)} bản ghi vào ${org}.`, 6000);
+    }
+  } catch (e) {
+    if (e.name === 'AbortError') {
+      // Dừng before the server started the run: nothing was sent.
+      showRunning('Đã dừng. Chưa ghi bản ghi nào vào org.');
+      toast('Đã dừng. Chưa ghi bản ghi nào vào org.', 6000);
+    } else if (e.lost && r.phase === 'insert') {
+      const msg = `Mất kết nối với server khi đang insert. Đã insert ít nhất ${fmt(r.inserted)} bản ghi (theo tiến độ cuối). Kiểm tra org trước khi chạy lại để tránh trùng.`;
+      showRunning(msg);
+      toast(msg, 12000);
+    } else {
+      if (e.insert?.inserted) e.message += ` Đã insert ${fmt(e.insert.inserted)} bản ghi trước khi lỗi; các bản ghi này vẫn còn trong org.`;
+      runFailed(e);
+    }
+  } finally {
+    window.removeEventListener('beforeunload', leaveGuard);
+    setRunning(null);
+    endProgress();
   }
 }
 
 const hhmm = (iso) => (iso ? new Date(iso).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : '?');
 
-/** previewed: the last preview's result when the insert repeats it (same workflow, seed and org). */
-function confirmInsert(org, previewed, seed) {
+/** Always shows the record count of `previewed` (the preview the insert repeats, same seed + now). */
+function confirmInsert(org, previewed) {
   const modal = $('modal');
-  const stats = previewed?.stats;
-  const read = (previewed?.queries ?? []).filter((q) => q.source !== 'sample');
+  const stats = previewed.stats;
+  const read = (previewed.queries ?? []).filter((q) => q.source !== 'sample');
+  const calls = Object.values(stats.bySobject).reduce((n, c) => n + Math.ceil(c / BATCH), 0);
+  const counts = Object.entries(stats.bySobject).map(([s, n]) => `${s} ${fmt(n)}`).join(', ');
   return new Promise((resolve) => {
     const done = (v) => { modal.close(); resolve(v); };
     const isProd = org && !org.isSandbox && !org.isScratch;
@@ -434,17 +612,19 @@ function confirmInsert(org, previewed, seed) {
       h('h2', {}, 'Insert vào org?'),
       h('p', {}, 'Org: ', h('b', {}, state.org), org?.username ? ` (${org.username})` : ''),
       isProd ? h('div', { class: 'warn-box' }, 'Org này không phải sandbox hay scratch org. Kiểm tra kỹ trước khi insert dữ liệu test.') : null,
-      stats
-        ? h('p', {}, `Giống lần xem trước (seed ${seed}): `, Object.entries(stats.bySobject).map(([s, n]) => `${s} ${n}`).join(', ') || 'không có bản ghi nào', '.')
-        : h('p', { class: 'hint' }, 'Chưa có bản xem trước với seed cố định cho workflow này, nên dữ liệu insert sẽ khác dữ liệu đã xem. Nhập seed và Xem trước để biết chính xác.'),
+      h('p', { class: 'insert-count' }, stats.total ? `Sẽ tạo ${fmt(stats.total)} bản ghi: ${counts}.` : 'Workflow không sinh bản ghi nào: không có gì để insert.'),
+      h('p', {}, `Giống hệt bản xem trước (seed ${previewed.seed}).`),
       read.length
         ? h('p', {}, `Đọc từ org, không ghi: ${read.map((q) => `${q.sobject} ${q.count} (${q.alias}, đọc lúc ${hhmm(q.fetchedAt)})`).join(', ')}.`)
         : null,
       // Within the 10-minute cache the insert reuses the previewed rows as they were; only a re-read
       // (cache expired, server restarted) can notice that the org changed.
       read.length ? h('p', { class: 'hint query-reuse' }, 'Insert dùng lại đúng các dòng đã đọc lúc xem trước. Nếu đã quá 10 phút (hoặc server vừa khởi động lại), app đọc lại org và dừng trước khi ghi nếu dữ liệu đã đổi. Muốn insert theo dữ liệu mới nhất, bấm ⟳ Đọc lại rồi Insert.') : null,
-      !stats && hasQueries() ? h('p', { class: 'hint' }, `Bước Query sẽ đọc org "${state.org}" ngay trước khi insert.`) : null,
-      h('div', { class: 'actions' }, h('button', { onclick: () => done(false) }, 'Hủy'), h('button', { class: 'danger solid', onclick: () => done(true) }, 'Insert')),
+      stats.total ? h('p', { class: 'hint' }, `Khoảng ${fmt(calls)} lời gọi API (${BATCH} bản ghi mỗi lời gọi), tính vào giới hạn API 24 giờ của org.`) : null,
+      stats.total ? h('p', { class: 'hint' }, 'Có thể bấm "Dừng" bất cứ lúc nào; bản ghi đã insert không tự xóa.') : null,
+      h('div', { class: 'actions' },
+        h('button', { onclick: () => done(false) }, 'Hủy'),
+        h('button', { class: 'danger solid', disabled: !stats.total, onclick: () => done(true) }, `Insert ${fmt(stats.total)} bản ghi`)),
     ].filter(Boolean));
     modal.onclose = () => resolve(false);
     modal.showModal();

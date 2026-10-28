@@ -6,6 +6,8 @@
 //      Ctrl+Z restores it
 //   3. Ctrl+Enter previews: results table (sticky header right under the tabs) and "bản ghi" / "lần lặp"
 //      stat chips on the cards; Record and Loop stripes differ from each other and the unknown-type fallback
+//  3b. run progress (0004): Dừng + 3 px progress while a (delayed) run is on, Dừng drops it; 60 Contacts per
+//      run show "Hiển thị 200/N" and "Tải CSV" downloads all N rows from /api/export
 //   4. renaming an alias via "" keeps focus and Lookup refs follow
 //   5. "Hoàn tác" on the delete toast disappears after another edit
 //  5b. variable picker (0005): {x} + search + Enter inserts {{acc.Industry}}, "{{in" puts loop.index first,
@@ -165,6 +167,40 @@ const V1_ORPHAN = {
     console.log(`steps=${before + 1}`);
     console.log(`summary=${summary.trim()}`);
     if (outDir) await page.screenshot({ path: path.join(outDir, 'smoke-1440.png') });
+
+    // Run progress (0004): while a run is on, Dừng takes the download buttons' place and a 3 px
+    // <progress> sits on the bottom edge of the results header; Dừng before the server answered
+    // drops the request. Then 60 Contacts per run: the Contact tab shows 200 with a "Hiển thị 200/N"
+    // hint, and "Tải CSV" regenerates the whole tab on the server.
+    await page.route('**/api/run', async (r) => { await new Promise((res) => setTimeout(res, 250)); await r.continue().catch(() => {}); });
+    await page.keyboard.press('Control+Enter');
+    await page.waitForSelector('#btn-stop:not([hidden])');
+    const during = await page.evaluate(() => {
+      const head = document.querySelector('.results-head').getBoundingClientRect();
+      const bar = document.getElementById('run-progress').getBoundingClientRect();
+      return { summary: document.getElementById('results-summary').textContent, json: document.getElementById('btn-dl-json').hidden, h: bar.height, gap: Math.abs(head.bottom - bar.bottom), w: bar.width - head.width };
+    });
+    check(/Đang sinh dữ liệu/.test(during.summary) && during.json, `no running state (${JSON.stringify(during)})`);
+    check(during.h > 0 && during.h <= 3 && during.gap < 1 && Math.abs(during.w) < 1, `progress bar is not a 3 px line on the header edge (${JSON.stringify(during)})`);
+    await page.click('#btn-stop');
+    await page.waitForSelector('#btn-stop', { state: 'hidden' });
+    check(/Đã dừng/.test(await page.textContent('#results-summary')), 'Dừng did not report the stop');
+    check(!(await page.isDisabled('#btn-preview')), 'Xem trước stays disabled after Dừng');
+    await page.unroute('**/api/run');
+    await page.click('.step-card[data-id="con"] .type');
+    await page.fill('#inspector input[data-key="count"]', '60');
+    await page.keyboard.press('Tab');
+    await page.keyboard.press('Control+Enter');
+    await page.click('.tabs button:has-text("Contact (")');
+    await page.waitForSelector('.table-more');
+    const conTotal = Number((await page.textContent('.tabs button:has-text("Contact (")')).replace(/\D/g, ''));
+    const more = await page.textContent('.table-more');
+    check(conTotal > 200 && more.includes(`Hiển thị 200/${conTotal.toLocaleString('en').replace(/,/g, ' ')} dòng đầu`), `no truncated-table hint (${more})`);
+    const [dl] = await Promise.all([page.waitForEvent('download'), page.click('#btn-dl-csv')]);
+    const csvLines = fs.readFileSync(await dl.path(), 'utf8').trim().split(/\r\n/);
+    check(csvLines.length === conTotal + 1 && /^ref,FirstName,LastName/.test(csvLines[0]), `CSV export: ${csvLines.length} lines for ${conTotal} Contacts, header ${csvLines[0]}`);
+    await page.fill('#inspector input[data-key="count"]', '1');
+    await page.keyboard.press('Tab');
 
     // Renaming an alias by clearing the field and typing a name: Lookups follow, not lost on "".
     await page.click('.step-card[data-id="acc"] .type');
@@ -451,11 +487,13 @@ const V1_ORPHAN = {
     await d.route('**/api/run', (r) => {
       const body = r.request().postDataJSON();
       if (body?.target) { insertSent = true; return r.abort(); }
-      return r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
-        seed: 1, warnings: [], records: [], samples: {},
-        stats: { total: 0, bySobject: { Contact: 0 }, byStep: {}, durationMs: 1 },
+      // The run streams NDJSON events (design 0004): start, then done with the result.
+      const result = {
+        seed: 1, now: Date.now(), warnings: [], records: [], samples: {},
+        stats: { total: 0, bySobject: { Contact: 0 }, byStep: {}, durationMs: 1, previewRows: 200, truncated: false },
         queries: [{ nodeId: 'accs', alias: 'accs', sobject: 'Account', soql: 'SELECT Id FROM Account', org: 'prod', source: 'org', fetchedAt: new Date().toISOString(), count: 2, totalSize: 2, truncated: false, fingerprint: 'abcd1234', fields: ['Id'], records: [{ Id: '001A' }, { Id: '001B' }] }],
-      }) });
+      };
+      return r.fulfill({ status: 200, contentType: 'application/x-ndjson', body: [{ type: 'start', runId: 'rsmoke', seed: 1, now: result.now, warnings: [] }, { type: 'done', result }].map((e) => JSON.stringify(e)).join('\n') + '\n' });
     });
     d.on('dialog', (x) => x.accept());
     await d.click('#sample-items .palette-item:has-text("Contact cho Account có sẵn")');

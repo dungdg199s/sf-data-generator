@@ -65,8 +65,9 @@ export function toast(message, ms = 2600, action = null) {
   };
 }
 
-export function download(filename, text, type = 'application/json') {
-  const url = URL.createObjectURL(new Blob([text], { type }));
+/** Saves `content` (a string, or a Blob as returned by /api/export) as a file. */
+export function download(filename, content, type = 'application/json') {
+  const url = URL.createObjectURL(content instanceof Blob ? content : new Blob([content], { type }));
   const a = h('a', { href: url, download: filename });
   document.body.append(a);
   a.click();

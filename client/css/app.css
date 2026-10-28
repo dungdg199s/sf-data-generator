@@ -774,7 +774,15 @@ input:focus, select:focus, textarea:focus { border-color: var(--color-accent); }
 .results { background: var(--color-surface); border-top: 1px solid var(--color-border); height: 38vh; display: flex; flex-direction: column; }
 .results.collapsed { height: auto; }
 .results.collapsed .results-body { display: none; }
-.results-head { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-2) var(--space-3); }
+.results-head { position: relative; display: flex; align-items: center; gap: var(--space-3); padding: var(--space-2) var(--space-3); }
+/* Run progress (design 0004 / 0009 §4): 3 px on the bottom edge of the header, no extra row. */
+.run-progress {
+  position: absolute; left: 0; right: 0; bottom: 0; width: 100%; height: 3px; border: none;
+  -webkit-appearance: none; appearance: none; background: var(--color-border); color: var(--color-accent);
+}
+.run-progress::-webkit-progress-bar { background: var(--color-border); }
+.run-progress::-webkit-progress-value { background: var(--color-accent); }
+.run-progress::-moz-progress-bar { background: var(--color-accent); }
 .summary { color: var(--color-text-muted); font-size: var(--text-sm); }
 .summary .chip {
   display: inline-block; background: var(--color-surface-hover); border-radius: var(--radius-pill); padding: 0 var(--space-2);
@@ -807,6 +815,12 @@ table.data th, table.data td {
 table.data th { background: var(--color-surface-sunken); position: sticky; top: var(--tabs-h); font-weight: var(--weight-semibold); }
 table.data tbody tr:hover td { background: var(--color-surface-sunken); }
 td .ref { color: var(--step-record-text); font-family: var(--font-mono); }
+table.data td.wrap { white-space: normal; }
+table.data td.num { text-align: right; }
+table.error-groups tr.clickable { cursor: pointer; }
+table.error-groups tr.clickable:focus-visible td { background: var(--color-accent-subtle); }
+.error-details { margin-top: var(--space-3); }
+.error-details summary { cursor: pointer; color: var(--color-text-muted); font-size: var(--text-sm); margin-bottom: var(--space-2); }
 td .null { color: var(--color-text-muted); }
 .ok { color: var(--color-success-text); }
 .err { color: var(--color-danger-text); }

@@ -26,7 +26,8 @@ export const state = {
   issues: { errors: [], warnings: [] },
   orgs: [],
   org: '',
-  result: null,
+  result: null, // last run (design 0004: first previewRows records per sObject + totals)
+  resultRun: null, // { workflow, seed, now, org, expectQueries } of that run: downloads regenerate from it
   lastRunKey: null,
   lastRunOrg: null, // org the Query steps of the last preview read ('' = sample rows)
   lastRunSteps: null, // JSON of steps at the last run, to dim stale stat chips
