@@ -6,7 +6,8 @@
 //      Ctrl+Z restores it
 //   3. Ctrl+Enter previews: results table (sticky header right under the tabs) and "bản ghi" / "lần lặp"
 //      stat chips on the cards; Record and Loop stripes differ from each other and the unknown-type fallback
-//  3b. run progress (0004): Dừng + 3 px progress while a (delayed) run is on, Dừng drops it; 60 Contacts per
+//  3b. run progress (0004): Dừng + 3 px progress while a (delayed) run is on, Dừng drops it (focus back on
+//      Xem trước); Dừng after the response but before `start` cancels by run id; 60 Contacts per
 //      run show "Hiển thị 200/N" and "Tải CSV" downloads all N rows from /api/export
 //   4. renaming an alias via "" keeps focus and Lookup refs follow
 //   5. "Hoàn tác" on the delete toast disappears after another edit
@@ -25,7 +26,9 @@
 //  11. narrow (390 px) layout renders, tapping a card opens the inspector bottom sheet
 //  12. dark colour scheme: Sáng overrides it (also after reload), Theo hệ thống returns to dark; sample +
 //      preview, and the Insert confirmation for a production org
-//      (mocked /api/orgs; a run with a target is blocked) has a solid red "Insert" and the warning box
+//      (mocked /api/orgs; a run with a target is blocked) has a solid red "Insert" and the warning box;
+//      then mocked inserts (answered by the route, never sent): a second Insert previews afresh, a fixed seed
+//      warns about repeating the data, error groups are role=button rows (Space) with a remainder row
 // Usage: node .claude/skills/smoke-test/smoke.cjs [screenshotDir]
 // Needs Playwright with a Chromium build available (require('playwright')).
 
@@ -172,7 +175,7 @@ const V1_ORPHAN = {
     // <progress> sits on the bottom edge of the results header; Dừng before the server answered
     // drops the request. Then 60 Contacts per run: the Contact tab shows 200 with a "Hiển thị 200/N"
     // hint, and "Tải CSV" regenerates the whole tab on the server.
-    await page.route('**/api/run', async (r) => { await new Promise((res) => setTimeout(res, 250)); await r.continue().catch(() => {}); });
+    await page.route('**/api/run', async (r) => { await new Promise((res) => setTimeout(res, 200)); await r.continue().catch(() => {}); });
     await page.keyboard.press('Control+Enter');
     await page.waitForSelector('#btn-stop:not([hidden])');
     const during = await page.evaluate(() => {
@@ -186,7 +189,37 @@ const V1_ORPHAN = {
     await page.waitForSelector('#btn-stop', { state: 'hidden' });
     check(/Đã dừng/.test(await page.textContent('#results-summary')), 'Dừng did not report the stop');
     check(!(await page.isDisabled('#btn-preview')), 'Xem trước stays disabled after Dừng');
+    check(await page.evaluate(() => document.activeElement?.id === 'btn-preview'), 'focus was not moved from Dừng to Xem trước when the run ended');
+    check((await page.getAttribute('#results-summary', 'aria-live')) === 'polite', '#results-summary has no aria-live="polite"');
     await page.unroute('**/api/run');
+    // Dừng after the response arrived but before its first event: the run is cancelled by id
+    // (POST /api/runs/<id>/cancel when `start` comes), not by dropping the stream.
+    await page.evaluate(() => {
+      const orig = window.fetch;
+      window.__cancels = [];
+      window.__restoreFetch = () => { window.fetch = orig; };
+      window.fetch = async (url, opts) => {
+        if (String(url).includes('/cancel')) window.__cancels.push(String(url));
+        const res = await orig(url, opts);
+        if (!String(url).endsWith('/api/run')) return res;
+        const body = new ReadableStream({
+          async start(c) {
+            await new Promise((r) => setTimeout(r, 200));
+            const rd = res.body.getReader();
+            for (let x; !(x = await rd.read()).done;) c.enqueue(x.value);
+            c.close();
+          },
+        });
+        return new Response(body, { status: res.status, headers: res.headers });
+      };
+    });
+    await page.keyboard.press('Control+Enter');
+    await page.waitForSelector('#btn-stop:not([hidden])');
+    await page.click('#btn-stop');
+    await page.waitForSelector('#btn-stop', { state: 'hidden' });
+    const cancels = await page.evaluate(() => { window.__restoreFetch(); return window.__cancels; });
+    check(cancels.length === 1 && /\/api\/runs\/r[0-9a-f]{8}\/cancel$/.test(cancels[0]), `Dừng after the response did not cancel by run id (${cancels})`);
+    check(/bản ghi/.test(await page.textContent('#results-summary')), 'the stream was dropped instead of read to its end');
     await page.click('.step-card[data-id="con"] .type');
     await page.fill('#inspector input[data-key="count"]', '60');
     await page.keyboard.press('Tab');
@@ -509,6 +542,60 @@ const V1_ORPHAN = {
     check(!/null/.test(confirmText), 'confirmation prints "null"');
     await d.click('dialog[open] .actions button:has-text("Hủy")');
     check(!insertSent, 'an insert request was sent');
+
+    // Insert twice (0004 review): the mock answers every insert itself, so nothing reaches the
+    // server or an org. A second Insert previews afresh (an inserted result is not a preview to
+    // repeat); with a fixed seed the confirmation warns that the data repeats the last insert.
+    // The "Lỗi insert" groups are buttons (Space selects the step) with a remainder row.
+    let previews = 0;
+    let mockedInserts = 0;
+    await d.unroute('**/api/run');
+    await d.route('**/api/run', (r) => {
+      const body = r.request().postDataJSON();
+      if (!body?.target) { previews++; return r.continue(); }
+      mockedInserts++;
+      const result = {
+        runId: 'rmock0001', seed: body.seed, now: body.now, warnings: [], records: [], samples: {},
+        stats: { total: 1, bySobject: { Account: 1 }, byStep: {}, durationMs: 1, previewRows: 200, truncated: false },
+        insert: {
+          inserted: 1, failed: 7, errorsTotal: 7, total: 8, notSent: 0, cancelled: false, stopped: null, ids: {}, bySobject: { Account: { inserted: 1, failed: 0 } },
+          errors: [{ ref: 'con#1', sobject: 'Contact', nodeId: 'con', field: 'fields.LastName', message: 'REQUIRED_FIELD_MISSING: x' }],
+          errorGroups: [{ sobject: 'Contact', nodeId: 'con', field: 'fields.LastName', message: 'REQUIRED_FIELD_MISSING: x', count: 2, refs: ['con#1', 'con#2'] }],
+          errorGroupsOther: { groups: 3, count: 5 },
+        },
+      };
+      return r.fulfill({ status: 200, contentType: 'application/x-ndjson', body: `${JSON.stringify({ type: 'start', runId: 'rmock0001', seed: body.seed, now: body.now, warnings: [] })}\n${JSON.stringify({ type: 'done', result })}\n` });
+    });
+    await d.click('#sample-items .palette-item >> nth=0');
+    await d.waitForSelector('.step-card[data-id="con"]');
+    const insertOnce = async () => {
+      await d.click('#btn-insert');
+      await d.waitForSelector('dialog[open]');
+      await d.click('dialog[open] .actions button.danger');
+      await d.waitForFunction(() => !document.querySelector('dialog[open]') && document.getElementById('btn-stop').hidden && !document.getElementById('btn-preview').disabled);
+    };
+    await d.fill('#seed', '');
+    await insertOnce();
+    const p1 = previews;
+    await d.click('#btn-insert');
+    await d.waitForSelector('dialog[open]');
+    check(previews === p1 + 1, `the second Insert did not preview afresh (${p1} → ${previews})`);
+    check(!(await d.$('dialog[open] .same-seed')), 'same-seed warning without a fixed seed');
+    await d.click('dialog[open] .actions button:has-text("Hủy")');
+    await d.fill('#seed', '7');
+    await insertOnce();
+    await d.click('.tabs .tab-issues');
+    check(/và 3 nhóm lỗi khác/.test(await d.textContent('table.error-groups')), 'no remainder row for the groups past the cap');
+    check((await d.getAttribute('table.error-groups tbody tr.clickable', 'role')) === 'button', 'error group rows are not role=button');
+    await d.click('.step-card[data-id="acc"] .type');
+    await d.focus('table.error-groups tbody tr.clickable');
+    await d.keyboard.press(' ');
+    await d.waitForSelector('.step-card.selected[data-id="con"]', { timeout: 2000 }).catch(() => errors.push('Space on an error group did not select its step'));
+    await d.click('#btn-insert');
+    await d.waitForSelector('dialog[open]');
+    check(/Seed 7 đã dùng cho lần insert trước/.test((await d.textContent('dialog[open] .same-seed').catch(() => '')) ?? ''), 'no same-seed warning on a repeated insert with a fixed seed');
+    await d.click('dialog[open] .actions button:has-text("Hủy")');
+    check(mockedInserts === 2, `${mockedInserts} mocked inserts`);
     await dark.close();
   } catch (e) {
     errors.push(String(e));

@@ -27,7 +27,9 @@ It starts the server on a random port 3900–3989 and drives headless Chromium t
 3b. **Run progress (design doc 0004).** With `/api/run` held for 250 ms, the results header shows
    "Đang sinh dữ liệu", the download buttons give their place to **Dừng**, and the `<progress>` is a ≤ 3 px
    line on the bottom edge of `.results-head`; Dừng drops the request ("Đã dừng") and re-enables Xem
-   trước. Then `con` makes 60 Contacts per run: the Contact tab shows "Hiển thị 200/N dòng đầu" and
+   trước, and focus moves from Dừng to Xem trước; `#results-summary` is `aria-live="polite"`. With the run's response body
+   held back 200 ms in the page (a `fetch` wrapper), Dừng sends `POST /api/runs/<runId>/cancel` once `start` arrives instead
+   of dropping the stream. Then `con` makes 60 Contacts per run: the Contact tab shows "Hiển thị 200/N dòng đầu" and
    "Tải CSV (tab hiện tại)" downloads all N rows (header `ref,FirstName,LastName…`) from `/api/export`.
 4. **Alias rename.** Clearing the `acc` alias and typing `account` keeps focus in the input and the
    Lookup `ref` follows the rename (never lost on the empty value); undo restores `acc`.
@@ -76,9 +78,12 @@ It starts the server on a random port 3900–3989 and drives headless Chromium t
     and fails the run, so the smoke test never writes to an org. Then, with a canned preview of the Query sample that
     read the (mocked) org, the confirmation lists "Đọc từ org, không ghi: Account 2 (accs, đọc lúc …)" and says the
     rows are re-read only after 10 minutes or with "⟳ Đọc lại" (no over-promise, no "null"). The canned preview is
-    an NDJSON stream (`start`, `done`) like the real `/api/run`.
+    an NDJSON stream (`start`, `done`) like the real `/api/run`. Then inserts are answered by the route mock itself (they
+    never reach the server or an org): after an insert, a second Insert previews afresh (seed empty); with seed 7 the
+    second confirmation warns "Seed 7 đã dùng cho lần insert trước…"; the "Lỗi insert" tab has role=button group rows
+    (Space selects `con`) and a "… và 3 nhóm lỗi khác" remainder row.
 
-It also fails on any page error or a run over 12 s (typically ~9 s with the 0004 flow; raised from 10 s with the 0006 flows, which left no margin on a loaded machine).
+It also fails on any page error or a run over 12 s (typically ~10 s with the 0004 flows; raised from 10 s with the 0006 flows, which left no margin on a loaded machine).
 Screenshots (only when a directory is given): `smoke-1440.png`, `smoke-390.png`, `smoke-390-sheet.png`,
 `smoke-390-dark.png`, `smoke-1440-dark.png`, `smoke-1440-dark-insert.png`.
 Requires Playwright with Chromium (`require('playwright')`); exit code 2 means it is not installed.

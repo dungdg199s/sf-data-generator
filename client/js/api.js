@@ -24,7 +24,7 @@ async function errorOf(res) {
  * thrown with `issues` and `insert` (what was written before it). A connection lost mid-run
  * throws with `lost: true`.
  */
-async function runStream(body, { onEvent, signal } = {}) {
+async function runStream(body, { onEvent, onResponse, signal } = {}) {
   const res = await fetch('/api/run', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson' },
@@ -32,6 +32,7 @@ async function runStream(body, { onEvent, signal } = {}) {
     signal,
   });
   if (!res.ok) throw await errorOf(res);
+  onResponse?.(); // the run has started on the server: stop it by id from now on
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buf = '';

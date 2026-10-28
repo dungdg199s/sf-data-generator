@@ -65,6 +65,7 @@ async function exportFile(format, sobject) {
   try {
     const { blob, filename } = await api.exportFile({
       workflow: run.workflow, seed: run.seed, now: run.now, format, sobject, org: run.org || undefined, expectQueries: run.expectQueries,
+      runId: run.runId, // the server reuses the Query rows of that run (exactly what was shown / inserted)
     });
     download(filename, blob);
   } catch (e) {
@@ -94,11 +95,14 @@ export function showProgress({ parts, value, max, onStop, stopping = false }) {
 
 /** Back to the idle header (download buttons instead of Dừng). */
 export function endProgress() {
+  // Dừng disappears: keep the keyboard user's place on the next sensible control.
+  const hadFocus = document.activeElement === stopBtn;
   progressBar.hidden = true;
   stopBtn.hidden = true;
   stopBtn.onclick = null;
   dlJson.hidden = dlCsv.hidden = false;
   updateButtons();
+  if (hadFocus) document.getElementById('btn-preview').focus();
 }
 
 /** One-off status text in the header (errors, lost connection). */
@@ -223,35 +227,49 @@ function dataTable(records, ids, total) {
   return h('div', {}, table, total > rows.length ? h('p', { class: 'hint table-more' }, `Hiển thị ${fmt(rows.length)}/${fmt(total)} dòng đầu. Tải CSV/JSON để lấy đủ.`) : null);
 }
 
-/** Insert failures grouped by (sObject, step, field, message); a row selects the step / field. */
+const DETAIL_ROWS = 200; // rows of "Chi tiết từng bản ghi" drawn (the server sends at most 1 000)
+
+/** Insert failures grouped by (sObject, step, field, message pattern); a row selects the step / field. */
 function errorGroupsView(ins) {
   const groups = ins?.errorGroups ?? [];
+  const other = ins?.errorGroupsOther;
   const errors = ins?.errors ?? [];
   const stepName = (id) => {
     const step = id ? stepById(id) : null;
     return step ? stepAlias(step) || id : id ?? '';
   };
+  const go = (g) => g.nodeId && onGoTo?.({ nodeId: g.nodeId, field: g.field });
+  const shown = errors.slice(0, DETAIL_ROWS);
+  const total = ins?.errorsTotal ?? errors.length;
   return h('div', {},
     h('table', { class: 'data error-groups' },
       h('thead', {}, h('tr', {}, h('th', {}, 'sObject'), h('th', {}, 'Bước'), h('th', {}, 'Lỗi'), h('th', {}, 'Số bản ghi'), h('th', {}, 'Ví dụ'))),
-      h('tbody', {}, groups.map((g) => h('tr', {
-        class: g.nodeId ? 'clickable' : '',
-        tabindex: g.nodeId ? '0' : null,
-        title: g.nodeId ? 'Bấm để chọn bước' : '',
-        onclick: () => g.nodeId && onGoTo?.({ nodeId: g.nodeId, field: g.field }),
-        onkeydown: (e) => { if (e.key === 'Enter' && g.nodeId) onGoTo?.({ nodeId: g.nodeId, field: g.field }); },
-      },
-      h('td', {}, g.sobject),
-      h('td', {}, stepName(g.nodeId)),
-      h('td', { class: 'err wrap' }, g.message),
-      h('td', { class: 'num' }, fmt(g.count)),
-      h('td', {}, g.refs.join(', ')))))),
-    errors.length
+      h('tbody', {},
+        groups.map((g) => h('tr', {
+          class: g.nodeId ? 'clickable' : '',
+          role: g.nodeId ? 'button' : null,
+          tabindex: g.nodeId ? '0' : null,
+          title: g.nodeId ? 'Bấm để chọn bước' : '',
+          onclick: () => go(g),
+          onkeydown: (e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              go(g);
+            }
+          },
+        },
+        h('td', {}, g.sobject),
+        h('td', {}, stepName(g.nodeId)),
+        h('td', { class: 'err wrap' }, g.message),
+        h('td', { class: 'num' }, fmt(g.count)),
+        h('td', {}, g.refs.join(', ')))),
+        other ? h('tr', { class: 'other-groups' }, h('td', { colspan: '3', class: 'wrap' }, `… và ${fmt(other.groups)} nhóm lỗi khác`), h('td', { class: 'num' }, fmt(other.count)), h('td', {})) : null)),
+    shown.length
       ? h('details', { class: 'error-details' },
-        h('summary', {}, `Chi tiết từng bản ghi${(ins.errorsTotal ?? errors.length) > errors.length ? ` (${fmt(errors.length)} dòng đầu / ${fmt(ins.errorsTotal)})` : ''}`),
+        h('summary', {}, `Chi tiết từng bản ghi${total > shown.length ? ` (${fmt(shown.length)} dòng đầu / ${fmt(total)})` : ''}`),
         h('table', { class: 'data' },
           h('thead', {}, h('tr', {}, h('th', {}, 'ref'), h('th', {}, 'sObject'), h('th', {}, 'Lỗi'))),
-          h('tbody', {}, errors.map((e) => h('tr', {}, h('td', {}, e.ref), h('td', {}, e.sobject), h('td', { class: 'err wrap' }, e.message))))))
+          h('tbody', {}, shown.map((e) => h('tr', {}, h('td', {}, e.ref), h('td', {}, e.sobject), h('td', { class: 'err wrap' }, e.message))))))
       : null);
 }
 

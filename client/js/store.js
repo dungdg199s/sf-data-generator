@@ -27,6 +27,7 @@ export const state = {
   orgs: [],
   org: '',
   result: null, // last run (design 0004: first previewRows records per sObject + totals)
+  lastInsert: null, // { key: runKey(workflow, seed), org } of the last insert that wrote records
   resultRun: null, // { workflow, seed, now, org, expectQueries } of that run: downloads regenerate from it
   lastRunKey: null,
   lastRunOrg: null, // org the Query steps of the last preview read ('' = sample rows)

@@ -376,7 +376,8 @@ function readSeed() {
 /** The last preview when an insert would repeat it: same workflow, org and (if typed) seed. */
 function matchingPreview(seed) {
   const r = state.result;
-  if (!r || r.cancelled || !state.resultRun) return null;
+  // A result that was inserted is not a preview to insert again: the next Insert previews afresh.
+  if (!r || r.cancelled || r.insert || !state.resultRun) return null;
   if (seed !== undefined && String(seed) !== String(r.seed)) return null;
   return state.lastRunKey === runKey(state.workflow, r.seed) && state.lastRunOrg === state.org ? r : null;
 }
@@ -395,7 +396,11 @@ async function stopRun() {
   r.stopping = true;
   r.render?.();
   if (!r.runId) {
-    r.controller.abort();
+    // Still waiting for the response (Query steps being read): dropping the request stops it
+    // before anything runs. Once the response arrived the run has started on the server, so
+    // cancel it by id as soon as `start` names it (dropping the stream could miss a batch).
+    if (!r.responded) r.controller.abort();
+    else r.cancelOnStart = true;
     return;
   }
   try {
@@ -403,6 +408,12 @@ async function stopRun() {
   } catch {
     // 404: the run just ended; its last event says what happened.
   }
+}
+
+/** `start` event: the run has an id; a Dừng pressed before it is sent now. */
+function started(r, ev) {
+  r.runId = ev.runId;
+  if (r.cancelOnStart && r.runId) api.cancelRun(r.runId).catch(() => {});
 }
 
 const leaveGuard = (e) => {
@@ -451,8 +462,9 @@ async function preview({ seed, refresh = false, auto = false }) {
   try {
     const result = await api.runStream({ workflow, seed, org: state.org || undefined, refreshQueries: refresh || undefined }, {
       signal: r.controller.signal,
+      onResponse: () => { r.responded = true; },
       onEvent: (ev) => {
-        if (ev.type === 'start') r.runId = ev.runId;
+        if (ev.type === 'start') started(r, ev);
         if (ev.type === 'progress') {
           r.generated = ev.generated;
           r.bySobject = ev.bySobject;
@@ -484,6 +496,7 @@ function acceptResult(result, workflow) {
     seed: result.seed,
     now: result.now,
     org: state.org,
+    runId: result.runId,
     expectQueries: result.queries?.length ? Object.fromEntries(result.queries.map((q) => [q.nodeId, { fingerprint: q.fingerprint, count: q.count, fetchedAt: q.fetchedAt }])) : undefined,
   };
   state.lastRunKey = runKey(workflow, result.seed);
@@ -543,8 +556,9 @@ async function insertRun(base) {
       workflow, seed: base.seed, now: base.now, target: { kind: 'org', org }, expectQueries: preview?.expectQueries,
     }, {
       signal: r.controller.signal,
+      onResponse: () => { r.responded = true; },
       onEvent: (ev) => {
-        if (ev.type === 'start') r.runId = ev.runId;
+        if (ev.type === 'start') started(r, ev);
         else if (ev.type === 'plan') {
           r.phase = 'insert';
           r.insertStart = Date.now();
@@ -558,6 +572,8 @@ async function insertRun(base) {
     });
     acceptResult(result, workflow);
     const ins = result.insert;
+    // A later Insert with the same seed would create the same data again: the confirmation says so.
+    if (ins.inserted) state.lastInsert = { key: runKey(workflow, result.seed), org };
     const where = bySobjectText(ins.bySobject);
     if (ins.stopped?.reason === 'allFailing') {
       const s = ins.stopped;
@@ -614,6 +630,9 @@ function confirmInsert(org, previewed) {
       isProd ? h('div', { class: 'warn-box' }, 'Org này không phải sandbox hay scratch org. Kiểm tra kỹ trước khi insert dữ liệu test.') : null,
       h('p', { class: 'insert-count' }, stats.total ? `Sẽ tạo ${fmt(stats.total)} bản ghi: ${counts}.` : 'Workflow không sinh bản ghi nào: không có gì để insert.'),
       h('p', {}, `Giống hệt bản xem trước (seed ${previewed.seed}).`),
+      state.lastInsert && state.lastInsert.org === state.org && state.lastInsert.key === runKey(state.workflow, previewed.seed)
+        ? h('div', { class: 'warn-box same-seed' }, `Seed ${previewed.seed} đã dùng cho lần insert trước vào org này với cùng workflow: cùng seed thì ra cùng dữ liệu (tên, email…), nên các bản ghi này có thể bị trùng với lần trước. Muốn dữ liệu mới, xóa ô Seed rồi bấm Insert lại.`)
+        : null,
       read.length
         ? h('p', {}, `Đọc từ org, không ghi: ${read.map((q) => `${q.sobject} ${q.count} (${q.alias}, đọc lúc ${hhmm(q.fetchedAt)})`).join(', ')}.`)
         : null,
