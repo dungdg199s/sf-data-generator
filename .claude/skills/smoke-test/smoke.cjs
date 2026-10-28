@@ -36,14 +36,13 @@
 // Usage: node .claude/skills/smoke-test/smoke.cjs [screenshotDir]
 // Needs Playwright with a Chromium build available (require('playwright')).
 
-const { spawn } = require('node:child_process');
+const http = require('node:http');
 const path = require('node:path');
 const fs = require('node:fs');
 const os = require('node:os');
 const { pathToFileURL } = require('node:url');
 
 const root = path.resolve(__dirname, '../../..');
-const port = 3900 + Math.floor(Math.random() * 90);
 const outDir = process.argv[2];
 
 let chromium;
@@ -54,17 +53,17 @@ try {
   process.exit(2);
 }
 
-async function waitForServer(url, ms = 8000) {
-  const until = Date.now() + ms;
-  while (Date.now() < until) {
-    try {
-      if ((await fetch(url)).ok) return;
-    } catch {
-      /* not up yet */
-    }
-    await new Promise((r) => setTimeout(r, 150));
-  }
-  throw new Error('Server did not start');
+/**
+ * The app in this process on a free port (port 0): it dies with the smoke (Ctrl+C, kill), and a
+ * stale server on a fixed port can never answer instead. The sf CLI is a stub that fails like a
+ * machine without `sf` (503), so the smoke can never reach a real org.
+ */
+async function startServer() {
+  const { createApp, allowedHostsFor } = await import(pathToFileURL(path.join(root, 'server/index.js')).href);
+  const noCli = async () => { throw Object.assign(new Error('smoke: không dùng sf CLI'), { status: 503 }); };
+  const server = http.createServer(createApp({ cli: { listOrgs: noCli, getConnection: noCli }, allowedHosts: allowedHostsFor('127.0.0.1') }));
+  await new Promise((res, rej) => server.once('error', rej).listen(0, '127.0.0.1', res));
+  return server;
 }
 
 // Body background of each theme (--color-bg: gray-50 / gray-950).
@@ -187,7 +186,10 @@ async function flowEditing() {
   // <progress> sits on the bottom edge of the results header; Dừng before the server answered
   // drops the request. Then 60 Contacts per run: the Contact tab shows 200 with a "Hiển thị 200/N"
   // hint, and "Tải CSV" regenerates the whole tab on the server.
-  await page.route('**/api/run', async (r) => { await new Promise((res) => setTimeout(res, 200)); await r.continue().catch(() => {}); });
+  // The request is held until Dừng was clicked (no fixed delay: a slow machine cannot finish the run first).
+  let releaseRun;
+  const runGate = new Promise((res) => { releaseRun = res; });
+  await page.route('**/api/run', async (r) => { await runGate; await r.continue().catch(() => {}); });
   await page.keyboard.press('Control+Enter');
   await page.waitForSelector('#btn-stop:not([hidden])');
   const during = await page.evaluate(() => {
@@ -198,6 +200,7 @@ async function flowEditing() {
   check(/Đang sinh dữ liệu/.test(during.summary) && during.json, `no running state (${JSON.stringify(during)})`);
   check(during.h > 0 && during.h <= 3 && during.gap < 1 && Math.abs(during.w) < 1, `progress bar is not a 3 px line on the header edge (${JSON.stringify(during)})`);
   await page.click('#btn-stop');
+  releaseRun();
   await page.waitForSelector('#btn-stop', { state: 'hidden' });
   check(/Đã dừng/.test(await page.textContent('#results-summary')), 'Dừng did not report the stop');
   check(!(await page.isDisabled('#btn-preview')), 'Xem trước stays disabled after Dừng');
@@ -210,13 +213,16 @@ async function flowEditing() {
     const orig = window.fetch;
     window.__cancels = [];
     window.__restoreFetch = () => { window.fetch = orig; };
+    // The response body is held until the smoke releases it (after Dừng), never by a timer.
+    window.__bodyGate = new Promise((r) => { window.__releaseBody = r; });
     window.fetch = async (url, opts) => {
       if (String(url).includes('/cancel')) window.__cancels.push(String(url));
       const res = await orig(url, opts);
       if (!String(url).endsWith('/api/run')) return res;
+      window.__gotResponse = true;
       const body = new ReadableStream({
         async start(c) {
-          await new Promise((r) => setTimeout(r, 200));
+          await window.__bodyGate;
           const rd = res.body.getReader();
           for (let x; !(x = await rd.read()).done;) c.enqueue(x.value);
           c.close();
@@ -227,7 +233,9 @@ async function flowEditing() {
   });
   await page.keyboard.press('Control+Enter');
   await page.waitForSelector('#btn-stop:not([hidden])');
+  await page.waitForFunction(() => window.__gotResponse); // the response is here, its body is not
   await page.click('#btn-stop');
+  await page.evaluate(() => window.__releaseBody());
   await page.waitForSelector('#btn-stop', { state: 'hidden' });
   const cancels = await page.evaluate(() => { window.__restoreFetch(); return window.__cancels; });
   check(cancels.length === 1 && /\/api\/runs\/r[0-9a-f]{8}\/cancel$/.test(cancels[0]), `Dừng after the response did not cancel by run id (${cancels})`);
@@ -388,6 +396,18 @@ async function flowPicker() {
 /** Flows 5c–10: Query sample, autosave / file migration, theme switch with a second tab. */
 async function flowFiles() {
   const page = await newPage('files');
+  // The validation of the first workflow is held until after the Query sample was previewed: when
+  // it lands it is stale and must not wipe the newer issues (0009 review, validateSeq).
+  let releaseValidate;
+  let heldValidate = null;
+  const validateGate = new Promise((res) => { releaseValidate = res; });
+  await page.route('**/api/validate', async (r) => {
+    if (!heldValidate) {
+      heldValidate = r.request();
+      await validateGate;
+    }
+    await r.continue().catch(() => {});
+  });
   await page.goto(base);
   await page.waitForSelector('.step-card[data-id="con"]');
   // Query → Chọn bản ghi → Record without an org (0006): sample rows, warning, palette defaults, {{ }} refused.
@@ -399,6 +419,20 @@ async function flowFiles() {
   check(/accs: 5 bản ghi mẫu/.test(await page.textContent('#results-summary')), 'results summary does not mention the sample rows');
   check(/Contact: 10/.test(await page.textContent('#results-summary')), 'the Query sample did not generate 10 Contacts');
   check(await page.isVisible('.step-card[data-id="accs"].has-warning'), 'no warning on the Query card without an org');
+  const staleDone = page.waitForEvent('requestfinished', (q) => q === heldValidate);
+  releaseValidate();
+  await staleDone;
+  await page.evaluate(() => new Promise((r) => setTimeout(r, 0)));
+  check(await page.isVisible('.step-card[data-id="accs"].has-warning'), 'a stale /api/validate response wiped the newer warning of the Query card');
+  await page.unroute('**/api/validate');
+  // A later validation of the same workflow (name edited and put back) keeps the run's warning.
+  const name = await page.inputValue('#wf-name');
+  await page.fill('#wf-name', `${name} x`);
+  const revalidated = page.waitForResponse((r) => r.url().endsWith('/api/validate'));
+  await page.fill('#wf-name', name);
+  await revalidated;
+  await page.evaluate(() => new Promise((r) => setTimeout(r, 0)));
+  check(await page.isVisible('.step-card[data-id="accs"].has-warning'), 'the validation of the unchanged workflow erased the run\'s Query warning');
   await page.click('.step-card[data-id="accs"] .type');
   await page.click('#palette-items .palette-item[data-type="pick"]');
   await page.waitForSelector('#inspector select[data-key="from"]');
@@ -644,9 +678,21 @@ async function flowLayoutWide() {
   await page.goto(base);
   await page.waitForSelector('#issues:not([hidden]) .issue.error');
   await page.waitForFunction((o) => document.getElementById('org-select').value === o, LONG_ORGS[0].alias);
+  // The aria-live count is only rewritten when it changes: an edit that keeps "2 lỗi · 1 cảnh báo"
+  // must not re-announce it after the background validation.
+  await page.evaluate(() => {
+    window.__countMutations = 0;
+    new MutationObserver(() => { window.__countMutations++; }).observe(document.getElementById('issues-count'), { childList: true, subtree: true, characterData: true });
+  });
+  const validated = page.waitForResponse((r) => r.url().endsWith('/api/validate'));
+  await page.fill('#wf-name', 'Account + Contact 2');
+  await validated;
+  await page.evaluate(() => new Promise((r) => setTimeout(r, 0)));
+  check((await page.evaluate(() => window.__countMutations)) === 0, 'the issues count (aria-live) was rewritten although it did not change');
 
-  // 13a: the bar is in the flow under the canvas, no card under it.
-  for (const [width, height] of [[1440, 900], [1280, 800], [1024, 768]]) {
+  // 13a: the bar is in the flow under the canvas, no card under it; on a short (landscape phone)
+  // screen it takes at most a quarter of the middle column and stays above the results header.
+  for (const [width, height] of [[844, 390], [1440, 900], [1280, 800], [1024, 768]]) {
     await page.setViewportSize({ width, height });
     const m = await page.evaluate(() => {
       const bar = document.getElementById('issues');
@@ -658,9 +704,17 @@ async function flowLayoutWide() {
         const bottom = Math.min(r.bottom, pb.bottom); // the part of the card the canvas shows
         return bottom > top && bottom > ib.top + 0.5 && top < ib.bottom && r.right > ib.left && r.left < ib.right;
       }).map((c) => c.dataset.id);
-      return { under, gap: ib.top - pb.bottom, position: getComputedStyle(bar).position, rows: bar.querySelectorAll('.issue').length };
+      const col = document.querySelector('.view-wrap').getBoundingClientRect();
+      const results = document.querySelector('.results-head').getBoundingClientRect();
+      return {
+        under, gap: ib.top - pb.bottom, position: getComputedStyle(bar).position, rows: bar.querySelectorAll('.issue').length,
+        h: ib.height, col: col.height, below: ib.bottom - Math.min(col.bottom, results.top), brand: getComputedStyle(document.querySelector('.brand')).display,
+      };
     });
     check(!m.under.length && m.gap >= -0.5 && m.position !== 'absolute' && m.rows === 3, `${width}px: issues bar covers cards or floats (${JSON.stringify(m)})`);
+    check(m.below <= 0.5 && m.h <= Math.max(0.25 * m.col, 33) + 0.5, `${width}px: issues bar taller than a quarter of the middle column or under the results header (${JSON.stringify(m)})`);
+    // < 1 300 px the app name goes (the bar fits one row only without it).
+    check((m.brand === 'none') === (width < 1300), `${width}px: app name display ${m.brand}`);
     const tb = await topbarBox(page);
     check(tb.h <= (width >= 1280 ? 50 : 90), `${width}px: top bar is ${tb.h}px high with a long org label`);
     check(tb.org && tb.preview && tb.insert && tb.overflow <= 0, `${width}px: Org / Xem trước / Insert not all visible (${JSON.stringify(tb)})`);
@@ -702,6 +756,16 @@ async function flowLayoutWide() {
   await page.setViewportSize({ width: 1440, height: 900 });
   const dl = await page.evaluate(() => ['btn-dl-json', 'btn-dl-csv', 'btn-dl-menu'].map((id) => document.getElementById(id).getBoundingClientRect().width > 0));
   check(dl.join() === 'true,true,false', `1440px: download buttons ${dl} (JSON, CSV shown; ⤓ Tải hidden)`);
+  // N5: a selection on a wide screen does not pop a sheet open when the window gets narrow.
+  await page.setViewportSize({ width: 800, height: 900 });
+  await settle(page);
+  const narrowed = await page.evaluate(() => {
+    const insp = document.getElementById('inspector');
+    return { open: insp.classList.contains('open'), top: insp.getBoundingClientRect().top, inert: insp.inert, sheet: document.body.classList.contains('sheet-open') };
+  });
+  check(!narrowed.open && !narrowed.sheet && narrowed.inert && narrowed.top >= 899, `narrowing the window popped the sheet open (${JSON.stringify(narrowed)})`);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.waitForFunction(() => !document.getElementById('inspector').inert, null, { timeout: 2000 }).catch(() => errors.push('the inspector stays inert on a wide screen'));
   const theme = await page.evaluate(() => ({ title: document.getElementById('theme-select').title, color: getComputedStyle(document.querySelector('#theme-select option')).color }));
   check(theme.title === 'Giao diện: Theo hệ thống' && !/rgba\(0, 0, 0, 0\)|transparent/.test(theme.color), `theme select title/option colour (${JSON.stringify(theme)})`);
   await page.context().close();
@@ -736,18 +800,25 @@ async function flowLayoutNarrow() {
   let s = await sheet();
   check(s.card <= s.sheet + 0.5 && s.sheet - s.canvas >= 190, `390px: sheet covers the selected card or leaves < 190px of canvas (${JSON.stringify(s)})`);
   if (outDir) await m.screenshot({ path: path.join(outDir, 'smoke-390-sheet.png') });
-  await m.tap('#inspector .sheet-close');
-  check(!(await m.$('#inspector.open')), '"‹ Xong" did not close the sheet');
+  // "‹ Xong" by keyboard: focus goes to the selected card, the closed sheet is inert.
+  await m.focus('#inspector .sheet-close');
+  await m.keyboard.press('Enter');
+  const closed = await m.evaluate(() => ({ open: document.getElementById('inspector').classList.contains('open'), inert: document.getElementById('inspector').inert, focus: document.activeElement?.dataset.id ?? document.activeElement?.id }));
+  check(!closed.open && closed.inert && closed.focus === 'con', `"‹ Xong" (${JSON.stringify(closed)}: closed, inert, focus on the card expected)`);
 
   // 13c: the ⋯ menu holds what the phone top bar hides, plus Mẫu.
   await m.tap('#btn-more');
   const menu = await m.evaluate(() => ({
+    // ARIA: inside role=menu only menu items, groups and aria-hidden text; inputs only inside a group.
+    aria: [...document.querySelectorAll('.popup[role="menu"] *')].filter((e) => !e.closest('[role="group"], [role^="menuitem"], [aria-hidden="true"]')
+      && ([...e.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim()) || e.matches('input'))).map((e) => e.outerHTML.slice(0, 60)),
     items: [...document.querySelectorAll('.popup .popup-item')].map((b) => b.textContent),
     seed: Boolean(document.querySelector('.popup input[data-field="seed"]')),
     radio: document.querySelector('.popup [role="menuitemradio"][aria-checked="true"]')?.textContent ?? '',
   }));
   const want = ['Mới', 'Mở…', 'Lưu', 'Account + Contact', 'Tối'];
   check(want.every((w) => menu.items.some((x) => x.includes(w))) && menu.seed && /Theo hệ thống/.test(menu.radio), `⋯ menu at 390px (${JSON.stringify(menu)})`);
+  check(!menu.aria.length, `text or input directly inside role=menu: ${menu.aria.join(' | ')}`);
   await m.fill('.popup input[data-field="seed"]', '42');
   check((await m.inputValue('#seed')) === '42', 'the Seed field of the ⋯ menu does not set #seed');
   await m.keyboard.press('Enter');
@@ -755,6 +826,15 @@ async function flowLayoutNarrow() {
   await m.tap('#seed-chip');
   check(await m.evaluate(() => document.activeElement?.dataset.field === 'seed'), 'the Seed chip does not open the menu on the Seed field');
   await m.keyboard.press('Escape');
+  check(await m.evaluate(() => document.activeElement?.id === 'seed-chip'), 'Esc in the menu opened from the Seed chip did not return focus to the chip');
+  // Tab / Shift+Tab leave the menu back to its button, not to the ends of the page.
+  for (const key of ['Tab', 'Shift+Tab']) {
+    await m.tap('#btn-more');
+    await m.focus('.popup input[data-field="seed"]');
+    await m.keyboard.press(key);
+    const after = await m.evaluate(() => ({ open: Boolean(document.querySelector('.popup')), focus: document.activeElement?.id }));
+    check(!after.open && after.focus === 'btn-more', `${key} in the ⋯ menu (${JSON.stringify(after)})`);
+  }
   await m.tap('#btn-more');
   await m.tap('.popup .popup-item:has-text("Lead theo xác suất")');
   await m.waitForSelector('.step-card[data-id="lead"]');
@@ -768,15 +848,24 @@ async function flowLayoutNarrow() {
   await m.keyboard.press('Escape');
   await m.setViewportSize({ width: 390, height: 844 });
 
-  // 13d: Xem trước closes the sheet (selection kept) so the results show.
+  // 13d: a run closes the sheet (selection kept) so the results show. Started with Ctrl+Enter in a
+  // field of the sheet, focus must leave the hidden form: typing afterwards edits nothing.
   await m.tap('.step-card[data-id="con"] .type');
   await m.waitForSelector('#inspector.open');
-  await m.tap('#btn-preview');
+  await m.focus('#inspector input[data-key="alias"]');
+  await m.keyboard.press('Control+Enter');
   await m.waitForSelector('table.data tbody tr');
   await settle(m);
   s = await sheet();
-  const table = await m.evaluate(() => { const r = document.querySelector('table.data').getBoundingClientRect(); return r.height > 0 && r.top < innerHeight; });
+  const table = await m.evaluate(() => {
+    const r = document.querySelector('table.data').getBoundingClientRect();
+    // Not under the sheet: above its top edge (off screen once closed).
+    return r.height > 0 && r.top < Math.min(innerHeight, document.getElementById('inspector').getBoundingClientRect().top);
+  });
   check(!s.open && (await m.isVisible('.step-card.selected[data-id="con"]')) && table, `Xem trước with the sheet open (${JSON.stringify(s)}, table ${table})`);
+  const typedIn = await m.evaluate(() => ({ inSheet: document.getElementById('inspector').contains(document.activeElement), inert: document.getElementById('inspector').inert }));
+  await m.keyboard.type('ZZ');
+  check(!typedIn.inSheet && typedIn.inert && (await m.inputValue('#inspector input[data-key="alias"]')) === 'con', `typing after a run edited the hidden sheet (${JSON.stringify(typedIn)})`);
   // 13e: one-row results header, "⤓ Tải" menu with the two downloads.
   const head = await m.evaluate(() => ({ h: document.querySelector('.results-head').getBoundingClientRect().height, expanded: document.getElementById('btn-results-toggle').getAttribute('aria-expanded') }));
   check(head.h <= 50 && head.expanded === 'true', `390px results header after Xem trước (${JSON.stringify(head)})`);
@@ -805,7 +894,31 @@ async function flowLayoutNarrow() {
   await m.setViewportSize({ width: 844, height: 390 });
   await settle(m);
   s = await sheet();
-  check(s.sheet >= s.palette + 60 - 0.5, `844×390: sheet top ${s.sheet} < palette bottom ${s.palette} + 60`);
+  check(s.sheet >= s.palette + 60 - 0.5 && s.sheet - s.canvas >= 60 - 0.5, `844×390: less than 60 px of canvas above the sheet (${JSON.stringify(s)})`);
+  await m.tap('#btn-more');
+  check(await m.$('.popup .popup-item:has-text("Thu gọn tất cả")'), '844×390: "Thu gọn tất cả" is neither on screen nor in the ⋯ menu');
+  await m.keyboard.press('Escape');
+  await m.setViewportSize({ width: 390, height: 844 });
+  await m.tap('#inspector .sheet-close');
+
+  // Going to an issue on a phone: the card ends up fully between the palette and the sheet.
+  await m.evaluate((wf) => localStorage.setItem('sfdg.workflow.v2', JSON.stringify(wf)), await issuesWorkflow());
+  await m.reload();
+  await m.waitForSelector('#issues:not([hidden]) .issue.error');
+  const cardBetween = (id) => m.evaluate((id) => {
+    const c = document.querySelector(`.step-card[data-id="${id}"]`).getBoundingClientRect();
+    const top = Math.max(document.getElementById('process').getBoundingClientRect().top, document.querySelector('.palette').getBoundingClientRect().bottom);
+    return { card: [c.top, c.bottom], top, sheet: document.getElementById('inspector').getBoundingClientRect().top, ok: c.top >= top - 0.5 && c.bottom <= document.getElementById('inspector').getBoundingClientRect().top + 0.5 };
+  }, id);
+  for (const [width, height, row, id] of [[390, 844, '.issue.error >> nth=0', 'task'], [844, 390, '.issue.warning', 'opp']]) {
+    await m.setViewportSize({ width, height });
+    if (await m.$('#inspector.open')) await m.tap('#inspector .sheet-close');
+    await m.tap(`#issues ${row}`);
+    await m.waitForSelector('#inspector.open');
+    await settle(m);
+    const b = await cardBetween(id);
+    check(b.ok, `${width}×${height}: after tapping its issue, "${id}" is not fully visible above the sheet (${JSON.stringify(b)})`);
+  }
   await m.setViewportSize({ width: 390, height: 844 });
   if (outDir) {
     await m.tap('#inspector .sheet-close');
@@ -817,14 +930,17 @@ async function flowLayoutNarrow() {
 }
 
 (async () => {
-  const server = spawn(process.execPath, ['server/index.js'], { cwd: root, env: { ...process.env, PORT: String(port) }, stdio: 'inherit' });
-  // A Playwright error outside a flow's promise (e.g. in an event handler) must not leave the server running.
-  process.on('uncaughtException', (e) => { server.kill(); console.error('SMOKE FAILED\n' + e); process.exit(1); });
-  base = `http://127.0.0.1:${port}`;
+  // A Playwright error outside a flow's promise (e.g. in an event handler) fails the run.
+  process.on('uncaughtException', (e) => { console.error('SMOKE FAILED\n' + e); process.exit(1); });
   const t0 = Date.now();
+  let server;
   try {
     // Browser start and server start overlap.
-    [browser] = await Promise.all([chromium.launch(), waitForServer(`${base}/api/meta`)]);
+    [browser, server] = await Promise.all([chromium.launch(), startServer()]);
+    base = `http://127.0.0.1:${server.address().port}`;
+    console.log(`server: ${base}`);
+    const orgs = await fetch(`${base}/api/orgs`);
+    check(orgs.status === 503 && /smoke:/.test((await orgs.json()).error), 'the smoke server is not using the sf CLI stub');
     // Independent flows, one context each, in parallel. A flow that throws (timed-out wait) is
     // reported and the others still finish.
     const flows = { flowEditing, flowPicker, flowFiles, flowDark, flowLayoutWide, flowLayoutNarrow };
@@ -833,8 +949,10 @@ async function flowLayoutNarrow() {
   } catch (e) {
     errors.push(String(e));
   } finally {
+    // Server first: browser.close() can hang on a crashed page, and nothing must keep the port.
+    server?.closeAllConnections();
+    server?.close();
     await browser?.close();
-    server.kill();
   }
   const ms = Date.now() - t0;
   console.log(`duration=${ms}ms`);
