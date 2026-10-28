@@ -173,7 +173,7 @@ chỉ thấy các field ở phía trên.
   workflow, `seed`, `now` và cùng dòng Query ⇒ cùng chuỗi bản ghi, từng byte, ở xem trước, insert và tải về.
 - Thứ tự gọi `rng` giống executor version 1, nên workflow v1 chuyển sang v2 sinh đúng dữ liệu cũ với cùng seed, **trừ ở các
   bước bị nhân bản** khi chuyển (xem [Version 1 (cũ) và chuyển đổi](#version-1-cũ-và-chuyển-đổi)): bản sao có trạng thái riêng.
-- Giới hạn: `LIMITS` trong `server/workflow/nodes.js` (số bản ghi, số bước đã chạy, `maxDepth = 32` cấp lồng nhau).
+- Giới hạn: `LIMITS` trong `server/workflow/nodes.js` (số bản ghi, số bước đã chạy — mỗi lần lặp của Lặp cũng tính là một bước, từ sửa sau review của 0010 —, `maxDepth = 32` cấp lồng nhau).
 
 ### Đường dẫn tham chiếu
 
@@ -193,7 +193,7 @@ Template dùng `{{path}}` (regex `\{\{\s*([\w.$]+)\s*\}\}`, khai báo một lầ
 Alias của Record, Query và Chọn bản ghi, và tên bản ghi đang lặp `itemAlias` của Lặp `each` (mọi khóa config đặt tên một
 nguồn `kind: "record"` của `exposes` đang có hiệu lực; server, `shared/` (`stepNames` trong `shared/workflow-tree.js`) và UI
 đều đọc từ danh mục) dùng **chung một không gian tên**: duy nhất trên **cả cây** (kể cả bước đang tắt), không trùng tên biến
-lặp (kể cả biến lặp của chính vòng đó) và không được là `this`. Query và Chọn bản ghi bắt buộc có alias (Record thiếu alias thì dùng `id`).
+lặp (kể cả biến lặp của chính vòng đó) và không được là `this`. Query và Chọn bản ghi bắt buộc có alias (Record thiếu alias thì dùng `id`, và id đó cũng nằm trong không gian tên: trùng một alias, `itemAlias` hay tên biến lặp là lỗi gắn ô `alias` của Record).
 Alias của Query là pool nên không có bản ghi hiện tại: chỉ dùng được trong Lookup "Ngẫu nhiên trong pool", `from` của Chọn
 bản ghi và `{{accs.$count}}`; `{{accs.Name}}` là lỗi `noCurrent`.
 

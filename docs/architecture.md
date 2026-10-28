@@ -121,7 +121,7 @@ Thứ tự slot được truyền vào qua tham số `slotKeys(type)`: server l�
 | `maxRecordsDefault` | 50 000 | Số bản ghi tối đa mỗi lần chạy nếu workflow không đặt `settings.maxRecords` |
 | `maxRecordsHard` | 200 000 | Trần cứng, không vượt được |
 | `maxCountPerNode` | 100 000 | Số lần lặp / số bản ghi tối đa của một node |
-| `maxSteps` | 2 000 000 | Chặn workflow lặp lồng nhau chạy quá lâu |
+| `maxSteps` | 2 000 000 | Chặn workflow lặp lồng nhau chạy quá lâu. Đếm mỗi lần thăm một bước **và**, từ sửa sau review của [0010](design/0010-lap-theo-ban-ghi.md), mỗi lần lặp của Lặp (cố định, ngẫu nhiên, `each`): trước đó Lặp có thân toàn bước tắt chạy 10¹⁰ lần lặp mà không bị đếm, treo server và Dừng không tới được. Hệ quả: một workflow cũ có thể bị từ chối mới — số bước đếm tăng tối đa gấp đôi, ví dụ Lặp 1 000 × Lặp 1 000 × [Rẽ nhánh] trước là ≈ 1 001 000, nay ≈ 2 002 000 > 2 000 000 (`Workflow chạy quá 2000000 bước…`) dù chỉ sinh ~100 000 bản ghi. Sửa bằng cách giảm số lần lặp lồng nhau |
 | `maxDepth` | 32 | Số cấp Lặp / Rẽ nhánh lồng nhau tối đa |
 | `previewRows` | 200 | Số bản ghi đầu mỗi sObject server gửi về cho bảng kết quả; phần còn lại chỉ đếm, tải đủ qua `/api/export` |
 | `maxQueryRows` | 2 000 | LIMIT tối đa và `maxFetch` của một bước Query |

@@ -599,6 +599,45 @@ câu `outsideLoop` trên thanh lỗi. Sau commit cuối, ba lần liên tiếp `
 
 ### Để sau
 
-- Đổi tên field của Record gốc chưa kéo theo `{{acc.Field}}` qua bản ghi đang lặp (cũng chưa có với Chọn bản ghi).
+- ~~Đổi tên field của Record gốc chưa kéo theo `{{acc.Field}}` qua bản ghi đang lặp (cũng chưa có với Chọn bản ghi).~~ Đã
+  sửa sau review (mục 2 dưới đây).
 - Các ý trong [Câu hỏi mở](#câu-hỏi-mở--việc-tiếp-theo): lọc / giới hạn / xáo trộn trong Lặp, `minIterations` thông minh hơn,
   phạm vi pool theo lượt, lặp theo danh sách giá trị, "Bọc trong Lặp qua từng bản ghi".
+
+### Sửa sau review (2026-10-28)
+
+Mỗi mục có test (`npm test`) hoặc bước smoke (thay đổi chỉ ở giao diện); bước smoke đã thử đỏ khi bỏ phần sửa.
+
+1. **Lặp `each` chép cả pool mỗi lần chạy qua, kể cả khi thân rỗng** (Lặp 100 000 × `each` thân rỗng qua pool 100 000: 38 giây
+   chạy đồng bộ). Pool chỉ được nối thêm, nên ảnh chụp giờ là **độ dài** `n` lúc bắt đầu, đọc `pool[i]` với `i < n` (không
+   chép); thân rỗng thì trả về ngay sau khi đếm `iterations` và cảnh báo. Ca trên: 135 ms. Test `an each loop with an empty
+   body does no work per visit…` (< 5 giây).
+2. **Đổi tên field không đi theo tham chiếu qua bản ghi đang lặp hay Chọn bản ghi** (`{{a.Name}}`, `left: a.Name` với `a` là
+   bản ghi đang lặp qua `acc`). Hàm mới `refsToRecords(scope, stepId, member)` (`shared/scope.js`) gom thêm tham chiếu tới
+   mọi nguồn có `root` = bước đó và `current` là `picked`/`item` (cả Chọn bản ghi của Chọn bản ghi); `renameField` và toast xóa
+   field dùng nó, nên số trong toast "Đã cập nhật N tham chiếu" đếm cả chúng. Test `renameField follows references through the
+   record of an each loop and a Chọn bản ghi`.
+3. **(lỗi có từ trước) Lặp có thân toàn bước tắt treo server.** `runSteps` bỏ bước tắt trước khi đếm, nên Lặp 100 000 × Lặp
+   100 000 × [Record tắt] chạy 10¹⁰ lần lặp không đếm, không `TICK`, Dừng không tới được. Giờ mỗi lần lặp (cố định, ngẫu nhiên,
+   `each`) là một lần thăm (`countVisit`): tính vào `LIMITS.maxSteps` và nhịp `TICK` (nên Dừng/ngắt kết nối có hiệu lực). Ca
+   trên dừng sau ~1 giây với `Workflow chạy quá 2000000 bước…`; 1 000 × 1 500 lần lặp không bản ghi thì Dừng sau < 400 ms.
+   Hash vàng không đổi (không đụng `rng`). **Hệ quả:** số bước đếm của workflow cũ tăng tối đa gấp đôi, nên một workflow cũ
+   hợp lệ có thể bị từ chối mới — ví dụ Lặp 1 000 × Lặp 1 000 × [Rẽ nhánh] (≈ 1 001 000 → ≈ 2 002 000 bước) dù chỉ sinh
+   ~100 000 bản ghi. Không nâng `maxSteps`; đã ghi ở bảng `LIMITS` của `architecture.md`. Test `loop iterations count as step
+   visits…`.
+4. **Nhỏ:**
+   - N1: Record không alias được gọi bằng id; id đó trùng `itemAlias`, alias Chọn bản ghi hay tên biến lặp thì âm thầm ra sai
+     dữ liệu. Giờ là lỗi gắn ô `alias` của Record: `Bước này chưa có alias nên được gọi bằng id "r1", trùng tên bản ghi đang lặp
+     của một bước Lặp. Đặt alias cho bước này (ví dụ r1_rec) hoặc đổi tên kia.` (test).
+   - N2: cảnh báo `poolUnused` nói thêm `Lặp qua từng bản ghi (menu ⋯)`; test cũ so câu này được sửa theo.
+   - N3: chưa chọn `from` thì không báo thiếu `itemAlias` (lỗi đầu tiên là `from`) (test).
+   - N4: `from` bằng chính `itemAlias` của vòng đó ⇒ câu `unknownName` thay vì `Chọn pool gốc "…"` (test).
+   - N5: mẫu "Contact cho mỗi Account có sẵn" có `count: 3` (ẩn), chuyển sang "Số lần cố định" không còn "0 lần"; hash vàng của
+     mẫu không đổi (test). Gợi ý "Ý bạn là" của một đường dẫn tới field (`{{acc.Name}}`) không bao giờ là pool không có bản ghi
+     hiện tại (`accs`, sẽ là `noCurrent`); `{{acc.$count}}` vẫn được gợi ý `accs.$count` (test).
+   - N6: dropdown pool không ghi "bản ghi cuối" cho pool tạo trong một Lặp đã chạy xong (smoke 14).
+   - N7: bên trong Lặp qua từng bản ghi của một Query, nhóm pool của bảng chọn biến ghi `không có bản ghi hiện tại: dùng bản
+     ghi đang lặp "row"` thay vì "dùng bước Chọn bản ghi" (smoke 14).
+
+Tổng sau sửa: **258** test (253 + 5), đều qua. Smoke `SMOKE OK` ba lần liên tiếp.
+

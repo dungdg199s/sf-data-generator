@@ -134,7 +134,9 @@ the others; never add a fixed `waitForTimeout`.
     it, selected, with "Lặp theo" = each, "Lặp qua pool" = `accs` (option text "accs (Account · đọc từ org)"), "Tên bản ghi
     đang lặp" = `acc2` and "Số lần lặp" hidden; one ↶ removes it. A Lặp from the palette switched to "Mỗi bản ghi trong
     pool" gets `accs` / `acc2`. Renaming the record to `a` updates the Contact's Lookup and template (autosave). Alt+↑ moves
-    the Contact out of the loop: error badge and the outsideLoop message in the issues bar.
+    the Contact out of the loop: error badge and the outsideLoop message in the issues bar. Then (0010 review) a saved
+    workflow: a pool made in a finished fixed loop reads "acc (Account · đã sinh)" in "Lặp qua pool" (no "bản ghi cuối"),
+    and inside a loop over each row of `accs` the picker's `accs` group says `dùng bản ghi đang lặp "row"`.
 
 It also fails on any page error or a run over 12 s (typically ~5.5–6.5 s since the flows run in parallel, flow 14 included; ~10 s before;
 ~7–8 s with two CPU-bound processes running alongside).
