@@ -155,6 +155,11 @@ chỉ thấy các field ở phía trên.
 - Lookup tới bản ghi `existing` (dòng Query, hoặc bản ghi chọn từ Query) cho ra **chuỗi Id thật**; bản ghi sinh ra vẫn là
   `{ "$ref" }`. Lookup `current` vào alias của Query là lỗi (pool không có bản ghi hiện tại).
 - Bản ghi đã sinh (`<alias>` hiện tại và danh sách mọi bản ghi của alias) dùng chung cho cả lần chạy; biến lặp theo phạm vi.
+  Từ [0004](design/0004-streaming-execution.md), "danh sách" của một alias Record chỉ là **số đếm** (`alias#1…alias#n`),
+  trừ khi một bước đọc cả bản ghi của pool đó (option bước `kind: "ref"` có `accepts.pool`: Chọn bản ghi `from`). Ý nghĩa
+  không đổi: Lookup "Ngẫu nhiên" vẫn chọn đều trong mọi bản ghi đã sinh, với đúng số ngẫu nhiên như trước.
+- **Chạy dạng luồng (0004):** executor sinh bản ghi lần lượt (cha luôn trước con); server không giữ hết bản ghi. Cùng
+  workflow, `seed`, `now` và cùng dòng Query ⇒ cùng chuỗi bản ghi, từng byte, ở xem trước, insert và tải về.
 - Thứ tự gọi `rng` giống executor version 1, nên workflow v1 chuyển sang v2 sinh đúng dữ liệu cũ với cùng seed, **trừ ở các
   bước bị nhân bản** khi chuyển (xem [Version 1 (cũ) và chuyển đổi](#version-1-cũ-và-chuyển-đổi)): bản sao có trạng thái riêng.
 - Giới hạn: `LIMITS` trong `server/workflow/nodes.js` (số bản ghi, số bước đã chạy, `maxDepth = 32` cấp lồng nhau).
@@ -240,9 +245,21 @@ Câu thông báo đúng như bảng "Thông báo lỗi" của [0005](design/0005
 
 ## Kết quả `/api/run`
 
+Request: `{ "workflow": {…}, "seed": 42, "now": 1761552000000, "target": { "kind": "org", "org": "dev-sb" } }`.
+`now` (mili giây, tùy chọn; thiếu thì là giờ hiện tại) là "hôm nay" của field ngày tương đối (`today`, `-1y`). **Cùng
+`seed` và `now` ⇒ cùng dữ liệu.** `now` không phải số hữu hạn ⇒ 400 `Tham số now không hợp lệ.`
+
+Hai cách nhận kết quả ([0004](design/0004-streaming-execution.md)):
+
+- **JSON một cục** (mặc định, cho script và test): toàn bộ bản ghi và mọi Id đã insert, như dưới đây.
+- **NDJSON** khi request có header `Accept: application/x-ndjson` (UI luôn dùng): `Content-Type: application/x-ndjson`, mỗi
+  dòng một sự kiện, gửi trong lúc chạy. Lỗi validate (422), `now` sai (400), lỗi đọc trước Query (409/502) vẫn trả JSON
+  thường vì được phát hiện **trước** khi gửi header.
+
 ```json
 {
   "seed": 42,
+  "now": 1761552000000,
   "stats": {
     "total": 17,
     "bySobject": { "Account": 5, "Contact": 12 },
@@ -251,21 +268,70 @@ Câu thông báo đúng như bảng "Thông báo lỗi" của [0005](design/0005
       "acc": { "runs": 5, "records": 5 },
       "hot": { "runs": 12, "records": 4, "true": 4, "false": 8 }
     },
-    "durationMs": 4
+    "durationMs": 4,
+    "previewRows": 200,
+    "truncated": false
   },
   "warnings": [{ "message": "...", "nodeId": "x", "field": "slots.body" }],
   "records": [
     { "ref": "acc#1", "sobject": "Account", "alias": "acc", "nodeId": "acc", "fields": { "Name": "Acme Inc" } },
     { "ref": "con#1", "sobject": "Contact", "alias": "con", "nodeId": "con", "fields": { "AccountId": { "$ref": "acc#1" } } }
   ],
-  "insert": { "inserted": 17, "failed": 0, "errors": [], "ids": { "acc#1": "001..." } }
+  "insert": {
+    "inserted": 17, "failed": 0, "errorsTotal": 0, "errors": [], "errorGroups": [],
+    "ids": { "acc#1": "001..." }, "bySobject": { "Account": { "inserted": 5, "failed": 0 } },
+    "total": 17, "notSent": 0, "cancelled": false, "stopped": null
+  }
 }
 ```
+
+Các sự kiện NDJSON:
+
+```json
+{"type":"start","runId":"r7f3k2a9","seed":42,"now":1761552000000,"warnings":[],"queries":[]}
+{"type":"progress","phase":"generate","generated":120000,"bySobject":{"Account":24000,"Contact":96000},"byStep":{…}}
+{"type":"plan","total":200000,"bySobject":{"Account":40000,"Contact":160000},"apiCalls":1000}
+{"type":"progress","phase":"insert","inserted":12400,"failed":3,"total":200000,"bySobject":{"Account":{"inserted":2480,"failed":0,"total":40000},"Contact":{"inserted":9920,"failed":3,"total":160000}}}
+{"type":"done","result":{ …cùng hình dạng như JSON một cục… }}
+{"type":"error","error":"Lỗi khi sinh dữ liệu, chưa ghi bản ghi nào vào org: …","issues":[{"message":"…","nodeId":"acc","field":"fields.AccountNumber"}],"insert":null}
+```
+
+- `start` luôn là dòng đầu; `runId` dùng cho `POST /api/runs/:runId/cancel`. `queries` như bên dưới (0006).
+- `progress` (`generate`) mỗi 1 000 bản ghi, tối đa 4 lần/giây; khi insert, đây là **lượt chạy thử**: sinh hết một lượt
+  chỉ để đếm, nên lỗi sinh dữ liệu dừng lần chạy trước khi ghi bản ghi đầu tiên vào org.
+- `plan` (chỉ khi insert): tổng chính xác và số lời gọi API ước tính `Σ ceil(n_sObject / 200)`; sau đó là `progress`
+  (`insert`) sau các lô, rồi `done`.
+- `done.result`: ở chế độ NDJSON, `records` chỉ có **200 bản ghi đầu mỗi sObject** (`stats.previewRows`;
+  `stats.truncated: true` nếu bị cắt) và `insert.ids` chỉ có Id của các bản ghi đó cùng alias được Lookup trỏ tới. Một lần
+  xem trước bị Dừng có `cancelled: true` và số đếm tới lúc dừng.
+- `error`: `issues` (có `nodeId`/`field`) cho lỗi sinh dữ liệu; `insert` là `null` nếu chưa ghi gì, còn không là tóm tắt đã
+  insert tới lúc lỗi.
+- `insert.errors`: tối đa **1 000** lỗi đầu, mỗi lỗi `{ ref, sobject, nodeId, field?, message, parentRef? }` (`field` =
+  `fields.<Name>` khi Salesforce chỉ đúng một field có trong bước; bản ghi con của bản ghi cha lỗi có `message: "Bỏ qua vì
+  bản ghi cha lỗi."` và `parentRef`). `errorsTotal` đếm đủ. `errorGroups: [{ sobject, nodeId, field?, message, count,
+  refs }]` gom theo (sObject, bước, field, thông báo), `count` đủ, `refs` là 3 ref đầu.
+- `insert.cancelled`: dừng bằng tay (Dừng hoặc đóng kết nối) trước khi gửi hết; lô đang gửi luôn được chờ xong nên
+  `inserted` chính xác. `insert.stopped: { reason: "allFailing", sobject, nodeId, message, batches, records }`: 3 lô đầu của
+  một sObject lỗi 100 % nên app tự dừng. `notSent`: số bản ghi chưa gửi. Bản ghi đã insert **không** tự xóa.
+
+### `POST /api/runs/:runId/cancel`
+
+Dừng lần chạy sau lô đang gửi. Trả `{ "ok": true }`; lần chạy đã xong hoặc không tồn tại ⇒ 404 `Lần chạy này đã kết thúc.`
+Đóng kết nối của `/api/run` (đóng tab) cũng dừng lần chạy.
+
+### `POST /api/export`
+
+Body `{ workflow, seed, now, format: "csv" | "json", sobject?, org?, expectQueries? }`. Server sinh lại lần chạy (cùng
+`seed`, `now`, và dòng Query qua cache như `/api/run`) và ghi thẳng ra response (`Content-Disposition: attachment`).
+`csv`: một sObject (`sobject` bắt buộc, thiếu ⇒ 400 `Chọn sObject cần tải CSV.`), cột `ref` rồi field theo thứ tự trong
+workflow, `{ $ref }` ghi thành ref. `json`: mảng bản ghi, mỗi bản ghi một dòng. Thiếu `seed`/`now` ⇒ 400. Dữ liệu Query đã
+đổi (fingerprint khác `expectQueries`) ⇒ 409 `Dữ liệu đọc từ org đã đổi so với lần chạy này. Bấm Xem trước lại rồi tải.`
 
 - `stats.byStep[<id>]`: `runs` = số lần chạy qua bước, `records` = số bản ghi sinh ra trong bước (với khung: cả bước con).
   Lặp có thêm `iterations` (tổng số lần lặp), Rẽ nhánh có thêm `true` / `false` (số lần đi mỗi nhánh). Bước tắt và bước
   chưa chạy lần nào không có mục. UI hiện các số này thành chip trên thẻ (`12 bản ghi`, `15 lần lặp`, `Đúng 4 · Sai 8`).
-- `insert` chỉ có khi request gửi `target: { "kind": "org", "org": "<alias hoặc username>" }`.
+- `insert` chỉ có khi request gửi `target: { "kind": "org", "org": "<alias hoặc username>" }`. Insert theo cửa sổ 2 000 bản
+  ghi, cha luôn trước con (xem [org-connection.md](org-connection.md#insert)).
 - `queries` (0006): mỗi bước Query đã đọc `{ nodeId, alias, sobject, soql, org, source: "org" | "cache" | "sample",
   fetchedAt, count, totalSize, truncated, fingerprint, fields, records }`. Các dòng này **không** nằm trong `records`/`stats`
   và không bao giờ được insert. `samples`: bản ghi đầu tiên mỗi bước Chọn bản ghi đã chọn (giá trị mẫu cho bảng chọn biến).

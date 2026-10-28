@@ -29,8 +29,11 @@ npm test
    Bước mới vào sau bước đang chọn, hoặc vào nhánh còn trống của khung Lặp / Rẽ nhánh đang chọn. Nút **+** giữa hai bước
    chèn đúng chỗ đó; kéo tay cầm ⠿ (hoặc Alt+↑ / Alt+↓) để di chuyển.
 2. Chọn bước để cấu hình ở cột phải. Với bước Record, bấm **Import từ org…** để lấy field có sẵn từ org.
-3. **▶ Xem trước** (Ctrl+Enter) để sinh dữ liệu và xem bảng kết quả, tải JSON hoặc CSV.
-4. Bấm **📌 giữ seed** để lần chạy sau ra đúng dữ liệu đó, chọn org, rồi bấm **⤒ Insert vào org**.
+3. **▶ Xem trước** (Ctrl+Enter) để sinh dữ liệu và xem bảng kết quả (200 dòng đầu mỗi sObject), tải JSON hoặc CSV đủ mọi
+   bản ghi.
+4. Chọn org rồi bấm **⤒ Insert vào org**: hộp xác nhận luôn ghi số bản ghi sẽ tạo và insert đúng dữ liệu vừa xem trước
+   (tự xem trước nếu chưa có). Trong lúc chạy có tiến độ và nút **Dừng**; bản ghi đã insert vẫn ở lại trong org.
+   Bấm **📌 giữ seed** để lần chạy sau ra đúng dữ liệu đó.
 
 File workflow cũ (version 1, dạng sơ đồ nối dây) vẫn mở được: ứng dụng tự chuyển sang dạng các bước và giữ bản gốc.
 

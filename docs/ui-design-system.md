@@ -304,6 +304,9 @@ Màn hình hẹp (≤ 900 px): palette là hàng nút ngang gồm ô icon + tên
 | Ô `ref` (`acc#1`, `→ acc#1`) | Mono, màu `--step-record-text` (là tham chiếu tới bản ghi, không phải link) |
 | `null` | `—` màu `text-muted` |
 | Kết quả insert | `insert 17` màu `success-text`, `lỗi 2` màu `danger-text` |
+| Đang chạy ([0004](design/0004-streaming-execution.md), chỗ chừa của [0009](design/0009-bo-cuc-man-hinh.md) §4) | Tóm tắt thành dòng tiến độ (`Đang insert vào dev: 12 400/200 000 (6 %) · lỗi 3 · còn khoảng 14 phút` + chip `<sObject> đã insert/tổng`). Ô nút tải đổi thành nút **Dừng** (`button.danger` viền đỏ; khóa khi đang dừng). `<progress class="run-progress">` cao 3 px, `position: absolute` sát mép dưới `.results-head` (không thêm hàng): rãnh `border`, phần đã chạy `accent`; không có giá trị thì là thanh chạy qua lại (xem trước) |
+| Bảng bị cắt | Câu `Hiển thị 200/160 000 dòng đầu. Tải CSV/JSON để lấy đủ.` (`.hint.table-more`) dưới bảng |
+| Tab "Lỗi insert" | Bảng nhóm lỗi (`table.error-groups`): sObject, Bước, Lỗi (`danger-text`, xuống dòng), Số bản ghi (căn phải), Ví dụ. Hàng có bước: `cursor: pointer`, Tab tới được, Enter/bấm chọn bước và field; focus nền `accent-subtle`. Dưới bảng là `<details>` "Chi tiết từng bản ghi" (1 000 dòng đầu) |
 
 ### 6.11 Hộp thoại, hộp cảnh báo, toast, danh sách lỗi
 

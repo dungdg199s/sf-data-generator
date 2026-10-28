@@ -7,6 +7,8 @@ Option chung (registry tự thêm, generator không cần khai báo):
 
 - `nullRatio` (0–1): tỉ lệ để trống. Không có với `checkbox`, `autonumber`, `masterdetail`.
 - `unique`: không lặp giá trị trong một lần chạy (thử tối đa 100 lần rồi báo lỗi). Chỉ có với các kiểu đặt `uniqueable: true`.
+  Tập giá trị đã dùng nằm trong bộ nhớ suốt lần chạy (khoảng 165 B/giá trị; 200 000 Email ≈ 30 MB): đây là phần bộ nhớ còn
+  tăng theo số bản ghi khi chạy dạng luồng ([0004](design/0004-streaming-execution.md)).
   Tập giá trị đã dùng (và bộ đếm của `autonumber`) tính **theo từng bước**: hai bước khác nhau, kể cả bản sao `c_2` do
   chuyển workflow v1 tạo ra, có thể sinh trùng giá trị của nhau.
 
@@ -30,7 +32,7 @@ Option chung (registry tự thêm, generator không cần khai báo):
 | `date` | Date | `from`, `to` | `YYYY-MM-DD` |
 | `datetime` | Date/Time | `from`, `to` | ISO 8601 UTC |
 | `time` | Time | `from`, `to` (HH:MM), `stepMinutes` | `HH:MM:00.000Z` |
-| `lookup` | Lookup Relationship | `mode`: `current` "Bản ghi hiện tại của alias", `random` "Ngẫu nhiên trong pool (đã sinh hoặc đọc từ org)", `fixed` "Id nhập tay"; `ref` "Bản ghi cha / pool (alias)": alias của bước Record, Query hoặc Chọn bản ghi ở phía trên ([0006](design/0006-query-pick-nodes.md); `current` không dùng được với Query vì pool không có bản ghi hiện tại); `ids`; `referenceTo` (sObject mà field trỏ tới, điền khi Import từ org; lọc danh sách Bản ghi cha và cảnh báo khi chọn bước sinh sObject khác). Bản ghi cha phải ở phía trên (xem [workflow-schema.md](workflow-schema.md#phạm-vi-biến-analyzescope)) | `{ "$ref": "acc#3" }` với bản ghi được sinh; **chuỗi Id thật** với bản ghi đọc từ org (Query, hoặc Chọn bản ghi từ Query); Id nhập tay với `fixed` |
+| `lookup` | Lookup Relationship | `mode`: `current` "Bản ghi hiện tại của alias", `random` "Ngẫu nhiên trong pool (đã sinh hoặc đọc từ org)", `fixed` "Id nhập tay"; `ref` "Bản ghi cha / pool (alias)": alias của bước Record, Query hoặc Chọn bản ghi ở phía trên ([0006](design/0006-query-pick-nodes.md); `current` không dùng được với Query vì pool không có bản ghi hiện tại); `ids`; `referenceTo` (sObject mà field trỏ tới, điền khi Import từ org; lọc danh sách Bản ghi cha và cảnh báo khi chọn bước sinh sObject khác). Bản ghi cha phải ở phía trên (xem [workflow-schema.md](workflow-schema.md#phạm-vi-biến-analyzescope)) | `{ "$ref": "acc#3" }` với bản ghi được sinh; **chuỗi Id thật** với bản ghi đọc từ org (Query, hoặc Chọn bản ghi từ Query); Id nhập tay với `fixed`. `random` chọn đều trong `alias#1…alias#n` (mọi bản ghi đã sinh tới lúc đó); từ 0004 pool chỉ đếm, ý nghĩa và dữ liệu không đổi |
 | `masterdetail` | Master-Detail | như `lookup`; báo lỗi nếu chưa có bản ghi cha | như trên |
 | `geolocation` | Geolocation | `latMin`, `latMax`, `lngMin`, `lngMax`, `scale` | `{ latitude, longitude }` (khi insert tách thành `X__Latitude__s` / `X__Longitude__s`) |
 | `template` | (ghép giá trị) | `template` (`vars: 'template'`, có bảng chọn biến) với `{{this.F}}`, `{{alias.F}}`, `{{loop.index}}`, `{{this.$n}}`, `{{alias.$n}}`. Mặc định `{{this.$n}}` (ra `1`, `2`, `3`…). Tham chiếu hỏng hoặc ngoài phạm vi là lỗi validate | chuỗi |
@@ -65,7 +67,7 @@ export const myType = {
 | `rng` | PRNG có seed (`int`, `float`, `bool`, `pick`, `weighted`, `sample`, `digits`). **Chỉ dùng `rng`, không dùng `Math.random`**, nếu không seed sẽ mất tác dụng |
 | `now` | Mốc thời gian chung của lần chạy (ms) |
 | `record` | Các field đã sinh phía trên trong cùng bản ghi |
-| `scope` | `{ current, all, vars }`: bản ghi hiện tại và toàn bộ bản ghi theo alias, biến lặp |
+| `scope` | `{ current, all, vars }`: bản ghi hiện tại, pool theo alias, biến lặp. Pool của alias Record thường chỉ **đếm** ([0004](design/0004-streaming-execution.md)): `{ kind: 'generated', length, refAt(i) }` với `refAt(i)` = `alias#(i+1)`; chỉ pool mà một bước đọc cả bản ghi (Chọn bản ghi `from`) mới là mảng bản ghi. Generator chọn trong pool phải xử lý cả hai dạng và rút đúng một số `Math.floor(rng.next() * length)` như `rng.pick` |
 | `fieldName` | Tên field (dùng trong thông báo lỗi) |
 | `fieldState` | Object riêng cho từng (bước, field), tồn tại suốt lần chạy (bộ đếm, tập giá trị unique) |
 | `n` | Số thứ tự của bản ghi đang sinh (`n` trong `alias#n`), cho `{{this.$n}}` |

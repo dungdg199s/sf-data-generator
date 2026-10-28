@@ -41,14 +41,39 @@ Nếu máy chưa cài `sf` thì `/api/orgs` trả 503 kèm thông báo; UI vẫn
 
 ## Insert
 
-`server/sf/insert.js` gọi `conn.sobject(type).create(records, { allOrNone: false })` của jsforce (sObject Collections `POST /composite/sobjects`), mỗi lần tối đa 200 bản ghi:
+`server/sf/insert.js` gọi `conn.sobject(type).create(records, { allOrNone: false })` của jsforce (sObject Collections `POST /composite/sobjects`), mỗi lần tối đa 200 bản ghi.
+Từ [0004](design/0004-streaming-execution.md) bản ghi tới theo **dòng** (`server/run.js` đẩy từng bản ghi của executor vào
+`createInserter`), không còn mảng toàn bộ bản ghi:
 
-1. Mỗi đợt (wave) lấy những bản ghi mà mọi `$ref` đã có Id thật.
-2. Gom theo sObject, chia lô 200, gửi đi, lưu Id trả về theo `ref`.
-3. Bản ghi có cha bị lỗi sẽ bị đánh lỗi luôn, không gửi đi.
-4. Lặp lại cho tới khi hết bản ghi. Self-lookup (ví dụ `Account.ParentId`) vẫn chạy được vì cha nằm ở đợt trước.
+1. Gom một **cửa sổ 2 000 bản ghi** (khoảng 1 MB). Trong cửa sổ, mỗi đợt (wave) lấy những bản ghi mà mọi `$ref` đã có Id
+   thật: cha ở cửa sổ trước đã có Id, cha cùng cửa sổ được gửi ở đợt trước.
+2. Gom theo sObject, chia lô 200, gửi đi; các SaveResult trả về theo đúng thứ tự nên được map lại vào `ref`.
+3. Bản ghi có cha bị lỗi (kể cả cha ở cửa sổ trước) bị đánh lỗi `Bỏ qua vì bản ghi cha lỗi.` (kèm `parentRef`), không gửi đi.
+4. Self-lookup (ví dụ `Account.ParentId`) vẫn chạy được vì cha luôn được sinh trước.
 
-Kết quả: `{ inserted, failed, errors: [{ ref, sobject, message }], ids: { ref: Id } }`.
+Hệ quả và giới hạn:
+
+- **Thứ tự insert xen kẽ theo cửa sổ.** Trước đây mọi Account vào org trước Contact đầu tiên; giờ Account và Contact xen
+  kẽ theo từng cửa sổ 2 000 (cha **vẫn luôn** vào trước con). Trigger hoặc flow nào giả định "mọi Account đã có trước Contact
+  đầu tiên" sẽ thấy khác. Số lời gọi gần như không đổi (lô vẫn gần đầy 200).
+- **Chỉ giữ Id cần thiết.** Sau mỗi cửa sổ chỉ giữ Id (và lỗi) của alias có Lookup trỏ tới (cùng pool phía sau một bước
+  Chọn bản ghi) và của các dòng xem trước; khoảng 100 B/bản ghi. Chế độ JSON một cục vẫn trả mọi Id.
+- **Dừng sớm khi lỗi hàng loạt.** Nếu 3 lô đầu của một sObject đều lỗi 100 % thì ngừng gửi (`stopped.reason: "allFailing"`):
+  thường là thiếu field bắt buộc, validation rule… nên không spam org với hàng trăm lô giống nhau. Lô lỗi sau khi sObject đó đã
+  có lô thành công thì không tính (có thể là lỗi theo dữ liệu, ví dụ trùng).
+- **Dừng bằng tay.** Nút **Dừng** (`POST /api/runs/:runId/cancel`) hoặc đóng tab / mất kết nối: inserter kiểm tra trước mỗi
+  lô và luôn chờ lô đang gửi xong, nên số đã insert là chính xác. Bản ghi đã insert **vẫn ở lại** trong org (chưa có tính
+  năng xóa); thông báo ghi rõ đã insert bao nhiêu bản ghi mỗi sObject. Chưa có "chạy tiếp" một lần đã dừng.
+- **Lượt chạy thử trước khi ghi.** Trước khi gửi lô đầu, server sinh hết một lượt chỉ để đếm (khoảng 1 % thời gian insert);
+  lỗi sinh dữ liệu (hết giá trị `unique`, vượt `maxRecords`) dừng lần chạy khi chưa ghi gì.
+- **Lỗi gom nhóm.** `errorGroups` đếm đủ theo (sObject, bước, field, thông báo); `errors` chỉ giữ 1 000 lỗi đầu
+  (`errorsTotal` là tổng). `field` = `fields.<Name>` khi Salesforce chỉ đúng một field có trong bước.
+- Streaming **không** làm insert nhanh hơn: thời gian nằm ở API (0,5–2 s mỗi lô 200). Muốn nhanh hơn cần Bulk API 2.0 hoặc
+  gửi song song (chưa làm).
+
+Kết quả: `{ inserted, failed, errorsTotal, errors: [{ ref, sobject, nodeId, field?, message, parentRef? }], errorGroups,
+ids: { ref: Id }, bySobject, total, notSent, cancelled, stopped }` (chi tiết ở [workflow-schema.md](workflow-schema.md#kết-quả-apirun)).
+`insertRecords(client, org, records)` vẫn có cho script: bọc `createInserter`, giữ mọi Id.
 
 Bản ghi đọc từ org (bước Query) không bao giờ nằm trong `records` nên không bao giờ bị insert lại. Lookup tới chúng là chuỗi Id
 thật, `collectRefs` không coi là phụ thuộc, nên bản ghi con được gửi ngay ở đợt đầu (`insert.js` không phải đổi).

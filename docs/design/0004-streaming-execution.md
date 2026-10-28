@@ -1,6 +1,6 @@
 # 0004 — Chạy workflow dạng luồng (streaming): nghiên cứu khả thi và thiết kế
 
-- **Trạng thái:** Đã duyệt (2026-10-27, xem [0007](0007-tong-hop-0003-0006.md))
+- **Trạng thái:** Đã làm (duyệt 2026-10-27, xem [0007](0007-tong-hop-0003-0006.md); làm 2026-10-28, xem [Đã làm](#đã-làm))
 - **Ngày:** 2026-10-27
 - **Liên quan:** [0001](0001-workflow-editor-ux.md), [0002](0002-jsforce-api.md), [0003](0003-process-mode.md) (chế độ
   process, JSON v2 dạng cây), [0005](0005-variable-picker.md) (bộ chọn biến, `exposes`),
@@ -598,4 +598,86 @@ Mỗi bước nhỏ, có test riêng, và `npm test` phải xanh sau mỗi bư�
 
 ## Đã làm
 
-(Cập nhật khi code xong: commit hoặc PR, chỗ nào khác với thiết kế và vì sao.)
+Đợt 5 của [0007](0007-tong-hop-0003-0006.md), làm **sau** 0003 (cây v2), 0005 (`analyzeScope`) và 0006 (Query, Chọn bản
+ghi, đọc trước), nên mọi chỗ viết cho đồ thị v1 được chuyển sang cây: `runChain` → `runSteps` (`function*`, `yield*` cho
+`slots`), workflow JSON vẫn là **version 2** (không đổi gì, không migration). Streaming **luôn bật**, không có checkbox
+(0007 Q2).
+
+Commit trên nhánh `claude/salesforce-data-generator-xt3u27`:
+
+| Commit | Nội dung |
+| --- | --- |
+| `30384ce` Record golden hashes of the current executor before streaming | Bước 0: `test/fixtures/golden-cases.js` (3 mẫu + 4 ca lồng nhau: Lookup ngẫu nhiên qua Lặp/Rẽ nhánh, Chọn bản ghi từ pool sinh ra và từ Query, bỏ qua khi pool rỗng, bước tắt) × seed 42 và 7, hash SHA-256 ghi bằng executor cũ (`golden-record.js` → `golden-hashes.json`) |
+| `430b065` Stream records from a synchronous generator executor | Bước 1: `createRun`, `records()`, `runWorkflow` gom lại (+ `now`), pool chỉ đếm, `poolUsage`, Lookup `random` rút chỉ số |
+| `f80b3e1` Insert in windows of 2 000 with fail-fast, cancel and error groups | Bước 2: `createInserter`, `insertRecords` bọc lại |
+| `b5ddcc5` Add the run driver, NDJSON /api/run, cancel and /api/export | Bước 3–4: `server/run.js`, HTTP, `LIMITS.previewRows` |
+| `fc0f58f` Show run progress, Dừng, grouped insert errors and server downloads | Bước 5: client, smoke |
+| `9ebc643`, `16fbe50` | Sửa phát hiện khi tự kiểm tra: không chạy khi client đã rời lúc đọc trước Query; kết quả NDJSON chỉ trả Id của dòng xem trước |
+| (commit tài liệu) | Bước 6: `architecture.md`, `workflow-schema.md`, `org-connection.md`, `field-types.md`, `ui-design-system.md`, `CLAUDE.md` (mục Architecture), skill `add-node-type` / `smoke-test`, doc này, 0007, README |
+
+**Đã có:** mọi mục của kế hoạch 0–6 và các quyết định nhỏ của 0007 (tự xem trước khi bấm Insert, dừng sớm sau 3 lô luôn
+bật, thứ tự insert xen kẽ theo cửa sổ 2 000, JSON tải về một bản ghi một dòng, không nâng giới hạn 200k).
+
+**Số đo sau khi làm** (Node v22, máy dev; workflow như mục 2 với N = 40 000, tức 200 000 bản ghi; script ngoài repo):
+
+| | Gom hết (`runWorkflow`) | Xem trước dạng luồng | Insert dạng luồng (client giả, cả lượt chạy thử) |
+| --- | --- | --- | --- |
+| Heap tăng thêm lúc cao nhất | ≈ 59 MB | ≈ 13 MB | ≈ 29 MB (Id của 40 000 Account được Lookup trỏ tới + cửa sổ) |
+| Kết quả gửi về | 34 MB JSON | 0,07 MB | 0,08 MB |
+
+**Quyết định ở chỗ doc chưa rõ, và chỗ khác thiết kế** (theo khuyến nghị của doc này hoặc 0007):
+
+1. **Pool giữ bản ghi đầy đủ (mâu thuẫn 1 của 0007, mở rộng cho Lặp `each` của 0010) — quy tắc chung từ danh mục:**
+   `poolUsage(workflow, catalog)` trong `shared/scope.js` coi tên ghi trong một **option của bước** có `kind: 'ref'` và
+   `accepts.pool` (hiện là Chọn bản ghi `from`; Lặp `each` của 0010 chỉ cần khai báo option như vậy) là "đọc cả bản ghi";
+   bước tắt và option bị ẩn (`showIf`) không tính. Chỉ các alias đó giữ mảng bản ghi; mọi pool Record khác là
+   `{ kind: 'generated', length, refAt }`. Pool Query và pool của Chọn bản ghi vẫn là mảng (Query ≤ 2 000 dòng; pool Chọn bản
+   ghi là con trỏ tới bản ghi đã có). Có test với một loại bước giả lập Lặp `each` để chứng minh không phải sửa executor.
+2. **`referencedAliases`** (Id cần giữ khi insert) = alias mà Lookup trỏ tới, **cộng** pool phía sau một bước Chọn bản ghi
+   (đi theo `exposes.*.fromSource`): Lookup tới bản ghi đã chọn ra `{ $ref }` của bản ghi gốc. Nếu vẫn thiếu Id (không nên
+   xảy ra), bản ghi con bị báo `Không xác định được Id bản ghi cha.` thay vì gửi Lookup trống.
+3. **Chế độ JSON một cục giữ lại** (doc: "giữ cho script và test") nhưng chạy qua **cùng** driver (`collect: true`): cũng
+   có lượt chạy thử, insert theo cửa sổ, dừng sớm; giữ mọi bản ghi và mọi Id. Test cũ của `/api/run` không phải sửa.
+4. **Đọc trước Query vẫn trước khi gửi header** (409/502/422 là HTTP thường). Sự kiện `start` mang `queries` và cảnh báo
+   của bước đọc trước (việc 0006 để lại). Không có sự kiện tiến độ riêng cho Query: trong lúc chờ `start`, UI tự ghi
+   `Đang đọc Query…` (khi workflow có Query).
+5. **Dừng trước khi server đặt `runId`** (đang đọc trước Query): UI hủy `fetch`. Server kiểm tra kết nối sau bước đọc trước
+   và **không** bắt đầu lần chạy nếu client đã rời — nếu không, một lần insert không ai theo dõi có thể chạy (test).
+6. **Câu lỗi sinh dữ liệu:** khi insert (lượt chạy thử) là `Lỗi khi sinh dữ liệu, chưa ghi bản ghi nào vào org: …`; khi xem
+   trước giữ `Workflow chưa hợp lệ.` như lỗi 422. Cả hai mang `issues` có `nodeId`/`field`.
+7. **Kết quả insert thêm** `bySobject`, `total`, `notSent` (để báo chính xác khi dừng), `stopped` có thêm `batches` và
+   `records` (để câu "3 lô Contact đầu tiên (600 bản ghi)…"). Bản xem trước bị Dừng có `cancelled: true` và **không** được
+   dùng lại cho Insert (sẽ tự xem trước lại).
+8. **"Bản xem trước khớp"** cho Insert = cùng workflow (theo `runKey`), cùng org, và ô Seed trống hoặc bằng seed của bản xem
+   trước. Insert gửi `seed` + `now` + `expectQueries` của bản xem trước đó. Khác thì tự xem trước (dùng seed trong ô, nếu có).
+9. **`/api/export` bắt buộc `seed` và `now`** (400 `Thiếu seed hoặc now của lần chạy. Bấm Xem trước rồi tải lại.`); lỗi sinh
+   dữ liệu trước byte đầu vẫn là 422, sau đó thì cắt kết nối. Cột CSV theo thứ tự field trong workflow (`columnsBySobject`).
+   **CSV của tab Query vẫn dựng ở client** (khác "client bỏ `toCsv`"): các dòng đã có sẵn trong trình duyệt (≤ 2 000), đọc từ
+   org chứ không sinh lại từ seed, nên không cần qua server.
+10. **Thời gian còn lại** tính ở client theo tốc độ insert, chỉ hiện sau khi đã xử lý 3 lô (600 bản ghi). Tiến độ insert:
+    `done = inserted + failed` trên `total` của `plan`.
+11. **Bố cục theo 0009 §4:** nút **Dừng** (`button.danger`, tooltip của doc này) thay ô nút tải lúc chạy, `<progress
+    class="run-progress">` 3 px `position: absolute` ở mép dưới `.results-head`, chip theo sObject trong tóm tắt. Phần còn lại
+    của 0009 (gộp `⤓ Tải`, tóm tắt cuộn ngang ở ≤ 720 px…) chưa làm, vì 0009 là doc riêng.
+12. **Bấm một nhóm lỗi** chọn bước và viền field (dùng lại `goToIssue`); hàng nhóm Tab tới được và Enter được. Tự dừng vì lỗi
+    hàng loạt cũng nhảy tới bước đó.
+13. **Test vàng** dùng hash ghi sẵn (không chép executor cũ vào `test/fixtures`): đơn giản hơn, và `run-v1.js` của 0003 đã
+    canh phần v1. Ghi lại hash bằng `node test/fixtures/golden-record.js` chỉ khi đổi dữ liệu có chủ đích.
+
+**Test:** thêm `test/stream.test.js` (8: vàng, `records()` = `runWorkflow` và cha trước con, chạy lại/dừng giữa chừng,
+bộ đếm `live`, `byStep`, `maxRecords` khi stream, pool chỉ đếm / giữ đầy đủ, `poolUsage` chung cho loại bước khác),
+`test/run.test.js` (7: thứ tự sự kiện và 200 dòng đầu, lỗi ở lượt chạy thử không gọi `create`, `plan` trước tiến độ insert và
+cùng chuỗi bản ghi, Dừng giữa lúc insert, Dừng trước khi insert, chế độ collect, sổ `runId`), `test/sf.test.js` (+6: cửa
+sổ phụ thuộc qua cửa sổ trước, lỗi lan qua cửa sổ + gom nhóm + `field`, 4 000 bản ghi ⇒ 20 lời gọi đầy, dừng sớm sau 3 lô,
+Dừng chờ lô đang gửi, giới hạn 1 000 lỗi), `test/jsforce.test.js` (+1: jsforce thật với Salesforce giả, map SaveResult về ref
+qua các cửa sổ), `test/server.test.js` (+9: NDJSON tới `done`, 422/400 trước khi stream, insert NDJSON, cancel 404, cancel
+giữa lúc insert, export CSV/JSON khớp bản xem trước, export có Query + 409, `limits.previewRows`, client rời lúc đọc trước).
+**Không sửa test cũ nào.** Tổng **215** test, đều qua. Smoke: thêm luồng 3b (Dừng + `<progress>` 3 px khi chạy, Dừng hủy
+request, bảng `Hiển thị 200/N dòng đầu`, Tải CSV đủ N dòng qua `/api/export`); bản xem trước giả lập của luồng 12 đổi sang
+NDJSON. `SMOKE OK`, khoảng 9 giây (trần 12 giây).
+
+**Chưa làm / để sau:**
+
+- Badge lỗi insert trên thẻ bước (dùng `errorGroups[].nodeId`, việc sau của 0003).
+- Bulk API 2.0, gửi song song, chạy tiếp lần đã dừng, xóa dữ liệu vừa insert, tải toàn bộ Id (câu hỏi mở 7), worker thread.
+- Phần còn lại của 0009 (menu `⤓ Tải` ở ≤ 720 px…).
