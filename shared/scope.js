@@ -623,7 +623,8 @@ function resolveRef({ step, here, o, path, sources, byName, loopKeys }) {
     const src = (byName.get(path) ?? []).find((s) => ok(s));
     if (!src) {
       // The record a Lặp `each` loops over (0010) is one record, not a pool.
-      const item = accepts.pool && (byName.get(path) ?? []).find((s) => s.current === 'item');
+      // (Its own record is not "the record of another loop": that is just an unknown pool.)
+      const item = accepts.pool && (byName.get(path) ?? []).find((s) => s.current === 'item' && s.nodeId !== step.id);
       if (item) return fail('itemNotPool', { source: item.id, pool: item.from ?? '' });
       const names = Object.values(sources).filter(ok).map((s) => s.name);
       const hint = closest(path, names);
@@ -672,8 +673,13 @@ function resolveRef({ step, here, o, path, sources, byName, loopKeys }) {
       if (inner) return fail('unknownName', { suggestion: { option: o.option, from: path, to: `${inner.name}.${rest[0]}` } });
       return fail('outsideLoop', { noLoop: true });
     }
-    const visibleNames = here.visible.map((v) => sources[v.source]?.name);
-    const hint = closest(name, [...visibleNames, ...(o.fieldIndex !== undefined ? ['this'] : [])]) ?? closest(name, [...byName.keys()]);
+    // A path to a field (`acc.Name`) is never "fixed" into a pool without a current record
+    // (`accs.Name` would be noCurrent); `accs.$count` still can (0010 review).
+    const fieldPath = rest.length > 0 && !rest[0].startsWith('$');
+    const fits = (src) => src && !(fieldPath && src.current === 'none');
+    const visibleNames = here.visible.map((v) => sources[v.source]).filter(fits).map((x) => x.name);
+    const allNames = [...byName.entries()].filter(([, list]) => list.some(fits)).map(([n]) => n);
+    const hint = closest(name, [...visibleNames, ...(o.fieldIndex !== undefined ? ['this'] : [])]) ?? closest(name, allNames);
     return fail('unknownName', hint ? { suggestion: { option: o.option, from: path, to: [hint, ...rest].join('.') } } : {});
   }
   const withSrc = { source: src.id };
@@ -746,6 +752,16 @@ export function refChoices(scope, stepId, accepts = { lookupParent: true }) {
 /** Step that provides source `sourceId` (`<loopId>#item` → the loop's id). */
 export function sourceStep(scope, sourceId) {
   return scope?.sources?.[sourceId]?.nodeId ?? sourceId;
+}
+
+/**
+ * References to the fields of step `stepId`'s records: directly, or through a source whose
+ * records are that step's (`root`): a Chọn bản ghi (`picked`) or the record a Lặp `each` loops
+ * over (`item`, design 0010). Optionally at one member.
+ */
+export function refsToRecords(scope, stepId, member, opts) {
+  const via = Object.values(scope?.sources ?? {}).filter((x) => x.root === stepId && (x.current === 'picked' || x.current === 'item')).map((x) => x.id);
+  return [stepId, ...via].flatMap((id) => refsTo(scope, id, member, opts));
 }
 
 /** References (from analyzeScope) that point at `sourceId`, optionally at one member. */

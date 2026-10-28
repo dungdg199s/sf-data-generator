@@ -373,3 +373,24 @@ test('cloneSteps gives a copied each loop a new item alias', () => {
   const both = cloneSteps(wf.steps, { ids: collectIds(wf), aliases: collectAliases(wf, catalog), catalog }).steps;
   assert.deepEqual([both[0].config.alias, both[1].config.from, both[1].config.itemAlias], ['accs2', 'accs2', 'acc2']);
 });
+
+test('renameField follows references through the record of an each loop and a Chọn bản ghi (0010 review)', () => {
+  const catalog = scopeCatalog();
+  const nameF = { name: 'Name', type: 'text', options: { mode: 'company' } };
+  const wf = tree([
+    r('acc', 'acc', [nameF]),
+    each('e', 'acc', 'a', [r('c', 'con', [tplF('T', '{{a.Name}} {{acc.Name}}')]), branch('b', [r('t', 't', [tplF('S', '{{a.Name}}')])])]),
+    { id: 'p', type: 'pick', config: { from: 'acc', alias: 'pk' } },
+    { id: 'p2', type: 'pick', config: { from: 'pk', alias: 'pk2' } },
+    r('d', 'd', [tplF('T', '{{pk.Name}} {{pk2.Name}}')]),
+  ]);
+  findStep(wf, 'b').step.config = { kind: 'compare', left: 'a.Name', op: 'eq', right: 'x' };
+  const res = renameField(wf, 'acc', 'Name', 'AccName', { catalog });
+  assert.equal(findStep(wf, 'c').step.config.fields[0].options.template, '{{a.AccName}} {{acc.AccName}}');
+  assert.equal(findStep(wf, 'b').step.config.left, 'a.AccName');
+  assert.equal(findStep(wf, 't').step.config.fields[0].options.template, '{{a.AccName}}');
+  assert.equal(findStep(wf, 'd').step.config.fields[0].options.template, '{{pk.AccName}} {{pk2.AccName}}', 'a pick, and a pick of a pick');
+  // The toast counts every reference changed.
+  assert.equal(res.count, 6);
+  assert.deepEqual(res.names.sort(), ['a', 'acc', 'pk', 'pk2']);
+});

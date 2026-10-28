@@ -997,6 +997,29 @@ async function flowEach() {
   check(err, 'the Contact moved out of the each-loop has no error badge');
   const issue = await page.textContent('#issues');
   check(/"acc" là bản ghi đang lặp của bước Lặp phía trên, chỉ dùng được bên trong vòng lặp đó/.test(issue), 'no outsideLoop message for the record looped over');
+
+  // Review fixes N6 / N7: a pool made in a finished fixed loop is not labelled "bản ghi cuối" in a
+  // pool dropdown; inside a loop over each record of a Query, the picker's pool group points at
+  // the record looped over instead of "dùng bước Chọn bản ghi".
+  const tpl = (name) => ({ name, type: 'template', options: { template: 'x' } });
+  const wfN = { version: 2, name: 'review', steps: [
+    { id: 'accs', type: 'query', config: { sobject: 'Account', alias: 'accs', fields: ['Id', 'Name'] } },
+    { id: 'l', type: 'loop', config: { count: 2, alias: 'i' }, slots: { body: [{ id: 'acc', type: 'record', config: { sobject: 'Account', alias: 'acc', fields: [tpl('Name')] } }] } },
+    { id: 'e', type: 'loop', config: { mode: 'each', from: 'acc', itemAlias: 'a' }, slots: { body: [{ id: 'c', type: 'record', config: { sobject: 'Contact', alias: 'c', fields: [tpl('LastName')] } }] } },
+    { id: 'e2', type: 'loop', config: { mode: 'each', from: 'accs', itemAlias: 'row', alias: 'k' }, slots: { body: [{ id: 'c2', type: 'record', config: { sobject: 'Contact', alias: 'c2', fields: [tpl('Title')] } }] } },
+  ] };
+  await page.evaluate((w) => localStorage.setItem('sfdg.workflow.v2', JSON.stringify(w)), wfN);
+  await page.reload();
+  await page.click('.step-card[data-id="e"] .type');
+  const accOpt = await page.$eval('#inspector select[data-key="from"] option:checked', (o) => o.textContent);
+  check(accOpt === 'acc (Account · đã sinh)', `pool option of a record made in a finished loop: ${accOpt}`);
+  await page.click('.step-card[data-id="c2"] .type');
+  const t2 = '#inspector .field-card[data-field="fields.Title"]';
+  await page.click(`${t2} .actions button[title="Tùy chọn"]`);
+  await page.click(`${t2} .var-btn`);
+  await page.waitForSelector('.var-picker .vp-item');
+  const note = await page.$eval('.var-picker .vp-group[aria-label^="accs "] .vp-note', (n) => n.textContent).catch(() => null);
+  check(note === 'không có bản ghi hiện tại: dùng bản ghi đang lặp "row"', `picker note of the pool looped over: ${note}`);
   await page.context().close();
 }
 

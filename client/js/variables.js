@@ -128,7 +128,11 @@ export function groupsFor(stepId, fieldIndex) {
     };
     const builtins = src.members.filter((m) => m.builtin);
     const fields = src.current === 'none' ? [] : src.members.filter((m) => !m.builtin);
-    if (src.current === 'none') g.note = 'không có bản ghi hiện tại: dùng bước Chọn bản ghi';
+    if (src.current === 'none') {
+      // Inside a Lặp over each record of this pool, its record is the way to a field (0010 review).
+      const item = (here?.visible ?? []).map((x) => scope.sources[x.source]).find((x) => x?.current === 'item' && x.from === src.name && x.name);
+      g.note = item ? `không có bản ghi hiện tại: dùng bản ghi đang lặp "${item.name}"` : 'không có bản ghi hiện tại: dùng bước Chọn bản ghi';
+    }
     if (src.current === 'picked') g.note = 'bản ghi vừa chọn';
     if (src.current === 'item') g.note = 'bản ghi đang lặp';
     // The record a Lặp `each` loops over (0010) shows the first record of its pool as sample.

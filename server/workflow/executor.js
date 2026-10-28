@@ -260,28 +260,39 @@ function generate(workflow, { seed, now, maxRecords, queryResults, keptPools, ti
       const pool = scope.all[c.from];
       // keptPools comes from the same catalogue rule that makes `from` a pool reader.
       if (pool && !Array.isArray(pool)) fail(step, `Pool "${c.from}" không giữ bản ghi để lặp (lỗi nội bộ). Báo lại kèm file workflow.`, 'from');
-      const items = pool ? pool.slice() : [];
-      if (items.length > LIMITS.maxCountPerNode) {
-        fail(step, `Pool "${c.from}" có ${items.length.toLocaleString('vi-VN')} bản ghi, quá giới hạn ${LIMITS.maxCountPerNode.toLocaleString('vi-VN')} lần lặp của một bước Lặp. Thu hẹp pool (WHERE/LIMIT của Query) hoặc giảm số bản ghi.`, 'from');
+      // Pools only grow (records are appended), so the snapshot is the length: no copy.
+      const n = pool ? pool.length : 0;
+      if (n > LIMITS.maxCountPerNode) {
+        fail(step, `Pool "${c.from}" có ${n.toLocaleString('vi-VN')} bản ghi, quá giới hạn ${LIMITS.maxCountPerNode.toLocaleString('vi-VN')} lần lặp của một bước Lặp. Thu hẹp pool (WHERE/LIMIT của Query) hoặc giảm số bản ghi.`, 'from');
       }
-      stat.iterations = (stat.iterations ?? 0) + items.length;
-      if (!items.length) emptyEach.add(step.id);
+      stat.iterations = (stat.iterations ?? 0) + n;
+      if (!n) emptyEach.add(step.id);
       const body = step.slots?.body ?? [];
       if (!body.length) return;
       const varName = c.alias || 'loop';
-      for (let i = 0; i < items.length; i++) {
-        scope.current[c.itemAlias] = items[i];
+      for (let i = 0; i < n; i++) {
+        if (countVisit(step)) yield TICK;
+        scope.current[c.itemAlias] = pool[i];
         // A skip inside the body ends this iteration only.
-        yield* runSteps(body, { ...scope, vars: { ...scope.vars, [varName]: { index: i + 1, index0: i, count: items.length } } });
+        yield* runSteps(body, { ...scope, vars: { ...scope.vars, [varName]: { index: i + 1, index0: i, count: n } } });
       }
+    }
+
+    /**
+     * One step visit or one loop iteration: counts toward LIMITS.maxSteps and the TICK cadence
+     * (a loop whose body only holds turned-off steps still iterates, review of 0010).
+     * → true when the caller should yield TICK.
+     */
+    function countVisit(step) {
+      if (++visits > LIMITS.maxSteps) fail(step, `Workflow chạy quá ${LIMITS.maxSteps} bước. Kiểm tra lại số lần lặp lồng nhau.`);
+      return ticks && visits % TICK_EVERY === 0;
     }
 
     /** Yields the records of `steps`; returns SKIP when a Chọn bản ghi step skipped the rest. */
     function* runSteps(steps, scope) {
       for (const step of steps ?? []) {
         if (step.disabled === true) continue;
-        if (++visits > LIMITS.maxSteps) fail(step, `Workflow chạy quá ${LIMITS.maxSteps} bước. Kiểm tra lại số lần lặp lồng nhau.`);
-        if (ticks && visits % TICK_EVERY === 0) yield TICK;
+        if (countVisit(step)) yield TICK;
         const c = step.config ?? {};
         const stat = (byStep[step.id] ??= { runs: 0, records: 0 });
         stat.runs++;
@@ -304,6 +315,7 @@ function generate(workflow, { seed, now, maxRecords, queryResults, keptPools, ti
             stat.iterations = (stat.iterations ?? 0) + times;
             if (body.length) {
               for (let i = 0; i < times; i++) {
+                if (countVisit(step)) yield TICK;
                 // A skip inside the body ends this iteration only.
                 yield* runSteps(body, { ...scope, vars: { ...scope.vars, [varName]: { index: i + 1, index0: i, count: times } } });
               }

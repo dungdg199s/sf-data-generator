@@ -170,7 +170,8 @@ export function prepareWorkflow(wf) {
       // A Record falls back to its id; a pool (Query) or a picked record needs a name.
       if (step.type !== 'record' && !off) err(`Đặt alias để bước khác dùng được ${step.type === 'query' ? 'pool này (ví dụ accs)' : 'bản ghi này (ví dụ acc)'}.`, step.id, 'alias');
     }
-    if (each && !step.config?.itemAlias && !off) err('Đặt tên cho bản ghi đang lặp (ví dụ acc) để các bước bên trong dùng {{acc.Name}}.', step.id, 'itemAlias');
+    // Without a pool yet, the first thing to fix is `from` (its error); the name comes with it.
+    if (each && !step.config?.itemAlias && step.config?.from && !off) err('Đặt tên cho bản ghi đang lặp (ví dụ acc) để các bước bên trong dùng {{acc.Name}}.', step.id, 'itemAlias');
     for (const { key, value } of stepNames(step, catalog)) {
       if (!ALIAS.test(value) || RESERVED_ALIASES.has(value)) {
         err(`Alias "${value}" không hợp lệ (chỉ chữ, số, gạch dưới; không bắt đầu bằng số; không dùng "this").`, step.id, key);
@@ -186,6 +187,18 @@ export function prepareWorkflow(wf) {
     // A clash with a record looped over is reported on that `itemAlias` (above).
     if (owner && owner.key === 'alias') {
       err(`Tên biến lặp "${step.config?.alias || 'loop'}" trùng alias của một bước ${nodeTypeMap.get(owner.step.type)?.label ?? owner.step.type}. Đổi một trong hai tên.`, step.id, 'alias');
+    }
+  }
+  // A Record without alias is named by its id (executor, Lookups): that name must not clash with
+  // another name either, or a reference silently reads the wrong records (0010 review).
+  for (const { step } of steps) {
+    if (step.type !== 'record' || step.config?.alias) continue;
+    const id = String(step.id);
+    const owner = aliasOwner.get(id);
+    if (owner || loopVars.has(id)) {
+      const what = !owner ? 'tên một biến lặp'
+        : owner.key === 'itemAlias' ? 'tên bản ghi đang lặp của một bước Lặp' : `alias của một bước ${nodeTypeMap.get(owner.step.type)?.label ?? owner.step.type}`;
+      err(`Bước này chưa có alias nên được gọi bằng id "${id}", trùng ${what}. Đặt alias cho bước này (ví dụ ${id}_rec) hoặc đổi tên kia.`, step.id, 'alias');
     }
   }
 
@@ -276,7 +289,7 @@ export function prepareWorkflow(wf) {
       if (off || step.type !== 'query' || !step.config?.alias) continue;
       if (scope.refs.some((r) => r.source === step.id && !r.disabled && !r.hidden)) continue;
       const a = step.config.alias;
-      warn(`Chưa có bước nào dùng pool "${a}". Thêm bước Chọn bản ghi hoặc chọn "${a}" ở một field Lookup.`, step.id, undefined, { code: 'poolUnused' });
+      warn(`Chưa có bước nào dùng pool "${a}". Thêm bước Chọn bản ghi, Lặp qua từng bản ghi (menu ⋯), hoặc chọn "${a}" ở một field Lookup.`, step.id, undefined, { code: 'poolUnused' });
     }
   }
 

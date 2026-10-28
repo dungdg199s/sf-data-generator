@@ -13,7 +13,7 @@ import {
   suggestPoolAlias, suggestPickAlias, queryResultOf,
 } from './store.js';
 import { setStepAlias, renameField, insertStep } from '/shared/workflow-tree.js';
-import { refChoices, refsTo, referenceOptions, exposesList } from '/shared/scope.js';
+import { refChoices, refsToRecords, referenceOptions, exposesList } from '/shared/scope.js';
 import { buildSoql, QUERY_DEFAULTS, SAMPLE_ROWS } from '/shared/soql.js';
 import { deleteStep, duplicateStep, toggleDisabled, newStep, fillEach } from './ops.js';
 import { placesText } from './variables.js';
@@ -496,7 +496,8 @@ function parentChoices(step, accepts, referenceTo, mode) {
       nodeType: c.nodeType,
       current: c.current,
       usable: c.usable,
-      note: c.usable ? (c.certainty === 'maybe' ? (pools ? 'có thể chưa có' : 'có thể trống') : c.certainty === 'last' ? 'bản ghi cuối' : '') : c.note ?? '',
+      // "bản ghi cuối" is about the current record; a pool option reads all of them (0010 review).
+      note: c.usable ? (c.certainty === 'maybe' ? (pools ? 'có thể chưa có' : 'có thể trống') : c.certainty === 'last' && !pools ? 'bản ghi cuối' : '') : c.note ?? '',
     };
   });
   return [...list.filter((c) => c.usable), ...list.filter((c) => !c.usable)];
@@ -679,7 +680,7 @@ function followFieldRename(step, from, to) {
 
 function removeField(step, index) {
   const f = step.config.fields[index];
-  const refs = f?.name ? refsTo(currentScope(), step.id, f.name).filter((r) => r.mode !== 'ref' && !(r.nodeId === step.id && r.fieldIndex === index)) : [];
+  const refs = f?.name ? refsToRecords(currentScope(), step.id, f.name).filter((r) => r.mode !== 'ref' && !(r.nodeId === step.id && r.fieldIndex === index)) : [];
   updateWorkflow(() => step.config.fields.splice(index, 1), { source: 'inspector-structure' });
   const places = placesText(refs);
   if (places.length) {

@@ -10,7 +10,7 @@
 // An insertion point ("target") is { parentId: null | stepId, slot: null | key, index }:
 // parentId null means the root sequence `wf.steps`.
 
-import { analyzeScope, referenceOptions, refsTo, tokenize, stripPath, exposesOf, exposesList } from './scope.js';
+import { analyzeScope, referenceOptions, refsToRecords, tokenize, stripPath, exposesOf, exposesList } from './scope.js';
 
 const ownSlots = (step) => Object.keys(step?.slots ?? {});
 
@@ -302,14 +302,16 @@ export function renameAlias(steps, from, to, { catalog, only } = {}) {
 /**
  * After renaming field `from` → `to` of step `stepId`: update `{{<alias>.from}}` everywhere,
  * `{{this.from}}` in the same step and branch `left` paths, using the scope analysis (only
- * references that resolve to this step). Returns { count, places: [{ nodeId, field }], names }
+ * references that resolve to this step, directly or through a Chọn bản ghi / the record of a
+ * Lặp `each` whose records come from it). Returns { count, places: [{ nodeId, field }], names }
  * (`names`: the prefixes whose references changed, e.g. ['acc', 'this']).
  */
 export function renameField(wf, stepId, from, to, { catalog } = {}) {
   const none = { count: 0, places: [], names: [] };
   if (!from || !to || from === to || !catalog) return none;
   const scope = analyzeScope(wf, catalog);
-  const refs = refsTo(scope, stepId, from, { includeHidden: true }).filter((r) => r.mode !== 'ref');
+  // Also through a Chọn bản ghi from its pool and the record a Lặp `each` loops over (0010 review).
+  const refs = refsToRecords(scope, stepId, from, { includeHidden: true }).filter((r) => r.mode !== 'ref');
   if (!refs.length) return none;
   let count = 0;
   const places = [];

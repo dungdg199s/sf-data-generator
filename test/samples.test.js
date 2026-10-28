@@ -42,4 +42,10 @@ test('the "Contact cho mỗi Account có sẵn" sample (0010) is clean and previ
   // Each sample Account gets exactly 3 Contacts, in pool order.
   assert.deepEqual(r.records.map((x) => x.fields.AccountId), [1, 2, 3, 4, 5].flatMap((i) => Array(3).fill(`mẫu:accs#${i}`)));
   assert.equal(r.records[3].fields.Title, 'Liên hệ của Account mẫu 2 (Account 2/5)');
+  // 0010 review N5: switched to "Số lần cố định" it runs 3 times (not "0 lần"); the hidden count
+  // does not change the each-loop data (golden hash of this sample unchanged).
+  const fixed = structuredClone(s.workflow);
+  fixed.steps[1].config.mode = 'fixed';
+  fixed.steps[1].slots.body = [];
+  assert.equal(runWorkflow(fixed, { seed: 1, queryResults: pre.results }).stats.byStep.eachAcc.iterations, 3);
 });

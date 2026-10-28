@@ -201,3 +201,37 @@ test('each loop over Query rows: preview and insert give the same records for th
   assert.deepEqual(sent, preview.end.result.records.map((r) => r.fields));
   assert.deepEqual(sent.map((x) => `${x.AccountId.slice(-3)} ${x.Title}`), ['AAA X 1/2', 'AAA X 1/2', 'AAA X 1/2', 'BBB Y 2/2', 'BBB Y 2/2', 'BBB Y 2/2']);
 });
+
+// ---------- 0010 review fixes ----------
+
+test('an each loop with an empty body does no work per visit (no pool copy): 100 000 × 100 000 stays fast', () => {
+  const w = wf([
+    record('acc', 'Account', 'acc', [], { count: 100000 }),
+    loop('o', { count: 100000 }, [loop('e', { mode: 'each', from: 'acc', itemAlias: 'a' }, [])]),
+  ], { settings: { maxRecords: 200000 } });
+  const t0 = Date.now();
+  const r = runWorkflow(w, { seed: 1, now: NOW });
+  assert.equal(r.stats.byStep.e.iterations, 100000 * 100000);
+  assert.ok(Date.now() - t0 < 5000, `took ${Date.now() - t0} ms`);
+});
+
+test('loop iterations count as step visits: a body of turned-off steps hits maxSteps, and Dừng gets through', async () => {
+  const off = { ...record('x', 'Account', 'x', []), disabled: true };
+  // Was a hang (10^10 iterations, no visit counted, no TICK): now stops at LIMITS.maxSteps.
+  const big = wf([loop('o', { count: 100000 }, [loop('i', { count: 100000 }, [off])])]);
+  const t0 = Date.now();
+  assert.throws(() => runWorkflow(big, { seed: 1, now: NOW }), (e) => e.issues?.[0]?.nodeId === 'i' && /quá 2000000 bước/.test(e.message));
+  assert.ok(Date.now() - t0 < 3000, `maxSteps took ${Date.now() - t0} ms`);
+  // Below maxSteps (1.5 M iterations, no record): the run yields TICK, so Dừng stops it early.
+  const controller = new AbortController();
+  const w = wf([loop('o', { count: 1000 }, [loop('i', { count: 1500 }, [off])]), record('a', 'Account', 'acc')]);
+  setTimeout(() => controller.abort(), 10);
+  const t1 = Date.now();
+  const end = await executeRun({ run: createRun(w, { seed: 1 }), signal: controller.signal, emit: () => {} });
+  assert.equal(end.result.cancelled, true);
+  assert.equal(end.result.stats.total, 0);
+  assert.ok(Date.now() - t1 < 400, `stopped after ${Date.now() - t1} ms`);
+  // Each-loop iterations count too.
+  const each = wf([record('acc', 'Account', 'acc', [], { count: 2000 }), loop('o', { count: 1000 }, [loop('e', { mode: 'each', from: 'acc', itemAlias: 'a' }, [off])])]);
+  assert.throws(() => runWorkflow(each, { seed: 1, now: NOW }), (e) => /quá 2000000 bước/.test(e.message));
+});

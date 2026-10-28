@@ -505,7 +505,7 @@ test('validation: Lookup "current" into a Query pool is an error; a Query nobody
   assert.equal(cur[0].message, 'Field "AccountId": Query "accs" là một pool nhiều bản ghi, không có "bản ghi hiện tại". Chọn "Ngẫu nhiên trong pool", hoặc thêm bước Chọn bản ghi rồi trỏ Lookup vào alias của nó.');
   const warns = warningsOf(wf([loop('l', { count: 2 }, [query('q', 'accs')])])).filter((x) => x.nodeId === 'q');
   assert.deepEqual(warns.map((x) => x.code), ['queryInLoop', 'poolUnused']);
-  assert.equal(warns[1].message, 'Chưa có bước nào dùng pool "accs". Thêm bước Chọn bản ghi hoặc chọn "accs" ở một field Lookup.');
+  assert.equal(warns[1].message, 'Chưa có bước nào dùng pool "accs". Thêm bước Chọn bản ghi, Lặp qua từng bản ghi (menu ⋯), hoặc chọn "accs" ở một field Lookup.'); // 0010 review: names the each-loop too
 });
 
 test('validation: aliases are unique across record, query and pick', () => {
@@ -772,4 +772,28 @@ test('each loop over more than maxCountPerNode records fails on from', () => {
     assert.match(e.issues[0].message, /^Pool "acc" có 100\.002 bản ghi, quá giới hạn 100\.000 lần lặp của một bước Lặp\. Thu hẹp pool \(WHERE\/LIMIT của Query\) hoặc giảm số bản ghi\.$/);
     return true;
   });
+});
+
+test('0010 review: alias-less Record ids join the namespace; first error on from; own record as pool', () => {
+  const body = [record('c', 'Contact', 'con', [])];
+  // N1: a Record without alias is called by its id; an itemAlias / pick alias / loop variable equal to it is an error.
+  const noAlias = (extra) => wf([query('q', 'accs'), record('r1', 'Account', '', []), ...extra]);
+  assert.deepEqual(issuesAt(errorsOf(noAlias([each('l', 'accs', 'r1', body)])), 'r1', 'alias'), ['Bước này chưa có alias nên được gọi bằng id "r1", trùng tên bản ghi đang lặp của một bước Lặp. Đặt alias cho bước này (ví dụ r1_rec) hoặc đổi tên kia.']);
+  assert.deepEqual(issuesAt(errorsOf(noAlias([pick('p', 'r1', 'accs')])), 'r1', 'alias'), ['Bước này chưa có alias nên được gọi bằng id "r1", trùng alias của một bước Chọn bản ghi. Đặt alias cho bước này (ví dụ r1_rec) hoặc đổi tên kia.']);
+  assert.deepEqual(issuesAt(errorsOf(noAlias([loop('o', { count: 1, alias: 'r1' }, body)])), 'r1', 'alias'), ['Bước này chưa có alias nên được gọi bằng id "r1", trùng tên một biến lặp. Đặt alias cho bước này (ví dụ r1_rec) hoặc đổi tên kia.']);
+  assert.deepEqual(errorsOf(noAlias([each('l', 'accs', 'acc', body)])), []);
+  // N3: no pool and no name: only `from` is reported.
+  assert.deepEqual(errorsOf(wf([query('q', 'accs'), each('l', '', '', body)])).map((i) => i.field), ['from']);
+  // N4: `from` = its own record name: an unknown pool, not "Chọn pool gốc".
+  assert.deepEqual(issuesAt(errorsOf(wf([query('q', 'accs'), each('l', 'acc', 'acc', body)])), 'l', 'from'), ['Không có bước nào có alias "acc". Ý bạn là "accs"? Chọn pool khác trong danh sách hoặc thêm bước Query/Record có alias này ở phía trên.']);
+});
+
+test('0010 review: a field path is never suggested onto a pool without a current record', () => {
+  const [e] = errorsOf(wf([query('q', 'accs'), pick('p', 'pk', 'accs'), record('c', 'Contact', 'con', [tplField('T', '{{acc.Name}}')])]));
+  assert.equal(e.code, 'unknownName');
+  assert.equal(e.suggestion, undefined, `suggested ${JSON.stringify(e.suggestion)}`);
+  assert.doesNotMatch(e.message, /Ý bạn là "accs"/);
+  // A pool built-in still gets the hint.
+  const [c] = errorsOf(wf([query('q', 'accs'), pick('p', 'pk', 'accs'), record('c', 'Contact', 'con', [tplField('T', '{{acc.$count}}')])]));
+  assert.equal(c.suggestion?.to, 'accs.$count');
 });

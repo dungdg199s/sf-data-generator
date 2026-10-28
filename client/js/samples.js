@@ -182,7 +182,8 @@ export const SAMPLES = [
         {
           id: 'eachAcc',
           type: 'loop',
-          config: { mode: 'each', from: 'accs', itemAlias: 'acc', alias: 'loop' },
+          // `count` is ignored in each mode; it is what "Số lần cố định" runs if the mode is switched.
+          config: { mode: 'each', from: 'accs', itemAlias: 'acc', alias: 'loop', count: 3 },
           slots: {
             body: [
               {
