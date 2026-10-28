@@ -249,14 +249,20 @@ test('1 000 steps: laid out in a few milliseconds, linear in size, without overl
   assert.equal(lay.nodes.length, count);
   assertNoOverlap(lay);
   assertNested(lay);
-  // Linear: 4× the steps is far from 16× the time (warm runs, generous bound against noise).
-  const big = bigTree(4000, 7);
+  // Linear: 4× the steps is far from 16× the time. Best of 7 warm runs each (other test files run
+  // in parallel; a GC pause in one run must not fail the check), with a generous bound.
+  const small = bigTree(2000, 3);
+  const big = bigTree(8000, 7);
   const time = (s) => {
-    const t = performance.now();
-    for (let i = 0; i < 5; i++) run(s);
-    return (performance.now() - t) / 5;
+    let best = Infinity;
+    for (let i = 0; i < 7; i++) {
+      const t = performance.now();
+      run(s);
+      best = Math.min(best, performance.now() - t);
+    }
+    return best;
   };
-  time(steps);
-  const ratio = time(big) / Math.max(time(steps), 0.05);
+  time(small);
+  const ratio = time(big) / Math.max(time(small), 0.05);
   assert.ok(ratio < 12, `4× the steps took ${ratio.toFixed(1)}× the time`);
 });
