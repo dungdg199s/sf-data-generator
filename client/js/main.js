@@ -9,7 +9,8 @@ import {
 } from './store.js';
 import { migrateV1, describeReport, reportIsEmpty } from '/shared/migrate-v1.js';
 import { malformedSteps, allSteps } from '/shared/workflow-tree.js';
-import { initProcess, focusSelected, openAddMenuAtDefault, openStepMenu, paletteDragStart, paletteDragEnd } from './process.js';
+import { initViews, focusSelected, openAddMenuAtDefault, paletteDragStart, paletteDragEnd, toggleView, setView, VIEWS } from './views.js';
+import { openStepMenu } from './menus.js';
 import * as ops from './ops.js';
 import { initInspector, openField, openSheet, closeSheet } from './inspector.js';
 import { initResults, showRunning, showProgress, endProgress, sobjectChips } from './results.js';
@@ -32,7 +33,7 @@ async function boot() {
   saveCollapsed();
 
   renderPalette();
-  initProcess();
+  initViews();
   initInspector();
   initResults({ onRefresh: () => run(false, { refresh: true }), onGoTo: goToIssue });
   initIssues({ onGoTo: goToIssue });
@@ -265,6 +266,8 @@ function openMoreMenu({ fromChip = false } = {}) {
     );
   }
   if (noViewTools()) {
+    // The Quy trình | Sơ đồ switch lives in the hidden "Thu gọn / Mở tất cả" row (design 0003).
+    items.push({ group: 'Chế độ xem' }, ...VIEWS.map((v) => ({ label: v.label, checked: state.view === v.value, onSelect: () => setView(v.value) })));
     items.push(
       { group: 'Khung' },
       { label: 'Thu gọn tất cả', onSelect: click('btn-collapse-all') },
@@ -369,6 +372,10 @@ function wireShortcuts() {
     } else if (!mod && !e.altKey && e.key === '/') {
       e.preventDefault();
       openAddMenuAtDefault();
+    } else if (!mod && !e.altKey && key === 'm') {
+      // Quy trình ↔ Sơ đồ (design 0003): same selection, no undo step.
+      e.preventDefault();
+      toggleView();
     } else if (e.key === 'Delete' || e.key === 'Backspace') {
       if (!sel) return;
       e.preventDefault();

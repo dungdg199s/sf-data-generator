@@ -35,6 +35,9 @@
 //  14. Lặp "Mỗi bản ghi trong pool" (0010): the sample previews 15 Contacts ("5 lần lặp"), "⋯ → Lặp qua từng
 //      bản ghi" on the Query inserts a filled each-loop (one undo), switching a Lặp to each fills pool and name,
 //      a Contact moved out of the loop gets the outsideLoop error
+//  15. Sơ đồ view (0003 đợt B): M switches with the selection kept, focused and inside the viewport; "+" on a
+//      connector adds a Record there; Delete removes it; ↑ walks the tree; M back; dark screenshot; at 390 px
+//      the saved Sơ đồ is not applied, the ⋯ menu switches (not saved) and a tap opens the sheet above the card
 // The flows run in parallel, one browser context each (independent storage): see SKILL.md.
 // Usage: node .claude/skills/smoke-test/smoke.cjs [screenshotDir]
 // Needs Playwright with a Chromium build available (require('playwright')).
@@ -817,7 +820,7 @@ async function flowLayoutNarrow() {
       && ([...e.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim()) || e.matches('input'))).map((e) => e.outerHTML.slice(0, 60)),
     items: [...document.querySelectorAll('.popup .popup-item')].map((b) => b.textContent),
     seed: Boolean(document.querySelector('.popup input[data-field="seed"]')),
-    radio: document.querySelector('.popup [role="menuitemradio"][aria-checked="true"]')?.textContent ?? '',
+    radio: document.querySelector('.popup [role="group"][aria-label="Giao diện"] [role="menuitemradio"][aria-checked="true"]')?.textContent ?? '',
   }));
   const want = ['Mới', 'Mở…', 'Lưu', 'Account + Contact', 'Tối'];
   check(want.every((w) => menu.items.some((x) => x.includes(w))) && menu.seed && /Theo hệ thống/.test(menu.radio), `⋯ menu at 390px (${JSON.stringify(menu)})`);
@@ -1023,6 +1026,87 @@ async function flowEach() {
   await page.context().close();
 }
 
+/** Flow 15: the Sơ đồ view (design 0003 đợt B). Own contexts (wide, then phone). */
+async function flowCanvas() {
+  const page = await newPage('canvas');
+  await page.goto(base);
+  await page.fill('#wf-name', 'Sơ đồ'); // an edit writes the autosave the checks read
+  await page.waitForSelector('#process .step-card[data-id="con"]');
+  await page.click('#process .step-card[data-id="con"] .type');
+  await page.keyboard.press('m');
+  await page.waitForSelector('#canvas .step-card[data-id="con"]');
+  const inView = (id) => page.evaluate((i) => {
+    const c = document.querySelector(`#canvas .step-card[data-id="${i}"]`);
+    if (!c) return null;
+    const r = c.getBoundingClientRect();
+    const v = document.getElementById('canvas').getBoundingClientRect();
+    return { inside: r.left >= v.left && r.top >= v.top && r.right <= v.right && r.bottom <= v.bottom, selected: c.classList.contains('selected'), focused: document.activeElement === c };
+  }, id);
+  const v = await inView('con');
+  check(v?.inside && v.selected && v.focused, `M: con not selected / focused / inside the diagram (${JSON.stringify(v)})`);
+  const sw = await page.evaluate(() => ({
+    process: document.querySelectorAll('#process *').length, hidden: document.getElementById('process').hidden,
+    pressed: document.querySelector('.view-switch [data-view="canvas"]').getAttribute('aria-pressed'), saved: localStorage.getItem('sfdg.view'),
+    tree: document.getElementById('canvas').getAttribute('role'),
+  }));
+  check(sw.process === 0 && sw.hidden && sw.pressed === 'true' && sw.saved === 'canvas' && sw.tree === 'tree', `switch state ${JSON.stringify(sw)}`);
+  // "+" on the connector after con → Record, selected, inside the loop body after con.
+  const count = () => page.evaluate(() => (JSON.stringify(JSON.parse(localStorage.getItem('sfdg.workflow.v2')).steps).match(/"type":"record"/g) ?? []).length);
+  const before = await count();
+  await page.click('#canvas button.dg-add[aria-label="Thêm bước sau \\"con\\""]');
+  await page.click('.popup [role="menuitem"][data-type="record"]');
+  const added = await page.waitForFunction(() => {
+    const id = document.querySelector('#canvas .step-card.selected')?.dataset.id;
+    const wf = JSON.parse(localStorage.getItem('sfdg.workflow.v2'));
+    const find = (list) => { for (const s of list) { const i = list.indexOf(s); for (const k of Object.keys(s.slots ?? {})) { const at = s.slots[k].findIndex((x) => x.id === id); if (at >= 0) return { prev: s.slots[k][at - 1]?.id, type: s.slots[k][at].type }; const deep = find(s.slots[k]); if (deep) return deep; } void i; } return null; };
+    return id && id !== 'con' && find(wf.steps);
+  }, null, { timeout: 3000 }).then((h) => h.jsonValue()).catch(() => null);
+  check(added?.prev === 'con' && added.type === 'record' && (await count()) === before + 1, `"+" after con did not add a Record there (${JSON.stringify(added)})`);
+  const newId = await page.$eval('#canvas .step-card.selected', (c) => c.dataset.id);
+  check((await inView(newId))?.inside, 'the new step is not inside the diagram viewport');
+  await page.keyboard.press('Delete');
+  await page.waitForFunction((id) => !document.querySelector(`#canvas .step-card[data-id="${id}"]`), newId, { timeout: 3000 }).catch(() => errors.push('Delete did not remove the step from the diagram'));
+  check((await count()) === before, 'Delete did not remove the added Record');
+  // Tree keys: ↑ from con goes to its loop (the step before it in reading order).
+  await page.focus('#canvas .step-card[data-id="con"]');
+  await page.click('#canvas .step-card[data-id="con"] .type');
+  await page.keyboard.press('ArrowUp');
+  const up = await page.$eval('#canvas .step-card.selected', (c) => ({ type: c.dataset.type, focused: document.activeElement === c }));
+  check(up.type === 'loop' && up.focused, `↑ from con: ${JSON.stringify(up)}`);
+  if (outDir) await page.screenshot({ path: path.join(outDir, 'smoke-1440-canvas.png') });
+  await page.emulateMedia({ colorScheme: 'dark' });
+  check(await page.evaluate(() => getComputedStyle(document.body).backgroundColor) === BG.dark, 'Sơ đồ: dark scheme not applied');
+  if (outDir) await page.screenshot({ path: path.join(outDir, 'smoke-1440-canvas-dark.png') });
+  await page.keyboard.press('m');
+  await page.waitForSelector('#process .step[data-type="loop"] > .step-card.selected', { timeout: 3000 });
+  check(await page.evaluate(() => document.getElementById('canvas-wrap').hidden && !document.querySelector('#canvas [data-key]')), 'Quy trình: the diagram kept its DOM');
+  await page.context().close();
+
+  // Phone: the saved Sơ đồ is not applied; the ⋯ menu offers it and does not save it.
+  const m = await newPage('canvas 390', { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+  await seedStorage(m, { workflow: null });
+  await m.addInitScript(() => { if (!localStorage.getItem('smoke.view')) { localStorage.setItem('sfdg.view', 'canvas'); localStorage.setItem('smoke.view', '1'); } });
+  await m.goto(base);
+  await m.waitForSelector('#process .step-card[data-id="con"]');
+  await m.click('#btn-more');
+  await m.click('.popup [role="menuitemradio"]:has-text("Sơ đồ")');
+  await m.waitForSelector('#canvas .step-card[data-id="__start"]');
+  const phone = await m.evaluate(() => ({ overflow: document.documentElement.scrollWidth - innerWidth, saved: localStorage.getItem('sfdg.view') }));
+  check(phone.overflow <= 0, `390px Sơ đồ overflows by ${phone.overflow}px`);
+  await m.tap('#canvas .step-card[data-id="__start"] .type');
+  await m.waitForSelector('#inspector.open');
+  await settle(m);
+  const sheet = await m.evaluate(() => ({ card: document.querySelector('#canvas .step-card.selected').getBoundingClientRect().bottom, sheet: document.getElementById('inspector').getBoundingClientRect().top }));
+  check(sheet.card <= sheet.sheet + 0.5, `390px Sơ đồ: the selected card is under the sheet (${JSON.stringify(sheet)})`);
+  if (outDir) await m.screenshot({ path: path.join(outDir, 'smoke-390-canvas.png') });
+  await m.click('.sheet-close');
+  await m.click('#btn-more');
+  await m.click('.popup [role="menuitemradio"]:has-text("Quy trình")');
+  await m.waitForSelector('#process .step-card');
+  check(await m.evaluate(() => localStorage.getItem('sfdg.view')) === 'canvas', 'a view chosen on a phone was saved');
+  await m.context().close();
+}
+
 (async () => {
   // A Playwright error outside a flow's promise (e.g. in an event handler) fails the run.
   process.on('uncaughtException', (e) => { console.error('SMOKE FAILED\n' + e); process.exit(1); });
@@ -1037,7 +1121,7 @@ async function flowEach() {
     check(orgs.status === 503 && /smoke:/.test((await orgs.json()).error), 'the smoke server is not using the sf CLI stub');
     // Independent flows, one context each, in parallel. A flow that throws (timed-out wait) is
     // reported and the others still finish.
-    const flows = { flowEditing, flowPicker, flowFiles, flowDark, flowLayoutWide, flowLayoutNarrow, flowEach };
+    const flows = { flowEditing, flowPicker, flowFiles, flowDark, flowLayoutWide, flowLayoutNarrow, flowEach, flowCanvas };
     const results = await Promise.allSettled(Object.values(flows).map((f) => f()));
     results.forEach((r, i) => { if (r.status === 'rejected') errors.push(`${Object.keys(flows)[i]}: ${r.reason}`); });
   } catch (e) {

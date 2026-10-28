@@ -5,21 +5,21 @@
 //
 // Rendering: workflow / view / result events rebuild the DOM (keeping scroll and focus);
 // selection and issue events only update classes and badges (decorate()), so focus and
-// scroll position survive.
+// scroll position survive. While the Sơ đồ view is shown (views.js) this view is empty and
+// does not render.
 
 import { h, icoTile } from './dom.js';
+import { state, subscribe, select, nodeType, fieldType, slotKeys, stepById, setCollapsed } from './store.js';
+import { allSteps, slotList } from '/shared/workflow-tree.js';
 import {
-  state, subscribe, select, nodeType, fieldType, slotKeys, locate, stepById, setCollapsed, runKey,
-} from './store.js';
-import { allSteps, slotList, walkSteps } from '/shared/workflow-tree.js';
-import { exposesOf } from '/shared/scope.js';
-import { stepSummary, stepAlias, statChip, stepLabel } from './summary.js';
+  stepSummary, stepAlias, statChip, stepLabel, addPointLabel, issuesByStep, innerIssues, innerCount,
+} from './summary.js';
 import * as ops from './ops.js';
 import { openField, openSheet } from './inspector.js';
-import { openPopup } from './popup.js';
+import { openAddMenu, openStepMenu } from './menus.js';
+import { START_ID } from './layout.js';
 
 const MAX_FIELD_CHIPS = 12;
-const START_ID = '__start';
 
 let root;
 const detailsOpen = new Set(); // record steps showing their field chips
@@ -36,13 +36,23 @@ export function initProcess() {
   document.getElementById('btn-collapse-all').onclick = () => setCollapsed(containerIds(), true);
   document.getElementById('btn-expand-all').onclick = () => setCollapsed(containerIds(), false);
   subscribe(({ kind, source }) => {
+    if (!active()) return;
     // Typing in the inspector: one rebuild per frame at most, not one per keystroke.
     if (kind === 'workflow' && source === 'inspector') scheduleRender();
     else if (kind === 'workflow' || kind === 'all' || kind === 'view' || kind === 'result') render();
     else if (kind === 'selection' || kind === 'issues') decorate();
   });
-  ops.onReveal(revealStep);
+  ops.onReveal((id, opts) => { if (active()) revealStep(id, opts); });
   // The first render is done by main.js (emit 'all'), which can recover from a broken autosave.
+}
+
+const active = () => state.view !== 'canvas';
+
+/** The Sơ đồ view took over: drop this view's DOM (no stale cards for document-wide queries). */
+export function clearProcess() {
+  if (renderFrame) cancelAnimationFrame(renderFrame);
+  renderFrame = 0;
+  root.replaceChildren();
 }
 
 let renderFrame = 0;
@@ -62,6 +72,7 @@ function render() {
     cancelAnimationFrame(renderFrame);
     renderFrame = 0;
   }
+  if (!active()) return;
   staleStats = state.lastRunSteps !== null && state.lastRunSteps !== JSON.stringify(state.workflow.steps);
   const scroll = root.scrollTop;
   const hadFocus = root.contains(document.activeElement) && !document.activeElement.closest('.popup');
@@ -131,20 +142,13 @@ function invalidStep(value) {
 }
 
 function addPoint(target, list) {
-  const before = isStep(list[target.index]) ? list[target.index] : null;
-  const after = isStep(list[target.index - 1]) ? list[target.index - 1] : null;
-  let label;
-  if (after) label = `Thêm bước sau "${nameOf(after)}"`;
-  else if (before) label = `Thêm bước trước "${nameOf(before)}"`;
-  else label = 'Thêm bước ở đây';
+  const label = addPointLabel(list, target.index);
   return h(
     'div',
     { class: 'add-point', ...targetAttrs(target) },
     h('button', { class: 'add-btn', title: 'Thêm bước ở đây (/)', 'aria-label': label, onclick: (e) => openAddMenu(e.currentTarget, target) }, '+'),
   );
 }
-
-const nameOf = (step) => stepAlias(step) || nodeType(step.type)?.label || step.type;
 
 function renderStep(step, level, at) {
   const type = nodeType(step.type);
@@ -205,8 +209,7 @@ function renderStep(step, level, at) {
   if (showDetails) el.append(fieldChips(step));
   if (!container) return el;
   if (collapsed) {
-    let n = 0;
-    walkSteps(Object.values(step.slots ?? {}).flat(), () => { n++; }, slotKeys);
+    const n = innerCount(step);
     el.append(h('div', { class: 'collapsed-note', 'data-count': String(n) }, `${n} bước bên trong`));
     return el;
   }
@@ -252,19 +255,6 @@ function fieldChips(step) {
 }
 
 // ---------- decoration (selection, issues) without rebuilding ----------
-
-function issuesByStep() {
-  const map = new Map();
-  for (const [level, list] of [['errors', state.issues.errors], ['warnings', state.issues.warnings]]) {
-    for (const i of list) {
-      const key = i.nodeId && stepById(i.nodeId) ? i.nodeId : START_ID;
-      const entry = map.get(key) ?? { errors: [], warnings: [] };
-      entry[level].push(i);
-      map.set(key, entry);
-    }
-  }
-  return map;
-}
 
 function decorate() {
   if (!root) return;
@@ -333,20 +323,6 @@ function decorate() {
   (focusable ?? root.querySelector('.start-card')).tabIndex = 0;
 }
 
-function innerIssues(id, issues) {
-  const step = stepById(id);
-  const out = { errors: 0, warnings: 0, first: null };
-  if (!step) return out;
-  walkSteps(Object.values(step.slots ?? {}).flat(), (s) => {
-    const i = issues.get(s.id);
-    if (!i) return;
-    out.errors += i.errors.length;
-    out.warnings += i.warnings.length;
-    if (!out.first && (i.errors.length || i.warnings.length)) out.first = s.id;
-  }, slotKeys);
-  return out;
-}
-
 // ---------- selection helpers ----------
 
 function cardOf(id) {
@@ -354,6 +330,7 @@ function cardOf(id) {
 }
 
 export function focusSelected() {
+  if (!active()) return;
   const sel = state.selection;
   const card = sel?.kind === 'step' ? cardOf(sel.id) : root.querySelector('.start-card');
   card?.focus({ preventScroll: true });
@@ -361,11 +338,11 @@ export function focusSelected() {
 }
 
 /** Open collapsed ancestors, scroll the card to the centre, optionally flash it. */
-function revealStep(id, { flash = false, focus = true } = {}) {
+export function revealStep(id, { flash = false, focus = true, block = 'center' } = {}) {
   if (ops.expandAncestors(id)) setCollapsed([], false); // persists + re-renders
   const card = cardOf(id);
   if (!card) return;
-  card.scrollIntoView({ block: 'center', behavior: 'auto' });
+  card.scrollIntoView({ block, behavior: 'auto' });
   if (focus && !document.activeElement?.closest('#inspector input, #inspector textarea, #inspector select')) card.focus({ preventScroll: true });
   if (flash) {
     const el = card.parentElement;
@@ -426,21 +403,7 @@ function onTreeKey(e) {
   }
 }
 
-// ---------- popups: "+" menu and step menu (client/js/popup.js) ----------
-
-function openAddMenu(anchor, target) {
-  const types = state.meta.nodeTypes;
-  const items = [];
-  for (const cat of state.meta.stepCategories ?? [{ key: undefined, label: '' }]) {
-    const inCat = types.filter((t) => t.category === cat.key);
-    if (!inCat.length) continue;
-    items.push({ group: cat.label });
-    for (const t of inCat) items.push({ type: t.type, label: t.label, desc: t.description.split('.')[0], onSelect: () => ops.addStep(t.type, target) });
-  }
-  const rest = types.filter((t) => !(state.meta.stepCategories ?? []).some((c) => c.key === t.category));
-  for (const t of rest) items.push({ type: t.type, label: t.label, desc: t.description.split('.')[0], onSelect: () => ops.addStep(t.type, target) });
-  openPopup(anchor, { title: 'Thêm bước', items, search: types.length > 6 });
-}
+// ---------- "+" menu at the default position (popups: menus.js) ----------
 
 /** "/" key: the "+" menu at the default insert position. */
 export function openAddMenuAtDefault() {
@@ -452,35 +415,6 @@ export function openAddMenuAtDefault() {
   const anchor = point?.matches('button') ? point : point?.querySelector('button') ?? root;
   anchor.scrollIntoView?.({ block: 'nearest' });
   openAddMenu(anchor, target);
-}
-
-/** A step whose records a Lặp `each` can loop over: a pool (`exposes.pool`) named by `alias` (catalogue). */
-const isPoolStep = (step) => exposesOf(nodeType(step.type), step.config).some(({ ex }) => ex.pool === true && ex.name?.key === 'alias');
-
-export function openStepMenu(anchor, id) {
-  const step = stepById(id);
-  if (!step) return;
-  const container = slotKeys(step.type).length > 0;
-  const items = [
-    { label: 'Nhân bản', kbd: 'Ctrl+D', onSelect: () => ops.duplicateStep(id) },
-    { label: 'Lên', kbd: 'Alt+↑', onSelect: () => ops.moveBy(id, -1) },
-    { label: 'Xuống', kbd: 'Alt+↓', onSelect: () => ops.moveBy(id, 1) },
-    { label: 'Bọc trong Lặp', onSelect: () => ops.wrapIn(id, 'loop') },
-    { label: 'Bọc trong Rẽ nhánh', onSelect: () => ops.wrapIn(id, 'branch') },
-    // Design 0010: a Lặp over each record of this step's pool, right after it.
-    isPoolStep(step)
-      ? step.config?.alias
-        ? { label: 'Lặp qua từng bản ghi', title: `Thêm bước Lặp ngay sau bước này, chạy một lần cho mỗi bản ghi của "${step.config.alias}".`, onSelect: () => ops.addEachLoopAfter(id) }
-        : { label: 'Lặp qua từng bản ghi', disabled: true, title: 'Đặt alias cho bước này trước.' }
-      : null,
-    container
-      ? { label: 'Bỏ vỏ (giữ các bước bên trong)', disabled: !ops.canUnwrap(step), title: ops.canUnwrap(step) ? undefined : 'Chỉ bỏ vỏ được khi một nhánh trống.', onSelect: () => ops.unwrap(id) }
-      : null,
-    { label: step.disabled ? 'Bật bước' : 'Tắt bước', kbd: 'Ctrl+/', onSelect: () => ops.toggleDisabled(id) },
-    { label: 'Xóa', kbd: 'Delete', danger: true, onSelect: () => ops.deleteStep(id) },
-  ].filter(Boolean);
-  select({ kind: 'step', id });
-  openPopup(anchor, { title: stepLabel(step), items });
 }
 
 // ---------- drag and drop ----------

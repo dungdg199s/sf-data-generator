@@ -15,7 +15,8 @@ import {
 import { setStepAlias, renameField, insertStep } from '/shared/workflow-tree.js';
 import { refChoices, refsToRecords, referenceOptions, exposesList } from '/shared/scope.js';
 import { buildSoql, QUERY_DEFAULTS, SAMPLE_ROWS } from '/shared/soql.js';
-import { deleteStep, duplicateStep, toggleDisabled, newStep, fillEach } from './ops.js';
+import { deleteStep, duplicateStep, toggleDisabled, newStep, fillEach, reveal } from './ops.js';
+import { START_ID } from './layout.js';
 import { placesText } from './variables.js';
 import { applySuggestion, closePicker } from './var-picker.js';
 
@@ -75,21 +76,25 @@ function setSheetOpen(open) {
   // Closing while focus is in the sheet (Ctrl+Enter in a field, "‹ Xong"): focus goes to the
   // selected card, never left in a hidden form.
   if (!open && was && root.contains(document.activeElement)) {
-    (document.querySelector('#process .step-card.selected') ?? document.getElementById('btn-preview'))?.focus({ preventScroll: true });
+    (document.querySelector('.view-wrap .step-card.selected') ?? document.getElementById('btn-preview'))?.focus({ preventScroll: true });
   }
   root.classList.toggle('open', open);
   root.inert = narrow() && !open;
   document.body.classList.toggle('sheet-open', open);
   if (open) updateSheetOverlap();
   if (open && !was) {
-    requestAnimationFrame(() => document.querySelector('#process .step-card.selected')?.scrollIntoView({ block: 'nearest' }));
+    // The selected card just above the sheet's edge, in either view (Sơ đồ pans, Quy trình scrolls).
+    requestAnimationFrame(() => {
+      const sel = state.selection;
+      if (sel) reveal(sel.kind === 'step' ? sel.id : START_ID, { focus: false, block: 'nearest' });
+    });
   }
 }
 
 /** --sheet-overlap: how much of the canvas the open sheet covers (scroll padding, end spacer). */
 function updateSheetOverlap() {
   if (!document.body.classList.contains('sheet-open')) return;
-  const canvas = document.getElementById('process').getBoundingClientRect();
+  const canvas = document.querySelector('.view-wrap > .view:not([hidden])').getBoundingClientRect();
   // offsetHeight ignores the slide-in transform, so this is the sheet's final position.
   const sheetTop = window.innerHeight - root.offsetHeight;
   document.body.style.setProperty('--sheet-overlap', `${Math.max(0, Math.round(canvas.bottom - sheetTop))}px`);
@@ -103,7 +108,8 @@ function wireSheet() {
   });
   window.addEventListener('resize', updateSheetOverlap);
   // The canvas changes height when the issues bar appears or grows.
-  new ResizeObserver(updateSheetOverlap).observe(document.getElementById('process'));
+  const views = new ResizeObserver(updateSheetOverlap);
+  for (const v of document.querySelectorAll('.view-wrap > .view')) views.observe(v);
   root.inert = narrow();
 }
 
@@ -146,6 +152,7 @@ function renderWorkflow() {
       h('li', {}, 'Ctrl+S: tải workflow JSON; Ctrl+Enter: xem trước'),
       h('li', {}, 'Ctrl+Shift+Enter: đọc lại org cho các bước Query rồi xem trước'),
       h('li', {}, 'F8 / Shift+F8: tới lỗi hoặc cảnh báo tiếp theo / trước đó'),
+      h('li', {}, 'M: đổi chế độ xem Quy trình / Sơ đồ. Trong Sơ đồ: kéo nền hoặc cuộn để di chuyển, Ctrl + cuộn hoặc + / − để thu phóng, 0: vừa khung'),
     ),
     h('h3', {}, 'Workflow'),
     renderOptions(

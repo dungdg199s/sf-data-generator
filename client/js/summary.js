@@ -2,7 +2,9 @@
 // Record, Query, Chọn bản ghi, Lặp and Rẽ nhánh have their own sentence; other step types fall
 // back to the options marked `summary: true` in /api/meta.
 
-import { nodeType, queryResultOf } from './store.js';
+import { state, nodeType, queryResultOf, stepById, slotKeys } from './store.js';
+import { walkSteps } from '/shared/workflow-tree.js';
+import { START_ID } from './layout.js';
 import { selectFields, soqlSobject } from '/shared/soql.js';
 import { exposesOf } from '/shared/scope.js';
 
@@ -84,4 +86,56 @@ export function statChip(step, byStep) {
   }
   if (step.type === 'pick') return `chọn ${s.picked ?? 0} lần${s.skipped ? ` · bỏ qua ${s.skipped}` : ''}`;
   return s.records ? `${s.records} bản ghi` : `${s.runs} lần chạy`;
+}
+
+/** Name of a step in labels: its alias, else its type label. */
+export const stepName = (step) => stepAlias(step) || nodeType(step.type)?.label || step.type;
+
+/** aria-label of the "+" at `index` of `list`: "Thêm bước sau "acc"" (both views). */
+export function addPointLabel(list, index) {
+  const isStep = (s) => s && typeof s === 'object' && !Array.isArray(s);
+  const after = isStep(list[index - 1]) ? list[index - 1] : null;
+  const before = isStep(list[index]) ? list[index] : null;
+  if (after) return `Thêm bước sau "${stepName(after)}"`;
+  if (before) return `Thêm bước trước "${stepName(before)}"`;
+  return 'Thêm bước ở đây';
+}
+
+/**
+ * Current issues grouped by step id: Map id → { errors, warnings }. Issues without a (known)
+ * step go to the Start card (START_ID).
+ */
+export function issuesByStep() {
+  const map = new Map();
+  for (const [level, list] of [['errors', state.issues.errors], ['warnings', state.issues.warnings]]) {
+    for (const i of list) {
+      const key = i.nodeId && stepById(i.nodeId) ? i.nodeId : START_ID;
+      const entry = map.get(key) ?? { errors: [], warnings: [] };
+      entry[level].push(i);
+      map.set(key, entry);
+    }
+  }
+  return map;
+}
+
+/** Issues of the steps inside a container (a collapsed frame shows them): counts and the first step. */
+export function innerIssues(id, issues) {
+  const step = stepById(id);
+  const out = { errors: 0, warnings: 0, first: null };
+  if (!step) return out;
+  walkSteps(Object.values(step.slots ?? {}).flat(), (s) => {
+    const i = issues.get(s.id);
+    if (!i) return;
+    out.errors += i.errors.length;
+    out.warnings += i.warnings.length;
+    if (!out.first && (i.errors.length || i.warnings.length)) out.first = s.id;
+  }, slotKeys);
+  return out;
+}
+
+/** Number of steps inside a container. */
+export function innerCount(step) {
+  let n = 0;
+  walkSteps(Object.values(step.slots ?? {}).flat(), () => { n++; }, slotKeys);
+  return n;
 }

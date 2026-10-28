@@ -466,6 +466,12 @@ input:focus, select:focus, textarea:focus { border-color: var(--color-accent); }
   background: transparent; border-color: transparent; color: var(--color-text-muted);
 }
 .view-tools button:hover:not(:disabled) { color: var(--color-text); }
+/* Quy trình | Sơ đồ (design 0003): a segmented pair at the left of the row, outside the top bar's width budget (0009). */
+.view-switch { display: inline-flex; margin-right: auto; border: 1px solid var(--color-border-strong); border-radius: var(--radius-md); background: var(--color-surface); }
+.view-tools .view-switch button { border-radius: 0; color: var(--color-text-muted); }
+.view-tools .view-switch button:first-child { border-radius: var(--radius-md) 0 0 var(--radius-md); }
+.view-tools .view-switch button:last-child { border-radius: 0 var(--radius-md) var(--radius-md) 0; border-left: 1px solid var(--color-border-strong); }
+.view-tools .view-switch button[aria-pressed="true"] { background: var(--color-accent-subtle); color: var(--color-accent-text); font-weight: var(--weight-semibold); }
 
 /* ---------- process view ---------- */
 .process {
@@ -549,21 +555,22 @@ input:focus, select:focus, textarea:focus { border-color: var(--color-accent); }
 .start-card { cursor: pointer; }
 .start-card .sum { flex: 1; }
 
-/* Turned-off step: grey fill, dashed frame and stripe, "Đã tắt" tag. No opacity, so badges stay readable. */
-.step.disabled > .step-card { background: var(--color-bg-disabled); border-style: dashed; box-shadow: none; }
-.step.disabled > .step-card.selected { box-shadow: 0 0 0 var(--ring-w) var(--color-accent); }
-.step.disabled > .step-card.has-error { box-shadow: inset 0 0 0 1px var(--color-danger); }
-.step.disabled > .step-card .type, .step.disabled > .step-card .alias { color: var(--color-text-muted); }
-.step.disabled > .step-card .alias { background: transparent; }
+/* Turned-off step: grey fill, dashed frame and stripe, "Đã tắt" tag. No opacity, so badges stay readable.
+   (.step.disabled > .step-card: Quy trình; .step-card.is-disabled: Sơ đồ.) */
+.step.disabled > .step-card, .step-card.is-disabled { background: var(--color-bg-disabled); border-style: dashed; box-shadow: none; }
+.step.disabled > .step-card.selected, .step-card.is-disabled.selected { box-shadow: 0 0 0 var(--ring-w) var(--color-accent); }
+.step.disabled > .step-card.has-error, .step-card.is-disabled.has-error { box-shadow: inset 0 0 0 1px var(--color-danger); }
+.step.disabled > .step-card .type, .step.disabled > .step-card .alias, .step-card.is-disabled .type, .step-card.is-disabled .alias { color: var(--color-text-muted); }
+.step.disabled > .step-card .alias, .step-card.is-disabled .alias { background: transparent; }
 /* The stat chip's surface-hover fill equals bg-disabled: give it a surface fill and a border so it stays visible. */
-.step.disabled > .step-card .stat:not(.stale) { background: var(--color-surface); border-color: var(--color-border-strong); }
-.step.disabled > .step-card .ico-tile { background: transparent; color: var(--color-text-muted); box-shadow: inset 0 0 0 1px var(--color-border-strong); }
+.step.disabled > .step-card .stat:not(.stale), .step-card.is-disabled .stat:not(.stale) { background: var(--color-surface); border-color: var(--color-border-strong); }
+.step.disabled > .step-card .ico-tile, .step-card.is-disabled .ico-tile { background: transparent; color: var(--color-text-muted); box-shadow: inset 0 0 0 1px var(--color-border-strong); }
 .step.disabled > .step-body, .step.disabled > .collapsed-note { background: var(--color-bg-disabled); border-style: dashed; }
 
-.step.flash > .step-card { animation: flash 0.6s var(--ease-out); }
+.step.flash > .step-card, .dg-card.flash { animation: flash 0.6s var(--ease-out); }
 @keyframes flash { from { background: var(--color-accent-subtle-strong); } to { background: var(--color-surface-raised); } }
 @media (prefers-reduced-motion: reduce) {
-  .step.flash > .step-card { animation: none; background: var(--color-accent-subtle-strong); }
+  .step.flash > .step-card, .dg-card.flash { animation: none; background: var(--color-accent-subtle-strong); }
 }
 .step.drag-source > * { opacity: 0.5; }
 .step.drag-source > .step-card, .step.drag-source > .step-body { border-style: dashed; box-shadow: none; }
@@ -644,6 +651,68 @@ input:focus, select:focus, textarea:focus { border-color: var(--color-accent); }
 .process .drop-active .add-btn, .process .slot-empty.drop-active {
   border-color: var(--color-accent) !important; border-style: solid !important; background: var(--color-accent-subtle-strong) !important;
 }
+
+/* ---------- Sơ đồ view (§6.13, design 0003 đợt B) ---------- */
+/* Viewport (#canvas) with a pannable, zoomable world: frames under one SVG of connectors, cards and "+" over it. */
+.canvas-wrap { flex: 1; min-height: 0; position: relative; display: flex; }
+.canvas {
+  flex: 1; min-width: 0; position: relative; overflow: hidden; outline: none; touch-action: none; cursor: grab;
+  background-image: radial-gradient(var(--color-canvas-dot) 1px, transparent 1px); background-size: 20px 20px;
+}
+.canvas.panning { cursor: grabbing; }
+.canvas.panning * { cursor: grabbing; }
+.dg-world { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+.dg-under, .dg-over { position: absolute; left: 0; top: 0; }
+/* Layers paint in DOM order (under, edges, over); frames inside .dg-under stack by nesting level (inline z-index). */
+.dg-under { isolation: isolate; }
+.dg-edges { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; }
+.dg-world [data-key] { position: absolute; }
+.dg-lines { fill: none; stroke: var(--color-border-strong); stroke-width: 2; }
+.dg-dots { fill: var(--color-border-strong); }
+.dg-frame {
+  border: 1px solid var(--color-border); border-left: var(--stripe-w) solid var(--c); border-radius: var(--radius-lg);
+  background: var(--c-subtle);
+}
+.dg-frame.is-disabled { background: var(--color-bg-disabled); border-style: dashed; }
+.dg-slot { pointer-events: none; }
+/* Cards: 210 × 76 (layout.js DIM), three rows; a frame header (.dg-head) is one row across the frame. */
+.dg-card { flex-direction: column; align-items: stretch; justify-content: center; gap: var(--space-0-5); min-height: 0; padding: var(--space-1) var(--space-1) var(--space-1) var(--space-2); }
+.dg-card.dg-head { flex-direction: row; align-items: center; gap: var(--space-2); border-radius: var(--radius-lg) var(--radius-lg) 0 0; }
+.dg-card .dg-row { display: flex; align-items: center; gap: var(--space-1); min-width: 0; }
+.dg-card .type { min-width: 0; }
+.dg-card .type-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.dg-card .alias { min-width: 0; max-width: 72px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: none; }
+.dg-card .dg-row .badges { margin-left: auto; }
+.dg-card .dg-sum { flex: none; padding-left: var(--space-0-5); }
+.dg-card .dg-tags { display: flex; align-items: center; gap: var(--space-1); min-width: 0; overflow: hidden; min-height: 18px; }
+.dg-card .dg-note { font-size: var(--text-xs); color: var(--color-text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dg-card button.icon { min-width: var(--control-h-sm); min-height: var(--control-h-sm); }
+.dg-card .badge { min-height: 20px; }
+.dg-card .tag-sample { max-width: none; }
+.dg-invalid { overflow: hidden; font-size: var(--text-xs); }
+.dg-add { opacity: 0.85; }
+.dg-empty {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0; min-height: 0; padding: 0 var(--space-2);
+  background: var(--color-surface); line-height: var(--leading-tight);
+}
+.dg-empty .slot-hint { margin-top: 0; }
+.dg-lane-label {
+  font-size: var(--text-xs); font-weight: var(--weight-semibold); color: var(--c-text); line-height: 16px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none;
+}
+.dg-lane-label.slot-true::before { content: '✓ '; }
+.dg-lane-label.slot-false::before { content: '✗ '; }
+.canvas.dragging .dg-add { opacity: 1; }
+.canvas .dg-add.drop-active, .canvas .dg-empty.drop-active {
+  border-color: var(--color-accent); border-style: solid; background: var(--color-accent-subtle-strong); color: var(--color-accent-text); opacity: 1;
+}
+/* Zoom: − 100% + ⤢ at the top right of the viewport (above the bottom sheet on narrow screens). */
+.dg-zoom {
+  position: absolute; top: var(--space-2); right: var(--space-2); display: flex; gap: var(--space-0-5); padding: var(--space-0-5);
+  background: var(--color-surface-raised); border: 1px solid var(--color-border); border-radius: var(--radius-md); box-shadow: var(--shadow-1);
+}
+.dg-zoom button { border-color: transparent; background: transparent; min-height: var(--control-h-sm); min-width: var(--control-h-sm); padding: 0 var(--space-1); }
+.dg-zoom .dg-zoom-level { font-size: var(--text-xs); font-variant-numeric: tabular-nums; min-width: 48px; color: var(--color-text-muted); }
 
 /* ---------- popup menus (§6.7) ---------- */
 .popup {

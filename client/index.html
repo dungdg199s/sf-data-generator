@@ -56,10 +56,24 @@
 
     <section class="view-wrap">
       <div class="view-tools">
+        <div class="view-switch" role="group" aria-label="Chế độ xem">
+          <button data-view="process" aria-pressed="true" title="Danh sách bước từ trên xuống. Đổi chế độ xem: M">Quy trình</button>
+          <button data-view="canvas" aria-pressed="false" title="Sơ đồ tự sắp xếp, kéo nền để di chuyển. Đổi chế độ xem: M">Sơ đồ</button>
+        </div>
         <button id="btn-collapse-all" title="Thu gọn mọi khung Lặp / Rẽ nhánh">Thu gọn tất cả</button>
         <button id="btn-expand-all" title="Mở mọi khung Lặp / Rẽ nhánh">Mở tất cả</button>
       </div>
-      <div id="process" class="process" role="tree" aria-label="Các bước của workflow"></div>
+      <div id="process" class="process view" role="tree" aria-label="Các bước của workflow"></div>
+      <div id="canvas-wrap" class="canvas-wrap view" hidden>
+        <div id="canvas" class="canvas" role="tree" aria-label="Sơ đồ các bước của workflow" aria-describedby="canvas-help"></div>
+        <div class="dg-zoom" role="group" aria-label="Thu phóng sơ đồ">
+          <button id="btn-zoom-out" class="icon" title="Thu nhỏ (−)" aria-label="Thu nhỏ">−</button>
+          <button id="btn-zoom-reset" class="dg-zoom-level">100%</button>
+          <button id="btn-zoom-in" class="icon" title="Phóng to (+)" aria-label="Phóng to">+</button>
+          <button id="btn-zoom-fit" class="icon" title="Vừa khung: thấy cả sơ đồ (0)" aria-label="Vừa khung">⤢</button>
+        </div>
+        <p id="canvas-help" class="sr-only">↑ ↓: bước trước, bước sau. ← →: khung cha, bước con (thu gọn, mở khung). Enter: sửa trong bảng cấu hình. Kéo nền hoặc cuộn để di chuyển, Ctrl + cuộn để thu phóng. M: về chế độ Quy trình.</p>
+      </div>
       <section id="issues" class="issues" role="region" aria-label="Lỗi và cảnh báo" hidden>
         <div class="issues-head">
           <span id="issues-count" class="issues-count" aria-live="polite"></span>

@@ -12,6 +12,7 @@ const LEGACY_STORAGE_KEY = 'sfdg.workflow.v1';
 const BROKEN_STORAGE_KEY = 'sfdg.workflow.v2.broken';
 const COLLAPSED_KEY = 'sfdg.collapsed';
 const COLLAPSED_MAX = 500;
+const VIEW_KEY = 'sfdg.view'; // 'process' (Quy trình, default) | 'canvas' (Sơ đồ), design 0003
 const HISTORY_LIMIT = 100;
 const COALESCE_MS = 800;
 
@@ -33,6 +34,7 @@ export const state = {
   lastRunOrg: null, // org the Query steps of the last preview read ('' = sample rows)
   lastRunSteps: null, // JSON of steps at the last run, to dim stale stat chips
   collapsed: loadCollapsed(), // ids of containers shown collapsed (UI only, no undo)
+  view: 'process', // 'process' | 'canvas' (views.js; UI only, no undo)
 };
 
 const listeners = new Set();
@@ -174,6 +176,26 @@ export function setCollapsed(ids, collapsed) {
   for (const id of ids) collapsed ? state.collapsed.add(id) : state.collapsed.delete(id);
   saveCollapsed();
   emit('app', 'view');
+}
+
+// ---------- view (Quy trình | Sơ đồ, UI state) ----------
+
+/** The saved view choice, or null. */
+export function loadView() {
+  try {
+    const v = localStorage.getItem(VIEW_KEY);
+    return v === 'process' || v === 'canvas' ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+export function saveView(view) {
+  try {
+    localStorage.setItem(VIEW_KEY, view);
+  } catch {
+    /* optional */
+  }
 }
 
 // ---------- lookups ----------
