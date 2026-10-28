@@ -1,0 +1,72 @@
+{
+  "sample: Account + Contact @42": {
+    "records": "5bedd07a74c30313ca5cfc21b02d4371fcf250f8dc19bd6731c749024885ccf9",
+    "count": 19,
+    "byStep": "2a8d1ed1c2563fc338433fbe2d4c22db5ae4830c64d23b5d5b6667c104446c11"
+  },
+  "sample: Account + Contact @7": {
+    "records": "b79a044d9eec7eb8a69724eb4474ede7671ad61443f00b49d151d9ed07349e5b",
+    "count": 17,
+    "byStep": "625a3a8ebc843e87c7adc29310fc110723569955327c46b387e751a4dc658a08"
+  },
+  "sample: Lead theo xác suất @42": {
+    "records": "1e1afedf259b46807b817338247af228456385fe42f8cbbbbd60ae3d83d31d9b",
+    "count": 24,
+    "byStep": "af6ca15e48a13b00dff83d44385f2f9dbfc2e240ce3bfbf47ebccccc3c23badf"
+  },
+  "sample: Lead theo xác suất @7": {
+    "records": "10d4699f2e5b735b02e76798795ba59f0d2e5a554f93a995634496bd1bb07375",
+    "count": 23,
+    "byStep": "3fe42a65d92e05212db4f4f63a746eed8cee1e1af8e2dd4169ae91284dd9e25a"
+  },
+  "sample: Contact cho Account có sẵn @42": {
+    "records": "f80613216eca572fbf96ca41095dad7e49d609906d947bac3ca719da0597f031",
+    "count": 10,
+    "byStep": "68d9d1b88a0e399a3c11951950fa1ce75d423700c41040e9a892c0851c032684"
+  },
+  "sample: Contact cho Account có sẵn @7": {
+    "records": "126f7d0ed3cd4d42cb6d78e2e2e3330474a8d9cef4c3477421b6dc5d8d6674fa",
+    "count": 10,
+    "byStep": "68d9d1b88a0e399a3c11951950fa1ce75d423700c41040e9a892c0851c032684"
+  },
+  "random lookups across nested loops and branches @42": {
+    "records": "c265e6ca83ac81a174345a0a2b6be2bf72a014225e55afa0513b39aa1f571f37",
+    "count": 30,
+    "byStep": "4bae4ab56c460114a298b9319addb501a06fbae1c6ae03fcb811aa04ec9e3a6a"
+  },
+  "random lookups across nested loops and branches @7": {
+    "records": "be34d9151e3e6227044de270ea3a1d290e738856b26b4332e8ff3ff66fc2b62a",
+    "count": 25,
+    "byStep": "ce4f2fdf18f1d53614606cc5ce82ebac133eb70efc69f9b79df43233b27a8db8"
+  },
+  "pick from a generated pool (unique, filtered) and lookups to the pick @42": {
+    "records": "69e8abd4c88b1d7624fc19749cf44a14fe594c4995392a52616f17fd1b7df738",
+    "count": 21,
+    "byStep": "c1149d2eea9144d5cd193ff838032340f7c8802ea612c4d3b13297cf81fd3e78"
+  },
+  "pick from a generated pool (unique, filtered) and lookups to the pick @7": {
+    "records": "a335a9cdf5c7d4a9a4f455d97e1817964d84949df6254ea33968d6f7d4d20797",
+    "count": 20,
+    "byStep": "0cb8cf5e3d24097e941e6debf7a1835bfb73e93d147a5aed72a042a17d84e7fc"
+  },
+  "Query pool, pick random and lookup random into the pool @42": {
+    "records": "6d3a0bc11d7fb940ca68889a7926e37b4a872fb36472fe86dc6f3d2ea54ab9f5",
+    "count": 12,
+    "byStep": "017b73b73613e28c8285265870e9d7398181a234626757428b54f69de7ed685f"
+  },
+  "Query pool, pick random and lookup random into the pool @7": {
+    "records": "6a700900760c311f2b48fed874a31beb7a187a5692a5d192cf926b2aa3affc8c",
+    "count": 6,
+    "byStep": "c6153b537a9d676eb30a694b8c7f396b7cc2c84abf9ac7c3bc8c498e4289dc8c"
+  },
+  "pick skip ends the iteration; disabled steps draw nothing @42": {
+    "records": "55f36000bf57ae8370ae14a8b29ec14015cf51e6c0ee5e3bfe6d2f8fde56417e",
+    "count": 8,
+    "byStep": "8fe1554911783b7ef016034ba4ceab09c59096111df054cd1a8dda30c37f350e"
+  },
+  "pick skip ends the iteration; disabled steps draw nothing @7": {
+    "records": "bda0ed8a1981907bbfd28d8728b3f6d9d99019488f9d2818ffd7fa3bad7f91e9",
+    "count": 8,
+    "byStep": "8fe1554911783b7ef016034ba4ceab09c59096111df054cd1a8dda30c37f350e"
+  }
+}
