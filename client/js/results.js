@@ -7,16 +7,19 @@
 // the table even after the workflow was edited. While a run goes on, the download buttons give
 // their place to "Dừng" and a thin <progress> sits on the bottom edge of the header (0009 §4).
 // Insert failures are grouped (sObject, step, message); a group selects its step and field.
+// The header is one row at every width (0009 §4): on phones the summary scrolls sideways and the
+// two download buttons become one "⤓ Tải" menu that calls them.
 
 import { h, download, toast } from './dom.js';
 import { state, subscribe, stepById } from './store.js';
 import { stepAlias } from './summary.js';
 import { api } from './api.js';
+import { openPopup, closePopup, popupAnchor } from './popup.js';
 
 const QUERY_TAB = 'q:'; // activeTab of a Query tab: `q:<stepId>`
 const ERRORS_TAB = '__errors';
 let activeTab = null;
-let panel, body, summary, progressBar, stopBtn, dlJson, dlCsv;
+let panel, body, summary, progressBar, stopBtn, dlJson, dlCsv, dlMenu, toggle;
 let onRefresh = null;
 let onGoTo = null;
 let busyDownload = false;
@@ -39,8 +42,10 @@ export function initResults({ onRefresh: refresh, onGoTo: goTo } = {}) {
   stopBtn = document.getElementById('btn-stop');
   dlJson = document.getElementById('btn-dl-json');
   dlCsv = document.getElementById('btn-dl-csv');
-  const toggle = document.getElementById('btn-results-toggle');
-  toggle.onclick = () => panel.classList.toggle('collapsed');
+  dlMenu = document.getElementById('btn-dl-menu');
+  toggle = document.getElementById('btn-results-toggle');
+  toggle.onclick = () => setOpen(panel.classList.contains('collapsed'));
+  dlMenu.onclick = () => (popupAnchor() === dlMenu ? closePopup() : openDownloadMenu());
   dlJson.onclick = () => exportFile('json');
   dlCsv.onclick = () => {
     const q = activeQuery();
@@ -52,6 +57,20 @@ export function initResults({ onRefresh: refresh, onGoTo: goTo } = {}) {
 }
 
 const fileBase = () => (state.workflow.name || 'workflow').replace(/[^\w.-]+/g, '_');
+
+/** Opens or collapses the panel; the toggle says which (aria-expanded, ▾ open / ▴ collapsed). */
+function setOpen(open) {
+  panel.classList.toggle('collapsed', !open);
+  toggle.setAttribute('aria-expanded', String(open));
+  toggle.querySelector('.caret').textContent = open ? '▾' : '▴';
+}
+
+/** "⤓ Tải" (phones): the two download buttons as a menu; each row calls its button. */
+function openDownloadMenu() {
+  const row = (btn) => ({ label: btn.textContent, disabled: btn.disabled, title: btn.title, onSelect: () => btn.click() });
+  dlMenu.setAttribute('aria-expanded', 'true');
+  openPopup(dlMenu, { title: 'Tải về', items: [row(dlJson), row(dlCsv)], onClose: () => dlMenu.setAttribute('aria-expanded', 'false') });
+}
 
 /** Regenerates the last run on the server and saves it (CSV: one sObject). */
 async function exportFile(format, sobject) {
@@ -80,14 +99,15 @@ async function exportFile(format, sobject) {
 
 /** Header while a run goes on: summary nodes, progress (value/max, or indeterminate), Dừng. */
 export function showProgress({ parts, value, max, onStop, stopping = false }) {
-  panel.classList.remove('collapsed');
+  setOpen(true);
   summary.replaceChildren(...parts);
   progressBar.hidden = false;
   if (max) {
     progressBar.max = max;
     progressBar.value = Math.min(value ?? 0, max);
   } else progressBar.removeAttribute('value');
-  dlJson.hidden = dlCsv.hidden = true;
+  dlJson.hidden = dlCsv.hidden = dlMenu.hidden = true;
+  if (popupAnchor() === dlMenu) closePopup();
   stopBtn.hidden = false;
   stopBtn.disabled = stopping || !onStop;
   stopBtn.onclick = onStop ?? null;
@@ -100,14 +120,14 @@ export function endProgress() {
   progressBar.hidden = true;
   stopBtn.hidden = true;
   stopBtn.onclick = null;
-  dlJson.hidden = dlCsv.hidden = false;
+  dlJson.hidden = dlCsv.hidden = dlMenu.hidden = false;
   updateButtons();
   if (hadFocus) document.getElementById('btn-preview').focus();
 }
 
 /** One-off status text in the header (errors, lost connection). */
 export function showRunning(text) {
-  panel.classList.remove('collapsed');
+  setOpen(true);
   summary.textContent = text;
 }
 
@@ -155,6 +175,7 @@ function updateButtons() {
   const hasQueries = Boolean(r?.queries?.length);
   dlJson.disabled = busyDownload || !canExport;
   dlCsv.disabled = busyDownload || !(canExport || hasQueries);
+  dlMenu.disabled = dlJson.disabled && dlCsv.disabled;
   const tip = state.resultRun ? `Server sinh lại từ seed ${state.resultRun.seed}, ra đúng dữ liệu đang xem.` : '';
   dlJson.title = tip;
   dlCsv.title = tip;
@@ -174,13 +195,13 @@ function render() {
     body.replaceChildren();
     return;
   }
-  panel.classList.remove('collapsed');
+  setOpen(true);
   summary.replaceChildren(
     ...Object.entries(r.stats.bySobject).map(([s, n]) => h('span', { class: 'chip' }, `${s}: ${fmt(n)}`)),
     ` ${fmt(r.stats.total)} bản ghi · seed `,
     h('code', {}, String(r.seed)),
     ' ',
-    h('button', { class: 'link', title: 'Dùng seed này cho lần chạy sau để ra đúng dữ liệu này', onclick: () => { document.getElementById('seed').value = r.seed; } }, '📌 giữ seed'),
+    h('button', { class: 'link', title: 'Dùng seed này cho lần chạy sau để ra đúng dữ liệu này', onclick: () => keepSeed(r.seed) }, '📌 giữ seed'),
     ` · ${fmt(r.stats.durationMs)} ms`,
     r.cancelled && !r.insert ? ' · đã dừng' : '',
     ...querySummary(r.queries),
@@ -213,6 +234,13 @@ function render() {
       dataTable(queryRecords(q), null, q.records.length));
   } else content = dataTable(r.records.filter((x) => x.sobject === activeTab), r.insert?.ids, r.stats.bySobject[activeTab] ?? 0);
   body.replaceChildren(tabs, content);
+}
+
+/** "📌 giữ seed": fills the Seed field; the input event updates the phone's "Seed n" chip. */
+function keepSeed(seed) {
+  const input = document.getElementById('seed');
+  input.value = seed;
+  input.dispatchEvent(new Event('input', { bubbles: true }));
 }
 
 function dataTable(records, ids, total) {

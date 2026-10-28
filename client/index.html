@@ -9,35 +9,40 @@
 </head>
 <body>
   <header class="topbar">
-    <div class="brand">SF Data Generator</div>
-    <input id="wf-name" class="wf-name" type="text" aria-label="Tên workflow" placeholder="Tên workflow">
-    <div class="toolbar">
-      <button id="btn-new" title="Workflow mới">Mới</button>
-      <button id="btn-open" title="Mở file workflow JSON">Mở…</button>
-      <button id="btn-save" title="Tải workflow JSON (Ctrl+S)">Lưu</button>
-      <button id="btn-undo" title="Hoàn tác (Ctrl+Z)">↶</button>
-      <button id="btn-redo" title="Làm lại (Ctrl+Shift+Z)">↷</button>
-      <input id="file-input" type="file" accept=".json,application/json" hidden>
+    <div class="tb-file">
+      <div class="brand">SF Data Generator</div>
+      <input id="wf-name" class="wf-name" type="text" aria-label="Tên workflow" placeholder="Tên workflow">
+      <div class="toolbar">
+        <button id="btn-new" class="tb-wide" title="Workflow mới">Mới</button>
+        <button id="btn-open" class="tb-wide" title="Mở file workflow JSON">Mở…</button>
+        <button id="btn-save" class="tb-wide" title="Tải workflow JSON (Ctrl+S)">Lưu</button>
+        <button id="btn-undo" title="Hoàn tác (Ctrl+Z)" aria-label="Hoàn tác">↶</button>
+        <button id="btn-redo" title="Làm lại (Ctrl+Shift+Z)" aria-label="Làm lại">↷</button>
+        <input id="file-input" type="file" accept=".json,application/json" hidden>
+      </div>
+      <button id="seed-chip" class="seed-chip" hidden>Seed</button>
+      <button id="btn-more" class="icon more-btn" title="Mẫu và thao tác khác" aria-label="Mẫu và thao tác khác" aria-haspopup="menu" aria-expanded="false">⋯</button>
     </div>
-    <div class="spacer"></div>
-    <label class="field-inline" title="Để trống: mỗi lần chạy ra dữ liệu khác. Nhập seed: chạy lại ra đúng dữ liệu cũ.">
-      Seed <input id="seed" type="text" placeholder="ngẫu nhiên" size="9">
-    </label>
-    <label class="field-inline">
-      Org
-      <select id="org-select"><option value="">— không kết nối —</option></select>
-      <button id="btn-orgs" class="icon" title="Tải lại danh sách org từ sf CLI">⟳</button>
-    </label>
-    <button id="btn-preview" class="primary" title="Sinh dữ liệu và xem trước (Ctrl+Enter)">▶ Xem trước</button>
-    <button id="btn-insert" class="danger" title="Sinh dữ liệu và insert vào org đã chọn">⤒ Insert vào org</button>
-    <label id="theme-field" class="field-inline" title="Giao diện sáng hoặc tối. &quot;Theo hệ thống&quot; dùng cài đặt của máy.">
-      <span class="sr-only">Giao diện</span>
-      <select id="theme-select">
-        <option value="system">Theo hệ thống</option>
-        <option value="light">Sáng</option>
-        <option value="dark">Tối</option>
-      </select>
-    </label>
+    <div class="tb-run">
+      <label class="field-inline seed-field tb-wide" title="Để trống: mỗi lần chạy ra dữ liệu khác. Nhập seed: chạy lại ra đúng dữ liệu cũ.">
+        Seed <input id="seed" type="text" placeholder="ngẫu nhiên">
+      </label>
+      <div class="field-inline org-field">
+        <label for="org-select" class="org-label">Org</label>
+        <select id="org-select"><option value="">— không kết nối —</option></select>
+        <button id="btn-orgs" class="icon tb-wide" title="Tải lại danh sách org từ sf CLI" aria-label="Tải lại danh sách org">⟳</button>
+      </div>
+      <button id="btn-preview" class="primary" title="Sinh dữ liệu và xem trước (Ctrl+Enter)">▶ Xem trước</button>
+      <button id="btn-insert" class="danger" title="Sinh dữ liệu và insert vào org đã chọn">⤒ Insert<span class="lbl-long"> vào org</span></button>
+      <label id="theme-field" class="field-inline theme-field tb-wide">
+        <span class="sr-only">Giao diện</span>
+        <select id="theme-select" title="Giao diện: Theo hệ thống">
+          <option value="system">Theo hệ thống</option>
+          <option value="light">Sáng</option>
+          <option value="dark">Tối</option>
+        </select>
+      </label>
+    </div>
   </header>
 
   <main class="layout">
@@ -55,7 +60,15 @@
         <button id="btn-expand-all" title="Mở mọi khung Lặp / Rẽ nhánh">Mở tất cả</button>
       </div>
       <div id="process" class="process" role="tree" aria-label="Các bước của workflow"></div>
-      <div id="issues" class="issues" hidden></div>
+      <section id="issues" class="issues" role="region" aria-label="Lỗi và cảnh báo" hidden>
+        <div class="issues-head">
+          <span id="issues-count" class="issues-count" aria-live="polite"></span>
+          <button id="issues-first" class="issues-first" hidden></button>
+          <span class="issues-hint">Bấm một dòng để tới bước · F8: lỗi tiếp theo</span>
+          <button id="btn-issues-toggle" class="issues-toggle" aria-expanded="true" aria-controls="issues-list">Thu gọn</button>
+        </div>
+        <div id="issues-list" class="issues-list"></div>
+      </section>
     </section>
 
     <aside id="inspector" class="inspector" aria-label="Cấu hình bước"></aside>
@@ -63,11 +76,11 @@
 
   <section id="results" class="results collapsed">
     <div class="results-head">
-      <button id="btn-results-toggle" class="link">Kết quả</button>
+      <button id="btn-results-toggle" class="link" aria-expanded="false" aria-controls="results-body">Kết quả <span class="caret" aria-hidden="true">▴</span></button>
       <div id="results-summary" class="summary" aria-live="polite">Chưa chạy.</div>
-      <div class="spacer"></div>
       <button id="btn-dl-json" disabled>Tải JSON</button>
       <button id="btn-dl-csv" disabled>Tải CSV (tab hiện tại)</button>
+      <button id="btn-dl-menu" class="dl-menu" disabled aria-haspopup="menu" aria-expanded="false" title="Tải JSON hoặc CSV của tab hiện tại">⤓ Tải</button>
       <button id="btn-stop" class="danger" hidden title="Dừng sau lô đang gửi. Bản ghi đã insert vẫn ở lại trong org.">Dừng</button>
       <progress id="run-progress" class="run-progress" hidden aria-label="Tiến độ lần chạy"></progress>
     </div>

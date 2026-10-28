@@ -1,5 +1,5 @@
-// App bootstrap: loads metadata, migrates old workflows, wires toolbar, shortcuts, live
-// validation and runs.
+// App bootstrap: loads metadata, migrates old workflows, wires toolbar (and its "⋯" menu on
+// narrow screens, design 0009), shortcuts, live validation (issues bar: issues.js) and runs.
 
 import { api } from './api.js';
 import { h, toast, download, icoTile } from './dom.js';
@@ -11,8 +11,10 @@ import { migrateV1, describeReport, reportIsEmpty } from '/shared/migrate-v1.js'
 import { malformedSteps, allSteps } from '/shared/workflow-tree.js';
 import { initProcess, focusSelected, openAddMenuAtDefault, openStepMenu, paletteDragStart, paletteDragEnd } from './process.js';
 import * as ops from './ops.js';
-import { initInspector, openField } from './inspector.js';
+import { initInspector, openField, openSheet, closeSheet } from './inspector.js';
 import { initResults, showRunning, showProgress, endProgress, sobjectChips } from './results.js';
+import { initIssues, renderIssues, expandIssues, goToNextIssue } from './issues.js';
+import { openPopup, closePopup, popupAnchor } from './popup.js';
 import { SAMPLES } from './samples.js';
 import { stepAlias } from './summary.js';
 
@@ -33,6 +35,7 @@ async function boot() {
   initProcess();
   initInspector();
   initResults({ onRefresh: () => run(false, { refresh: true }), onGoTo: goToIssue });
+  initIssues({ onGoTo: goToIssue });
   firstRender();
   wireToolbar();
   wireShortcuts();
@@ -151,17 +154,14 @@ function renderPalette() {
     ...types.filter((t) => !cats.some((c) => c.key === t.category)).map(item),
   );
   $('sample-items').replaceChildren(
-    ...SAMPLES.map((s) =>
-      h('button', {
-        class: 'palette-item',
-        title: s.description,
-        onclick: () => {
-          if (!confirmDiscard()) return;
-          replaceWorkflow(structuredClone(s.workflow));
-        },
-      }, s.label, h('small', {}, s.description)),
-    ),
+    ...SAMPLES.map((s) => h('button', { class: 'palette-item', title: s.description, onclick: () => loadSample(s) }, s.label, h('small', {}, s.description))),
   );
+}
+
+/** Mẫu (palette, or the "⋯" menu on narrow screens): asks before replacing a non-empty workflow. */
+function loadSample(s) {
+  if (!confirmDiscard()) return;
+  replaceWorkflow(structuredClone(s.workflow));
 }
 
 function confirmDiscard() {
@@ -209,6 +209,74 @@ function wireToolbar() {
     emit('toolbar', 'all'); // inspector re-renders so "Import từ org" enables
   };
   updateInsertButton();
+  $('btn-more').onclick = () => (popupAnchor() === $('btn-more') ? closePopup() : openMoreMenu());
+  $('seed-chip').onclick = () => openMoreMenu({ focusSeed: true });
+  $('seed').addEventListener('input', updateSeedChip);
+  updateSeedChip();
+}
+
+const phone = () => window.matchMedia('(max-width: 720px)').matches;
+
+/** Phones: "Seed 42" in the top bar while a seed is set (the Seed field itself is in the ⋯ menu). */
+function updateSeedChip() {
+  const v = $('seed').value.trim();
+  const chip = $('seed-chip');
+  chip.hidden = !v;
+  chip.textContent = `Seed ${v}`;
+  chip.title = `Seed cố định: ${v}. Chạm để sửa.`;
+}
+
+const THEMES = [['system', 'Theo hệ thống'], ['light', 'Sáng'], ['dark', 'Tối']];
+
+/**
+ * "⋯" (≤ 900 px, design 0009 §2): Mẫu always; on phones (≤ 720 px) also what the top bar hides
+ * there. Every row calls the existing control (same confirmations); the Seed row mirrors #seed.
+ */
+function openMoreMenu({ focusSeed = false } = {}) {
+  const btn = $('btn-more');
+  const click = (id) => () => $(id).click();
+  const items = [];
+  if (phone()) {
+    items.push(
+      { group: 'Workflow' },
+      { label: 'Mới', onSelect: click('btn-new') },
+      { label: 'Mở…', onSelect: click('btn-open') },
+      { label: 'Lưu', kbd: 'Ctrl+S', onSelect: click('btn-save') },
+      { group: 'Chạy' },
+      {
+        field: {
+          id: 'seed',
+          label: 'Seed',
+          value: $('seed').value,
+          placeholder: 'ngẫu nhiên',
+          title: $('seed').closest('label')?.title,
+          onInput: (v) => {
+            $('seed').value = v;
+            $('seed').dispatchEvent(new Event('input', { bubbles: true }));
+          },
+          onEnter: () => closePopup(true),
+        },
+      },
+      { label: 'Tải lại danh sách org', onSelect: click('btn-orgs') },
+      { group: 'Khung' },
+      { label: 'Thu gọn tất cả', onSelect: click('btn-collapse-all') },
+      { label: 'Mở tất cả', onSelect: click('btn-expand-all') },
+    );
+  }
+  items.push({ group: 'Mẫu' }, ...SAMPLES.map((s) => ({ label: s.label, desc: s.description, onSelect: () => loadSample(s) })));
+  if (phone()) {
+    const select = $('theme-select');
+    items.push({ group: 'Giao diện' }, ...THEMES.map(([value, label]) => ({
+      label,
+      checked: select.value === value,
+      onSelect: () => {
+        select.value = value;
+        select.dispatchEvent(new Event('change', { bubbles: true }));
+      },
+    })));
+  }
+  btn.setAttribute('aria-expanded', 'true');
+  openPopup(btn, { title: 'Mẫu và thao tác khác', items, focus: focusSeed ? 'seed' : null, onClose: () => btn.setAttribute('aria-expanded', 'false') });
 }
 
 function openWorkflowObject(wf, raw, fileName) {
@@ -257,7 +325,11 @@ function wireShortcuts() {
     const mod = e.ctrlKey || e.metaKey;
     const key = e.key.toLowerCase();
     const sel = ops.selectedId();
-    if (mod && e.key === 'Enter') {
+    if (e.key === 'F8' && !mod && !e.altKey) {
+      // Works in the inspector's inputs too (not a typing key).
+      e.preventDefault();
+      goToNextIssue(e.shiftKey ? -1 : 1);
+    } else if (mod && e.key === 'Enter') {
       // Ctrl+Shift+Enter: read the org again for Query steps (bypass the server's cache).
       e.preventDefault();
       run(false, { refresh: e.shiftKey });
@@ -334,6 +406,7 @@ function goToIssue(i) {
   const index = i.field?.startsWith('fields.') ? (step.config?.fields ?? []).findIndex((f) => `fields.${f?.name}` === i.field) : -1;
   if (index >= 0) openField(i.nodeId, index);
   else select({ kind: 'step', id: i.nodeId });
+  openSheet(); // narrow screens: a run closed the sheet; show the step's configuration again
   emit('app', 'view');
   ops.reveal(i.nodeId);
   return undefined;
@@ -341,21 +414,12 @@ function goToIssue(i) {
 
 function setIssues(issues) {
   state.issues = { errors: issues.errors ?? [], warnings: issues.warnings ?? [] };
-  const box = $('issues');
   const all = [...state.issues.errors.map((i) => ({ ...i, level: 'error' })), ...state.issues.warnings.map((i) => ({ ...i, level: 'warning' }))];
-  box.hidden = !all.length;
-  box.classList.toggle('only-warnings', !state.issues.errors.length);
-  box.replaceChildren(
-    ...all.map((i) => {
-      const step = i.nodeId ? stepById(i.nodeId) : null;
-      const alias = step ? stepAlias(step) : '';
-      return h('button', {
-        class: `issue ${i.level}`,
-        title: step ? 'Bấm để chọn bước' : '',
-        onclick: () => goToIssue(i),
-      }, `${alias ? `[${alias}] ` : ''}${i.message}`);
-    }),
-  );
+  renderIssues(all.map((i) => {
+    const step = i.nodeId ? stepById(i.nodeId) : null;
+    const alias = step ? stepAlias(step) : '';
+    return { ...i, nodeId: step ? i.nodeId : undefined, prefix: alias ? `[${alias}] ` : '' };
+  }));
   emit('validation', 'issues');
 }
 
@@ -432,6 +496,8 @@ async function run(insert, { refresh = false } = {}) {
     toast('Đang chạy. Bấm "Dừng" nếu muốn chạy lại.');
     return;
   }
+  // Narrow screens: the results panel opens behind the sheet, so close it (selection kept).
+  if (window.matchMedia('(max-width: 900px)').matches) closeSheet();
   const seed = readSeed();
   if (!insert) {
     await preview({ seed, refresh });
@@ -509,6 +575,7 @@ function acceptResult(result, workflow) {
 function runFailed(e) {
   if (e.issues) {
     setIssues({ errors: e.issues, warnings: state.issues.warnings });
+    expandIssues(); // the only time the bar expands by itself (design 0009, Đã chốt 2)
     const first = e.issues.find((i) => i.nodeId && stepById(i.nodeId));
     if (first) goToIssue(first);
   }

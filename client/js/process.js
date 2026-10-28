@@ -14,7 +14,8 @@ import {
 import { allSteps, slotList, walkSteps } from '/shared/workflow-tree.js';
 import { stepSummary, stepAlias, statChip, stepLabel } from './summary.js';
 import * as ops from './ops.js';
-import { openField } from './inspector.js';
+import { openField, openSheet } from './inspector.js';
+import { openPopup } from './popup.js';
 
 const MAX_FIELD_CHIPS = 12;
 const START_ID = '__start';
@@ -98,7 +99,10 @@ function startCard() {
       'aria-level': '1',
       tabindex: '-1',
       'data-type': 'start',
-      onclick: () => select({ kind: 'workflow' }),
+      onclick: () => {
+        select({ kind: 'workflow' });
+        openSheet();
+      },
     },
     h('span', { class: 'type' }, icoTile(), 'Bắt đầu'),
     h('span', { class: 'sum' }, `${wf.name || 'Workflow'} · ≤ ${Number(max).toLocaleString('vi-VN')} bản ghi`),
@@ -164,6 +168,7 @@ function renderStep(step, level, at) {
       onclick: (e) => {
         if (e.target.closest('button, .handle')) return;
         select({ kind: 'step', id: step.id });
+        openSheet(); // narrow screens: a tap on the selected card shows the sheet a run (or ‹ Xong) closed
         card.focus({ preventScroll: true });
       },
     },
@@ -420,87 +425,7 @@ function onTreeKey(e) {
   }
 }
 
-// ---------- popups: "+" menu and step menu ----------
-
-let popup = null;
-
-function closePopup(refocus = false) {
-  if (!popup) return;
-  const { el, anchor } = popup;
-  popup = null;
-  el.remove();
-  document.removeEventListener('pointerdown', onOutside, true);
-  if (refocus && anchor?.isConnected) anchor.focus();
-}
-
-function onOutside(e) {
-  if (popup && !popup.el.contains(e.target) && e.target !== popup.anchor) closePopup();
-}
-
-/**
- * items: [{ group }] headers and [{ type, label, desc, kbd, disabled, title, danger, onSelect }].
- * `type` (a step type) adds the type's icon tile.
- */
-function openPopup(anchor, { title, items, search = false }) {
-  closePopup();
-  const list = h('div', { class: 'popup-items' });
-  const buttons = [];
-  const build = (q = '') => {
-    buttons.length = 0;
-    const needle = q.trim().toLowerCase();
-    const shown = items.filter((it) => it.group || !needle || `${it.label} ${it.desc ?? ''}`.toLowerCase().includes(needle));
-    list.replaceChildren(
-      ...shown
-        .filter((it, i) => !it.group || (shown[i + 1] && !shown[i + 1].group))
-        .map((it) => {
-          if (it.group) return h('div', { class: 'popup-group', role: 'presentation' }, it.group);
-          const b = h('button', {
-            class: `popup-item${it.danger ? ' danger' : ''}`,
-            role: 'menuitem',
-            'data-type': it.type,
-            disabled: it.disabled,
-            title: it.title,
-            onclick: () => {
-              closePopup();
-              it.onSelect();
-            },
-          }, h('span', { class: 'pi-label' }, it.type ? icoTile() : null, it.label), it.desc ? h('small', {}, it.desc) : null, it.kbd ? h('kbd', {}, it.kbd) : null);
-          if (!it.disabled) buttons.push(b);
-          return b;
-        }),
-    );
-  };
-  build();
-  const searchInput = search ? h('input', { class: 'popup-search', placeholder: 'Tìm loại bước…', 'aria-label': 'Tìm loại bước', oninput: (e) => build(e.target.value) }) : null;
-  const el = h('div', { class: 'popup', role: 'menu', 'aria-label': title }, h('div', { class: 'popup-title' }, title), searchInput, list);
-  el.addEventListener('keydown', (e) => {
-    const i = buttons.indexOf(document.activeElement);
-    if (e.key === 'Escape') {
-      e.preventDefault();
-      e.stopPropagation();
-      closePopup(true);
-    } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-      e.preventDefault();
-      const n = buttons.length;
-      if (n) buttons[(i + (e.key === 'ArrowDown' ? 1 : -1) + n) % n].focus();
-    } else if (e.key === 'Tab') {
-      closePopup();
-    } else if (e.key.length === 1 && e.target !== searchInput && /\S/.test(e.key)) {
-      const k = e.key.toLowerCase();
-      const order = [...buttons.slice(i + 1), ...buttons.slice(0, i + 1)];
-      order.find((b) => b.textContent.trim().toLowerCase().startsWith(k))?.focus();
-    }
-  });
-  document.body.append(el);
-  const r = anchor.getBoundingClientRect();
-  const w = el.offsetWidth;
-  const hgt = el.offsetHeight;
-  el.style.left = `${Math.max(8, Math.min(r.left, innerWidth - w - 8))}px`;
-  el.style.top = `${r.bottom + hgt + 8 > innerHeight ? Math.max(8, r.top - hgt - 4) : r.bottom + 4}px`;
-  popup = { el, anchor };
-  setTimeout(() => document.addEventListener('pointerdown', onOutside, true));
-  (searchInput ?? buttons[0])?.focus();
-}
+// ---------- popups: "+" menu and step menu (client/js/popup.js) ----------
 
 function openAddMenu(anchor, target) {
   const types = state.meta.nodeTypes;

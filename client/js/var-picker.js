@@ -296,10 +296,13 @@ export function closePicker({ focus = false } = {}) {
 
 function position(p) {
   const r = p.input.closest('.var-input')?.getBoundingClientRect() ?? p.input.getBoundingClientRect();
-  const width = Math.min(Math.max(r.width, 340), window.innerWidth - 16);
-  const left = Math.max(8, Math.min(r.left, window.innerWidth - width - 8));
+  // Phones (design 0009 §3): full width minus 8 px each side, at most min(360 px, 45 % of the
+  // height) (CSS max-height), above the field when there is no room under it (e.g. in the sheet).
+  const phone = window.matchMedia('(max-width: 720px)').matches;
+  const width = phone ? window.innerWidth - 16 : Math.min(Math.max(r.width, 340), window.innerWidth - 16);
+  const left = phone ? 8 : Math.max(8, Math.min(r.left, window.innerWidth - width - 8));
   const below = window.innerHeight - r.bottom - 8;
-  const height = Math.min(360, p.el.scrollHeight || 360);
+  const height = Math.min(phone ? Math.min(360, window.innerHeight * 0.45) : 360, p.el.scrollHeight || 360);
   p.el.style.width = `${width}px`;
   p.el.style.left = `${left}px`;
   if (below < Math.min(height, 240) && r.top > below) {

@@ -2,7 +2,8 @@
 // the Start card (or nothing) is selected. It is the only place where configuration is edited.
 // Edits made here emit source 'inspector' and do not trigger a re-render, so focus survives
 // typing; structural edits (add/remove/reorder fields) use 'inspector-structure'.
-// On narrow screens the panel is a bottom sheet (.inspector.open) shown while a step is selected.
+// On narrow screens the panel is a bottom sheet (.inspector.open, body.sheet-open) shown while a
+// step is selected (design 0009 §3).
 
 import { h, toast, icoTile } from './dom.js';
 import { renderOptions } from './forms.js';
@@ -49,10 +50,39 @@ function render() {
   const key = step ? `step:${step.id}` : s?.kind ?? 'none';
   if (key !== lastSelectionKey) sheetClosed = false;
   lastSelectionKey = key;
-  const closeSheet = h('button', { class: 'sheet-close', onclick: () => { sheetClosed = true; root.classList.remove('open'); } }, '‹ Xong');
-  root.replaceChildren(closeSheet, step ? renderStep(step) : renderWorkflow());
-  root.classList.toggle('open', Boolean(s) && !sheetClosed);
+  // The "‹ Xong" row sticks to the top of the sheet, so it closes without scrolling back up.
+  const head = h('div', { class: 'sheet-head' }, h('button', { class: 'sheet-close', title: 'Đóng bảng cấu hình (vẫn giữ bước đang chọn)', onclick: closeSheet }, '‹ Xong'));
+  root.replaceChildren(head, step ? renderStep(step) : renderWorkflow());
+  setSheetOpen(Boolean(s) && !sheetClosed);
   markIssues();
+}
+
+const narrow = () => window.matchMedia('(max-width: 900px)').matches;
+
+/**
+ * Narrow screens (design 0009 §3): the inspector is a bottom sheet while something is selected.
+ * `body.sheet-open` gives the canvas a scroll padding of the sheet's height, so the selected card
+ * is scrolled to just above the sheet's edge when it opens.
+ */
+function setSheetOpen(open) {
+  const was = root.classList.contains('open');
+  root.classList.toggle('open', open);
+  document.body.classList.toggle('sheet-open', open);
+  if (open && !was && narrow()) {
+    requestAnimationFrame(() => document.querySelector('#process .step-card.selected')?.scrollIntoView({ block: 'nearest' }));
+  }
+}
+
+/** "‹ Xong", or a run started on a narrow screen: hide the sheet, keep the selection. */
+export function closeSheet() {
+  sheetClosed = true;
+  setSheetOpen(false);
+}
+
+/** Show the sheet again for the current selection (a run failed on validation: goToIssue). */
+export function openSheet() {
+  sheetClosed = false;
+  setSheetOpen(Boolean(state.selection));
 }
 
 function renderWorkflow() {
@@ -81,6 +111,7 @@ function renderWorkflow() {
       h('li', {}, 'Ctrl+Z / Ctrl+Shift+Z: hoàn tác / làm lại'),
       h('li', {}, 'Ctrl+S: tải workflow JSON; Ctrl+Enter: xem trước'),
       h('li', {}, 'Ctrl+Shift+Enter: đọc lại org cho các bước Query rồi xem trước'),
+      h('li', {}, 'F8 / Shift+F8: tới lỗi hoặc cảnh báo tiếp theo / trước đó'),
     ),
     h('h3', {}, 'Workflow'),
     renderOptions(
