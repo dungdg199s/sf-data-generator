@@ -1,6 +1,6 @@
 # 0009 — Bố cục màn hình: danh sách lỗi, thanh trên, bottom sheet và panel kết quả
 
-- **Trạng thái:** Đã duyệt
+- **Trạng thái:** Đã làm (duyệt 2026-10-27, làm 2026-10-28 sau 0004/0005/0006, xem [Đã làm](#đã-làm))
 - **Ngày:** 2026-10-27
 - **Liên quan:** [0008](0008-ui-design-system.md) (ghi nhận các lỗi bố cục này và để lại, Đã chốt 6), [0003](0003-process-mode.md)
   (bố cục Quy trình, bottom sheet ≤ 900 px), [0004](0004-streaming-execution.md) (tiến độ và nút Dừng trong panel kết quả),
@@ -336,4 +336,65 @@ Người dùng giao chọn theo phương án đề xuất; planner chốt như s
 
 ## Đã làm
 
-(Chưa làm.)
+Làm sau 0004, 0005 và 0006, nên trước khi sửa đã đo lại DOM hiện tại: nút **Dừng** và `<progress class="run-progress">`
+3 px ở mép dưới `.results-head` (0004 đã dùng đúng chỗ chừa của §4) **giữ nguyên**; bảng chọn biến (0005), Query / Chọn bản
+ghi (0006, 5 mục palette, tab `↓ alias`), tab "Lỗi insert" gom nhóm và tải qua `/api/export` không đổi.
+
+| Commit | Nội dung |
+| --- | --- |
+| `71fb3b0` Rework the screen layout… | Bước 1–6: `client/js/popup.js`, `client/js/issues.js`, thanh trên, menu ⋯ và chip Seed, bottom sheet, đầu panel kết quả, `test/issues.test.js` |
+| `9d1e9da` Run the smoke flows in parallel… | Smoke luồng 13 (13a–13e) và smoke chạy song song |
+| (commit tài liệu) | Bước 7: `ui-design-system.md` (§4 token, §5 icon `theme`, §6.7 popup, §6.8 sheet, §6.10 đầu panel, §6.11 thanh lỗi, §7 bảng mốc, §8.3), `architecture.md`, SKILL smoke, ghi chú ở 0004 / 0005, doc này, README; test token trong `css-tokens.test.js` |
+
+**Số đo sau khi làm** (Chromium headless, theme sáng, `/api/orgs` giả lập nhãn dài
+`dev-sandbox-very-long — admin.developer@acme-corporation.com.devsb [sandbox]`):
+
+| Màn hình | Thanh trên | Canvas | Ghi chú |
+| --- | --- | --- | --- |
+| 1440 × 900, 1280 × 800, 1140 × 800 | 49 px (1 hàng) | — | Thanh lỗi không che thẻ nào (smoke 13a); trước: 89 px, 1280 che `task` |
+| 1024 × 768, 900, 768 | 89 px (2 hàng) | — | Trước 1024 che `opp` và `task` |
+| 600, 390 × 844, 360 × 740 | 89 px (2 hàng) | 390: 655 px (y 140 → 795), 198 px phía trên sheet | Trước 209 px / 492 px / 46 px |
+| 844 × 390 | 89 px | sheet 190 px, đỉnh sheet = đáy palette + 60 px | |
+| Đầu panel kết quả | 48 px ở mọi chiều rộng | | Trước 119 px ở 390 |
+
+**Chỗ khác thiết kế / quyết định khi làm:**
+
+1. **Nút `⤒ Insert` ở điện thoại:** phần ` vào org` ẩn kiểu `.sr-only` (vẫn được đọc) thay vì đặt `aria-label`; tên đọc lên
+   vẫn là "⤒ Insert vào org", `title` vẫn là câu đầy đủ `Sinh dữ liệu và insert vào <org>`. Nhãn "Org" cũng chỉ ẩn bằng mắt
+   ở ≤ 720 px để ô Org rộng hơn.
+2. **Mốc 1 139 px là media query** (`.tb-run { flex-basis: 100% }`) chứ không để tự gập, để hàng hai luôn là "Seed trái, các
+   nút phải". Từ 1 140 px trở lên vẫn gập nguyên nhóm nếu font máy khác rộng hơn. Không cần hạ `#org-select` xuống 160 px.
+3. **Tự mở rộng không ghi nhớ:** chạy lỗi validate thì thanh mở rộng, nhưng `sfdg.issuesCollapsed` giữ nguyên lựa chọn của
+   người dùng (tải lại thì vẫn thu gọn). Chỉ bấm `Thu gọn` / `Hiện (n)` mới ghi.
+4. **Chạm lại thẻ đang chọn mở lại sheet** (doc chưa nói): sau khi chạy đóng sheet hoặc bấm `‹ Xong`, chạm thẻ đó là sửa
+   tiếp được (trước đây phải chọn bước khác rồi chọn lại). `goToIssue` cũng mở lại sheet (cả khi bấm nhóm lỗi insert).
+5. **`scroll-padding-bottom: var(--sheet-h)` như doc:** khoảng đệm tính từ đáy canvas, mà đáy canvas cao hơn đáy màn hình một
+   đầu panel kết quả (49 px), nên thẻ dừng cao hơn mép sheet tối đa ~49 px thay vì sát mép. Vẫn đạt "không che thẻ" và
+   ≥ 190 px canvas; không đo bằng JS cho gọn.
+6. **Hàng `‹ Xong`** là `.sheet-head` (dính, nền `surface`, đường `border` dưới) bọc nút `.sheet-close` cũ, để phần cuộn không
+   lộ ra hai bên nút.
+7. **Hàng tab** cuộn ngang với thanh cuộn ẩn (`scrollbar-width: none`): thanh cuộn ngang sẽ ăn vào chiều cao cố định
+   `--tabs-h` mà đầu bảng dính dựa vào. Cuộn bằng trackpad / Shift+lăn / chạm.
+8. **`issues.js` chỉ import `dom.js`** (bước của thẻ và tên alias do `main.js` truyền vào), nên `test/issues.test.js` nạp được
+   module trong Node. Thêm `issueCountParts` (số đếm kèm mức để vẽ icon ⊗ / ▲).
+9. **Menu ⋯:** nút mở/đóng theo `aria-expanded`; bấm lại ⋯ thì đóng. Hàng Seed là `.popup-field` (input phản chiếu `#seed`,
+   phát sự kiện `input` nên chip cập nhật); "📌 giữ seed" cũng phát `input`. Lúc chạy, nút `⤓ Tải` ẩn cùng hai nút tải (Dừng
+   thay chỗ, 0004).
+10. **Test token:** `css-tokens.test.js` thêm một test kiểm `--canvas-tail` 64 px, `--issues-max-h`, `--sheet-h`, `--ico-theme`
+    có trong CSS và có trong bảng của `ui-design-system.md`. `scroll-padding-bottom`, `top`, `inset` không thuộc luật khoảng
+    cách 4 px; mọi `padding`/`margin`/`gap` mới dùng token (kể cả `calc(-1 * var(--space-3))` của `.sheet-head`).
+11. **Nhỏ:** ↶ / ↷ / ⟳ / ⋯ có `aria-label`; `#btn-results-toggle` có `aria-controls="results-body"`.
+
+**Smoke:** luồng 13 (13a–13e) như kế hoạch, với `getBoundingClientRect`; luồng 11 chạy chung trang với 13. Thử làm hỏng
+có chủ đích (`.issues { position: absolute }`) thì 13a báo đúng như số đo ban đầu: 1280 che `task`, 1024 che `opp`, `task`.
+Đồng thời smoke được tăng tốc: sáu nhóm luồng độc lập chạy song song, mỗi nhóm một browser context; trình duyệt khởi động
+cùng lúc với server; bỏ `localStorage.clear()` + tải lại (context mới đã trống), `addInitScript` cho dữ liệu cần trước lần
+tải đầu, đổi kích thước một trang thay vì mở context mỗi chiều rộng, chờ hiệu ứng bằng `document.getAnimations()` thay vì
+`waitForTimeout`. Thời gian từ ~10 s xuống ~5,3–5,5 s (trần 12 s giữ nguyên). Ảnh: `smoke-1280-issues.png`,
+`smoke-390-topbar.png`, `smoke-390-sheet.png`.
+
+**Test:** thêm `test/issues.test.js` (4: nhãn `2 lỗi · 1 cảnh báo` / `2 lỗi` / `1 cảnh báo`, F8 và Shift+F8 vòng lại, danh sách
+đổi / rỗng) và 1 test token trong `test/css-tokens.test.js`. **Không sửa test cũ nào.** Tổng **229** test, đều qua.
+
+**Chưa làm / để sau:** như "Câu hỏi mở" (kéo đổi chiều cao panel / sheet hai nấc, dấu hiệu "còn mục" ở palette ngang, icon
+SVG cho các ký tự `⋯ ▸ ▾ ⠿ ↶ ↷ ⟳ ⤓`).

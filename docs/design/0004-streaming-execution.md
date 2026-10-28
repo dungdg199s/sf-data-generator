@@ -683,7 +683,8 @@ NDJSON. `SMOKE OK`, khoảng 9 giây (trần 12 giây).
 
 - Badge lỗi insert trên thẻ bước (dùng `errorGroups[].nodeId`, việc sau của 0003).
 - Bulk API 2.0, gửi song song, chạy tiếp lần đã dừng, xóa dữ liệu vừa insert, tải toàn bộ Id (câu hỏi mở 7), worker thread.
-- Phần còn lại của 0009 (menu `⤓ Tải` ở ≤ 720 px…).
+- ~~Phần còn lại của 0009 (menu `⤓ Tải` ở ≤ 720 px…).~~ Đã làm ở [0009](0009-bo-cuc-man-hinh.md#đã-làm): lúc chạy nút
+  Dừng thay cả ô nút tải lẫn nút `⤓ Tải`; `<progress>` 3 px giữ nguyên ở mép dưới đầu panel.
 
 ### Sửa sau review (2026-10-28)
 

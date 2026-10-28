@@ -1,6 +1,6 @@
 ---
 name: smoke-test
-description: Launch sf-data-generator and verify the editor works in a real browser (load, sample workflow, editing, preview, variable picker, migration, theme switch, dark mode, insert confirmation), plus API checks with curl. Use after any client/ or API change, or when asked to run or screenshot the app.
+description: Launch sf-data-generator and verify the editor works in a real browser (load, sample workflow, editing, preview, variable picker, migration, theme switch, dark mode, insert confirmation, screen layout at desktop and phone widths), plus API checks with curl. Use after any client/ or API change, or when asked to run or screenshot the app.
 ---
 
 # Smoke test
@@ -12,7 +12,17 @@ node .claude/skills/smoke-test/smoke.cjs /path/to/screenshot-dir   # dir optiona
 ```
 
 It starts the server on a random port 3900–3989 and drives headless Chromium through these flows
-(failed checks are collected and reported together; a timed-out wait aborts the run):
+(failed checks are collected and reported together; a timed-out wait aborts that flow, the others finish).
+
+**Speed (since design 0009).** The flows are grouped into six independent functions that run **in parallel**, each in
+its own browser context (so storage, routes and dialogs never leak between them): `flowEditing` (1–5), `flowPicker`
+(5b), `flowFiles` (5c–10), `flowDark` (12), `flowLayoutWide` and `flowLayoutNarrow` (11, 13). The browser launches
+while the server starts; a fresh context starts with empty storage, so no `localStorage.clear()` + reload; storage a flow
+needs before its first load is written by `addInitScript` (once, guarded by a marker key, so reloads keep it); layout
+checks resize one page (`setViewportSize`) instead of opening a context per width; waits for the sheet or toast
+transition use `document.getAnimations()` instead of fixed timeouts. A run went from ~10 s (sequential) to ~5.5 s with
+flow 13 added. When you add a flow, put it in the function it depends on, or in a new function if it needs nothing from
+the others; never add a fixed `waitForTimeout`.
 
 1. **Wide (1440 px), light scheme.** Loads the "Account + Contact" sample. Every step, the Start card
    and every palette item carries `data-type` and an icon tile (`.ico-tile .ico`) and no inline `--c`;
@@ -67,7 +77,7 @@ It starts the server on a random port 3900–3989 and drives headless Chromium t
     (`storage` event: `data-theme` and the select value).
 11. **Narrow (390 px, touch).** No horizontal overflow (`smoke-390.png`); tapping a card opens the
     inspector bottom sheet (`smoke-390-sheet.png`) and "‹ Xong" closes it. Dark-scheme shot of the same
-    page: `smoke-390-dark.png`.
+    page: `smoke-390-dark.png`. (Runs inside `flowLayoutNarrow`, with flow 13.)
 12. **Dark scheme (`colorScheme: 'dark'`, 1440 px).** The dark background applies without `data-theme`;
     "Sáng" overrides it (light background, `data-theme="light"`), still after a reload, and "Theo hệ
     thống" returns to the dark background and clears the key. `/api/orgs/**` (describe) is answered 404 so
@@ -82,13 +92,34 @@ It starts the server on a random port 3900–3989 and drives headless Chromium t
     never reach the server or an org): after an insert, a second Insert previews afresh (seed empty); with seed 7 the
     second confirmation warns "Seed 7 đã dùng cho lần insert trước…"; the "Lỗi insert" tab has role=button group rows
     (Space selects `con`) and a "… và 3 nhóm lỗi khác" remainder row.
+13. **Screen layout (design 0009).** `/api/orgs` is mocked with one long label (`dev-sandbox-very-long — admin.developer@
+    acme-corporation.com.devsb [sandbox]`, selected through `sfdg.org`); describe calls get 404, no real org is called.
+    Measurements use `getBoundingClientRect`.
+    - **13a issues bar** ("Account + Contact" + `opp` without fields + `task` without sObject and with an unnamed field: 2
+      errors, 1 warning) at 1440 × 900, 1280 × 800, 1024 × 768: the bar is not `position: absolute`, `#process` ends where
+      `#issues` starts and no visible part of a `.step-card` is under it (`smoke-1280-issues.png`). F8 × 4 selects task,
+      task, opp, task (wraps), one row is `.current`, Shift+F8 goes back to opp. "Thu gọn" leaves a ≤ 40 px bar showing
+      "— [task] Chưa nhập sObject…", still collapsed after a reload; that line selects `task`. Ctrl+Enter (422) expands the
+      bar and selects `task`.
+    - **13b top bar**: ≤ 50 px (one row) at 1440 and 1280, ≤ 90 px at 1024, 390 and 360; no horizontal overflow; `#org-select`,
+      Xem trước and Insert inside the viewport at every width; the theme select is 32 px wide, `title` "Giao diện: Theo
+      hệ thống", its `option` colour is not transparent (`smoke-390-topbar.png`).
+    - **13c ⋯ menu at 390 × 844**: Mới, Mở…, Lưu, a Seed field, Account + Contact, Tối (radio, "Theo hệ thống" checked);
+      typing 42 sets `#seed` and shows the chip "Seed 42"; the chip reopens the menu on the Seed field; Mẫu "Lead theo xác
+      suất" then "Account + Contact" replace the workflow. At 800 px the menu only has the Mẫu group.
+    - **13d sheet at 390 × 844**: tapping `con` leaves its bottom ≤ the sheet top and ≥ 190 px of canvas above the sheet;
+      Xem trước closes the sheet, `con` stays selected and the table is on screen; tapping `con` reopens it; scrolled to
+      the bottom, "‹ Xong" is still inside the sheet; a toast (F8 with nothing to go to) ends above the sheet; at 844 × 390
+      the sheet top is ≥ palette bottom + 60 px.
+    - **13e results header**: ≤ 50 px after Xem trước at 390 px with `aria-expanded="true"`; "⤓ Tải" opens "Tải JSON" and
+      "Tải CSV (tab hiện tại)"; at 1440 px the two buttons show and "⤓ Tải" does not.
 
-It also fails on any page error or a run over 12 s (typically ~10 s with the 0004 flows; raised from 10 s with the 0006 flows, which left no margin on a loaded machine).
+It also fails on any page error or a run over 12 s (typically ~5.5 s since the flows run in parallel; ~10 s before).
 Screenshots (only when a directory is given): `smoke-1440.png`, `smoke-390.png`, `smoke-390-sheet.png`,
-`smoke-390-dark.png`, `smoke-1440-dark.png`, `smoke-1440-dark-insert.png`.
+`smoke-390-dark.png`, `smoke-390-topbar.png`, `smoke-1280-issues.png`, `smoke-1440-dark.png`, `smoke-1440-dark-insert.png`.
 Requires Playwright with Chromium (`require('playwright')`); exit code 2 means it is not installed.
 
-Extend the script when you add a UI flow worth guarding (keep it fast, under ~12 s).
+Extend the script when you add a UI flow worth guarding (keep it fast: see "Speed" above).
 
 ## Manual API checks
 

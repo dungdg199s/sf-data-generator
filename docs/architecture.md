@@ -141,14 +141,16 @@ sObject, tối đa 1 000 lỗi chi tiết trong kết quả (nhóm lỗi luôn �
 | `client/js/process.js` | Chế độ Quy trình: thẻ bước, khung Lặp/Rẽ nhánh, nút "+", menu bước, kéo thả, bàn phím kiểu cây |
 | `client/js/ops.js` | Thao tác trên bước (thêm, xóa, nhân bản, tắt, bọc, bỏ vỏ, di chuyển) qua `shared/workflow-tree.js`, toast Hoàn tác |
 | `client/js/summary.js` | Câu tóm tắt trên thẻ và chip số liệu từ `stats.byStep` |
-| `client/js/inspector.js` | Cấu hình bước (nơi duy nhất sửa cấu hình), trình soạn field, import field từ org, đổi alias tự cập nhật tham chiếu; bottom sheet trên màn hình hẹp |
+| `client/js/inspector.js` | Cấu hình bước (nơi duy nhất sửa cấu hình), trình soạn field, import field từ org, đổi alias tự cập nhật tham chiếu; bottom sheet trên màn hình hẹp (`body.sheet-open`, `openSheet`/`closeSheet`: chạy thì đóng, lỗi validate thì mở lại, [0009](design/0009-bo-cuc-man-hinh.md)) |
+| `client/js/popup.js` | Popup menu dùng chung ([0009](design/0009-bo-cuc-man-hinh.md)): menu "+", menu bước, menu **⋯** của thanh trên, menu `⤓ Tải`; hàng thường, hàng chọn một (`menuitemradio`), hàng ô nhập; bàn phím |
+| `client/js/issues.js` | Thanh lỗi dưới canvas ([0009](design/0009-bo-cuc-man-hinh.md)): số đếm, danh sách, thu gọn (`sfdg.issuesCollapsed`, không vào undo), F8 / Shift+F8, tự mở rộng khi chạy lỗi validate. Chỉ import `dom.js`, nên các hàm thuần (`issueCountsLabel`, `nextIssueIndex`) được test trong Node |
 | `client/js/forms.js` | Dựng form từ option schema (`showIf`, các `kind`); gắn bảng chọn biến cho option có `vars` |
 | `client/js/var-picker.js` | Bảng chọn biến (nút `{x}`, gõ `{{`, Ctrl+Space), tìm kiếm, phím tắt, ARIA, chèn bằng `execCommand('insertText')`; dải chip dưới ô và dòng "Lần xem trước" |
 | `client/js/variables.js` | Dữ liệu cho bảng chọn: nhóm biến theo bước từ `currentScope()` và meta (nhóm `this` dựng từ thứ tự field hiện tại), giá trị mẫu từ lần xem trước, chỗ đang dùng một biến (toast khi xóa/đổi tên) |
-| `client/js/results.js` | Bảng kết quả theo sObject (200 dòng đầu + tổng), tab chỉ đọc `↓ alias` cho dòng Query đã đọc, "⟳ Đọc lại", tab lỗi insert gom nhóm (bấm để chọn bước/field), tải JSON/CSV qua `/api/export`; tiến độ, `<progress>` 3 px và nút Dừng khi đang chạy |
-| `client/js/main.js` | Khởi động, toolbar, phím tắt, validate trực tiếp, chạy/insert: đọc NDJSON, tự xem trước trước khi xác nhận insert, hộp xác nhận luôn có số bản ghi, `beforeunload` khi đang insert |
+| `client/js/results.js` | Bảng kết quả theo sObject (200 dòng đầu + tổng), tab chỉ đọc `↓ alias` cho dòng Query đã đọc, "⟳ Đọc lại", tab lỗi insert gom nhóm (bấm để chọn bước/field), tải JSON/CSV qua `/api/export`; tiến độ, `<progress>` 3 px và nút Dừng khi đang chạy; đầu panel một hàng, ở ≤ 720 px gộp hai nút tải thành `⤓ Tải` |
+| `client/js/main.js` | Khởi động, toolbar (và menu **⋯** + chip `Seed n` ở màn hình hẹp), phím tắt, validate trực tiếp, chạy/insert: đọc NDJSON, tự xem trước trước khi xác nhận insert, hộp xác nhận luôn có số bản ghi, `beforeunload` khi đang insert |
 | `client/js/api.js` | Gọi API; `runStream` đọc NDJSON bằng `res.body.getReader()`, `cancelRun`, `exportFile` (Blob) |
-| `client/js/theme.js` | Nút chuyển giao diện Sáng / Tối / Theo hệ thống: `data-theme` trên `<html>`, nhớ trong `sfdg.theme`; script thường trong `<head>` để áp dụng trước lần vẽ đầu |
+| `client/js/theme.js` | Nút chuyển giao diện Sáng / Tối / Theo hệ thống: `data-theme` trên `<html>`, nhớ trong `sfdg.theme`; script thường trong `<head>` để áp dụng trước lần vẽ đầu; `title` của ô chọn (vẽ thành icon) theo giá trị |
 | `client/js/dom.js` | Helper DOM `h()`, toast, tải file, `icoTile()` (ô icon loại bước) |
 | `client/css/app.css` | Khối token (primitive, sáng/tối, thang đo, icon) rồi tới thành phần; màu và icon loại bước chỉ ở luật `[data-type]`. Quy tắc: `docs/ui-design-system.md` |
 

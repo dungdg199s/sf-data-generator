@@ -291,3 +291,14 @@ test('documented colour pairs meet WCAG 2.2 AA in both themes (computed from app
   const failing = contrastReport().filter((r) => r.ratio < r.min).map((r) => `${r.theme}: ${r.fg} on ${r.bg} = ${r.ratio.toFixed(2)} (< ${r.min})`);
   assert.deepEqual(failing, []);
 });
+
+test('layout tokens of design 0009 are defined and documented in docs/ui-design-system.md', () => {
+  const all = Object.fromEntries(declarations(TOKENS).map((d) => [d.prop, d.value]));
+  assert.equal(all['--canvas-tail'], '64px');
+  assert.equal(all['--issues-max-h'], 'min(124px, 25vh)');
+  assert.equal(all['--sheet-h'], 'min(60dvh, calc(100dvh - 200px))');
+  assert.match(all['--ico-theme'] ?? '', /^url\("data:image\/svg\+xml,/);
+  const doc = read('docs/ui-design-system.md');
+  for (const t of ['--canvas-tail', '--issues-max-h', '--sheet-h']) assert.ok(doc.includes(`\`${t}\``), `${t} missing from the scale table`);
+  assert.match(doc, /\| `theme` \|/, 'the theme icon is missing from the icon table');
+});

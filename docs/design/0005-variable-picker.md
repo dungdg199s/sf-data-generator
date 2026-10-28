@@ -961,6 +961,10 @@ mở rộng test meta; `test/generators.test.js` thêm `valueType` và mặc đ�
 `referenceTo`. `test/samples.test.js` vẫn khóa việc hai mẫu hợp lệ (không lỗi, không cảnh báo). Tổng: 130 test, đều qua.
 Smoke test có luồng 5b (mở bảng chọn, chèn, chip, tham chiếu hỏng có badge đỏ, sửa nhanh, đổi tên field): `SMOKE OK`.
 
+**Bố cục điện thoại ([0009](0009-bo-cuc-man-hinh.md) §3, làm sau):** ở ≤ 720 px bảng chọn biến rộng `100vw − 16 px`, neo trái
+8 px, cao tối đa `min(360px, 45dvh)` và lật lên trên ô khi dưới không đủ chỗ (`position()` trong `var-picker.js` + CSS).
+z-index `--z-popup` (40) vẫn trên sheet (30).
+
 **Sửa sau review** (commit sau `9fa2efd`; mỗi mục có test đơn vị hoặc bước smoke):
 
 1. *Đổi tên biến lặp bỏ sót `left` đang ẩn* (`showIf`): `analyzeScope` giờ phân tích cả option đang ẩn, đánh dấu

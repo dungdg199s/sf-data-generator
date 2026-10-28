@@ -51,8 +51,8 @@ Trong CSS, tên là `--color-<tên>` (trừ nhóm loại bước là `--step-*`)
 | --- | --- | --- | --- |
 | `--color-bg` | gray-50 `#f3f5f8` | gray-950 `#0f1216` | Nền trang, vùng canvas Quy trình |
 | `--color-canvas-dot` | gray-200 | gray-800 | Chấm lưới canvas |
-| `--color-surface` | gray-0 `#ffffff` | gray-900 `#161a1f` | Topbar, palette, inspector, kết quả, ô nhập, cột nhánh |
-| `--color-surface-raised` | gray-0 `#ffffff` | gray-850 `#1f2329` | Thẻ bước, popup, hộp thoại, danh sách lỗi |
+| `--color-surface` | gray-0 `#ffffff` | gray-900 `#161a1f` | Topbar, palette, inspector, kết quả, thanh lỗi, ô nhập, cột nhánh |
+| `--color-surface-raised` | gray-0 `#ffffff` | gray-850 `#1f2329` | Thẻ bước, popup, hộp thoại |
 | `--color-surface-sunken` | gray-25 `#f9fafc` | mix gray-950 50% / gray-900 = `#12161a` | Field card, đầu bảng, hàng bảng khi hover |
 | `--color-surface-hover` | gray-100 `#e8ebf0` | gray-800 `#292e35` | Hover nút phụ/ghost/hàng menu, chip số liệu |
 | `--color-border` | gray-200 `#d8dde3` | gray-800 | Đường chia, viền thẻ, viền panel |
@@ -135,10 +135,12 @@ loại của bước có alias đó (Record, Query, Chọn bản ghi), biến l�
 | Độ đậm | `--weight-regular/medium/semibold` | 400 / 500 / 600 | Chữ / nút, nhãn form / tên loại, tiêu đề, badge |
 | Dòng | `--leading-tight/normal` | 1.25 / 1.45 | Tiêu đề / chữ thường |
 | Khoảng cách | `--space-0-5/1/2/3/4/6/8` | 2 / 4 / 8 / 12 / 16 / 24 / 32 px | padding, gap, margin. `test/css-tokens.test.js` bắt mọi `padding*`, `margin*`, `gap`, `outline-offset` dùng token này (hoặc `0`, `auto`, `calc(-1 * var(--space-n))`, `--focus-offset*`, `--canvas-tail`). Ngoại lệ duy nhất: `margin: -1px` của `.sr-only` |
-| | `--canvas-tail` | 160 px | Khoảng trống dưới thẻ cuối trên canvas, để cuộn thẻ cuối lên trên danh sách lỗi |
+| | `--canvas-tail` | 64 px | Khoảng trống dưới dấu + cuối trên canvas ([0009](design/0009-bo-cuc-man-hinh.md): thanh lỗi không còn nổi, nên chỉ cần chỗ thở; trước là 160 px) |
+| | `--issues-max-h` | `min(124px, 25vh)` | Chiều cao tối đa danh sách trong thanh lỗi (≈ 4 dòng), cuộn bên trong; canvas không bị đẩy thấp hơn 75 % vùng giữa |
+| | `--sheet-h` | `min(60dvh, calc(100dvh - 200px))` | Chiều cao bottom sheet (≤ 900 px); cũng là `scroll-padding-bottom` của canvas khi sheet mở. `dvh` để không lệch khi thanh địa chỉ di động co giãn; điện thoại xoay ngang 844 × 390 còn 190 px |
 | Bo góc | `--radius-sm` | 4 px | Alias trên thẻ, chip biến |
 | | `--radius-md` | 6 px | Nút, ô nhập, field card, ô icon, cột nhánh |
-| | `--radius-lg` | 10 px | Thẻ bước, khung, popup, danh sách lỗi |
+| | `--radius-lg` | 10 px | Thẻ bước, khung, popup |
 | | `--radius-xl` | 14 px | Hộp thoại, bottom sheet |
 | | `--radius-pill` | 999 px | Badge, chip số liệu, chip field, tag "Đã tắt" |
 | Kích thước | `--control-h-sm` / `--control-h-md` | 28 / 32 px | Nút nhỏ (view tools, toast) / nút và ô nhập thường |
@@ -146,7 +148,7 @@ loại của bước có alias đó (Record, Query, Chọn bản ghi), biến l�
 | | `--stripe-w`, `--ring-w`, `--focus-offset` | 4 / 2 / 2 px | Sọc loại, vòng chọn/focus, khoảng hở focus |
 | | `--focus-offset-card` | `ring-w + focus-offset` = 4 px | Khoảng hở focus của thẻ bước: nằm ngoài vòng chọn 2 px, chừa 2 px trống nên focus và chọn không dính vào nhau |
 | Đổ bóng | `--shadow-1` | `0 1px 2px rgb(16 24 40 / .08), 0 1px 3px rgb(16 24 40 / .06)` (tối: `0 1px 2px rgb(0 0 0 / .5)`) | Thẻ bước |
-| | `--shadow-2` | `0 4px 12px rgb(16 24 40 / .14)` (tối `.55`) | Popup, danh sách lỗi, toast |
+| | `--shadow-2` | `0 4px 12px rgb(16 24 40 / .14)` (tối `.55`) | Popup, toast |
 | | `--shadow-3` | `0 12px 32px rgb(16 24 40 / .22)` (tối `.65`) | Hộp thoại, bottom sheet, bóng khi kéo |
 | Lớp | `--z-sheet/popup/drag/toast` | 30 / 40 / 50 / 60 | Bottom sheet / popup / bóng kéo / toast. `dialog` dùng top layer |
 | Chuyển động | `--dur-fast/base`, `--ease-out` | 120 / 200 ms, `cubic-bezier(.2,.8,.2,1)` | Hover, focus / sheet, toast. `prefers-reduced-motion: reduce` → 0 ms, bỏ animation chớp |
@@ -171,6 +173,7 @@ Icon chỉ để trang trí (`aria-hidden="true"`), nhãn chữ luôn có.
 | `info` | vòng tròn có chữ i | Thông tin, loại bước chưa biết |
 | `off` | biểu tượng nguồn ⏻ | Tag "Đã tắt" |
 | `stale` | đồng hồ | (tùy chọn) chip số liệu cũ |
+| `theme` | vòng tròn tô nửa | Ô **Giao diện** thu gọn ở thanh trên ([0009](design/0009-bo-cuc-man-hinh.md)) |
 
 Ký tự Unicode đang dùng (`⋯ ▸ ▾ ⠿ ↶ ↷ ⟳ ▶ ⤒ +`) giữ nguyên ở đợt này. Chỉ icon loại bước và trạng thái chuyển sang SVG.
 
@@ -274,7 +277,13 @@ trạng thái chọn.
 | Hàng menu nguy hiểm | chữ `danger-text` | như trên | như trên |
 | Tiêu đề nhóm | 12 px HOA, 600, `text-muted`, giãn chữ 0.05em | — | — |
 
-Màn hình hẹp (≤ 900 px): palette là hàng nút ngang gồm ô icon + tên.
+Màn hình hẹp (≤ 900 px): palette là hàng nút ngang gồm ô icon + tên (cuộn ngang khi không đủ chỗ). Mục **Mẫu** không có ở
+hàng này mà nằm trong nhóm **Mẫu** của menu **⋯** ở thanh trên.
+
+Popup dùng chung (`client/js/popup.js`, [0009](design/0009-bo-cuc-man-hinh.md)): menu "+", menu bước, menu **⋯**, menu
+`⤓ Tải`. Ngoài hàng thường còn hàng chọn một (`role="menuitemradio"`, `aria-checked`, dấu ✓ màu `accent-text`) và hàng ô
+nhập (`.popup-field`: nhãn 13 px + ô nhập, ví dụ Seed). ↑/↓ đi qua cả hàng lẫn ô nhập; gõ một chữ cái nhảy tới hàng bắt đầu
+bằng chữ đó, trừ khi đang ở trong ô nhập; Esc đóng và trả focus về nút mở.
 
 ### 6.8 Inspector
 
@@ -284,7 +293,8 @@ Màn hình hẹp (≤ 900 px): palette là hàng nút ngang gồm ô icon + tên
 | Mô tả | 13 px `text-muted` |
 | Tiêu đề nhóm (FIELDS (2)) | 12 px HOA 600 `text-muted` |
 | Field card | Nền `surface-sunken`, viền `border`, bo 6 px. Nút ↑ ↓ ⚙ × là ghost 28 px. Lỗi: viền 2 px `danger`, câu lỗi 13 px `danger-text` |
-| Bottom sheet (hẹp) | Nền `surface`, bo trên 14 px, `shadow-3`, `--z-sheet` |
+| Bottom sheet (≤ 900 px, [0009](design/0009-bo-cuc-man-hinh.md) §3) | Nền `surface`, bo trên 14 px, `shadow-3`, `--z-sheet`, cao `--sheet-h`. Mở khi có bước được chọn; `body.sheet-open` cho canvas `scroll-padding-bottom: var(--sheet-h)` và phần đệm cuối cùng chiều cao, nên thẻ đang chọn cuộn lên ngay trên mép sheet. Hàng `‹ Xong` (`.sheet-head`) dính trên cùng (`position: sticky`, nền `surface`, đường `border` dưới). Bấm Xem trước / Insert thì sheet đóng (giữ bước đang chọn); chạm lại thẻ đang chọn thì mở lại; chạy lỗi validate thì mở ở bước lỗi. Toast nằm trên mép sheet |
+| Popup trong sheet (≤ 720 px) | Bảng chọn biến (0005) rộng `100vw − 2 × space-2`, neo trái 8 px, cao tối đa `min(360px, 45dvh)`, lật lên trên ô nếu dưới không đủ chỗ |
 
 ### 6.9 Chip
 
@@ -298,6 +308,8 @@ Màn hình hẹp (≤ 900 px): palette là hàng nút ngang gồm ô icon + tên
 
 | Thành phần | Quy tắc |
 | --- | --- |
+| Đầu panel ([0009](design/0009-bo-cuc-man-hinh.md) §4) | **Một hàng ở mọi chiều rộng**, cao 48 px: `[Kết quả ▾] [tóm tắt (co giãn)] [nút]`. Nút `Kết quả` không xuống dòng, có `aria-expanded` và ▾ (đang mở) / ▴ (đang thu gọn). Ở ≤ 720 px tóm tắt một dòng, cuộn ngang; `Tải JSON` và `Tải CSV (tab hiện tại)` gộp thành nút `⤓ Tải` (`aria-haspopup="menu"`) mở popup hai mục gọi đúng hai nút đó (khóa khi chúng khóa) |
+| Hàng tab | Không xuống dòng; nhiều tab thì cuộn ngang (`overflow-x: auto`, ẩn thanh cuộn để không ăn vào chiều cao `--tabs-h`) |
 | Tab | Không viền khung. Mặc định chữ `text-muted`. Đang mở: chữ `accent-text` 600 + gạch dưới 2 px `accent`. Hàng tab có đường `border` bên dưới |
 | Tab "Lỗi insert (n)" (`.tab-issues`) | Như tab, thêm icon ▲ màu `warning` (icon SVG thay ký tự ⚠) |
 | Bảng | Chữ 12 px, `tabular-nums`, viền `border`, đầu bảng nền `surface-sunken` 600, hàng hover nền `surface-sunken`. Hàng tab và đầu bảng dính khi cuộn; đầu bảng dính ngay dưới hàng tab (`top: var(--tabs-h)`, = 4 + 32 + 1 px, không hở) |
@@ -316,7 +328,9 @@ Màn hình hẹp (≤ 900 px): palette là hàng nút ngang gồm ô icon + tên
 | Hộp xác nhận Insert | Nút cuối "Insert" là **nguy hiểm đặc** (`.danger.solid`), "Hủy" là nút phụ |
 | Hộp cảnh báo (`.warn-box`) | Nền `warning-subtle`, viền 1 px `warning` + viền trái 4 px, icon ▲ màu `warning-text`, chữ `text`, bo 6 px |
 | Toast | Nền `inverse-bg`, chữ `inverse-text`, bo 6 px, `shadow-2`, `--z-toast`. Nút trong toast viền `currentColor`, nhấn không đổi nền, vòng focus `focus-ring-inverse` |
-| Danh sách lỗi (`.issues`) | Nền `surface-raised`, `shadow-2`, viền trái 4 px `danger` (hoặc `warning` nếu chỉ có cảnh báo, class `.only-warnings`). Mỗi dòng có icon ⊗ đỏ hoặc ▲ hổ phách (khác **hình**, không chỉ khác màu) |
+| Thanh lỗi (`#issues.issues`, [0009](design/0009-bo-cuc-man-hinh.md) §1) | **Trong luồng** của cột giữa, ngay dưới canvas (không `position: absolute`, không bóng, không bo góc), nên không bao giờ che thẻ: canvas co lại đúng bằng chiều cao thanh. Nền `surface`, viền trên `border`, sọc trái 4 px `danger` (hoặc `warning` khi chỉ có cảnh báo, `.only-warnings`). `role="region"`, `aria-label="Lỗi và cảnh báo"`; ẩn khi không có gì |
+| Đầu thanh lỗi (`.issues-head`) | Cao 32 px: số đếm `2 lỗi · 1 cảnh báo` (600, 13 px, icon ⊗ / ▲ từng phần, `aria-live="polite"`), gợi ý `Bấm một dòng để tới bước · F8: lỗi tiếp theo` (12 px `text-muted`, ẩn ở ≤ 720 px), nút ghost `Thu gọn` / `Hiện (n)` (`aria-expanded`, `aria-controls="issues-list"`). Thu gọn: sau số đếm là dòng lỗi đầu, một dòng, cắt `…`; bấm vào thì tới bước đó |
+| Dòng lỗi (`.issue`) | Icon ⊗ đỏ hoặc ▲ hổ phách (khác **hình**, không chỉ khác màu) + `[alias] câu lỗi`. Danh sách cao tối đa `--issues-max-h`, cuộn bên trong. Dòng vừa tới bằng F8 / bấm: nền `accent-subtle` + vạch trái 2 px `accent` (`.current`) |
 
 ### 6.12 Trạng thái rỗng
 
@@ -335,6 +349,19 @@ Màn hình hẹp (≤ 900 px): palette là hàng nút ngang gồm ô icon + tên
 | Thẻ, popup, hộp thoại | `surface-raised` | viền `border` + bóng 1/2/3 |
 
 Ở theme tối, càng nổi càng sáng: `bg` (950) < `surface` (900) < `surface-raised` (850).
+
+Cột giữa là flex dọc `[Thu gọn/Mở tất cả] [canvas (co giãn)] [thanh lỗi]`. Không lớp nổi nào (thanh lỗi, sheet, toast) được
+che thẻ đang được nói tới hay đang chọn.
+
+**Mốc chiều rộng** ([0009](design/0009-bo-cuc-man-hinh.md); media query không dùng được biến CSS, nên ghi ở đây):
+
+| Chiều rộng | Thanh trên | Khác |
+| --- | --- | --- |
+| ≥ 1 300 px | 1 hàng: nhóm `.tb-file` (tên app, tên workflow, Mới · Mở… · Lưu · ↶ · ↷) bên trái, nhóm `.tb-run` (Seed 96 px, Org ≤ 180 px + ⟳, Xem trước, Insert vào org, ô Giao diện 32 px) bên phải | Ba cột palette / canvas / inspector |
+| 1 140–1 299 px | 1 hàng, ẩn tên app (vẫn có trong `<title>`) | |
+| 901–1 139 px | 2 hàng: `.tb-file` / `.tb-run` (Seed trái, các nút phải). Hai nhóm luôn gập nguyên nhóm | |
+| ≤ 900 px | như trên + nút **⋯** (nhóm Mẫu) | Palette thành hàng ngang, inspector thành bottom sheet |
+| ≤ 720 px (điện thoại) | 2 hàng: `[tên][Seed n][↶][↷][⋯]` / `[Org][▶ Xem trước][⤒ Insert]`. Mới/Mở…/Lưu, Seed, ⟳, Thu gọn/Mở tất cả, Giao diện vào menu ⋯. Org, Xem trước, Insert không bao giờ vào menu | Đầu panel kết quả: tóm tắt cuộn ngang, `⤓ Tải`; popup bảng chọn biến rộng cả màn hình |
 
 ## 8. Trợ năng
 
@@ -417,8 +444,14 @@ Với người mù màu đỏ–lục, vài cặp chỉ còn khác về độ s�
   đặt `data-theme="light|dark"` trên `<html>` (Theo hệ thống thì bỏ thuộc tính) và nhớ trong `localStorage['sfdg.theme']`
   (bọc `try/catch`, chế độ riêng tư thì chỉ nhớ tới khi tải lại). `client/js/theme.js` là script thường trong `<head>` nên
   theme áp dụng trước lần vẽ đầu, không nháy màu. Đổi theme ở một tab thì các tab khác đang mở theo luôn (sự kiện `storage`, ô chọn cũng
-  cập nhật). Nhãn "Giao diện" chỉ cho trình đọc màn hình; màn hình hẹp đưa ô chọn lên
-  cùng hàng với thanh công cụ.
+  cập nhật). Nhãn "Giao diện" chỉ cho trình đọc màn hình. Từ [0009](design/0009-bo-cuc-man-hinh.md) ô chọn vẫn là
+  `<select>` (giữ phím, trợ năng) nhưng vẽ thành ô icon 32 px: `appearance: none`, chữ trong suốt, icon `--ico-theme` ở giữa
+  (`::after` của nhãn, không nhận chuột); `option` đặt lại màu chữ `text` và nền `surface` để danh sách thả xuống đọc được;
+  `title` theo giá trị (`Giao diện: Tối`…). Ở ≤ 720 px ô này vào menu ⋯ (nhóm Giao diện, hàng chọn một).
+- Nút `⤒ Insert` ở điện thoại: phần ` vào org` chỉ ẩn bằng mắt (kiểu `.sr-only`), nên tên đọc lên vẫn là "⤒ Insert vào org";
+  `title` vẫn là câu đầy đủ `Sinh dữ liệu và insert vào <org>`.
+- **F8 / Shift+F8** tới lỗi hoặc cảnh báo tiếp theo / trước đó (theo thứ tự trong thanh lỗi, vòng lại), kể cả khi focus đang
+  trong ô nhập của inspector. Không có gì thì toast `Không có lỗi hay cảnh báo.`
 - `prefers-reduced-motion: reduce`: thời lượng 0 ms, không animation chớp.
 - Icon `aria-hidden`; mọi badge có `title`/`aria-label` bằng chữ ("2 lỗi — bấm để xem").
 
