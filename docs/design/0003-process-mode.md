@@ -1010,3 +1010,29 @@ Khác với thiết kế (và lý do):
   sang Quy trình để kéo.
 
 Chưa làm: kéo thẻ trên Sơ đồ, minimap (mục "Việc tiếp theo").
+
+### Sửa sau review (đợt B), 2026-10-28
+
+| Mục | Đã làm | Kiểm tra (hỏng nếu bỏ phần sửa) |
+| --- | --- | --- |
+| B1 | Mất focus sau khi dựng lại (Alt+↑/↓, Ctrl+/, Ctrl+Z, ←/→, Ctrl+Enter, F8, M): `render()` tạo phần tử ngay (`applyNow()`, trước chỉ hẹn `cull()` ở khung hình sau) rồi mới trả focus; `revealStep` và `focusSelected` gọi `cull()` trước khi tìm thẻ | Smoke 15: focus trên thẻ sau Delete, ↑, Alt+↓, Ctrl+Z, F8, M (cả khi chọn Bắt đầu) |
+| S1 | Test tuyến tính không đo thời gian nữa: đếm số lần hỏi catalogue (`= 2 × số bước`) và chặn kích thước đầu ra ("+", đường nối, ô rỗng/nhãn/ô con) theo số bước, ở 1 000 và 8 000 bước | `test/layout.test.js`; `npm test` 2 lần liền và 3 lần chạy song song |
+| S2 | Mở workflow khác (Mới, Mở…, Mẫu: `replaceWorkflow` phát `source: 'replace'`) đặt lại 100 % với thẻ Bắt đầu bên trái. Pan luôn để lại ít nhất 120 px của sơ đồ trên màn hình (`clampPan`) | Smoke 15: nạp mẫu sau khi pan đi xa; pan rất xa vẫn còn thẻ trên màn hình |
+| S3 | `showRect`: phần nhìn thấy thấp hơn thẻ (844 × 390, sheet mở) thì hiện đầu thẻ; vùng của thanh thu phóng tính là bị che (đưa thẻ sang trái, hoặc xuống dưới nó). Ở điện thoại (≤ 720 px hoặc ≤ 900 × 500) thanh thu phóng chỉ còn ⤢; `visibleHeight` không còn tối thiểu 80 px giả | Smoke 15 ở 844 × 390 |
+| S4 | Ở ≤ 900 px nút ⋯ / ▾ trên thẻ và nút thu phóng là 32 px | Smoke 15 (390 và 844 × 390) |
+| S5 | Enter chỉ đưa vào inspector khi focus ở chính thẻ; Enter trên "+", ⋯, ▾ kích hoạt nút đó (cả `process.js`) | Smoke 15: Enter trên "+" (Sơ đồ) và ⋯ (Quy trình) mở menu |
+| Thứ tự Tab | Mọi nút trong sơ đồ (`+`, ⋯, ▾, badge, ô rỗng) có `tabindex="-1"`: cây có một điểm Tab (thẻ đang chọn); các nút dùng qua phím (`/`, ContextMenu / Shift+F10, ← →, F8) hoặc chuột | Smoke 15: một tab stop |
+| `aria-setsize` / `aria-posinset` | Có ở mọi treeitem của cả hai view (thẻ Bắt đầu là mục 1 của cấp 1; mục không phải bước không được đếm). `layout()` trả về `posinset`/`setsize` | `test/layout.test.js`, smoke 15 |
+| Nút mức thu phóng | `aria-label` "Thu phóng N%, bấm để về 100%" | Smoke 15 |
+| Bấm nền | `#canvas` có `tabindex="-1"` và nhận focus khi bấm nền, nên + / − / 0 vẫn chạy | Smoke 15: bấm nền rồi + → 125 % |
+| Nhãn làn | Rộng tới `laneX − 6`, không chạm viền ô con của chính nó | `test/layout.test.js` (mọi test bố cục kiểm) |
+| Nhãn ô rỗng | `emptySlotLabel(def)` trong `summary.js`: chữ `empty` của catalogue, nếu không có thì "Thêm bước vào nhánh <nhãn>"; dùng ở cả hai view thay cho "vào vòng lặp" viết cứng | Smoke 15 với meta có `empty` khác |
+| Điện thoại xoay ngang | Quyết định: ≤ 900 px rộng và ≤ 500 px cao tính như điện thoại (đúng những màn hình mà nút đổi chế độ nằm trong menu ⋯): luôn mở ở Quy trình, chọn ở đó không ghi `sfdg.view` | Smoke 15 ở 844 × 390 |
+| Panel kết quả mở | Khi khung nhìn đổi kích thước (panel kết quả, thanh lỗi, sheet, cửa sổ), thẻ đang chọn đang thấy trọn thì vẫn được giữ trong tầm nhìn | Smoke 15: `con` sát mép dưới, Ctrl+Enter |
+| Nhãn Query | Alias chuyển xuống hàng tóm tắt; hàng đầu chỉ còn loại + badge + ⋯, nên "Query (đọc org)" không bị cắt | Smoke 15: không nhãn loại nào bị cắt |
+| Tài liệu và `z-index` | §6.13 ghi đúng: không `z-index` trong CSS, `z-index` inline theo cấp lồng trong lớp khung (cô lập bằng `isolation`) | — |
+| Tốc độ smoke | Không gộp phần điện thoại của luồng 15 vào `flowLayoutNarrow` (tùy chọn): luồng đó đã dài nhất, gộp vào làm cả lần chạy chậm hơn. Thêm `SMOKE_ONLY` để chạy riêng một luồng | — |
+
+Mỗi phần sửa ở smoke đã được kiểm bằng cách bỏ riêng phần sửa đó: luồng 15 hỏng (B1 hỏng khi bỏ cả ba chỗ `cull`/`applyNow`;
+bỏ riêng một chỗ thì hai chỗ còn lại vẫn trả focus được).
+

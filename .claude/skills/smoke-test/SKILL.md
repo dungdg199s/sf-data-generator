@@ -138,15 +138,23 @@ the others; never add a fixed `waitForTimeout`.
     workflow: a pool made in a finished fixed loop reads "acc (Account · đã sinh)" in "Lặp qua pool" (no "bản ghi cuối"),
     and inside a loop over each row of `accs` the picker's `accs` group says `dùng bản ghi đang lặp "row"`.
 
-15. **Sơ đồ view (design 0003 đợt B), `flowCanvas`, own contexts.** At 1440 px, `con` selected in Quy trình, **M**
-    shows the diagram: `con` still selected, focused and inside `#canvas`; `#process` has no DOM and is hidden, the
-    "Sơ đồ" switch is `aria-pressed`, `sfdg.view` = `canvas`, `#canvas` is `role=tree`. The "+" labelled
-    `Thêm bước sau "con"` → Record adds a Record right after `con` (autosave), selected and inside the viewport;
-    Delete removes it. ↑ from `con` selects and focuses its Lặp. Dark scheme (`emulateMedia`) applies
-    (`smoke-1440-canvas.png`, `smoke-1440-canvas-dark.png`); **M** goes back with the Lặp selected and no diagram DOM
-    left. At 390 × 844 (touch) with `sfdg.view` = `canvas` saved, the page opens in Quy trình; ⋯ → "Sơ đồ" shows the
-    diagram without horizontal overflow; tapping the Start card opens the sheet with the card above it
-    (`smoke-390-canvas.png`); ⋯ → "Quy trình" switches back and `sfdg.view` is still `canvas` (not saved on phones).
+15. **Sơ đồ view (design 0003 đợt B and its review fixes), `flowCanvas`, own contexts.** `/api/meta` is answered with
+    the real catalogue except a different `empty` text for Lặp's body. In Quy trình, Enter on a focused ⋯ opens the step
+    menu. With `con` selected, **M** shows the diagram: `con` still selected, focused and inside `#canvas`; `#process`
+    has no DOM and is hidden, the "Sơ đồ" switch is `aria-pressed`, `sfdg.view` = `canvas`, `#canvas` is `role=tree`
+    with one tab stop (the selected card), `aria-posinset` on cards, an `aria-label` on the zoom level button. Enter on
+    the focused "+" `Thêm bước sau "con"` opens its menu → Record is added right after `con`, selected, focused, in
+    view; Delete removes it. Focus stays on the card after Delete, ↑ (selects the Lặp), Alt+↓, Ctrl+Z, and F8 to the
+    warning of an empty Lặp added from the palette; its empty box's `aria-label` is the catalogue text in both views
+    (M there and back). With `con` panned near the bottom, Ctrl+Enter (results panel) keeps it in view. Dark scheme
+    (`smoke-1440-canvas.png`, `smoke-1440-canvas-dark.png`); M with Start selected, there and back, focuses Start; a
+    click on the background then **+** zooms to 125 %. Loading "Contact cho Account có sẵn" after panning away resets
+    to 100 % with Start in view, no type label is cut (Query card), and panning far away still leaves a card on
+    screen. At 390 × 844 (touch) with `sfdg.view` = `canvas` saved, the page opens in Quy trình; ⋯ → "Sơ đồ" shows the
+    diagram without overflow, the zoom bar is only ⤢ (32 px); tapping Start opens the sheet with the card above it
+    (`smoke-390-canvas.png`). At 844 × 390 with the sheet open, End selects `con`: its top is visible above the sheet,
+    not under the zoom bar, its ⋯ is 32 px; ⋯ → "Quy trình" there leaves `sfdg.view` = `canvas` (landscape phone = phone).
+    `SMOKE_ONLY=flowCanvas` (comma list) runs only the named flows.
 
 It also fails on any page error or a run over 12 s (typically ~5.5–6.5 s since the flows run in parallel, flow 14 included, ~7–8.5 s with flow 15 on a 4-CPU machine; ~10 s before;
 ~7–8 s with two CPU-bound processes running alongside).

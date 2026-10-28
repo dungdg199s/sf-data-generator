@@ -349,14 +349,18 @@ bằng chữ đó, trừ khi đang ở trong ô nhập; Esc, Tab và Shift+Tab �
 | Nút chế độ `.view-switch` | Cặp nút liền ở đầu hàng "Thu gọn/Mở tất cả" (không nằm ở thanh trên, để giữ ngân sách chiều rộng của 0009). Nút đang chọn: nền `accent-subtle`, chữ `accent-text`, `aria-pressed="true"` |
 | Khung nhìn `.canvas` | Nền `bg` + chấm `canvas-dot` như Quy trình; chấm co giãn và trôi theo pan/zoom. Con trỏ `grab` / `grabbing` |
 | Đường nối `.dg-lines` | Một `<path>` SVG, nét `border-strong` 2 px; chấm gộp nhánh `.dg-dots` cùng màu |
-| Thẻ `.dg-card` | Dùng chung `.step-card` (§6.4: viền, sọc loại bước, chọn, lỗi, badge, chip, `Đã tắt`), kích thước cố định 210 × 76 px, ba hàng: loại + alias + badge + ⋯; tóm tắt; chip / tag. Bước tắt: `.is-disabled` (cùng luật với `.step.disabled > .step-card`) |
+| Thẻ `.dg-card` | Dùng chung `.step-card` (§6.4: viền, sọc loại bước, chọn, lỗi, badge, chip, `Đã tắt`), kích thước cố định 210 × 76 px, ba hàng: loại + badge + ⋯; alias + tóm tắt; chip / tag (nhãn loại không bị cắt, kể cả "Query (đọc org)"). Bước tắt: `.is-disabled` (cùng luật với `.step.disabled > .step-card`) |
 | Khung `.dg-frame` + đầu khung `.dg-head` | Khung nền `--c-subtle`, sọc trái `--c`; đầu khung là một `.step-card` một hàng rộng cả khung |
 | Nhãn làn `.dg-lane-label` | `text-xs`, đậm, màu `--c-text` của loại bước cha; "✓" / "✗" như §6.5 |
 | "+" và ô rỗng | Như §6.6 (`.add-btn`, `.slot-empty`, `.add-first`); khi kéo mục palette, "+" gần nhất được tô `accent` |
 | Ô con lỗi `.dg-slot` | Viền nét đứt `danger` / `warning` quanh thân khung hoặc làn (cùng `.slot-error` / `.slot-warning`) |
 | Thu phóng `.dg-zoom` | Nhóm nút góc trên phải khung nhìn (không bị bottom sheet che): − · 100% · + · ⤢; nền `surface-raised`, bóng 1 |
 
-Các lớp vẽ theo thứ tự DOM (khung, đường nối, thẻ), không dùng `z-index` riêng; khung lồng nhau xếp theo cấp lồng.
+Ba lớp vẽ theo thứ tự DOM (khung, đường nối, thẻ), không có `z-index` trong CSS. Riêng trong lớp khung (`.dg-under`, một
+stacking context nhờ `isolation: isolate`), mỗi khung và ô con có `z-index` inline theo cấp lồng (khung `2 × cấp`, ô con
+`2 × cấp + 1`) để khung trong luôn nằm trên khung ngoài dù phần tử được tạo theo thứ tự nào (chỉ phần gần khung nhìn được
+tạo). Ở ≤ 900 px nút trên thẻ và thanh thu phóng là 32 px; ở điện thoại (≤ 720 px, hoặc ≤ 900 × 500) thanh thu phóng chỉ còn
+⤢ (chụm hai ngón để thu phóng).
 
 ## 7. Bố cục và tầng nền
 
