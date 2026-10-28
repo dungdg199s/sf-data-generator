@@ -4,8 +4,16 @@
 // One Connection is kept per org target. When Salesforce rejects the token (INVALID_SESSION_ID),
 // jsforce calls refreshFn, which asks the sf CLI for a fresh token (`sf org display` refreshes it
 // from the CLI's stored auth) and retries the request.
+//
+// Writes (design 0011): this is the only file that calls jsforce's `create`, `destroy` and `bulk2`;
+// server/sf/insert.js and server/sf/delete.js are the only callers of `create`, `destroy` and
+// `bulkJob` (test/safety.test.js scans the sources). Bulk jobs only ever `insert` or `delete`:
+// never hardDelete (bypasses the Recycle Bin), update or upsert.
 
 import { Connection } from 'jsforce';
+
+/** Bulk API 2.0 operations this app may run. */
+export const BULK_OPERATIONS = Object.freeze(['insert', 'delete']);
 
 export function createSfClient({ cli, createConnection = (options) => new Connection(options) }) {
   const connections = new Map(); // target -> Promise<Connection>
@@ -42,21 +50,71 @@ export function createSfClient({ cli, createConnection = (options) => new Connec
     }
   }
 
+  /**
+   * A Bulk API 2.0 ingest job. `operation` must be 'insert' or 'delete' (anything else throws
+   * before any request). New job: { object, operation }; existing job (read its results): { id, operation }.
+   * Every call goes through `call` (Salesforce errors → 502 with `cause`, refreshFn on an expired token).
+   */
+  function bulkJob(target, { object, operation, id } = {}) {
+    if (!BULK_OPERATIONS.includes(operation)) {
+      throw Object.assign(new Error(`Bulk API: thao tác "${operation}" không được phép (chỉ insert hoặc delete).`), { status: 500 });
+    }
+    let job = null;
+    const jobOf = (conn) => {
+      if (!job) {
+        job = id
+          ? conn.bulk2.job('ingest', { id })
+          : conn.bulk2.createJob({ object, operation, lineEnding: 'LF', columnDelimiter: 'COMMA' });
+      }
+      return job;
+    };
+    const run = (fn) => call(target, (conn) => fn(jobOf(conn)));
+    return {
+      get id() {
+        return job?.id ?? id ?? null;
+      },
+      open: () => {
+        if (id) throw new Error('Job đã có, không mở lại được.');
+        return run((j) => j.open());
+      },
+      upload: (csv) => run((j) => j.uploadData(String(csv))),
+      close: () => run((j) => j.close()),
+      check: () => run((j) => j.check()),
+      abort: () => run((j) => j.abort()),
+      successfulResults: () => run((j) => j.getSuccessfulResults()),
+      failedResults: () => run((j) => j.getFailedResults()),
+    };
+  }
+
   return {
     connection: connectionFor,
+    /** Drops the cached Connection (the next call builds one from a fresh sf CLI lookup). */
+    reset: (target) => { connections.delete(target); },
     describeGlobal: (target) => call(target, (conn) => conn.describeGlobal()),
     describe: (target, sobject) => call(target, (conn) => conn.describe(sobject)),
-    /**
-     * Create records of one sObject type. Uses sObject Collections (allOrNone=false), so the result
-     * has one SaveResult per record: { id, success, errors: [{ statusCode, message, fields }] }.
-     * Callers send at most 200 records per call (see server/sf/insert.js).
-     */
     /** Cache identity of an org target (server/sf/query.js): instance URL + username from the sf CLI. */
     identity: async (target) => {
       const info = await cli.getConnection(target);
       return `${info.instanceUrl}|${info.username ?? target}`;
     },
+    /**
+     * Create records of one sObject type. Uses sObject Collections (allOrNone=false), so the result
+     * has one SaveResult per record: { id, success, errors: [{ statusCode, message, fields }] }.
+     * Callers send at most 200 records per call (see server/sf/insert.js).
+     */
     create: (target, sobject, records) => call(target, (conn) => conn.sobject(sobject).create(records, { allOrNone: false })),
+    /**
+     * Deletes records by Id (sObject Collections `DELETE /composite/sobjects?ids=…`, at most 200 Ids;
+     * allOrNone false, Salesforce's default: jsforce only adds the parameter when it is true). One
+     * result per Id, in order: { id, success, errors }. Deleted records go to the Recycle Bin.
+     */
+    destroy: (target, sobject, ids) => {
+      if (!Array.isArray(ids) || ids.length > 200) throw Object.assign(new Error('Xóa tối đa 200 Id mỗi lời gọi.'), { status: 500 });
+      return call(target, (conn) => conn.sobject(sobject).destroy(ids, { allOrNone: false }));
+    },
+    bulkJob,
+    /** Org limits (`GET /limits`, read only): { DailyApiRequests: { Max, Remaining }, DailyBulkApiBatches: { … }, … }. */
+    limits: (target) => call(target, (conn) => conn.limits()),
     /**
      * Read-only SOQL (Query step, design 0006) through the REST `/query` endpoint: jsforce follows
      * nextRecordsUrl (queryMore) until `maxFetch` rows. Never `scanAll` (that would be queryAll,
