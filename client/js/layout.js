@@ -46,14 +46,14 @@ const isStep = (s) => s !== null && typeof s === 'object' && !Array.isArray(s);
  *   dims           overrides of DIM
  * @returns {{
  *   width, height, start: { x, y, w, h },
- *   nodes:   [{ kind: 'card' | 'frame' | 'invalid', id, step, x, y, w, h, head?, level, parentId, slot, index, container, collapsed, path }],
+ *   nodes:   [{ kind: 'card' | 'frame' | 'invalid', id, step, x, y, w, h, head?, level, parentId, slot, index, container, collapsed, path, posinset, setsize }],
  *   slots:   [{ parentId, key, label, x, y, w, h }],   // frame body / lane areas (issue outlines)
  *   adds:    [{ parentId, slot, index, x, y, after, before }],   // "+" centres; neighbouring steps
  *   empties: [{ parentId, slot, def, root, x, y, w, h }],
  *   labels:  [{ parentId, slot, text, x, y, w }],       // lane labels, y = baseline box top
  *   edges:   [[x1, y1, x2, y2, …]],                    // connector polylines
  *   dots:    [{ x, y }],                                // lane join points
- *   order:   [{ id, parentId, level, container, collapsed }],   // visible steps in reading order, Start first
+ *   order:   [{ id, parentId, level, container, collapsed, posinset, setsize }],   // visible steps in reading order, Start first
  * }}
  */
 export function layout(steps, { slotsOf = () => [], collapsed = new Set(), dims = {} } = {}) {
@@ -130,12 +130,17 @@ export function layout(steps, { slotsOf = () => [], collapsed = new Set(), dims 
       return;
     }
     let cx = x;
+    // aria-setsize / aria-posinset among the real steps of this sequence (plus Start at the root).
+    const offset = ctx.posOffset ?? 0;
+    const setsize = list.filter(isStep).length + offset;
+    let pos = offset;
     list.forEach((step, index) => {
+      if (isStep(step)) pos++;
       line(cx, spine, cx + D.gap, spine);
       out.adds.push({ parentId, slot, index, x: cx + D.gap / 2, y: spine, after: list[index - 1], before: step });
       cx += D.gap;
       const im = measureItem(step);
-      placeItem(step, im, cx, spine - im.a, { parentId, slot, index, level, path: `${path}.${index}` });
+      placeItem(step, im, cx, spine - im.a, { parentId, slot, index, level, path: `${path}.${index}`, pos, setsize });
       cx += im.w;
     });
     line(cx, spine, cx + D.gap, spine);
@@ -143,7 +148,7 @@ export function layout(steps, { slotsOf = () => [], collapsed = new Set(), dims 
   }
 
   function placeItem(step, m, x, y, at) {
-    const base = { step, x, y, w: m.w, h: m.h, level: at.level, parentId: at.parentId, slot: at.slot, index: at.index, path: at.path };
+    const base = { step, x, y, w: m.w, h: m.h, level: at.level, parentId: at.parentId, slot: at.slot, index: at.index, path: at.path, posinset: at.pos, setsize: at.setsize };
     if (m.kind === 'invalid') {
       out.nodes.push({ ...base, kind: 'invalid', id: null, container: false, collapsed: false });
       return;
@@ -151,7 +156,7 @@ export function layout(steps, { slotsOf = () => [], collapsed = new Set(), dims 
     const defs = defsOf(step);
     const container = defs.length > 0;
     const isCollapsed = container && collapsed.has(step.id);
-    out.order.push({ id: step.id, parentId: at.parentId, level: at.level, container, collapsed: isCollapsed });
+    out.order.push({ id: step.id, parentId: at.parentId, level: at.level, container, collapsed: isCollapsed, posinset: at.pos, setsize: at.setsize });
     const inner = { level: at.level + 1, path: at.path };
     if (m.kind === 'card') {
       out.nodes.push({ ...base, kind: 'card', id: step.id, container, collapsed: isCollapsed });
@@ -184,7 +189,8 @@ export function layout(steps, { slotsOf = () => [], collapsed = new Set(), dims 
       const lane = m.lanes[i];
       const s = spines[i];
       if (i > 0) line(forkX, s, laneX, s);
-      if (def.label) out.labels.push({ parentId: step.id, slot: def.key, text: def.label, x: forkX + 4, y: s - 18, w: laneX - forkX - 6 });
+      // Between the fork line and the lane's outline (slots box starts at laneX - 4).
+      if (def.label) out.labels.push({ parentId: step.id, slot: def.key, text: def.label, x: forkX + 4, y: s - 18, w: laneX - forkX - 10 });
       out.slots.push({ parentId: step.id, key: def.key, label: def.label ?? '', x: laneX - 4, y: y + m.tops[i] - 4, w: lane.w + 8, h: lane.above + lane.below + 8 });
       placeSeq(listOf(step, def.key), lane, laneX, s, { parentId: step.id, slot: def.key, def, ...inner });
       line(laneX + lane.w, s, joinX, s);
@@ -199,8 +205,11 @@ export function layout(steps, { slotsOf = () => [], collapsed = new Set(), dims 
   const startA = D.cardH / 2;
   const spine = D.margin + Math.max(startA, root.above);
   const start = { x: D.margin, y: spine - startA, w: D.cardW, h: D.cardH };
-  out.order.push({ id: START_ID, parentId: null, level: 1, container: false, collapsed: false });
-  placeSeq(list, root, D.margin + D.cardW, spine, { parentId: null, slot: null, level: 1, path: 'steps' });
+  // The Start card is the first item of level 1, so root steps count from 2 (aria-posinset).
+  const rootSize = list.filter(isStep).length + 1;
+  out.order.push({ id: START_ID, parentId: null, level: 1, container: false, collapsed: false, posinset: 1, setsize: rootSize });
+  out.rootSize = rootSize;
+  placeSeq(list, root, D.margin + D.cardW, spine, { parentId: null, slot: null, level: 1, path: 'steps', posOffset: 1 });
   return {
     ...out,
     start,

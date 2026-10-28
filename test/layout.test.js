@@ -39,6 +39,10 @@ function assertNoOverlap(lay) {
       assert.ok(!overlaps(boxes[i], boxes[j]), `${boxes[i].name} overlaps ${boxes[j].name}`);
     }
   }
+  // Lane labels sit between the fork line and their lanes' outlines, never on them.
+  for (const l of lay.labels) {
+    for (const sl of lay.slots.filter((x) => x.parentId === l.parentId)) assert.ok(!overlaps({ x: l.x, y: l.y, w: l.w, h: 16 }, sl), `label ${l.parentId}.${l.slot} overlaps the outline of ${sl.parentId}.${sl.key}`);
+  }
   for (const b of boxes) assert.ok(b.x >= 0 && b.y >= 0 && b.x + b.w <= lay.width && b.y + b.h <= lay.height, `${b.name} is outside the diagram`);
 }
 
@@ -237,32 +241,35 @@ function bigTree(n, seed = 1) {
   return steps;
 }
 
-test('1 000 steps: laid out in a few milliseconds, linear in size, without overlaps', () => {
-  const steps = bigTree(1000);
-  const count = allSteps({ steps }, slotKeys).length;
-  assert.ok(count >= 1000);
-  const t0 = performance.now();
-  const lay = run(steps);
-  const ms = performance.now() - t0;
-  assert.ok(ms < 200, `layout of ${count} steps took ${ms.toFixed(1)} ms`);
-  assert.equal(lay.order.length, count + 1);
-  assert.equal(lay.nodes.length, count);
-  assertNoOverlap(lay);
-  assertNested(lay);
-  // Linear: 4× the steps is far from 16× the time. Best of 7 warm runs each (other test files run
-  // in parallel; a GC pause in one run must not fail the check), with a generous bound.
-  const small = bigTree(2000, 3);
-  const big = bigTree(8000, 7);
-  const time = (s) => {
-    let best = Infinity;
-    for (let i = 0; i < 7; i++) {
-      const t = performance.now();
-      run(s);
-      best = Math.min(best, performance.now() - t);
+test('1 000 steps: linear work and output, without overlaps', () => {
+  // No timing (it flakes under parallel load): count the work instead. Each step is measured once
+  // (memoised) and placed once, so the catalogue is asked exactly twice per step; the output grows
+  // by a bounded amount per step.
+  for (const [n, seed] of [[1000, 1], [8000, 7]]) {
+    const steps = bigTree(n, seed);
+    const count = allSteps({ steps }, slotKeys).length;
+    assert.ok(count >= n);
+    let calls = 0;
+    const lay = layout(steps, { slotsOf: (type) => { calls++; return slotsOf(type); } });
+    assert.equal(calls, 2 * count, `catalogue asked ${calls} times for ${count} steps`);
+    assert.equal(lay.order.length, count + 1);
+    assert.equal(lay.nodes.length, count);
+    // One "+" per step plus one at the end of each non-empty sequence; ≤ 7 connector segments per step.
+    const containers = allSteps({ steps }, slotKeys).filter((x) => slotKeys(x.type).length).length;
+    assert.ok(lay.adds.length <= count + 2 * containers + 1, `${lay.adds.length} "+" for ${count} steps`);
+    assert.ok(lay.edges.length <= 7 * count + 2, `${lay.edges.length} connectors for ${count} steps`);
+    assert.ok(lay.empties.length + lay.labels.length + lay.slots.length <= 6 * containers + 1);
+    if (n === 1000) {
+      assertNoOverlap(lay);
+      assertNested(lay);
     }
-    return best;
-  };
-  time(small);
-  const ratio = time(big) / Math.max(time(small), 0.05);
-  assert.ok(ratio < 12, `4× the steps took ${ratio.toFixed(1)}× the time`);
+  }
+});
+
+test('aria-setsize / aria-posinset: siblings of a sequence, the Start card first at the root', () => {
+  const lay = run([r('a'), 'oops', loop('l', [r('b'), r('c')]), branch('br', [r('t')], [])]);
+  const at = (id) => lay.order.find((o) => o.id === id);
+  assert.deepEqual([at(START_ID), at('a'), at('l'), at('br')].map((o) => `${o.posinset}/${o.setsize}`), ['1/4', '2/4', '3/4', '4/4']);
+  assert.deepEqual([at('b'), at('c'), at('t')].map((o) => `${o.posinset}/${o.setsize}`), ['1/2', '2/2', '1/1']);
+  assert.equal(node(lay, 'c').posinset, 2);
 });
