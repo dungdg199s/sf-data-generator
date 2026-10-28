@@ -88,8 +88,8 @@ không chạy).
 
 - *Chạy thất bại vì lỗi validate* (server trả `issues`): thanh lỗi **tự mở rộng** nếu đang thu gọn, bước lỗi đầu tiên được
   chọn như hiện nay. Trên điện thoại sheet mở ở bước đó (với thẻ nằm ngay trên sheet).
-- *Rất nhiều lỗi* (ví dụ 30 dòng): danh sách cao tối đa `min(124 px, 25vh)` và cuộn bên trong; canvas không bao giờ bị
-  đẩy xuống thấp hơn 75 % chiều cao vùng giữa.
+- *Rất nhiều lỗi* (ví dụ 30 dòng): danh sách cao tối đa `min(124 px, 25vh)` và cuộn bên trong. (Sửa sau review: câu cũ
+  "canvas không bao giờ thấp hơn 75 %" sai ở màn hình thấp. Đảm bảo thật: cả thanh (đầu + danh sách) cao tối đa 25 % cột giữa nhưng không thấp hơn đầu thanh (33 px), nên canvas giữ ≥ 75 % cột giữa (trừ phần hàng "Thu gọn/Mở tất cả") khi cột giữa cao từ ~132 px trở lên; thấp hơn nữa thì chỉ còn đầu thanh.)
 - *Điện thoại xoay ngang 844 × 390*: sheet cao `min(60dvh, 100dvh − 200px)` = 190 px, vẫn chừa ≥ 60 px canvas (1 thẻ).
 - *Đang mở sheet mà có toast* (xóa bước, lỗi chạy): toast hiện **trên** mép sheet, không đè nội dung sheet.
 - *Chỉ có cảnh báo*: thanh dùng sọc trái màu cảnh báo (`.only-warnings`), đầu thanh `1 cảnh báo`.
@@ -368,9 +368,10 @@ ghi (0006, 5 mục palette, tab `↓ alias`), tab "Lỗi insert" gom nhóm và t
    người dùng (tải lại thì vẫn thu gọn). Chỉ bấm `Thu gọn` / `Hiện (n)` mới ghi.
 4. **Chạm lại thẻ đang chọn mở lại sheet** (doc chưa nói): sau khi chạy đóng sheet hoặc bấm `‹ Xong`, chạm thẻ đó là sửa
    tiếp được (trước đây phải chọn bước khác rồi chọn lại). `goToIssue` cũng mở lại sheet (cả khi bấm nhóm lỗi insert).
-5. **`scroll-padding-bottom: var(--sheet-h)` như doc:** khoảng đệm tính từ đáy canvas, mà đáy canvas cao hơn đáy màn hình một
-   đầu panel kết quả (49 px), nên thẻ dừng cao hơn mép sheet tối đa ~49 px thay vì sát mép. Vẫn đạt "không che thẻ" và
-   ≥ 190 px canvas; không đo bằng JS cho gọn.
+5. **`scroll-padding-bottom` đo được, không phải `var(--sheet-h)`** (sửa sau review, S2): đệm của doc tính từ đáy canvas,
+   mà canvas kết thúc trên đầu panel kết quả và thanh lỗi, nên thẻ dừng cao hơn mép sheet, và ở điện thoại có lỗi thì thẻ
+   bị đẩy nửa dưới palette. Nay `inspector.js` đo `--sheet-overlap` = đáy canvas − đỉnh sheet (lúc mở sheet, khi đổi kích
+   thước, khi canvas đổi cao) và dùng cho cả `scroll-padding-bottom` lẫn phần đệm cuối; thẻ nằm trọn giữa palette và sheet.
 6. **Hàng `‹ Xong`** là `.sheet-head` (dính, nền `surface`, đường `border` dưới) bọc nút `.sheet-close` cũ, để phần cuộn không
    lộ ra hai bên nút.
 7. **Hàng tab** cuộn ngang với thanh cuộn ẩn (`scrollbar-width: none`): thanh cuộn ngang sẽ ăn vào chiều cao cố định
@@ -398,3 +399,45 @@ tải đầu, đổi kích thước một trang thay vì mở context mỗi chi�
 
 **Chưa làm / để sau:** như "Câu hỏi mở" (kéo đổi chiều cao panel / sheet hai nấc, dấu hiệu "còn mục" ở palette ngang, icon
 SVG cho các ký tự `⋯ ▸ ▾ ⠿ ↶ ↷ ⟳ ⤓`).
+
+### Sửa sau review (2026-10-28)
+
+Mỗi mục có bước smoke **đỏ khi bỏ phần sửa** (đã thử bằng cách đảo từng phần sửa rồi chạy smoke), trừ S3/S4b là sửa ở
+chính smoke.
+
+1. **(B1) Gõ phím sửa form ẩn sau khi sheet đóng.** Ctrl+Enter trong một ô của sheet (hoặc "‹ Xong" bằng bàn phím) đóng sheet
+   nhưng focus ở lại ô alias, gõ tiếp là đổi alias mà không thấy. `setSheetOpen(false)`: focus đang trong sheet chuyển về
+   thẻ đang chọn (không có thì Xem trước); sheet đóng ở màn hình hẹp là `inert` (tính lại khi qua mốc 900 px). Smoke 13d:
+   "‹ Xong" bằng phím ⇒ đóng, inert, focus ở thẻ `con`; Ctrl+Enter trong ô alias rồi gõ "ZZ" ⇒ alias không đổi.
+2. **(S1) Màn hình thấp: thanh lỗi tràn dưới đầu panel kết quả**, ở 844 × 390 chỉ còn ~68 px canvas. `.issues { flex: 0 1
+   auto; max-height: 25%; min-height: <đầu thanh> }`, danh sách `min-height: 0`. Ở 844 × 390 thêm: ẩn hàng "Thu gọn/Mở tất
+   cả" khi ≤ 900 px và cao ≤ 500 px (hai mục vào menu ⋯, nhóm Khung), để sheet chừa ≥ 60 px canvas (trước đó chỉ 28 px:
+   một thẻ 44 px không vừa). Câu "canvas không bao giờ thấp hơn 75 %" (doc này §Trường hợp biên, `ui-design-system.md`)
+   sửa thành đảm bảo thật. Smoke 13a thêm 844 × 390 (≤ 25 % cột giữa, không dưới đầu panel); 13d kiểm 60 px và mục menu.
+3. **(S2) Điện thoại có lỗi: tới một lỗi thì thẻ nằm nửa dưới palette.** Xem chỗ khác thiết kế 5 (`--sheet-overlap`). Smoke:
+   chạm dòng lỗi ở 390 × 844 (`task`) và 844 × 390 (`opp`) ⇒ thẻ nằm trọn giữa palette và sheet.
+4. **(S3) Smoke để lại server khi bị Ctrl+C/kill, và có thể thử nhầm server cũ khi trùng cổng.** Server chạy ngay trong
+   tiến trình smoke (`createApp` + `allowedHostsFor`, cổng 0), sf CLI là stub trả 503 (smoke kiểm thông báo `smoke:` lúc đầu),
+   nên không thể chạm org thật; đóng server trước `browser.close()`.
+5. **(S4a) Phản hồi `/api/validate` cũ ghi đè lỗi mới** (và là nguyên nhân smoke đỏ "no warning on the Query card" khi máy
+   bận). `validateNow` đánh số mỗi lần gọi, chỉ nhận phản hồi mới nhất; `acceptResult`/`runFailed` cũng tăng số. Thêm: cảnh
+   báo chỉ lần chạy biết (Query dùng bản ghi mẫu vì chưa chọn org) được giữ khi validate lại **đúng workflow đã chạy**
+   (trước đây lần validate kế tiếp xóa nó), và nếu workflow đổi trong lúc chạy thì validate lại. Smoke 5c: giữ phản hồi
+   validate đầu tiên tới sau bản xem trước ⇒ cảnh báo còn; sửa tên rồi đặt lại ⇒ cảnh báo còn.
+6. **(S4b) Kiểm tra Dừng dựa vào trễ cố định 200 ms.** Request `/api/run` và thân phản hồi giờ bị giữ bằng promise, chỉ thả
+   sau khi bấm Dừng. Chạy dưới tải (2 tiến trình `for(;;){}` chiếm CPU): **6/6 lần `SMOKE OK`, 6,9–8,1 s** (trước khi sửa:
+   2/6 OK, lỗi "no warning on the Query card" / cảnh báo bị phản hồi cũ xóa). Không tải: 5 lần liên tiếp 5,0–5,8 s.
+7. **(S5) Số đếm `aria-live` đọc lại sau mỗi lần validate.** Chỉ viết lại khi nhãn đổi. Smoke 13a: sửa tên workflow (nhãn vẫn
+   `2 lỗi · 1 cảnh báo`) ⇒ 0 thay đổi DOM ở `#issues-count`.
+8. **(S6) Tab / Shift+Tab trong popup ném focus ra hai đầu trang.** Tab đóng popup và trả focus về nút mở. Smoke 13c.
+9. **(N1) ARIA của popup:** `role="menu"` chỉ chứa hàng menu và `role="group"` có `aria-label` cho mỗi nhóm; tiêu đề popup và
+   tiêu đề nhóm `aria-hidden`; ô Seed (và ô tìm của menu "+") nằm trong group. Smoke 13c kiểm không có chữ/ô nhập nào nằm
+   trực tiếp trong menu.
+10. **(N2)** Menu ⋯ mở từ chip `Seed n` neo vào chip: Esc / Tab trả focus về chip. Smoke 13c.
+11. **(N3)** Smoke 13d so bảng kết quả với **đỉnh sheet** (không chỉ đáy màn hình).
+12. **(N4)** Smoke 13a kiểm tên app ẩn đúng khi < 1 300 px (ở 844, 1024, 1280; hiện ở 1440).
+13. **(N5)** `setSheetOpen` chỉ mở sheet ở màn hình hẹp; qua mốc 900 px thì sheet đóng (không tự bật khi thu hẹp cửa sổ).
+    Smoke 13a: chọn bước ở 1440 rồi thu về 800 px ⇒ sheet không mở, inert; về 1440 ⇒ hết inert.
+
+Tổng sau sửa: **229** test (`npm test`), đều qua; không thêm test đơn vị (mọi sửa là hành vi giao diện, có bước smoke).
+Smoke `SMOKE OK` 5 lần liên tiếp không tải.

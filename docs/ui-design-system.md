@@ -136,8 +136,8 @@ loại của bước có alias đó (Record, Query, Chọn bản ghi), biến l�
 | Dòng | `--leading-tight/normal` | 1.25 / 1.45 | Tiêu đề / chữ thường |
 | Khoảng cách | `--space-0-5/1/2/3/4/6/8` | 2 / 4 / 8 / 12 / 16 / 24 / 32 px | padding, gap, margin. `test/css-tokens.test.js` bắt mọi `padding*`, `margin*`, `gap`, `outline-offset` dùng token này (hoặc `0`, `auto`, `calc(-1 * var(--space-n))`, `--focus-offset*`, `--canvas-tail`). Ngoại lệ duy nhất: `margin: -1px` của `.sr-only` |
 | | `--canvas-tail` | 64 px | Khoảng trống dưới dấu + cuối trên canvas ([0009](design/0009-bo-cuc-man-hinh.md): thanh lỗi không còn nổi, nên chỉ cần chỗ thở; trước là 160 px) |
-| | `--issues-max-h` | `min(124px, 25vh)` | Chiều cao tối đa danh sách trong thanh lỗi (≈ 4 dòng), cuộn bên trong; canvas không bị đẩy thấp hơn 75 % vùng giữa |
-| | `--sheet-h` | `min(60dvh, calc(100dvh - 200px))` | Chiều cao bottom sheet (≤ 900 px); cũng là `scroll-padding-bottom` của canvas khi sheet mở. `dvh` để không lệch khi thanh địa chỉ di động co giãn; điện thoại xoay ngang 844 × 390 còn 190 px |
+| | `--issues-max-h` | `min(124px, 25vh)` | Chiều cao tối đa danh sách trong thanh lỗi (≈ 4 dòng), cuộn bên trong. Ngoài ra cả thanh (đầu + danh sách) cao tối đa 25 % cột giữa nhưng không thấp hơn đầu thanh (33 px), nên canvas giữ ≥ 75 % cột giữa (trừ phần hàng "Thu gọn/Mở tất cả") khi cột giữa cao từ ~132 px trở lên; thấp hơn nữa thì chỉ còn đầu thanh (`.issues { max-height: 25% }`, sửa sau review 0009) |
+| | `--sheet-h` | `min(60dvh, calc(100dvh - 200px))` | Chiều cao bottom sheet (≤ 900 px); phần canvas bị sheet che (đo được, `--sheet-overlap`) là `scroll-padding-bottom` của canvas khi sheet mở. `dvh` để không lệch khi thanh địa chỉ di động co giãn; điện thoại xoay ngang 844 × 390 còn 190 px |
 | Bo góc | `--radius-sm` | 4 px | Alias trên thẻ, chip biến |
 | | `--radius-md` | 6 px | Nút, ô nhập, field card, ô icon, cột nhánh |
 | | `--radius-lg` | 10 px | Thẻ bước, khung, popup |
@@ -283,7 +283,9 @@ hàng này mà nằm trong nhóm **Mẫu** của menu **⋯** ở thanh trên.
 Popup dùng chung (`client/js/popup.js`, [0009](design/0009-bo-cuc-man-hinh.md)): menu "+", menu bước, menu **⋯**, menu
 `⤓ Tải`. Ngoài hàng thường còn hàng chọn một (`role="menuitemradio"`, `aria-checked`, dấu ✓ màu `accent-text`) và hàng ô
 nhập (`.popup-field`: nhãn 13 px + ô nhập, ví dụ Seed). ↑/↓ đi qua cả hàng lẫn ô nhập; gõ một chữ cái nhảy tới hàng bắt đầu
-bằng chữ đó, trừ khi đang ở trong ô nhập; Esc đóng và trả focus về nút mở.
+bằng chữ đó, trừ khi đang ở trong ô nhập; Esc, Tab và Shift+Tab đóng và trả focus về nút mở (menu ⋯ mở từ chip
+`Seed n` thì về chip). ARIA: trong `role="menu"` chỉ có hàng menu và `role="group"` (mỗi tiêu đề nhóm một group, tên là
+`aria-label`); tiêu đề popup và tiêu đề nhóm là chữ `aria-hidden`; ô nhập luôn nằm trong một group.
 
 ### 6.8 Inspector
 
@@ -293,7 +295,7 @@ bằng chữ đó, trừ khi đang ở trong ô nhập; Esc đóng và trả foc
 | Mô tả | 13 px `text-muted` |
 | Tiêu đề nhóm (FIELDS (2)) | 12 px HOA 600 `text-muted` |
 | Field card | Nền `surface-sunken`, viền `border`, bo 6 px. Nút ↑ ↓ ⚙ × là ghost 28 px. Lỗi: viền 2 px `danger`, câu lỗi 13 px `danger-text` |
-| Bottom sheet (≤ 900 px, [0009](design/0009-bo-cuc-man-hinh.md) §3) | Nền `surface`, bo trên 14 px, `shadow-3`, `--z-sheet`, cao `--sheet-h`. Mở khi có bước được chọn; `body.sheet-open` cho canvas `scroll-padding-bottom: var(--sheet-h)` và phần đệm cuối cùng chiều cao, nên thẻ đang chọn cuộn lên ngay trên mép sheet. Hàng `‹ Xong` (`.sheet-head`) dính trên cùng (`position: sticky`, nền `surface`, đường `border` dưới). Bấm Xem trước / Insert thì sheet đóng (giữ bước đang chọn); chạm lại thẻ đang chọn thì mở lại; chạy lỗi validate thì mở ở bước lỗi. Toast nằm trên mép sheet |
+| Bottom sheet (≤ 900 px, [0009](design/0009-bo-cuc-man-hinh.md) §3) | Nền `surface`, bo trên 14 px, `shadow-3`, `--z-sheet`, cao `--sheet-h`. Chỉ ở màn hình hẹp: mở khi có bước được chọn (thu hẹp cửa sổ không tự bật sheet). `body.sheet-open` cho canvas `scroll-padding-bottom: var(--sheet-overlap)` và phần đệm cuối cùng chiều cao; `--sheet-overlap` = đáy canvas − đỉnh sheet, `inspector.js` đo lại khi mở sheet, khi đổi kích thước cửa sổ và khi canvas đổi cao (thanh lỗi), nên thẻ đang chọn (kể cả khi tới từ thanh lỗi) nằm trọn giữa palette và mép sheet. Sheet đóng thì `inert`: focus đang trong sheet chuyển về thẻ đang chọn, gõ phím không sửa được form ẩn. Hàng `‹ Xong` (`.sheet-head`) dính trên cùng (`position: sticky`, nền `surface`, đường `border` dưới). Bấm Xem trước / Insert thì sheet đóng (giữ bước đang chọn); chạm lại thẻ đang chọn thì mở lại; chạy lỗi validate thì mở ở bước lỗi. Toast nằm trên mép sheet |
 | Popup trong sheet (≤ 720 px) | Bảng chọn biến (0005) rộng `100vw − 2 × space-2`, neo trái 8 px, cao tối đa `min(360px, 45dvh)`, lật lên trên ô nếu dưới không đủ chỗ |
 
 ### 6.9 Chip
@@ -328,8 +330,8 @@ bằng chữ đó, trừ khi đang ở trong ô nhập; Esc đóng và trả foc
 | Hộp xác nhận Insert | Nút cuối "Insert" là **nguy hiểm đặc** (`.danger.solid`), "Hủy" là nút phụ |
 | Hộp cảnh báo (`.warn-box`) | Nền `warning-subtle`, viền 1 px `warning` + viền trái 4 px, icon ▲ màu `warning-text`, chữ `text`, bo 6 px |
 | Toast | Nền `inverse-bg`, chữ `inverse-text`, bo 6 px, `shadow-2`, `--z-toast`. Nút trong toast viền `currentColor`, nhấn không đổi nền, vòng focus `focus-ring-inverse` |
-| Thanh lỗi (`#issues.issues`, [0009](design/0009-bo-cuc-man-hinh.md) §1) | **Trong luồng** của cột giữa, ngay dưới canvas (không `position: absolute`, không bóng, không bo góc), nên không bao giờ che thẻ: canvas co lại đúng bằng chiều cao thanh. Nền `surface`, viền trên `border`, sọc trái 4 px `danger` (hoặc `warning` khi chỉ có cảnh báo, `.only-warnings`). `role="region"`, `aria-label="Lỗi và cảnh báo"`; ẩn khi không có gì |
-| Đầu thanh lỗi (`.issues-head`) | Cao 32 px: số đếm `2 lỗi · 1 cảnh báo` (600, 13 px, icon ⊗ / ▲ từng phần, `aria-live="polite"`), gợi ý `Bấm một dòng để tới bước · F8: lỗi tiếp theo` (12 px `text-muted`, ẩn ở ≤ 720 px), nút ghost `Thu gọn` / `Hiện (n)` (`aria-expanded`, `aria-controls="issues-list"`). Thu gọn: sau số đếm là dòng lỗi đầu, một dòng, cắt `…`; bấm vào thì tới bước đó |
+| Thanh lỗi (`#issues.issues`, [0009](design/0009-bo-cuc-man-hinh.md) §1) | **Trong luồng** của cột giữa, ngay dưới canvas (không `position: absolute`, không bóng, không bo góc), nên không bao giờ che thẻ: canvas co lại đúng bằng chiều cao thanh. Cao tối đa 25 % cột giữa (tối thiểu bằng đầu thanh), không tràn xuống dưới đầu panel kết quả. Nền `surface`, viền trên `border`, sọc trái 4 px `danger` (hoặc `warning` khi chỉ có cảnh báo, `.only-warnings`). `role="region"`, `aria-label="Lỗi và cảnh báo"`; ẩn khi không có gì |
+| Đầu thanh lỗi (`.issues-head`) | Cao 32 px: số đếm `2 lỗi · 1 cảnh báo` (600, 13 px, icon ⊗ / ▲ từng phần, `aria-live="polite"`, chỉ viết lại khi nhãn đổi để không đọc lại sau mỗi lần validate), gợi ý `Bấm một dòng để tới bước · F8: lỗi tiếp theo` (12 px `text-muted`, ẩn ở ≤ 720 px), nút ghost `Thu gọn` / `Hiện (n)` (`aria-expanded`, `aria-controls="issues-list"`). Thu gọn: sau số đếm là dòng lỗi đầu, một dòng, cắt `…`; bấm vào thì tới bước đó |
 | Dòng lỗi (`.issue`) | Icon ⊗ đỏ hoặc ▲ hổ phách (khác **hình**, không chỉ khác màu) + `[alias] câu lỗi`. Danh sách cao tối đa `--issues-max-h`, cuộn bên trong. Dòng vừa tới bằng F8 / bấm: nền `accent-subtle` + vạch trái 2 px `accent` (`.current`) |
 
 ### 6.12 Trạng thái rỗng
@@ -361,6 +363,7 @@ che thẻ đang được nói tới hay đang chọn.
 | 1 140–1 299 px | 1 hàng, ẩn tên app (vẫn có trong `<title>`) | |
 | 901–1 139 px | 2 hàng: `.tb-file` / `.tb-run` (Seed trái, các nút phải). Hai nhóm luôn gập nguyên nhóm | |
 | ≤ 900 px | như trên + nút **⋯** (nhóm Mẫu) | Palette thành hàng ngang, inspector thành bottom sheet |
+| ≤ 900 px và cao ≤ 500 px (điện thoại xoay ngang) | như trên | Ẩn hàng "Thu gọn/Mở tất cả" (để còn ≥ 60 px canvas trên sheet), hai mục này vào menu ⋯ (nhóm Khung) |
 | ≤ 720 px (điện thoại) | 2 hàng: `[tên][Seed n][↶][↷][⋯]` / `[Org][▶ Xem trước][⤒ Insert]`. Mới/Mở…/Lưu, Seed, ⟳, Thu gọn/Mở tất cả, Giao diện vào menu ⋯. Org, Xem trước, Insert không bao giờ vào menu | Đầu panel kết quả: tóm tắt cuộn ngang, `⤓ Tải`; popup bảng chọn biến rộng cả màn hình |
 
 ## 8. Trợ năng

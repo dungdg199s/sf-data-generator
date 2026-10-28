@@ -11,7 +11,10 @@ description: Launch sf-data-generator and verify the editor works in a real brow
 node .claude/skills/smoke-test/smoke.cjs /path/to/screenshot-dir   # dir optional
 ```
 
-It starts the server on a random port 3900–3989 and drives headless Chromium through these flows
+It runs the app **in its own process** (`createApp` from `server/index.js` on port 0, so it dies with the smoke on
+Ctrl+C or kill and a stale server on a busy port can never answer instead) with a **stub sf CLI** that fails like a machine
+without `sf` (503 `smoke: …`, checked at start), so no flow can reach a real org. It drives headless Chromium through these
+flows
 (failed checks are collected and reported together; a timed-out wait aborts that flow, the others finish).
 
 **Speed (since design 0009).** The flows are grouped into six independent functions that run **in parallel**, each in
@@ -34,11 +37,11 @@ the others; never add a fixed `waitForTimeout`.
    summary shows the Account count, and the sample has no validation errors. Scrolled, the sticky table
    header sits right under the sticky tab row (no gap). The Record and Loop stripes (`border-left-color`)
    differ from each other and from the unknown-type `[data-type]` fallback. Screenshot `smoke-1440.png`.
-3b. **Run progress (design doc 0004).** With `/api/run` held for 250 ms, the results header shows
+3b. **Run progress (design doc 0004).** With `/api/run` held until Dừng was clicked (a promise, no timer), the results header shows
    "Đang sinh dữ liệu", the download buttons give their place to **Dừng**, and the `<progress>` is a ≤ 3 px
    line on the bottom edge of `.results-head`; Dừng drops the request ("Đã dừng") and re-enables Xem
    trước, and focus moves from Dừng to Xem trước; `#results-summary` is `aria-live="polite"`. With the run's response body
-   held back 200 ms in the page (a `fetch` wrapper), Dừng sends `POST /api/runs/<runId>/cancel` once `start` arrives instead
+   held back in the page (a `fetch` wrapper, released after the click), Dừng sends `POST /api/runs/<runId>/cancel` once `start` arrives instead
    of dropping the stream. Then `con` makes 60 Contacts per run: the Contact tab shows "Hiển thị 200/N dòng đầu" and
    "Tải CSV (tab hiện tại)" downloads all N rows (header `ref,FirstName,LastName…`) from `/api/export`.
 4. **Alias rename.** Clearing the `acc` alias and typing `account` keeps focus in the input and the
@@ -63,6 +66,9 @@ the others; never add a fixed `waitForTimeout`.
    shows "chưa chọn org" on the Query card; Ctrl+Enter generates 10 Contacts from 5 sample rows, with a "↓ accs ·
    Account (5)" tab, "accs: 5 bản ghi mẫu" in the summary and a warning on the Query card. With the Query selected,
    "Chọn bản ghi" in the palette fills "Chọn từ pool" = `accs` and alias `acc…`; `{{` typed in WHERE outlines it red.
+   The first `/api/validate` (of the workflow before the sample) is held until after the preview: when it lands, the
+   Query warning stays (stale responses are dropped). Editing the name and putting it back (a validation of the same
+   workflow) also keeps the run's warning.
 6. **v1 autosave.** A `sfdg.workflow.v1` autosave is migrated on load (toast), `sfdg.workflow.v2` is
    written and the v1 key is left untouched.
 7. **Malformed v2 autosave.** The sample is shown with a recovery toast and a "Tải bản lưu" button; the
@@ -96,25 +102,34 @@ the others; never add a fixed `waitForTimeout`.
     acme-corporation.com.devsb [sandbox]`, selected through `sfdg.org`); describe calls get 404, no real org is called.
     Measurements use `getBoundingClientRect`.
     - **13a issues bar** ("Account + Contact" + `opp` without fields + `task` without sObject and with an unnamed field: 2
-      errors, 1 warning) at 1440 × 900, 1280 × 800, 1024 × 768: the bar is not `position: absolute`, `#process` ends where
-      `#issues` starts and no visible part of a `.step-card` is under it (`smoke-1280-issues.png`). F8 × 4 selects task,
+      errors, 1 warning) at 844 × 390, 1440 × 900, 1280 × 800, 1024 × 768: the bar is not `position: absolute`, `#process`
+      ends where `#issues` starts and no visible part of a `.step-card` is under it (`smoke-1280-issues.png`); it is at most
+      a quarter of the middle column (or its 33 px head) and ends above the results header; the app name is hidden
+      exactly below 1 300 px. An edit that keeps "2 lỗi · 1 cảnh báo" does not rewrite the aria-live count. F8 × 4 selects task,
       task, opp, task (wraps), one row is `.current`, Shift+F8 goes back to opp. "Thu gọn" leaves a ≤ 40 px bar showing
       "— [task] Chưa nhập sObject…", still collapsed after a reload; that line selects `task`. Ctrl+Enter (422) expands the
-      bar and selects `task`.
+      bar and selects `task`. Narrowed to 800 px with a step selected, the sheet does not pop open (closed, inert, off
+      screen); back at 1440 the inspector is not inert.
     - **13b top bar**: ≤ 50 px (one row) at 1440 and 1280, ≤ 90 px at 1024, 390 and 360; no horizontal overflow; `#org-select`,
       Xem trước and Insert inside the viewport at every width; the theme select is 32 px wide, `title` "Giao diện: Theo
       hệ thống", its `option` colour is not transparent (`smoke-390-topbar.png`).
     - **13c ⋯ menu at 390 × 844**: Mới, Mở…, Lưu, a Seed field, Account + Contact, Tối (radio, "Theo hệ thống" checked);
       typing 42 sets `#seed` and shows the chip "Seed 42"; the chip reopens the menu on the Seed field; Mẫu "Lead theo xác
-      suất" then "Account + Contact" replace the workflow. At 800 px the menu only has the Mẫu group.
+      suất" then "Account + Contact" replace the workflow. At 800 px the menu only has the Mẫu group. Esc in the menu opened
+      from the chip returns focus to the chip; Tab and Shift+Tab close the menu onto ⋯. Inside `role=menu` there is no
+      text or input outside a group, a menu item or `aria-hidden` text.
     - **13d sheet at 390 × 844**: tapping `con` leaves its bottom ≤ the sheet top and ≥ 190 px of canvas above the sheet;
-      Xem trước closes the sheet, `con` stays selected and the table is on screen; tapping `con` reopens it; scrolled to
-      the bottom, "‹ Xong" is still inside the sheet; a toast (F8 with nothing to go to) ends above the sheet; at 844 × 390
-      the sheet top is ≥ palette bottom + 60 px.
+      "‹ Xong" by keyboard closes it, makes it inert and focuses the `con` card; Ctrl+Enter in the alias field closes the
+      sheet, `con` stays selected, the table is above the sheet's top, focus left the sheet and typing "ZZ" changes
+      nothing; tapping `con` reopens it; scrolled to the bottom, "‹ Xong" is still inside the sheet; a toast (F8 with
+      nothing to go to) ends above the sheet; at 844 × 390 there are ≥ 60 px of canvas above the sheet and "Thu gọn tất
+      cả" is in the ⋯ menu. With the issues workflow, tapping an issue row (390 × 844: `task`; 844 × 390: `opp`) leaves the
+      card fully between the palette and the sheet.
     - **13e results header**: ≤ 50 px after Xem trước at 390 px with `aria-expanded="true"`; "⤓ Tải" opens "Tải JSON" and
       "Tải CSV (tab hiện tại)"; at 1440 px the two buttons show and "⤓ Tải" does not.
 
-It also fails on any page error or a run over 12 s (typically ~5.5 s since the flows run in parallel; ~10 s before).
+It also fails on any page error or a run over 12 s (typically ~5.3 s since the flows run in parallel; ~10 s before;
+~7–8 s with two CPU-bound processes running alongside).
 Screenshots (only when a directory is given): `smoke-1440.png`, `smoke-390.png`, `smoke-390-sheet.png`,
 `smoke-390-dark.png`, `smoke-390-topbar.png`, `smoke-1280-issues.png`, `smoke-1440-dark.png`, `smoke-1440-dark-insert.png`.
 Requires Playwright with Chromium (`require('playwright')`); exit code 2 means it is not installed.
