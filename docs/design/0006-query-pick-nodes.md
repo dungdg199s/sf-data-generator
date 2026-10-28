@@ -1036,4 +1036,5 @@ Smoke test: trần thời gian nâng từ 10 lên 12 giây (thường ~8 giây, 
 - Nút sửa nhanh "Thêm `<Field>` vào SELECT" cho lỗi template dùng field Query không lấy.
 - ~~Sự kiện tiến độ `Đang đọc Query…` và `queries[]` trong sự kiện đầu khi chạy dạng stream (0004).~~ Đã làm ở
   [0004](0004-streaming-execution.md#đã-làm) (`queries` trong sự kiện `start`; UI ghi `Đang đọc Query…` trong lúc chờ).
-- Lặp "mỗi bản ghi trong pool" ([0010](0010-lap-theo-ban-ghi.md)), chọn N bản ghi / trọng số, Update/Upsert/Delete.
+- ~~Lặp "mỗi bản ghi trong pool"~~ Đã làm ở [0010](0010-lap-theo-ban-ghi.md#đã-làm). Chọn N bản ghi / trọng số,
+  Update/Upsert/Delete.

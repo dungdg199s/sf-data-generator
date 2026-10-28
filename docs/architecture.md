@@ -95,8 +95,11 @@ Thứ tự slot được truyền vào qua tham số `slotKeys(type)`: server l�
   liệu, và chạy xen kẽ sẽ đổi thứ tự rút số ngẫu nhiên (đổi dữ liệu của mọi seed cũ).
 - **Pool bản ghi chỉ đếm khi không ai đọc cả bản ghi.** Pool của alias Record là `{ kind: 'generated', length, refAt }`
   (Lookup "Ngẫu nhiên" rút cùng một số như `rng.pick`, nên dữ liệu không đổi). Chỉ alias là pool của một option bước
-  `kind: 'ref'` có `accepts.pool` (Chọn bản ghi `from`, sau này Lặp "mỗi bản ghi" của 0010) mới giữ bản ghi đầy đủ —
-  `poolUsage` tính từ danh mục, không hard-code loại bước. Phần bộ nhớ còn tăng theo số bản ghi: tập giá trị `unique`
+  `kind: 'ref'` có `accepts.pool` (Chọn bản ghi `from`, Lặp "Mỗi bản ghi trong pool" `from` của
+  [0010](design/0010-lap-theo-ban-ghi.md)) mới giữ bản ghi đầy đủ — `poolUsage` tính từ danh mục, không hard-code loại bước.
+  Lookup tới bản ghi đang lặp giữ Id của pool phía sau nó khi insert (`referencedAliases` đi theo `fromSource`).
+- **Lặp `each` không dùng `rng`** (0010): chụp pool lúc bắt đầu và lặp theo thứ tự pool, nên chèn hay bỏ một Lặp `each` không
+  làm lệch số ngẫu nhiên của các bước khác; xem trước và insert cùng seed ra cùng số lần lặp (dòng Query có dấu vân tay). Phần bộ nhớ còn tăng theo số bản ghi: tập giá trị `unique`
   (khoảng 165 B/giá trị) và Id của alias có Lookup trỏ tới khi insert (khoảng 100 B/bản ghi).
 - **Lookup dùng placeholder `{ "$ref": "alias#n" }`.** Executor không biết Id thật; `sf/insert.js` chèn
   theo từng "đợt" (wave) để bản ghi cha luôn có Id trước bản ghi con.

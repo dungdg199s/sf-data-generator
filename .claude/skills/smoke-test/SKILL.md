@@ -17,9 +17,9 @@ without `sf` (503 `smoke: …`, checked at start), so no flow can reach a real o
 flows
 (failed checks are collected and reported together; a timed-out wait aborts that flow, the others finish).
 
-**Speed (since design 0009).** The flows are grouped into six independent functions that run **in parallel**, each in
+**Speed (since design 0009).** The flows are grouped into seven independent functions that run **in parallel**, each in
 its own browser context (so storage, routes and dialogs never leak between them): `flowEditing` (1–5), `flowPicker`
-(5b), `flowFiles` (5c–10), `flowDark` (12), `flowLayoutWide` and `flowLayoutNarrow` (11, 13). The browser launches
+(5b), `flowFiles` (5c–10), `flowDark` (12), `flowLayoutWide` and `flowLayoutNarrow` (11, 13), `flowEach` (14). The browser launches
 while the server starts; a fresh context starts with empty storage, so no `localStorage.clear()` + reload; storage a flow
 needs before its first load is written by `addInitScript` (once, guarded by a marker key, so reloads keep it); layout
 checks resize one page (`setViewportSize`) instead of opening a context per width; waits for the sheet or toast
@@ -128,7 +128,15 @@ the others; never add a fixed `waitForTimeout`.
     - **13e results header**: ≤ 50 px after Xem trước at 390 px with `aria-expanded="true"`; "⤓ Tải" opens "Tải JSON" and
       "Tải CSV (tab hiện tại)"; at 1440 px the two buttons show and "⤓ Tải" does not.
 
-It also fails on any page error or a run over 12 s (typically ~5.3 s since the flows run in parallel; ~10 s before;
+14. **Lặp "Mỗi bản ghi trong pool" (design 0010), `flowEach`, own context.** The "Contact cho mỗi Account có sẵn"
+    sample: the loop card shows `acc` and "Mỗi bản ghi trong accs → acc · {{loop.index}}"; Ctrl+Enter (no org, 5 sample
+    rows) gives "Contact: 15" and the chip "5 lần lặp". "⋯ → Lặp qua từng bản ghi" on the Query card inserts a Lặp right after
+    it, selected, with "Lặp theo" = each, "Lặp qua pool" = `accs` (option text "accs (Account · đọc từ org)"), "Tên bản ghi
+    đang lặp" = `acc2` and "Số lần lặp" hidden; one ↶ removes it. A Lặp from the palette switched to "Mỗi bản ghi trong
+    pool" gets `accs` / `acc2`. Renaming the record to `a` updates the Contact's Lookup and template (autosave). Alt+↑ moves
+    the Contact out of the loop: error badge and the outsideLoop message in the issues bar.
+
+It also fails on any page error or a run over 12 s (typically ~5.5–6.5 s since the flows run in parallel, flow 14 included; ~10 s before;
 ~7–8 s with two CPU-bound processes running alongside).
 Screenshots (only when a directory is given): `smoke-1440.png`, `smoke-390.png`, `smoke-390-sheet.png`,
 `smoke-390-dark.png`, `smoke-390-topbar.png`, `smoke-1280-issues.png`, `smoke-1440-dark.png`, `smoke-1440-dark-insert.png`.

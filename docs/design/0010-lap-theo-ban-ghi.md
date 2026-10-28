@@ -1,6 +1,7 @@
 # 0010 — Lặp theo từng bản ghi trong pool (`loop.mode: 'each'`)
 
-- **Trạng thái:** Đã duyệt (2026-10-27, người dùng chọn theo đề xuất cho mọi quyết định, xem [Đã chốt](#đã-chốt-2026-10-27))
+- **Trạng thái:** Đã làm (duyệt 2026-10-27, người dùng chọn theo đề xuất cho mọi quyết định, xem [Đã chốt](#đã-chốt-2026-10-27);
+  làm 2026-10-28, xem [Đã làm](#đã-làm))
 - **Ngày:** 2026-10-27
 - **Liên quan:** [0003](0003-process-mode.md) (cây bước v2, Lặp, `slots.body`), [0005](0005-variable-picker.md)
   (`analyzeScope`, `flow`/`exposes`, `outsideLoop`), [0006](0006-query-pick-nodes.md) (Query, Chọn bản ghi, pool, bản ghi mẫu,
@@ -486,4 +487,118 @@ Không có câu hỏi chặn việc làm. Ý tưởng để sau:
 
 ## Đã làm
 
-(Chưa làm. Khi code xong thì cập nhật commit hoặc PR, chỗ nào khác với thiết kế và vì sao.)
+Làm sau 0004, 0005, 0006 và 0009 (doc viết khi 0005/0006 đang làm, 0004/0009 chưa vào). Commit trên nhánh
+`claude/salesforce-data-generator-xt3u27`:
+
+| Commit | Nội dung |
+| --- | --- |
+| `313cc51` Add each-record loops: Lặp mode each over a pool | Bước 1–5 và 7 của kế hoạch: `shared/scope.js`, danh mục, validate, executor, `shared/workflow-tree.js`, mẫu mới, test, ca vàng mới |
+| `8ccc1d1` Add the each-loop UI… | Bước 6 và 8: inspector, `ops.js`, menu `⋯`, tóm tắt thẻ, bảng chọn biến, smoke luồng 14 |
+| (commit tài liệu) | Bước 9: `workflow-schema.md`, `architecture.md`, `field-types.md`, skill `add-node-type` / `smoke-test`, `CLAUDE.md` (dòng executor), doc này, 0006, 0007, README |
+
+### Kiểm tra lại các giả định (so với code lúc làm)
+
+1. **`exposes` và khóa nguồn** — `analyzeScope` đọc `type.exposes` là một object, khóa `sources[step.id]`. Đã mở rộng đúng như
+   doc: `exposesOf(type, config, stepId)` (mới, `shared/scope.js`) nhận object hoặc mảng, lọc theo `when`, phần tử đầu có id
+   nguồn = id bước, phần tử sau `<stepId>#<key>` (`l1#item`). Nguồn có thêm `id`; `nodeId` vẫn là id bước. Mọi chỗ dùng nguồn
+   làm khóa (`refs[].source`, `refChoices`, `hidden`, `state`) chuyển sang `id`; nguồn cũ có `id === nodeId` nên không đổi gì.
+   Chỗ đọc theo `nodeId` của bước: toast xóa / Bỏ vỏ (`ops.js`) dùng hàm mới `sourceStep(scope, id)`; `variables.js` dùng
+   `src.id` cho nhóm và `src.root` cho giá trị mẫu; `refsTo`/`renameField` không đổi (tham chiếu qua bản ghi đang lặp không đi
+   theo khi đổi tên field của Record gốc — giống Chọn bản ghi hôm nay, xem "Để sau"). Code khác đọc `exposes` như object
+   (`stepAlias`, `inspector.js`, `setStepAlias`, `poolUsage`, `schema.js`) đã chuyển sang `exposesOf`/`exposesList`.
+2. **Tên khóa pool** — code theo 0005/0007: Query `kind: 'record'`, `current: 'none'`, `pool: true`, `origin: 'org'`. Dùng
+   nguyên `pool: false` / `origin: { fromSource }` như doc.
+3. **`outsideLoop`** — hiện xét **trước** `disabled` cho biến lặp (sửa sau review của 0005). Nới cho mọi nguồn có `visibleIn`
+   khác `downstream`: nguồn bản ghi như vậy chỉ "thấy" khi nằm trên chuỗi của thân, còn lại luôn là `outsideLoop` (kể cả khi
+   vòng lặp tắt). `visible`/`hidden` vẫn tính lười; phân tích vẫn tuyến tính (bản ghi đang lặp là một nút trên chuỗi lúc vào
+   thân). Option đang ẩn vẫn có trong `refs` với `hidden: true`, nên `from` ẩn (chế độ `fixed`) vẫn đi theo khi đổi tên pool.
+   `poolUsage` (0004): `from` của Lặp khai báo `kind: 'ref'` + `accepts: { pool: true }` + `showIf` each nên pool tự giữ bản ghi
+   đầy đủ **chỉ khi** đang ở `each` (không sửa executor cho việc này); `poolUsage` đi qua `exposesOf` nên Lookup tới bản ghi
+   đang lặp kéo theo pool phía sau vào `referencedAliases` (Id được giữ qua các cửa sổ insert; test). Pool chỉ đếm gặp Lặp
+   `each` thì báo lỗi nội bộ gắn `from` (không xảy ra vì cùng một quy tắc).
+4. **Pool Query** — đúng như giả định: `scope.all[alias]` là mảng `{ ref, id, existing: true, fields }` dựng một lần mỗi lần
+   chạy; member của nguồn `origin: 'org'` không phân biệt hoa thường, nên `{{acc.industry}}` qua bản ghi đang lặp cũng được.
+5. **`ref` theo từng option** — đã có từ 0006 (`refChoices: (def) => parentChoices(step, def.accepts)`); `from` của Lặp dùng
+   lại, không sửa `forms.js`.
+6. **`suggestPickAlias` và "pool gần nhất"** — dùng đúng hàm 0006 (thêm tham số `key` để bỏ tên của chính ô `itemAlias` ra
+   khỏi danh sách đã dùng) và cùng luật `refChoices(…, { pool: true })` lọc `usable` như Chọn bản ghi mới (`fillEach`).
+7. **Kế thừa builtin** — Chọn bản ghi không kế thừa builtin. Bản ghi đang lặp kế thừa builtin cấp bản ghi (`$n`), không kế
+   thừa builtin cấp pool: `$count` của Query được đánh dấu `level: 'pool'` trong danh mục.
+8. **0004 đã vào** — case `each` là một vòng `for` trong generator (`runEach`, `yield*`), `TICK` không đổi. Golden hash: mọi ca
+   cũ giữ nguyên từng byte (đã so `golden-hashes.json` trước/sau: 16 khóa cũ không đổi), thêm 4 khóa (mẫu mới và một ca lồng
+   `each` qua pool Record, Query, Chọn bản ghi; × 2 seed) ghi bằng executor này.
+9. **Nhãn "Số lần" → "Lặp theo"** — không có test hay bước smoke nào so nhãn cũ.
+10. **(thêm) `aliasTypes(catalog)`** — trả *loại bước* có `alias` đặt tên bản ghi; giữ nguyên (test 0006 khóa nó). Không gian
+    tên chung giờ đi qua `stepNames(step, catalog)` (mới, `shared/workflow-tree.js`): mọi khóa config đặt tên nguồn `record`
+    của `exposes` đang hiệu lực (`alias`, và `itemAlias` khi `each`). `collectAliases`, `aliasTaken`, `cloneSteps` và validate
+    (`schema.js`) dùng nó.
+11. **(thêm) Bảng chọn biến, `stepAlias`, thanh lỗi 0009** — `stepAlias` lấy tên cuối cùng có giá trị trong `exposes` đang
+    hiệu lực (`each` ⇒ `itemAlias`), nên thẻ, toast, nhãn "con › Title" và dòng lỗi của thanh lỗi ghi `acc`. Thanh lỗi, F8,
+    viền ô theo `field` không phải sửa.
+
+### Khác với thiết kế, và quyết định ở chỗ doc chưa rõ
+
+1. **Help của `itemAlias`** viết `Lookup "Bản ghi hiện tại" acc` (nhãn thật của chế độ Lookup là "Bản ghi hiện tại của
+   alias"), không phải "Bản ghi gần nhất". Câu lỗi Lookup "Ngẫu nhiên" vào bản ghi đang lặp cũng dùng nhãn thật: `Chọn "Bản
+   ghi hiện tại của alias", hoặc chọn pool "accs" nếu muốn ngẫu nhiên.`
+2. **Câu lỗi template ngoài thân** có tiền tố `Field "Title": ` như mọi issue của field (`Field "Title": {{acc.Name}}: "acc" là
+   bản ghi đang lặp…`); `left` của Rẽ nhánh không có tiền tố.
+3. **Lookup "Ngẫu nhiên" vào bản ghi đang lặp ngoài thân** chỉ báo một lỗi (`outsideLoop`), không báo thêm `randomOfItem`.
+4. **Trùng tên giữa `itemAlias` và biến lặp** chỉ báo một lần, ở `itemAlias` (câu của doc), không báo thêm "Tên biến lặp trùng
+   alias…" ở ô biến lặp. Trùng alias khác: bước đứng sau theo thứ tự đọc nhận lỗi, như hôm nay.
+5. **`from` hỏng** (thiếu, không tồn tại): bản ghi đang lặp vẫn có trong thân nhưng không có danh sách field (`unresolved`),
+   nên `{{acc.Name}}` bên trong không bị báo thêm; chỉ `from` có lỗi. `from` đang tắt vẫn lấy field của bước đó.
+6. **Ghi chú lý do ẩn** giữ câu sẵn có (`chạy sau bước này`, `ở nhánh còn lại của Rẽ nhánh`, `đang tắt`; bản ghi đang lặp:
+   `chỉ có bên trong vòng lặp "loop"` — tên biến lặp, như biến lặp) và nhóm "Không dùng được ở đây" sẵn có.
+7. **Dòng của dropdown pool** (`from` của Lặp **và** của Chọn bản ghi): `accs (Account · đọc từ org)`, `acc (Account · đã
+   sinh)`, `pk (Account · đã chọn)`, `maybe` thêm `· có thể chưa có`. Ô "Bản ghi cha" của Lookup giữ cách ghi cũ, thêm
+   `acc (Account · bản ghi đang lặp)`; ở chế độ "Ngẫu nhiên" bản ghi đang lặp nằm trong nhóm không dùng được, kèm lý do.
+8. **Import từ org** ưu tiên bản ghi đang lặp gần nhất khớp `referenceTo` (luật cũ chỉ tự chọn khi có đúng một bước khớp; trong
+   thân Lặp qua pool Record thì cả `acc` lẫn `acc2` đều khớp).
+9. **Mục menu chỉ hiện** trên bước có nguồn `pool` đặt tên bằng `alias` (đọc từ danh mục, không hard-code Record/Query/Chọn
+   bản ghi); chưa có alias thì hiện nhưng bị khóa, title như doc.
+10. **Lặp `each` mới từ `⋯`** giữ `count: 3` (giá trị `initial`) ở dạng ẩn: chuyển về "Số lần cố định" vẫn chạy 3 lần.
+11. **`maybe` sau Lặp `each`**: câu cảnh báo nói nguyên nhân thật (`vòng lặp "loop" chạy 0 lần khi pool "accs" rỗng nên "con"
+    có thể chưa có bản ghi.`; Master-Detail: `… sẽ báo lỗi khi chạy nếu pool đó rỗng.`) thay vì "đặt Số lần lặp ≥ 1".
+12. **Cảnh báo pool rỗng** có `field: 'from'` và `code: 'eachEmpty'`; `stats.byStep` không thêm khóa (đếm bằng tập riêng).
+    Lỗi chạy của executor giờ mang được `field` (pool quá lớn gắn `from`).
+13. **Bảng chọn biến:** nhóm bản ghi đang lặp có ghi chú `bản ghi đang lặp`, giá trị mẫu là bản ghi đầu tiên của pool gốc; ví
+    dụ biến lặp ở `each`: `index 1, 2, 3…`, `count = số bản ghi của accs`, nhãn `Vòng lặp mỗi bản ghi trong accs`.
+14. **Đổi tên:** `setStepAlias(…, { key: 'itemAlias' })` nhớ tên tốt cuối cùng riêng cho từng khóa (`<id>#itemAlias`), nên
+    đổi biến lặp và bản ghi đang lặp của cùng vòng không lẫn nhau. `renameAlias` không có danh mục (migration v1) cũng đổi
+    `from` của Lặp `each`. `cloneSteps` trả thêm `renamed[].names` cho khóa khác `alias`.
+
+### Test
+
+Thêm 24 test, sửa có chủ đích 2 test cũ; tổng **253** (229 + 24), đều qua (`npm test`).
+
+- `test/scope.test.js` (+4, đúng tên của kế hoạch): `loopMinIterations is 0 in each mode`, `each item alias is visible inside
+  the body with the pool sObject` (cả pool Record với `$n`, khung lồng trong thân, không có nguồn ở `fixed`), `… outsideLoop
+  after the loop` (cả khi vòng tắt), `sources created in an each loop are maybe after it` (cả `from` hỏng không lan lỗi).
+- `test/server.test.js` (+1): `GET /api/meta: loop has mode each with from and itemAlias shown only for each`.
+- `test/workflow.test.js` (+12): 5 test validate của kế hoạch (mọi câu của bảng "Thông báo" trừ hai câu lúc chạy, có
+  `nodeId` + `field`), 6 test executor của kế hoạch, và `each loop over a pick pool and nested each loops`. Pool Record
+  (thứ tự, `$ref` `acc#1..3`, `1/3 …`, mọi bản ghi qua nhiều lượt), dòng Query (Id thật, field không phân biệt hoa thường),
+  rng (chèn hai Lặp `each` rỗng và pool rỗng không đổi dữ liệu), pool rỗng (0 lần, một cảnh báo dù chạy 3 lượt; pool chưa
+  từng chạy), ảnh chụp, trần 100 000 (`Pool "acc" có 100.002 bản ghi…`, gắn `from`).
+- `test/workflow-tree.test.js` (+4): namespace (`stepNames`, mọi tên bị chiếm), `renameAlias updates loop from` (cả `from`
+  ẩn và không danh mục), `setStepAlias on itemAlias renames references inside the body only` (khung lồng, gõ dở, biến lặp
+  riêng), `cloneSteps gives a copied each loop a new item alias` (cả khi chép kèm pool).
+- `test/run.test.js` (+2): Lookup tới bản ghi đang lặp qua cửa sổ insert 10 bản ghi với 1 dòng xem trước (Id của pool chỉ
+  được giữ nhờ `referencedAliases`); xem trước = insert với cùng seed trên dòng Query.
+- `test/samples.test.js` (+1): mẫu mới không lỗi/cảnh báo, không org ra 15 Contact, 3 cho mỗi Account mẫu theo thứ tự.
+- `test/stream.test.js`: không sửa; ca vàng thêm trong `test/fixtures/golden-cases.js` + `golden-hashes.json`.
+- **Sửa có chủ đích:** `GET /api/meta lists field types…` (`exposes` của Lặp là mảng: so `vars+record`); `the first palette
+  samples are exactly the migrated v1 samples` (có thêm mẫu thứ tư không có bản v1: `V1_SAMPLES.length + 2`).
+
+**Smoke:** luồng 14 (`flowEach`, chạy song song như các luồng khác, không chờ cố định): thẻ Lặp ghi `acc` và câu tóm tắt,
+Ctrl+Enter không org ra `Contact: 15` và chip `5 lần lặp`; `⋯ → Lặp qua từng bản ghi` trên Query chèn Lặp ngay sau, được
+chọn, `each` / `accs` (dòng `accs (Account · đọc từ org)`) / `acc2`, ô "Số lần lặp" ẩn, một ↶ bỏ; Lặp mới từ palette đổi sang
+`each` tự điền `accs` / `acc2`; đổi `acc` → `a` kéo Lookup và template trong thân; Alt+↑ đưa Contact ra ngoài ⇒ badge lỗi và
+câu `outsideLoop` trên thanh lỗi. Sau commit cuối, ba lần liên tiếp `SMOKE OK`, 5,5–5,8 giây (trước đó 5,4–6,5 giây; trần 12 giây).
+
+### Để sau
+
+- Đổi tên field của Record gốc chưa kéo theo `{{acc.Field}}` qua bản ghi đang lặp (cũng chưa có với Chọn bản ghi).
+- Các ý trong [Câu hỏi mở](#câu-hỏi-mở--việc-tiếp-theo): lọc / giới hạn / xáo trộn trong Lặp, `minIterations` thông minh hơn,
+  phạm vi pool theo lượt, lặp theo danh sách giá trị, "Bọc trong Lặp qua từng bản ghi".
