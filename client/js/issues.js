@@ -106,10 +106,15 @@ export function renderIssues(all) {
   const warnings = all.length - errors;
   box.hidden = !all.length;
   box.classList.toggle('only-warnings', !errors);
-  count.replaceChildren(...issueCountParts({ errors, warnings }).flatMap((p, n) => [
-    n ? ' · ' : '',
-    h('span', { class: `ic ic-${p.level}` }, p.text),
-  ]));
+  // aria-live: only touch the count when it changes, or every background validation re-announces it.
+  const label = issueCountsLabel({ errors, warnings });
+  if (count.dataset.label !== label) {
+    count.dataset.label = label;
+    count.replaceChildren(...issueCountParts({ errors, warnings }).flatMap((p, n) => [
+      n ? ' · ' : '',
+      h('span', { class: `ic ic-${p.level}` }, p.text),
+    ]));
+  }
   rows = all.map((issue, n) => {
     const key = keyOf(issue);
     const el = h('button', {

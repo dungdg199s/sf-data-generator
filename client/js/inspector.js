@@ -28,6 +28,7 @@ const aliasMemo = new Map();
 
 export function initInspector() {
   root = document.getElementById('inspector');
+  wireSheet();
   subscribe(({ source, kind }) => {
     if (kind === 'issues') return markIssues();
     if (kind === 'view' || kind === 'result') return undefined;
@@ -57,20 +58,53 @@ function render() {
   markIssues();
 }
 
-const narrow = () => window.matchMedia('(max-width: 900px)').matches;
+const NARROW = window.matchMedia('(max-width: 900px)');
+const narrow = () => NARROW.matches;
 
 /**
  * Narrow screens (design 0009 §3): the inspector is a bottom sheet while something is selected.
- * `body.sheet-open` gives the canvas a scroll padding of the sheet's height, so the selected card
- * is scrolled to just above the sheet's edge when it opens.
+ * Only applied on narrow screens (a selection on a wide screen does not pop a sheet open when
+ * the window gets narrower). While the sheet is closed it is `inert`, so focus and typing can
+ * never reach the hidden form. `body.sheet-open` gives the canvas a scroll padding equal to the
+ * part of it the sheet covers (measured: the canvas ends above the results header and the
+ * issues bar), so the selected card is scrolled to just above the sheet's edge.
  */
 function setSheetOpen(open) {
+  open = open && narrow();
   const was = root.classList.contains('open');
+  // Closing while focus is in the sheet (Ctrl+Enter in a field, "‹ Xong"): focus goes to the
+  // selected card, never left in a hidden form.
+  if (!open && was && root.contains(document.activeElement)) {
+    (document.querySelector('#process .step-card.selected') ?? document.getElementById('btn-preview'))?.focus({ preventScroll: true });
+  }
   root.classList.toggle('open', open);
+  root.inert = narrow() && !open;
   document.body.classList.toggle('sheet-open', open);
-  if (open && !was && narrow()) {
+  if (open) updateSheetOverlap();
+  if (open && !was) {
     requestAnimationFrame(() => document.querySelector('#process .step-card.selected')?.scrollIntoView({ block: 'nearest' }));
   }
+}
+
+/** --sheet-overlap: how much of the canvas the open sheet covers (scroll padding, end spacer). */
+function updateSheetOverlap() {
+  if (!document.body.classList.contains('sheet-open')) return;
+  const canvas = document.getElementById('process').getBoundingClientRect();
+  // offsetHeight ignores the slide-in transform, so this is the sheet's final position.
+  const sheetTop = window.innerHeight - root.offsetHeight;
+  document.body.style.setProperty('--sheet-overlap', `${Math.max(0, Math.round(canvas.bottom - sheetTop))}px`);
+}
+
+function wireSheet() {
+  // Wider than 900 px: no sheet, nothing inert. Narrower: the sheet starts closed.
+  NARROW.addEventListener('change', () => {
+    if (narrow()) sheetClosed = true;
+    setSheetOpen(false);
+  });
+  window.addEventListener('resize', updateSheetOverlap);
+  // The canvas changes height when the issues bar appears or grows.
+  new ResizeObserver(updateSheetOverlap).observe(document.getElementById('process'));
+  root.inert = narrow();
 }
 
 /** "‹ Xong", or a run started on a narrow screen: hide the sheet, keep the selection. */

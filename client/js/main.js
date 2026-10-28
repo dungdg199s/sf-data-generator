@@ -210,12 +210,14 @@ function wireToolbar() {
   };
   updateInsertButton();
   $('btn-more').onclick = () => (popupAnchor() === $('btn-more') ? closePopup() : openMoreMenu());
-  $('seed-chip').onclick = () => openMoreMenu({ focusSeed: true });
+  $('seed-chip').onclick = () => (popupAnchor() === $('seed-chip') ? closePopup() : openMoreMenu({ fromChip: true }));
   $('seed').addEventListener('input', updateSeedChip);
   updateSeedChip();
 }
 
 const phone = () => window.matchMedia('(max-width: 720px)').matches;
+/** The "Thu gọn / Mở tất cả" row is hidden (app.css): phones and short narrow screens. */
+const noViewTools = () => window.matchMedia('(max-width: 720px), (max-width: 900px) and (max-height: 500px)').matches;
 
 /** Phones: "Seed 42" in the top bar while a seed is set (the Seed field itself is in the ⋯ menu). */
 function updateSeedChip() {
@@ -232,8 +234,10 @@ const THEMES = [['system', 'Theo hệ thống'], ['light', 'Sáng'], ['dark', 'T
  * "⋯" (≤ 900 px, design 0009 §2): Mẫu always; on phones (≤ 720 px) also what the top bar hides
  * there. Every row calls the existing control (same confirmations); the Seed row mirrors #seed.
  */
-function openMoreMenu({ focusSeed = false } = {}) {
+function openMoreMenu({ fromChip = false } = {}) {
   const btn = $('btn-more');
+  // Opened from the "Seed n" chip: anchored there, so Esc / Tab put focus back on the chip.
+  const anchor = fromChip ? $('seed-chip') : btn;
   const click = (id) => () => $(id).click();
   const items = [];
   if (phone()) {
@@ -258,6 +262,10 @@ function openMoreMenu({ focusSeed = false } = {}) {
         },
       },
       { label: 'Tải lại danh sách org', onSelect: click('btn-orgs') },
+    );
+  }
+  if (noViewTools()) {
+    items.push(
       { group: 'Khung' },
       { label: 'Thu gọn tất cả', onSelect: click('btn-collapse-all') },
       { label: 'Mở tất cả', onSelect: click('btn-expand-all') },
@@ -276,7 +284,7 @@ function openMoreMenu({ focusSeed = false } = {}) {
     })));
   }
   btn.setAttribute('aria-expanded', 'true');
-  openPopup(btn, { title: 'Mẫu và thao tác khác', items, focus: focusSeed ? 'seed' : null, onClose: () => btn.setAttribute('aria-expanded', 'false') });
+  openPopup(anchor, { title: 'Mẫu và thao tác khác', items, focus: fromChip ? 'seed' : null, onClose: () => btn.setAttribute('aria-expanded', 'false') });
 }
 
 function openWorkflowObject(wf, raw, fileName) {
@@ -389,9 +397,26 @@ function wireValidation() {
   validateNow();
 }
 
+// Each request (and each run result, which carries its own issues) takes a number; a response
+// that is not the latest is dropped, so a slow /api/validate of an older workflow can never
+// overwrite newer issues.
+let validateSeq = 0;
+// Warnings only a run can know (Query "sample rows, no org", …): kept while the workflow is the
+// one that ran, so the next background validation of that same workflow does not erase them.
+let runWarnings = null; // { key, warnings }
+
+function withRunWarnings(issues, key) {
+  if (runWarnings?.key !== key) return issues;
+  const seen = new Set((issues.warnings ?? []).map((w) => `${w.nodeId}|${w.message}`));
+  return { ...issues, warnings: [...(issues.warnings ?? []), ...runWarnings.warnings.filter((w) => !seen.has(`${w.nodeId}|${w.message}`))] };
+}
+
 async function validateNow() {
+  const seq = ++validateSeq;
+  const key = JSON.stringify(state.workflow);
   try {
-    setIssues(await api.validate(state.workflow));
+    const issues = await api.validate(state.workflow);
+    if (seq === validateSeq) setIssues(withRunWarnings(issues, key));
   } catch {
     // Server unreachable; the next run will surface the error.
   }
@@ -568,12 +593,17 @@ function acceptResult(result, workflow) {
   state.lastRunKey = runKey(workflow, result.seed);
   state.lastRunSteps = JSON.stringify(workflow.steps);
   state.lastRunOrg = state.org;
+  validateSeq++; // a validation still in flight is older than this result
+  runWarnings = { key: JSON.stringify(workflow), warnings: result.warnings ?? [] };
   setIssues({ errors: [], warnings: result.warnings });
+  // Edited while it ran: the dropped validation was of the newer workflow, so check that again.
+  if (JSON.stringify(workflow) !== JSON.stringify(state.workflow)) validateNow();
   emit('run', 'result');
 }
 
 function runFailed(e) {
   if (e.issues) {
+    validateSeq++;
     setIssues({ errors: e.issues, warnings: state.issues.warnings });
     expandIssues(); // the only time the bar expands by itself (design 0009, Đã chốt 2)
     const first = e.issues.find((i) => i.nodeId && stepById(i.nodeId));
