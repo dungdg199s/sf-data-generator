@@ -370,3 +370,33 @@ test('GET /api/meta serves limits.previewRows', async () => {
   const meta = await (await fetch(base + '/api/meta')).json();
   assert.equal(meta.limits.previewRows, 200);
 });
+
+test('a client that leaves while Query steps are read gets no run (nothing inserted)', async () => {
+  let created = 0;
+  let queried2 = 0;
+  const client = {
+    identity: async (org) => org,
+    query: async () => {
+      queried2++;
+      await new Promise((r) => setTimeout(r, 150));
+      return { records: [{ Id: '001000000000001AAA', Name: 'Acme' }], totalSize: 1, done: true };
+    },
+    create: async (_t, _s, recs) => { created += recs.length; return recs.map(() => ({ success: true, id: '001x' })); },
+  };
+  const app = http.createServer(createApp({ cli: { listOrgs: async () => [] }, client }));
+  await new Promise((r) => app.listen(0, '127.0.0.1', r));
+  try {
+    const controller = new AbortController();
+    const req = fetch(`http://127.0.0.1:${app.address().port}/api/run`, {
+      method: 'POST', signal: controller.signal, headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson' },
+      body: JSON.stringify({ workflow: queryWf(), seed: 1, target: { kind: 'org', org: 'dev' } }),
+    });
+    while (!queried2) await new Promise((r) => setTimeout(r, 5));
+    controller.abort();
+    await req.catch(() => {});
+    await new Promise((r) => setTimeout(r, 300));
+    assert.equal(created, 0);
+  } finally {
+    app.close();
+  }
+});

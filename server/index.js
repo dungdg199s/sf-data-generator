@@ -84,6 +84,11 @@ export function createApp({ cli = createSfCli(), client, queryCache = createQuer
       'POST',
       /^\/api\/run$/,
       async (_m, body, _params, { req, res }) => {
+        // A client that left while the Query steps were read (Dừng before the run started, tab
+        // closed) must not get a run — above all not an insert nobody watches.
+        let gone = false;
+        const onEarlyClose = () => { gone = true; };
+        res.on('close', onEarlyClose);
         const insert = body?.target?.kind === 'org';
         if (insert) {
           // A v1 workflow whose conversion copied or cut steps runs differently from what the
@@ -96,6 +101,8 @@ export function createApp({ cli = createSfCli(), client, queryCache = createQuer
         const { run, pre } = await prepareRun(body, { insert });
         const target = insert ? body.target.org : null;
         const start = { queries: pre.queries, warnings: pre.warnings };
+        res.off('close', onEarlyClose);
+        if (gone || res.destroyed) return STREAMED;
 
         if (!String(req.headers.accept ?? '').includes(NDJSON)) {
           // One JSON body with every record (scripts, tests); same sinks as the stream.
