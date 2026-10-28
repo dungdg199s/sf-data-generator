@@ -68,3 +68,44 @@ test('real jsforce: query follows nextRecordsUrl and stops at maxFetch, never ca
     server.close();
   }
 });
+
+test('real jsforce: windowed insert maps SaveResults back to refs across windows (design 0004)', async () => {
+  const { createInserter } = await import('../server/sf/insert.js');
+  const seen = [];
+  let n = 0;
+  const server = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', (c) => (body += c));
+    req.on('end', () => {
+      const { records } = JSON.parse(body);
+      seen.push(records);
+      res.setHeader('Content-Type', 'application/json');
+      // The second Contact fails, as Salesforce reports it: per record, in order.
+      res.end(JSON.stringify(records.map((r) => (r.LastName === 'bad'
+        ? { success: false, errors: [{ statusCode: 'FIELD_CUSTOM_VALIDATION_EXCEPTION', message: 'no', fields: ['LastName'] }] }
+        : { id: `${r.attributes.type === 'Account' ? '001' : '003'}${String(++n).padStart(15, '0')}`, success: true, errors: [] }))));
+    });
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  try {
+    const instanceUrl = `http://127.0.0.1:${server.address().port}`;
+    const client = createSfClient({ cli: { getConnection: async () => ({ accessToken: 't', instanceUrl, apiVersion: '62.0' }) } });
+    const ins = createInserter(client, 'dev', { window: 2, keepId: (ref) => ref.startsWith('acc#') });
+    const recs = [
+      { ref: 'acc#1', sobject: 'Account', nodeId: 'a', fields: { Name: 'A' } },
+      { ref: 'acc#2', sobject: 'Account', nodeId: 'a', fields: { Name: 'B' } },
+      { ref: 'con#1', sobject: 'Contact', nodeId: 'c', fields: { LastName: 'ok', AccountId: { $ref: 'acc#2' } } },
+      { ref: 'con#2', sobject: 'Contact', nodeId: 'c', fields: { LastName: 'bad', AccountId: { $ref: 'acc#1' } } },
+      { ref: 'con#3', sobject: 'Contact', nodeId: 'c', fields: { LastName: 'ok2', AccountId: { $ref: 'acc#1' } } },
+    ];
+    for (const r of recs) await ins.push(r);
+    const res = await ins.end();
+    assert.deepEqual(seen.map((s) => s.map((r) => r.attributes.type)), [['Account', 'Account'], ['Contact', 'Contact'], ['Contact']]);
+    assert.deepEqual(seen[1].map((r) => r.AccountId), [res.ids['acc#2'], res.ids['acc#1']], 'parents of an earlier window resolved');
+    assert.equal(seen[2][0].AccountId, res.ids['acc#1']);
+    assert.equal(res.inserted, 4);
+    assert.deepEqual(res.errors.map((e) => [e.ref, e.field]), [['con#2', 'fields.LastName']]);
+  } finally {
+    server.close();
+  }
+});

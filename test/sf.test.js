@@ -2,11 +2,12 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createSfCli } from '../server/sf/cli.js';
 import { createSfClient } from '../server/sf/client.js';
-import { insertRecords, toSObject } from '../server/sf/insert.js';
+import { insertRecords, toSObject, createInserter } from '../server/sf/insert.js';
+import { createRun } from '../server/workflow/executor.js';
 import { mapDescribe, mapQueryFields } from '../server/sf/describe-map.js';
 import { createQueryCache, prefetchQueries, fingerprint } from '../server/sf/query.js';
 import { WorkflowError } from '../server/workflow/schema.js';
-import { wf, query, pick } from './helpers.js';
+import { wf, query, pick, record, loop } from './helpers.js';
 
 test('listOrgs merges groups and de-duplicates by username', async () => {
   const run = async () => ({
@@ -342,4 +343,118 @@ test('the query cache is keyed by org identity (instance URL + username), not th
   // The real client's identity comes from the sf CLI.
   const real = createSfClient({ cli: { getConnection: async () => ({ instanceUrl: 'https://x', username: 'me@x', accessToken: 't' }) }, createConnection: fakeJsforce().createConnection });
   assert.equal(await real.identity('dev'), 'https://x|me@x');
+});
+
+// ---------- windowed inserter (design 0004) ----------
+
+/** Fake client: Ids by sObject, `fail(record)` → SaveResult errors, optional `gate` to hold a call. */
+function fakeClient({ fail = () => null, gate } = {}) {
+  const calls = [];
+  let n = 0;
+  return {
+    calls,
+    async create(_target, sobject, recs) {
+      calls.push({ sobject, recs });
+      if (gate) await gate(calls.length);
+      return recs.map((r) => {
+        const errors = fail(r, sobject);
+        return errors ? { success: false, errors } : { success: true, id: `${sobject.slice(0, 3)}${String(++n).padStart(4, '0')}` };
+      });
+    },
+  };
+}
+const acc = (i) => ({ ref: `acc#${i}`, sobject: 'Account', nodeId: 'a', fields: { Name: `A${i}` } });
+const con = (i, parent) => ({ ref: `con#${i}`, sobject: 'Contact', nodeId: 'c', fields: { LastName: `C${i}`, AccountId: { $ref: `acc#${parent}` } } });
+
+test('windowed insert resolves parents from earlier windows (and the same window in waves)', async () => {
+  const client = fakeClient();
+  const ins = createInserter(client, 'dev', { window: 3, keepId: (ref) => ref.startsWith('acc#') });
+  for (const r of [acc(1), con(1, 1), acc(2), con(2, 1), con(3, 2), con(4, 2), con(5, 1)]) await ins.push(r);
+  const res = await ins.end();
+  assert.equal(res.inserted, 7);
+  // window 1: acc#1 then (wave 2) con#1 + acc#2… acc#2 has no deps, so wave 1 = [acc#1, acc#2]
+  assert.deepEqual(client.calls.map((c) => [c.sobject, c.recs.length]), [['Account', 2], ['Contact', 1], ['Contact', 3], ['Contact', 1]]);
+  const accIds = Object.fromEntries(Object.entries(res.ids).filter(([k]) => k.startsWith('acc#')));
+  assert.deepEqual(client.calls[2].recs.map((r) => r.AccountId), [accIds['acc#1'], accIds['acc#2'], accIds['acc#2']]);
+  assert.deepEqual(Object.keys(res.ids).sort(), ['acc#1', 'acc#2'], 'keepId limits retained Ids');
+});
+
+test('failure cascades across windows, grouped, with the parent ref and the field Salesforce names', async () => {
+  const client = fakeClient({ fail: (r) => (r.Name === 'A2' ? [{ statusCode: 'REQUIRED_FIELD_MISSING', message: 'Required fields are missing: [Phone]', fields: ['Phone'] }] : null) });
+  const ins = createInserter(client, 'dev', { window: 2, keepId: (ref) => ref.startsWith('acc#') });
+  for (const r of [acc(1), acc(2), con(1, 2), con(2, 1), con(3, 2)]) await ins.push(r);
+  const res = await ins.end();
+  assert.equal(res.inserted, 2);
+  assert.deepEqual(res.errors.map((e) => [e.ref, e.message, e.parentRef ?? null]), [
+    ['acc#2', 'REQUIRED_FIELD_MISSING: Required fields are missing: [Phone] [Phone]', null],
+    ['con#1', 'Bỏ qua vì bản ghi cha lỗi.', 'acc#2'],
+    ['con#3', 'Bỏ qua vì bản ghi cha lỗi.', 'acc#2'],
+  ]);
+  assert.equal(res.errors[0].field, undefined, 'Phone is not a field of the record');
+  assert.deepEqual(res.errorGroups.map((g) => [g.sobject, g.nodeId, g.count, g.refs]), [['Contact', 'c', 2, ['con#1', 'con#3']], ['Account', 'a', 1, ['acc#2']]]);
+  assert.deepEqual(res.bySobject, { Account: { inserted: 1, failed: 1 }, Contact: { inserted: 1, failed: 2 } });
+
+  const named = fakeClient({ fail: (r) => (r.LastName === 'C1' ? [{ statusCode: 'X', message: 'bad', fields: ['lastname'] }] : null) });
+  const one = await insertRecords(named, 'dev', [acc(1), con(1, 1)]);
+  assert.equal(one.errors[0].field, 'fields.LastName');
+  assert.equal(one.errorGroups[0].field, 'fields.LastName');
+});
+
+test('window 2000 keeps batches full for nested Account→Contact (4 000 records ⇒ 20 calls)', async () => {
+  const w = wf([loop('l', { count: 800 }, [record('a', 'Account', 'acc', [{ name: 'Name', type: 'text', options: {} }]), loop('m', { count: 4 }, [record('c', 'Contact', 'con', [{ name: 'AccountId', type: 'lookup', options: { ref: 'acc' } }])])])]);
+  const run = createRun(w, { seed: 1 });
+  const client = fakeClient();
+  const ins = createInserter(client, 'dev', { keepId: (ref) => ref.startsWith('acc#') });
+  for (const r of run.records()) await ins.push(r);
+  const res = await ins.end();
+  assert.equal(res.inserted, 4000);
+  assert.equal(client.calls.length, 20);
+  assert.ok(client.calls.every((c) => c.recs.length === 200));
+  assert.ok(client.calls.every((c) => c.recs.every((r) => c.sobject === 'Account' || /^Acc\d+$/.test(r.AccountId))), 'every Contact got its Account Id');
+});
+
+test('stops after 3 all-failing batches of one sObject and reports stopped', async () => {
+  const client = fakeClient({ fail: (_r, s) => (s === 'Contact' ? [{ statusCode: 'REQUIRED_FIELD_MISSING', message: 'Required fields are missing: [LastName]', fields: ['LastName'] }] : null) });
+  const ins = createInserter(client, 'dev', { window: 2000 });
+  const records = [acc(1), ...Array.from({ length: 1000 }, (_, i) => con(i + 1, 1))];
+  for (const r of records) await ins.push(r);
+  const res = await ins.end();
+  assert.equal(client.calls.length, 4, '1 Account call + 3 Contact calls');
+  assert.equal(res.inserted, 1);
+  assert.deepEqual([res.stopped.reason, res.stopped.sobject, res.stopped.nodeId, res.stopped.batches], ['allFailing', 'Contact', 'c', 3]);
+  assert.match(res.stopped.message, /REQUIRED_FIELD_MISSING/);
+  assert.equal(res.failed, 600);
+  assert.equal(res.notSent, 400);
+  assert.deepEqual(res.errorGroups.map((g) => [g.field, g.count]), [['fields.LastName', 600]]);
+
+  // A failing batch after a success of the same sObject does not stop (data-dependent errors).
+  let k = 0;
+  const flaky = fakeClient({ fail: (_r, s) => (s === 'Contact' && k++ >= 200 ? [{ message: 'dup' }] : null) });
+  const res2 = await insertRecords(flaky, 'dev', records);
+  assert.equal(res2.stopped, null);
+  assert.equal(flaky.calls.length, 6);
+});
+
+test('cancel waits for the in-flight batch and reports exact counts', async () => {
+  const controller = new AbortController();
+  const client = fakeClient({ gate: async (n) => { if (n === 2) controller.abort(); } });
+  const ins = createInserter(client, 'dev', { window: 2000, signal: controller.signal });
+  for (let i = 1; i <= 1000; i++) await ins.push(acc(i));
+  const res = await ins.end();
+  assert.equal(client.calls.length, 2, 'the call in flight when Dừng came is finished, no more after it');
+  assert.equal(res.inserted, 400);
+  assert.equal(res.notSent, 600);
+  assert.equal(res.cancelled, true);
+  assert.equal(Object.keys(res.ids).length, 400);
+});
+
+test('errors are capped at 1000 but groups count everything', async () => {
+  let k = 0;
+  const client = fakeClient({ fail: () => (k++ % 2 ? [{ statusCode: 'DUPLICATE_VALUE', message: 'dup' }] : null) });
+  const records = Array.from({ length: 2600 }, (_, i) => acc(i + 1));
+  const res = await insertRecords(client, 'dev', records);
+  assert.equal(res.errorsTotal, 1300);
+  assert.equal(res.errors.length, 1000);
+  assert.deepEqual(res.errorGroups.map((g) => [g.count, g.refs.length]), [[1300, 3]]);
+  assert.equal(res.inserted, 1300);
 });
