@@ -177,7 +177,10 @@ Trạng thái của một nguồn tại một bước:
 | `disabled` | Nguồn, hoặc một khung bao nó, đang tắt | Lỗi |
 
 Ví dụ: `Lặp{acc}` rồi `con` có `AccountId` = ngẫu nhiên trong các bản ghi của `acc`: `acc` là `last`, hợp lệ.
-Bước tắt và bước con của nó không được kiểm tra (nhưng vẫn có `at` và `refs`, để đổi tên vẫn đi theo).
+Bước tắt và bước con của nó không được kiểm tra (nhưng vẫn có `at` và `refs`, để đổi tên vẫn đi theo). Option đang ẩn
+theo `showIf` (ví dụ `left` khi điều kiện là Xác suất) cũng có trong `refs` với `hidden: true`: không kiểm tra, nhưng đổi
+tên vẫn đi theo. Biến lặp dùng ngoài vòng lặp của nó luôn là `outsideLoop`, kể cả khi vòng lặp đang tắt. `visible`/`hidden`
+của `at` được tính khi đọc lần đầu; phân tích tuyến tính theo kích thước workflow.
 
 Tham chiếu hỏng là **lỗi** (chặn Xem trước và Insert, HTTP 422 khi chạy), không còn âm thầm ra chuỗi rỗng. `code` của issue:
 

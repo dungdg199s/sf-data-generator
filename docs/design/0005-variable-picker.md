@@ -934,15 +934,18 @@ Commit trên nhánh `claude/salesforce-data-generator-xt3u27`:
    trong `shared/` (`VAR_EXAMPLES`), vì trình duyệt tự tính scope.
 6. **Bước tắt vẫn có `at`** (thêm `disabled: true`) và `refs` (cờ `disabled`). Doc nói bước tắt không có `at`; giữ lại để
    ô "Bản ghi cha" và việc đổi tên vẫn đúng khi người dùng sửa một bước đang tắt. Validate vẫn bỏ qua chúng.
-7. **`partial` luôn `false`**, không có `MAX_SCOPE_CONTEXTS` và cảnh báo "quá phức tạp": trên cây, phân tích là một lượt
-   duyệt, không bùng nổ ngữ cảnh như đồ thị v1. `reachable`/`unchecked` không có (chỉ v1).
+7. **`partial` luôn `false`**, không có `MAX_SCOPE_CONTEXTS` và cảnh báo "quá phức tạp": trên cây không bùng nổ ngữ cảnh
+   như đồ thị v1. Bản đầu tuy vậy vẫn bậc hai (mỗi bước chép tập nguồn đang thấy và liệt kê mọi nguồn bị ẩn); sau review
+   phân tích là tuyến tính, xem "Sửa sau review" số 5. `reachable`/`unchecked` không có (chỉ v1).
 8. `hidden` có cả chính bước đó (`after`, note `là chính bước này`); bảng chọn và `refChoices` bỏ nó ra.
 9. Issue có thêm `option` (khóa option chứa tham chiếu), để chip và nút "Sửa thành" khớp đúng option.
 10. Cảnh báo `unclosed` cũng áp dụng khi `{{` không thành token hợp lệ (ví dụ `{{ a b }}`), vì kết quả như nhau.
 11. **Đổi tên biến lặp:** thay vì chụp `scope.refs` lúc ô nhận focus, `setStepAlias` tạm đặt lại tên cũ (tên đang giữ
     trong `memo`), chạy `analyzeScope` và chỉ đổi ở các option có tham chiếu trỏ về vòng lặp đó. Cùng kết quả, không phải
     giữ trạng thái ở client. Không có danh mục (`catalog`) thì đổi cả thân vòng lặp như trước.
-12. Chế độ `path`: Ctrl+Space và nút `{x}` mở ô tìm kiếm; focus/bấm ô trống hoặc ↓ mở dạng combobox, lọc theo nội dung ô.
+12. Chế độ `path`: Ctrl+Space và nút `{x}` mở ô tìm kiếm; bấm vào ô hoặc ↓ mở dạng combobox, lọc theo nội dung ô.
+    **Không** mở khi chỉ focus (Tab đi qua form không được chọn biến). Tab chỉ chèn dòng đang chọn khi người dùng đã gõ
+    hoặc đã di chuyển lựa chọn; Shift+Tab không bao giờ chèn; Enter luôn chèn (sửa sau review, số 3).
 13. **`referenceTo`** (câu hỏi mở số 5, 0007 chọn "Có"): option "Trỏ tới sObject" của Lookup/Master-Detail, hiện trong
     form (không ẩn) để người dùng thấy và sửa được; Import từ org điền sẵn. Bước sai sObject chuyển sang nhóm "Không dùng
     được ở đây"; nếu vẫn chọn thì validate cảnh báo `wrongSobject`.
@@ -957,6 +960,41 @@ tham chiếu, `$n`, `left` nhận `{{ }}`, `referenceTo`; `test/workflow-tree.te
 mở rộng test meta; `test/generators.test.js` thêm `valueType` và mặc định template; `test/sf.test.js` kiểm tra
 `referenceTo`. `test/samples.test.js` vẫn khóa việc hai mẫu hợp lệ (không lỗi, không cảnh báo). Tổng: 130 test, đều qua.
 Smoke test có luồng 5b (mở bảng chọn, chèn, chip, tham chiếu hỏng có badge đỏ, sửa nhanh, đổi tên field): `SMOKE OK`.
+
+**Sửa sau review** (commit sau `9fa2efd`; mỗi mục có test đơn vị hoặc bước smoke):
+
+1. *Đổi tên biến lặp bỏ sót `left` đang ẩn* (`showIf`): `analyzeScope` giờ phân tích cả option đang ẩn, đánh dấu
+   `hidden: true` (validate bỏ qua, đổi tên vẫn đi theo; `refsTo` bỏ chúng trừ khi `includeHidden`). Test
+   `setStepAlias renames a loop variable in a branch left hidden by showIf`.
+2. *Biến của vòng lặp đang tắt dùng bên ngoài* báo "Bật lại…": với nguồn `vars`, `outsideLoop` được xét trước `disabled`.
+   Test `a turned-off loop's variable used outside it is outsideLoop`.
+3. *Ô path mở khi focus, Tab chèn dòng đầu*: chỉ mở khi bấm, ↓ hoặc Ctrl+Space; Tab chỉ chèn sau khi gõ/di chuyển lựa chọn,
+   Shift+Tab không chèn (quyết định 12). Bước smoke "Path fields".
+4. *Dải chip cũ sau khi đổi tên chính field đó*: `forms.js` truyền getter (`fieldName`, `field`) thay vì sao chép. Bước smoke
+   "Renaming the field that owns a chip strip".
+5. *Hiệu năng*: trạng thái "phía trên" là một chuỗi bền (persistent chain) — mỗi bước chỉ giữ con trỏ, tra một nguồn bằng
+   khoảng DFS của cây chuỗi; `visible`/`hidden` tính lười khi UI cần; biến lặp tra theo tên trong ngăn xếp vòng lặp; chip
+   strip vẽ lại tối đa một lần mỗi khung hình; `refAt` có chỉ mục; `setStepAlias` dùng lại `currentScope()` thay vì phân
+   tích lần hai. Đo bằng script của reviewer: 330 bước từ ~150 ms xuống ~25 ms, 1 050 bước từ ~1,5 s xuống ~80 ms. Test
+   `analysis stays linear` (1 000 bước < 1 s).
+6. *Hoàn tác đổi tên field cần hai lần Ctrl+Z*: cập nhật tham chiếu dùng `history: false`, nằm chung bước undo với tên
+   (chạy thử trên bản sao trước để không phát sự kiện khi không có gì đổi). Bước smoke "One undo restores both".
+
+Các điểm nhỏ:
+
+- Gợi ý Master-Detail ghi `"Số lần lặp" ≥ 1` khi vòng lặp ở chế độ Cố định, `"Ít nhất" ≥ 1` khi Ngẫu nhiên (test).
+- Thiếu member con (`{{a.Geo__c.lat}}`): `field "Geo__c" của bước "a" chỉ có latitude, longitude; không có "lat".` (test).
+- Bước Record chưa có alias được tham chiếu bằng id; alias đầu tiên đặt cho nó kéo các tham chiếu đó theo (`setStepAlias`, test).
+- ARIA: trong `role=listbox` chỉ có group/option (thông báo rỗng và nhóm "Không dùng được ở đây" nằm cạnh listbox);
+  `aria-controls` chỉ có khi bảng đang mở; bỏ `role=dialog` (popup của combobox, focus ở lại ô hoặc ô tìm kiếm) (smoke).
+- Dải chip là một điểm Tab (`role=toolbar`), ←/→/Home/End di chuyển giữa các chip (smoke).
+- Chip `$n` dùng màu trung tính `start` như `docs/ui-design-system.md` §3 (smoke).
+- Icon ⊗ hiện cả trên chip lỗi chưa khớp nguồn, đúng §6.9 (smoke).
+- Toast đổi tên field ghi đúng tiền tố đã đổi (`acc.X → acc.Y, this.X → this.Y`; `renameField` trả `names`, test).
+- Ô "Bản ghi cha" dựng lại khi sửa "Trỏ tới sObject" (smoke).
+- Rẽ nhánh chuyển sang "So sánh giá trị" ngoài mọi vòng lặp: `loop.index` báo `outsideLoop` kèm cách sửa ("Bọc trong
+  Lặp"), trong vòng lặp tên khác thì gợi ý `<tên>.index`; inspector tự thay mặc định không dùng được bằng biến gần nhất
+  (biến lặp, hoặc field đầu của bản ghi phía trên) (test + smoke).
 
 **Chưa làm / để sau:**
 
