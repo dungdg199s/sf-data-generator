@@ -1,13 +1,18 @@
-// Bottom panel: run summary, per-sObject tables, insert results, JSON/CSV download.
+// Bottom panel: run summary, per-sObject tables, read-only tabs of the rows each Query step read
+// (design 0006: `queries[]` of /api/run, never inserted), insert results, JSON/CSV download.
 
 import { h, download } from './dom.js';
 import { state, subscribe } from './store.js';
 
 const PREVIEW_ROWS = 200;
+const QUERY_TAB = 'q:'; // activeTab of a Query tab: `q:<stepId>`
 let activeTab = null;
 let panel, body, summary;
+let onRefresh = null;
 
-export function initResults() {
+/** opts.onRefresh: "⟳ Đọc lại" (preview again, reading the org instead of the query cache). */
+export function initResults({ onRefresh: refresh } = {}) {
+  onRefresh = refresh ?? null;
   panel = document.getElementById('results');
   body = document.getElementById('results-body');
   summary = document.getElementById('results-summary');
@@ -16,7 +21,10 @@ export function initResults() {
     if (state.result) download(`${fileBase()}.json`, JSON.stringify(state.result.records, null, 2));
   };
   document.getElementById('btn-dl-csv').onclick = () => {
-    if (state.result && activeTab) download(`${fileBase()}-${activeTab}.csv`, toCsv(state.result.records.filter((r) => r.sobject === activeTab)), 'text/csv');
+    if (!state.result || !activeTab) return;
+    const q = activeQuery();
+    if (q) download(`${fileBase()}-${q.alias}.csv`, toCsv(queryRecords(q)), 'text/csv');
+    else download(`${fileBase()}-${activeTab}.csv`, toCsv(state.result.records.filter((r) => r.sobject === activeTab)), 'text/csv');
   };
   subscribe(({ kind }) => kind === 'result' && render());
 }
@@ -28,9 +36,38 @@ export function showRunning(text) {
   summary.textContent = text;
 }
 
+const activeQuery = () => (activeTab?.startsWith(QUERY_TAB) ? state.result?.queries?.find((q) => `${QUERY_TAB}${q.nodeId}` === activeTab) : null);
+const hhmm = (iso) => (iso ? new Date(iso).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : '');
+
+/** Rows of a Query as table records: relationship fields become `Owner.Name` columns. */
+function queryRecords(q) {
+  const flat = (obj, prefix = '', out = {}) => {
+    for (const [k, v] of Object.entries(obj ?? {})) {
+      if (v && typeof v === 'object' && !Array.isArray(v)) flat(v, `${prefix}${k}.`, out);
+      else out[`${prefix}${k}`] = v;
+    }
+    return out;
+  };
+  return q.records.map((row, i) => ({ ref: `${q.alias}#${i + 1}`, fields: flat(row) }));
+}
+
+function querySummary(queries) {
+  if (!queries?.length) return [];
+  const fromOrg = queries.filter((q) => q.source !== 'sample');
+  const samples = queries.filter((q) => q.source === 'sample');
+  const parts = [];
+  if (fromOrg.length) parts.push(` · ↓ đọc từ ${fromOrg[0].org}: ${fromOrg.map((q) => `${q.alias} ${q.count} (${hhmm(q.fetchedAt)})`).join(', ')}`);
+  for (const q of samples) parts.push(` · ↓ ${q.alias}: ${q.count} bản ghi mẫu`);
+  return [
+    ...parts,
+    ' · ',
+    h('button', { class: 'link', title: 'Đọc lại org cho các bước Query rồi xem trước (Ctrl+Shift+Enter)', onclick: () => onRefresh?.() }, '⟳ Đọc lại'),
+  ];
+}
+
 function render() {
   const r = state.result;
-  const hasData = Boolean(r?.records?.length);
+  const hasData = Boolean(r?.records?.length || r?.queries?.length);
   document.getElementById('btn-dl-json').disabled = !hasData;
   document.getElementById('btn-dl-csv').disabled = !hasData;
   if (!r) {
@@ -47,18 +84,35 @@ function render() {
     ' ',
     h('button', { class: 'link', title: 'Dùng seed này cho lần chạy sau để ra đúng dữ liệu này', onclick: () => { document.getElementById('seed').value = r.seed; } }, '📌 giữ seed'),
     ` · ${r.stats.durationMs} ms`,
+    ...querySummary(r.queries),
     r.insert ? h('span', {}, ' · ', h('span', { class: 'ok' }, `insert ${r.insert.inserted}`), r.insert.failed ? h('span', { class: 'err' }, ` · lỗi ${r.insert.failed}`) : '') : '',
   );
 
   const sobjects = Object.keys(r.stats.bySobject);
-  if (!sobjects.includes(activeTab)) activeTab = sobjects[0] ?? null;
+  const queryTabs = (r.queries ?? []).map((q) => `${QUERY_TAB}${q.nodeId}`);
+  if (!sobjects.includes(activeTab) && !queryTabs.includes(activeTab) && !(activeTab === '__errors' && r.insert?.errors.length)) activeTab = sobjects[0] ?? queryTabs[0] ?? null;
   const tabs = h(
     'div',
     { class: 'tabs' },
     sobjects.map((s) => h('button', { class: s === activeTab ? 'active' : '', onclick: () => { activeTab = s; render(); } }, `${s} (${r.stats.bySobject[s]})`)),
+    (r.queries ?? []).map((q) => {
+      const key = `${QUERY_TAB}${q.nodeId}`;
+      return h('button', { class: `tab-query${key === activeTab ? ' active' : ''}`, 'data-query': q.nodeId, 'data-type': 'query', title: 'Bản ghi đọc từ org (chỉ để xem, không insert)', onclick: () => { activeTab = key; render(); } }, `↓ ${q.alias} · ${q.sobject} (${q.count})`);
+    }),
     r.insert?.errors.length ? h('button', { class: `tab-issues${activeTab === '__errors' ? ' active' : ''}`, onclick: () => { activeTab = '__errors'; render(); } }, `Lỗi insert (${r.insert.errors.length})`) : null,
   );
-  body.replaceChildren(tabs, activeTab === '__errors' ? errorTable(r.insert.errors) : dataTable(r.records.filter((x) => x.sobject === activeTab), r.insert?.ids));
+  const q = activeQuery();
+  let content;
+  if (activeTab === '__errors') content = errorTable(r.insert.errors);
+  else if (q) {
+    const when = q.fetchedAt ? new Date(q.fetchedAt).toLocaleTimeString('vi-VN') : '';
+    content = h('div', {},
+      h('p', { class: 'hint query-hint' }, q.source === 'sample'
+        ? 'Bản ghi mẫu (Id giả) vì chưa chọn org. Chọn org để đọc dữ liệu thật.'
+        : `Đọc từ org "${q.org}" lúc ${when}, chỉ để xem, không insert. SOQL: ${q.soql}`),
+      dataTable(queryRecords(q), null));
+  } else content = dataTable(r.records.filter((x) => x.sobject === activeTab), r.insert?.ids);
+  body.replaceChildren(tabs, content);
 }
 
 function dataTable(records, ids) {

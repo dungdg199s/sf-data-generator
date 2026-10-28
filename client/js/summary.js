@@ -1,8 +1,12 @@
 // One-line summaries and run-stat chips for step cards (moved out of the old canvas.js).
-// Record, Lặp and Rẽ nhánh have their own sentence; other step types (0006) fall back to the
-// options marked `summary: true` in /api/meta.
+// Record, Query, Chọn bản ghi, Lặp and Rẽ nhánh have their own sentence; other step types fall
+// back to the options marked `summary: true` in /api/meta.
 
-import { nodeType } from './store.js';
+import { nodeType, queryResultOf } from './store.js';
+import { selectFields, soqlSobject } from '/shared/soql.js';
+
+const opLabel = (type, key, value) => nodeType(type)?.options.find((o) => o.key === key)?.choices?.find((x) => x.value === value)?.label ?? value;
+const PICK_MODE = { random: 'ngẫu nhiên', unique: 'không lặp', sequential: 'lần lượt' };
 
 export function stepSummary(step) {
   const c = step.config ?? {};
@@ -14,10 +18,23 @@ export function stepSummary(step) {
       const times = (c.mode ?? 'fixed') === 'range' ? `${c.min ?? 1}–${c.max ?? 1} lần` : `${c.count ?? 0} lần`;
       return `${times} · {{${c.alias || 'loop'}.index}}`;
     }
+    case 'query': {
+      // Builder: "Account · 2 field · ≤200"; SOQL: the start of the statement. Last run: "· đọc 200" / "· mẫu 5".
+      const soql = (c.mode ?? 'builder') === 'soql';
+      const text = soql
+        ? (String(c.soql ?? '').trim().replace(/\s+/g, ' ').slice(0, 40) || 'SOQL trống')
+        : `${soqlSobject(c) || '?'} · ${selectFields(c).fields.length} field · ≤${c.limit ?? 200}`;
+      const q = queryResultOf(step.id);
+      return q ? `${text} · ${q.source === 'sample' ? 'mẫu' : 'đọc'} ${q.count}` : text;
+    }
+    case 'pick': {
+      const base = `${PICK_MODE[c.mode ?? 'random'] ?? c.mode} từ ${c.from || '?'}`;
+      if ((c.filter ?? 'none') !== 'compare') return base;
+      return `${base} · lọc ${c.filterField || '?'} ${opLabel('pick', 'filterOp', c.filterOp ?? 'eq')} ${c.filterValue ?? ''}`.trim();
+    }
     case 'branch': {
       if ((c.kind ?? 'chance') === 'chance') return `${Math.round((c.probability ?? 0.5) * 100)}% đi nhánh Đúng`;
-      const op = nodeType('branch')?.options.find((o) => o.key === 'op')?.choices.find((x) => x.value === c.op)?.label ?? c.op;
-      return `${c.left ?? ''} ${op} ${c.right ?? ''}`;
+      return `${c.left ?? ''} ${opLabel('branch', 'op', c.op)} ${c.right ?? ''}`;
     }
     default: {
       const defs = (nodeType(step.type)?.options ?? []).filter((o) => o.summary);
@@ -26,9 +43,9 @@ export function stepSummary(step) {
   }
 }
 
-/** The name shown next to the type label: record alias or loop variable. */
+/** The name shown next to the type label: record / pool alias or loop variable. */
 export function stepAlias(step) {
-  if (step.type === 'record') return step.config?.alias || '';
+  if (step.type === 'record' || step.type === 'query' || step.type === 'pick') return step.config?.alias || '';
   if (step.type === 'loop') return step.config?.alias || 'loop';
   return '';
 }
@@ -48,5 +65,10 @@ export function statChip(step, byStep) {
   if (step.type === 'record') return `${s.records} bản ghi`;
   if (step.type === 'loop') return `${s.iterations ?? 0} lần lặp`;
   if (step.type === 'branch') return `Đúng ${s.true ?? 0} · Sai ${s.false ?? 0}`;
+  if (step.type === 'query') {
+    const q = queryResultOf(step.id);
+    return q?.source === 'sample' ? `${q.count} bản ghi mẫu` : `${q?.count ?? s.rows ?? 0} bản ghi đọc từ org`;
+  }
+  if (step.type === 'pick') return `chọn ${s.picked ?? 0} lần${s.skipped ? ` · bỏ qua ${s.skipped}` : ''}`;
   return s.records ? `${s.records} bản ghi` : `${s.runs} lần chạy`;
 }

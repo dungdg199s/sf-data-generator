@@ -20,11 +20,16 @@ export function typeLabel(member) {
 }
 
 let firstCache = { result: null, map: new Map() };
-/** First generated record of every step in the last preview. */
+/**
+ * First record of every step in the last preview: generated records, the first row each Query
+ * read (`queries[]`) and the first record each Chọn bản ghi picked (`samples`), design 0006.
+ */
 function firstRecords() {
   if (firstCache.result !== state.result) {
     const map = new Map();
     for (const r of state.result?.records ?? []) if (!map.has(r.nodeId)) map.set(r.nodeId, r);
+    for (const q of state.result?.queries ?? []) if (q.records?.length) map.set(q.nodeId, { fields: q.records[0] });
+    for (const [id, fields] of Object.entries(state.result?.samples ?? {})) map.set(id, { fields });
     firstCache = { result: state.result, map };
   }
   return firstCache.map;

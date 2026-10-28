@@ -5,10 +5,10 @@ import { api } from './api.js';
 import { h, toast, download, icoTile } from './dom.js';
 import {
   state, emit, subscribe, updateWorkflow, replaceWorkflow, emptyWorkflow, loadPersisted, loadLegacy, persist,
-  undo, redo, select, stepById, runKey, saveCollapsed, backupBrokenAutosave,
+  undo, redo, select, stepById, runKey, saveCollapsed, backupBrokenAutosave, slotKeys,
 } from './store.js';
 import { migrateV1, describeReport, reportIsEmpty } from '/shared/migrate-v1.js';
-import { malformedSteps } from '/shared/workflow-tree.js';
+import { malformedSteps, allSteps } from '/shared/workflow-tree.js';
 import { initProcess, focusSelected, openAddMenuAtDefault, openStepMenu, paletteDragStart, paletteDragEnd } from './process.js';
 import * as ops from './ops.js';
 import { initInspector, openField } from './inspector.js';
@@ -32,7 +32,7 @@ async function boot() {
   renderPalette();
   initProcess();
   initInspector();
-  initResults();
+  initResults({ onRefresh: () => run(false, { refresh: true }) });
   firstRender();
   wireToolbar();
   wireShortcuts();
@@ -258,8 +258,9 @@ function wireShortcuts() {
     const key = e.key.toLowerCase();
     const sel = ops.selectedId();
     if (mod && e.key === 'Enter') {
+      // Ctrl+Shift+Enter: read the org again for Query steps (bypass the server's cache).
       e.preventDefault();
-      run(false);
+      run(false, { refresh: e.shiftKey });
     } else if (mod && key === 's') {
       e.preventDefault();
       saveFile();
@@ -361,26 +362,45 @@ function setIssues(issues) {
 // ---------- run ----------
 
 let running = false;
-async function run(insert) {
+/** The workflow has a Query step that is not turned off (design 0006). */
+const hasQueries = () => allSteps(state.workflow, slotKeys).some((s) => s.type === 'query' && !s.disabled);
+
+/**
+ * Preview (insert false) or insert. A preview's Query steps read `state.org` (sample rows without
+ * one); an insert reads the target org and, when it repeats the last preview (same workflow, seed
+ * and org), sends that preview's fingerprints so the server refuses (409) if the org data changed.
+ */
+async function run(insert, { refresh = false } = {}) {
   if (running) return;
   const seedRaw = $('seed').value.trim();
   const seed = seedRaw === '' ? undefined : /^\d+$/.test(seedRaw) ? Number(seedRaw) : seedRaw;
+  let expectQueries;
 
   if (insert) {
     const org = state.orgs.find((o) => (o.alias ?? o.username) === state.org);
-    const same = state.result && seed !== undefined && state.lastRunKey === runKey(state.workflow, seed);
-    const ok = await confirmInsert(org, same ? state.result.stats : null, seed);
+    const same = state.result && seed !== undefined && state.lastRunKey === runKey(state.workflow, seed) && state.lastRunOrg === state.org;
+    const ok = await confirmInsert(org, same ? state.result : null, seed);
     if (!ok) return;
+    if (same && state.result.queries?.length) {
+      expectQueries = Object.fromEntries(state.result.queries.map((q) => [q.nodeId, { fingerprint: q.fingerprint, count: q.count, fetchedAt: q.fetchedAt }]));
+    }
   }
 
   running = true;
   $('btn-preview').disabled = $('btn-insert').disabled = true;
-  showRunning(insert ? `Đang sinh và insert vào ${state.org}…` : 'Đang sinh dữ liệu…');
+  showRunning(insert ? `Đang sinh và insert vào ${state.org}…` : refresh ? 'Đang đọc lại org và sinh dữ liệu…' : 'Đang sinh dữ liệu…');
   try {
-    const result = await api.run(state.workflow, { seed, target: insert ? { kind: 'org', org: state.org } : undefined });
+    const result = await api.run(state.workflow, {
+      seed,
+      target: insert ? { kind: 'org', org: state.org } : undefined,
+      org: insert ? undefined : state.org || undefined,
+      refreshQueries: refresh || undefined,
+      expectQueries,
+    });
     state.result = result;
     state.lastRunKey = runKey(state.workflow, result.seed);
     state.lastRunSteps = JSON.stringify(state.workflow.steps);
+    state.lastRunOrg = state.org;
     setIssues({ errors: [], warnings: result.warnings });
     emit('run', 'result');
     if (insert) toast(result.insert.failed ? `Insert ${result.insert.inserted}, lỗi ${result.insert.failed}. Xem tab "Lỗi insert".` : `Đã insert ${result.insert.inserted} bản ghi.`, 5000);
@@ -391,7 +411,7 @@ async function run(insert) {
       if (first) goToIssue(first);
     }
     showRunning(`Lỗi: ${e.message}`);
-    toast(e.message, 5000);
+    toast(e.message, e.status === 409 ? 8000 : 5000);
   } finally {
     running = false;
     $('btn-preview').disabled = false;
@@ -399,20 +419,31 @@ async function run(insert) {
   }
 }
 
-function confirmInsert(org, stats, seed) {
+const hhmm = (iso) => (iso ? new Date(iso).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : '?');
+
+/** previewed: the last preview's result when the insert repeats it (same workflow, seed and org). */
+function confirmInsert(org, previewed, seed) {
   const modal = $('modal');
+  const stats = previewed?.stats;
+  const read = (previewed?.queries ?? []).filter((q) => q.source !== 'sample');
   return new Promise((resolve) => {
     const done = (v) => { modal.close(); resolve(v); };
     const isProd = org && !org.isSandbox && !org.isScratch;
-    modal.replaceChildren(
+    // replaceChildren would print "null" for the parts that do not apply.
+    modal.replaceChildren(...[
       h('h2', {}, 'Insert vào org?'),
       h('p', {}, 'Org: ', h('b', {}, state.org), org?.username ? ` (${org.username})` : ''),
       isProd ? h('div', { class: 'warn-box' }, 'Org này không phải sandbox hay scratch org. Kiểm tra kỹ trước khi insert dữ liệu test.') : null,
       stats
-        ? h('p', {}, `Giống lần xem trước (seed ${seed}): `, Object.entries(stats.bySobject).map(([s, n]) => `${s} ${n}`).join(', '), '.')
+        ? h('p', {}, `Giống lần xem trước (seed ${seed}): `, Object.entries(stats.bySobject).map(([s, n]) => `${s} ${n}`).join(', ') || 'không có bản ghi nào', '.')
         : h('p', { class: 'hint' }, 'Chưa có bản xem trước với seed cố định cho workflow này, nên dữ liệu insert sẽ khác dữ liệu đã xem. Nhập seed và Xem trước để biết chính xác.'),
+      read.length
+        ? h('p', {}, `Đọc từ org, không ghi: ${read.map((q) => `${q.sobject} ${q.count} (${q.alias}, đọc lúc ${hhmm(q.fetchedAt)})`).join(', ')}.`)
+        : null,
+      read.length ? h('p', { class: 'hint' }, 'Nếu dữ liệu đọc được đã đổi so với lần xem trước, app sẽ dừng trước khi ghi và yêu cầu xem trước lại.') : null,
+      !stats && hasQueries() ? h('p', { class: 'hint' }, `Bước Query sẽ đọc org "${state.org}" ngay trước khi insert.`) : null,
       h('div', { class: 'actions' }, h('button', { onclick: () => done(false) }, 'Hủy'), h('button', { class: 'danger solid', onclick: () => done(true) }, 'Insert')),
-    );
+    ].filter(Boolean));
     modal.onclose = () => resolve(false);
     modal.showModal();
   });

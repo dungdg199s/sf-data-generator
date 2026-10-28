@@ -174,6 +174,7 @@ function renderStep(step, level, at) {
     chip ? h('span', { class: `stat${stale ? ' stale' : ''}`, title: stale ? 'Số liệu của lần xem trước gần nhất; workflow đã đổi sau đó.' : 'Số liệu của lần xem trước gần nhất.' }, chip) : null,
     h('span', { class: 'badges' }),
     step.disabled ? h('span', { class: 'tag-off', title: 'Bước này đang tắt: không chạy và không được kiểm tra. Ctrl+/ để bật lại.' }, 'Đã tắt') : null,
+    type?.needsOrg && !state.org && !step.disabled ? h('span', { class: 'tag-sample', title: 'Chưa chọn org: Xem trước dùng bản ghi mẫu (Id giả). Chọn org ở thanh trên để đọc dữ liệu thật.' }, 'chưa chọn org') : null,
     h('button', { class: 'icon menu-btn', title: 'Thao tác với bước', 'aria-label': `Thao tác với bước ${stepLabel(step)}`, onclick: (e) => openStepMenu(e.currentTarget, step.id) }, '⋯'),
     container
       ? h('button', { class: 'icon toggle', title: collapsed ? 'Mở khung' : 'Thu gọn khung', 'aria-label': collapsed ? 'Mở khung' : 'Thu gọn khung', onclick: () => setCollapsed([step.id], !collapsed) }, collapsed ? '▸' : '▾')

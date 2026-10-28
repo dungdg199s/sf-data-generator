@@ -5,7 +5,9 @@
 import { h, toast } from './dom.js';
 import {
   state, subscribe, updateWorkflow, select, undo, nodeType, slotKeys, locate, stepById, newId, suggestAlias, workflowRevision, currentScope,
+  suggestPoolAlias, suggestPickAlias,
 } from './store.js';
+import { analyzeScope, refChoices } from '/shared/scope.js';
 import {
   insertStep, removeStep, moveStep, wrapStep, cloneSteps, collectIds, collectAliases,
   defaultInsertTarget, neighbourTarget, findStep, walkSteps, slotList, subtreeIds,
@@ -59,7 +61,7 @@ function loopVarsIn(steps) {
 export function newStep(type, target, around = []) {
   const def = nodeType(type);
   const step = {
-    id: newId(type === 'record' ? 'r' : type === 'loop' ? 'l' : type === 'branch' ? 'b' : 's'),
+    id: newId({ record: 'r', loop: 'l', branch: 'b', query: 'q', pick: 'p' }[type] ?? 's'),
     type,
     // `initial` (a new step's value) wins over `default` (the value used when the key is missing).
     config: Object.fromEntries((def?.options ?? []).map((o) => [o.key, o.initial ?? o.default]).filter(([, v]) => v !== '' && v !== undefined).map(([k, v]) => [k, structuredClone(v)])),
@@ -69,6 +71,7 @@ export function newStep(type, target, around = []) {
     step.config.alias = suggestAlias(step.config.sobject);
     step.config.fields = [{ name: 'Name', type: 'text', options: { mode: step.config.sobject === 'Account' ? 'company' : 'name' } }];
   }
+  if (type === 'query') step.config.alias = suggestPoolAlias(step.config.sobject);
   if (type === 'loop') {
     // Do not shadow the variable of an enclosing loop: loop, loop2, loop3…
     // …nor a loop inside the steps it wraps, nor a record alias.
@@ -81,10 +84,27 @@ export function newStep(type, target, around = []) {
   return step;
 }
 
+/**
+ * A new Chọn bản ghi picks from the selected step if it is a pool (Query, Record, Chọn bản ghi)
+ * usable at the new position, else from the nearest pool above; its alias follows (accs → acc).
+ */
+function fillPick(wf, step, selected) {
+  const pools = refChoices(analyzeScope(wf, state.meta), step.id, { pool: true }).filter((c) => c.usable);
+  const from = pools.find((c) => c.source === selected?.id) ?? pools[0];
+  if (!from) return;
+  step.config.from = from.name;
+  step.config.alias = suggestPickAlias(from.name);
+}
+
 /** Insert a new step (default target: the "first free slot" rule) and select it. */
 export function addStep(type, target = defaultTarget()) {
   const step = newStep(type, target);
-  const ok = updateWorkflow((wf) => insertStep(wf, target, step));
+  const selected = stepById(selectedId());
+  const ok = updateWorkflow((wf) => {
+    if (!insertStep(wf, target, step)) return false;
+    if (type === 'pick') fillPick(wf, step, selected);
+    return true;
+  });
   if (ok === false) return null;
   select({ kind: 'step', id: step.id });
   reveal(step.id, { flash: true });

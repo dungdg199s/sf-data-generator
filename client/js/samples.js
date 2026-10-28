@@ -1,6 +1,7 @@
 // Starter workflows shown in the palette. They double as living examples of the schema
-// (workflow JSON version 2). test/samples.test.js checks they validate and that they are the
-// migrated form of the original v1 samples.
+// (workflow JSON version 2). test/samples.test.js checks they validate and that the first two
+// are the migrated form of the original v1 samples; the third (design 0006) reads existing
+// Accounts with a Query step (sample rows when no org is selected).
 
 export const SAMPLES = [
   {
@@ -116,6 +117,47 @@ export const SAMPLES = [
                     },
                   ],
                   false: [],
+                },
+              },
+            ],
+          },
+        },
+      ],
+    },
+  },
+  {
+    label: 'Contact cho Account có sẵn',
+    description: 'Đọc Account trong org, 10 Contact gắn vào Account có sẵn',
+    workflow: {
+      version: 2,
+      name: 'Contact cho Account có sẵn',
+      steps: [
+        {
+          id: 'accs',
+          type: 'query',
+          config: { mode: 'builder', sobject: 'Account', alias: 'accs', fields: ['Id', 'Name'], where: '', orderBy: 'Id', limit: 200 },
+        },
+        {
+          id: 'loopCon',
+          type: 'loop',
+          config: { mode: 'fixed', count: 10, alias: 'loop' },
+          slots: {
+            body: [
+              { id: 'acc', type: 'pick', config: { from: 'accs', alias: 'acc', mode: 'random', filter: 'none', onEmpty: 'skip' } },
+              {
+                id: 'con',
+                type: 'record',
+                config: {
+                  sobject: 'Contact',
+                  alias: 'con',
+                  count: 1,
+                  fields: [
+                    { name: 'FirstName', type: 'text', options: { mode: 'firstName' } },
+                    { name: 'LastName', type: 'text', options: { mode: 'lastName' } },
+                    { name: 'Email', type: 'email', options: { mode: 'fromName' } },
+                    { name: 'Title', type: 'template', options: { template: 'Liên hệ của {{acc.Name}}' } },
+                    { name: 'AccountId', type: 'lookup', options: { mode: 'current', ref: 'acc', referenceTo: ['Account'] } },
+                  ],
                 },
               },
             ],

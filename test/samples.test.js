@@ -12,7 +12,19 @@ test('palette samples are valid v2 workflows', () => {
   }
 });
 
-test('palette samples are exactly the migrated v1 samples (same data for the same seed)', () => {
-  assert.equal(SAMPLES.length, V1_SAMPLES.length);
-  SAMPLES.forEach((s, i) => assert.deepEqual(s.workflow, migrateV1(V1_SAMPLES[i].workflow).workflow, s.label));
+// Changed for 0006: a third sample (Query → Lặp → Chọn bản ghi → Contact) has no v1 original.
+test('the first palette samples are exactly the migrated v1 samples (same data for the same seed)', () => {
+  assert.equal(SAMPLES.length, V1_SAMPLES.length + 1);
+  V1_SAMPLES.forEach((v1, i) => assert.deepEqual(SAMPLES[i].workflow, migrateV1(v1.workflow).workflow, SAMPLES[i].label));
+});
+
+test('the "Contact cho Account có sẵn" sample has no warnings and previews without an org (sample rows)', async () => {
+  const { prefetchQueries } = await import('../server/sf/query.js');
+  const { runWorkflow } = await import('../server/workflow/executor.js');
+  const s = SAMPLES.find((x) => x.label === 'Contact cho Account có sẵn');
+  assert.deepEqual(validateWorkflow(s.workflow), { errors: [], warnings: [] });
+  const pre = await prefetchQueries({ client: null, org: null, workflow: s.workflow });
+  const r = runWorkflow(s.workflow, { seed: 1, queryResults: pre.results });
+  assert.equal(r.stats.bySobject.Contact, 10);
+  assert.ok(r.records.every((x) => /^mẫu:accs#[1-5]$/.test(x.fields.AccountId) && /^Liên hệ của Account mẫu [1-5]$/.test(x.fields.Title)));
 });

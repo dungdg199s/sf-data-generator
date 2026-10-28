@@ -9,10 +9,12 @@ import { renderOptions } from './forms.js';
 import { api } from './api.js';
 import {
   state, subscribe, select, updateWorkflow, stepById, nodeType, fieldType, suggestAlias, currentScope, slotKeys,
+  suggestPoolAlias, suggestPickAlias, queryResultOf,
 } from './store.js';
-import { setStepAlias, renameField } from '/shared/workflow-tree.js';
+import { setStepAlias, renameField, insertStep } from '/shared/workflow-tree.js';
 import { refChoices, refsTo, referenceOptions } from '/shared/scope.js';
-import { deleteStep, duplicateStep, toggleDisabled } from './ops.js';
+import { buildSoql, QUERY_DEFAULTS, SAMPLE_ROWS } from '/shared/soql.js';
+import { deleteStep, duplicateStep, toggleDisabled, newStep } from './ops.js';
 import { placesText } from './variables.js';
 import { applySuggestion, closePicker } from './var-picker.js';
 
@@ -78,6 +80,7 @@ function renderWorkflow() {
       h('li', {}, 'Enter: sửa bước đang chọn; Esc: quay lại danh sách'),
       h('li', {}, 'Ctrl+Z / Ctrl+Shift+Z: hoàn tác / làm lại'),
       h('li', {}, 'Ctrl+S: tải workflow JSON; Ctrl+Enter: xem trước'),
+      h('li', {}, 'Ctrl+Shift+Enter: đọc lại org cho các bước Query rồi xem trước'),
     ),
     h('h3', {}, 'Workflow'),
     renderOptions(
@@ -111,29 +114,228 @@ function renderStep(step) {
   );
   if (!type?.options.length && step.type !== 'record') return wrap;
 
+  if (type?.needsOrg && !state.org) {
+    wrap.append(h('div', { class: 'info-box' }, `ⓘ Chưa chọn org: Xem trước sẽ dùng ${SAMPLE_ROWS} bản ghi mẫu (Id giả).`));
+  }
   const form = renderOptions(type.options, step.config ?? {}, (key, v, meta) => onStepOption(step, key, v, form, meta), {
     vars: { stepId: step.id },
     refChoices: (def) => parentChoices(step, def.accepts),
+    suggest: suggestContext(step),
   });
   wrap.append(form);
   if (step.type === 'record') wrap.append(renderFields(step));
+  if (step.type === 'query') wrap.append(renderSoqlBox(step));
   return wrap;
 }
 
+// ---------- Query (design 0006) ----------
+
+let soqlBox = null; // { stepId, code } of the "SOQL sẽ chạy" line on screen
+
+/** "SOQL sẽ chạy" (built by shared/soql.js, the code the server runs), "Sửa dạng SOQL", last read. */
+function renderSoqlBox(step) {
+  const c = step.config ?? {};
+  const builder = (c.mode ?? 'builder') === 'builder';
+  const code = h('code', { class: 'soql' }, buildSoql(c));
+  soqlBox = { stepId: step.id, code };
+  const q = queryResultOf(step.id);
+  const when = q?.fetchedAt ? new Date(q.fetchedAt).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : '';
+  return h(
+    'div',
+    { class: 'soql-box' },
+    builder ? h('div', { class: 'soql-head' }, h('span', {}, 'SOQL sẽ chạy'), h('button', {
+      class: 'link',
+      title: 'Chuyển sang ô SOQL với câu này để sửa tay (Ctrl+Z để quay lại)',
+      onclick: () => updateWorkflow(() => {
+        const cc = (step.config ??= {});
+        cc.soql = buildSoql(cc);
+        cc.mode = 'soql';
+      }, { source: 'inspector-structure' }),
+    }, 'Sửa dạng SOQL')) : null,
+    builder ? code : null,
+    q ? h('p', { class: 'hint' }, q.source === 'sample'
+      ? `Lần xem trước dùng ${q.count} bản ghi mẫu vì chưa chọn org (xem tab ↓ ${q.alias} ở bảng kết quả).`
+      : `Lần đọc gần nhất: ${q.count} bản ghi từ ${q.org} lúc ${when} (xem tab ↓ ${q.alias} ở bảng kết quả).`) : null,
+  );
+}
+
+const sobjectLists = new Map(); // `${org}|${purpose}` → Promise<list>
+
+function suggestContext(step) {
+  return {
+    org: state.org,
+    sobjects: (purpose = 'create') => {
+      const key = `${state.org}|${purpose}`;
+      if (!sobjectLists.has(key)) {
+        const p = api.sobjects(state.org, { purpose });
+        p.catch(() => sobjectLists.delete(key));
+        sobjectLists.set(key, p);
+      }
+      return sobjectLists.get(key);
+    },
+    pickFields: (def, values, apply) => openFieldPicker(values[def.suggest.sobjectKey], values[def.key], apply),
+    poolFields: (alias) => {
+      const scope = currentScope();
+      const src = Object.values(scope.sources).find((x) => x.pool && x.name === alias);
+      const out = [];
+      const walk = (members, prefix) => {
+        for (const m of members ?? []) {
+          if (m.builtin) continue;
+          if (m.members?.length && m.valueType !== 'reference') walk(m.members, `${prefix}${m.key}.`);
+          else out.push(`${prefix}${m.key}`);
+        }
+      };
+      walk(src?.members, '');
+      return out;
+    },
+  };
+}
+
+/** Builder values a Query takes from its sObject: preset (meta.queryPresets) or the option defaults. */
+const presetOf = (sobject) => ({ ...QUERY_DEFAULTS, ...(state.meta?.queryPresets?.[sobject] ?? {}) });
+const PRESET_KEYS = ['fields', 'where', 'orderBy', 'limit'];
+const autoFields = new Map(); // Query step id → JSON of the field list filled from the name field
+const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+
+/**
+ * The sObject of a Query changed: every builder value still at the old sObject's preset (or the
+ * default, or the name-field list filled earlier) takes the new one's. Without a preset and with
+ * an org, the field list becomes Id + the name field from describe (Case → CaseNumber).
+ */
+function applyQueryPreset(step, from, to, form) {
+  const c = step.config;
+  const before = presetOf(from);
+  const after = presetOf(to);
+  for (const k of PRESET_KEYS) {
+    const cur = c[k] ?? QUERY_DEFAULTS[k];
+    const untouched = same(cur, before[k]) || (k === 'fields' && autoFields.get(step.id) === JSON.stringify(cur));
+    if (!untouched || same(cur, after[k])) continue;
+    c[k] = structuredClone(after[k]);
+    const input = form.querySelector(`[data-key="${k}"]`);
+    if (input) input.value = Array.isArray(after[k]) ? after[k].join('\n') : after[k];
+  }
+  autoFields.delete(step.id);
+  const presetFields = state.meta?.queryPresets?.[to]?.fields;
+  if (presetFields || !state.org || !/^[A-Za-z][A-Za-z0-9_]*$/.test(to)) return;
+  const fieldsNow = JSON.stringify(c.fields ?? QUERY_DEFAULTS.fields);
+  clearTimeout(nameFieldTimer);
+  nameFieldTimer = setTimeout(async () => {
+    let described;
+    try {
+      const known = await suggestContext(step).sobjects('query');
+      if (!known.some((x) => x.name === to)) return;
+      described = await api.fields(state.org, to);
+    } catch {
+      return;
+    }
+    const live = stepById(step.id);
+    if (!described?.nameField || !live || live.config?.sobject !== to || JSON.stringify(live.config.fields ?? QUERY_DEFAULTS.fields) !== fieldsNow) return;
+    const next = ['Id', ...(described.nameField === 'Id' ? [] : [described.nameField])];
+    if (same(next, live.config.fields ?? QUERY_DEFAULTS.fields)) return;
+    // No undo step of its own: undoing the sObject edit also restores the field list.
+    updateWorkflow(() => { live.config.fields = next; }, { source: 'inspector', history: false });
+    autoFields.set(step.id, JSON.stringify(next));
+    const input = form.isConnected ? form.querySelector('[data-key="fields"]') : null;
+    if (input) input.value = next.join('\n');
+    refreshSoqlBox(live);
+  }, 500);
+}
+let nameFieldTimer = 0;
+
+function refreshSoqlBox(step) {
+  if (soqlBox?.stepId === step.id && soqlBox.code.isConnected) soqlBox.code.textContent = buildSoql(step.config ?? {});
+}
+
+let fieldPickerSeq = 0;
+
+/** "Chọn field…": the sObject's fields from describe; Id always on; Lookups can add `<relationship>.Name`. */
+async function openFieldPicker(sobject, current, apply) {
+  const modal = document.getElementById('modal');
+  const org = state.org;
+  const seq = ++fieldPickerSeq;
+  const body = h('div', {}, h('p', { class: 'hint' }, 'Đang đọc describe…'));
+  modal.replaceChildren(h('h2', {}, `Chọn field của ${sobject || '?'}`), body);
+  modal.onclose = null;
+  modal.showModal();
+  let described;
+  try {
+    described = await api.fields(org, sobject);
+  } catch (e) {
+    if (seq !== fieldPickerSeq) return;
+    body.replaceChildren(h('p', { class: 'err' }, e.message), h('div', { class: 'actions' }, h('button', { onclick: () => modal.close() }, 'Đóng')));
+    return;
+  }
+  if (seq !== fieldPickerSeq) return;
+  const list = (Array.isArray(current) ? current : String(current ?? '').split(/[\n,;]/)).map((x) => String(x).trim()).filter(Boolean);
+  const has = new Set(list.map((x) => x.toLowerCase()));
+  const rows = described.fields.map((f) => {
+    const isId = f.name === 'Id';
+    const cb = h('input', { type: 'checkbox', checked: isId || has.has(f.name.toLowerCase()), disabled: isId });
+    const relPath = f.relationshipName ? `${f.relationshipName}.Name` : null;
+    const rel = relPath ? h('input', { type: 'checkbox', checked: has.has(relPath.toLowerCase()), title: `Thêm ${relPath}` }) : null;
+    const el = h('label', {}, cb, h('span', {}, `${f.label} `, h('small', {}, `${f.name} · ${f.type}${f.referenceTo ? ` → ${f.referenceTo.join(', ')}` : ''}`)),
+      rel ? h('span', { class: 'rel-check' }, rel, ` kèm tên (${relPath})`) : h('span'));
+    return { f, cb, rel, relPath, el };
+  });
+  const filter = h('input', {
+    placeholder: 'Lọc field…',
+    class: 'dialog-filter',
+    oninput: (e) => {
+      const q = e.target.value.toLowerCase();
+      for (const r of rows) r.el.hidden = q && !`${r.f.name} ${r.f.label}`.toLowerCase().includes(q);
+    },
+  });
+  body.replaceChildren(
+    filter,
+    h('div', { class: 'list' }, rows.map((r) => r.el)),
+    h('div', { class: 'actions' },
+      h('button', { onclick: () => modal.close() }, 'Hủy'),
+      h('button', {
+        class: 'primary',
+        onclick: () => {
+          const next = ['Id'];
+          for (const r of rows) {
+            if (r.cb.checked && r.f.name !== 'Id') next.push(r.f.name);
+            if (r.rel?.checked) next.push(r.relPath);
+          }
+          // Paths the describe does not list (typed by hand, e.g. Account.Owner.Name) are kept.
+          const known = new Set(rows.flatMap((r) => [r.f.name.toLowerCase(), r.relPath?.toLowerCase()]).filter(Boolean));
+          for (const x of list) if (!known.has(x.toLowerCase()) && !next.some((y) => y.toLowerCase() === x.toLowerCase())) next.push(x);
+          modal.close();
+          apply(next);
+        },
+      }, 'Cập nhật danh sách')),
+  );
+  filter.focus();
+}
+
 function onStepOption(step, key, v, form, meta) {
+  const setAliasInput = (next) => {
+    const input = form.querySelector('[data-key="alias"]');
+    if (input) input.value = next;
+  };
   updateWorkflow((wf) => {
     const c = (step.config ??= {});
+    const follow = (next) => {
+      setStepAlias(wf, step.id, next, { memo: aliasMemo, slotKeys, catalog: state.meta, scope: currentScope() });
+      setAliasInput(next);
+    };
     if (key === 'sobject' && step.type === 'record') {
       // Keep the alias in sync while it is still the auto-suggested one.
       const auto = !c.alias || c.alias === suggestAlias(c.sobject, step.id);
       c.sobject = v;
-      if (auto) {
-        const next = suggestAlias(v, step.id);
-        setStepAlias(wf, step.id, next, { memo: aliasMemo, slotKeys, catalog: state.meta, scope: currentScope() });
-        const input = form.querySelector('[data-key="alias"]');
-        if (input) input.value = next;
-      }
-    } else if (key === 'alias' && (step.type === 'record' || step.type === 'loop')) {
+      if (auto) follow(suggestAlias(v, step.id));
+    } else if (key === 'sobject' && step.type === 'query') {
+      const old = c.sobject ?? QUERY_DEFAULTS.sobject;
+      const auto = !c.alias || c.alias === suggestPoolAlias(old, step.id);
+      c.sobject = v;
+      applyQueryPreset(step, old, v, form);
+      if (auto) follow(suggestPoolAlias(v, step.id));
+    } else if (key === 'from' && step.type === 'pick') {
+      const auto = !c.alias || c.alias === suggestPickAlias(c.from, step.id);
+      c.from = v;
+      if (auto && v) follow(suggestPickAlias(v, step.id));
+    } else if (key === 'alias' && ['record', 'loop', 'query', 'pick'].includes(step.type)) {
       // References follow only to a valid, free name (a loop variable: inside its body only);
       // while the field is empty or matches another alias mid-typing, they stay put.
       setStepAlias(wf, step.id, v, { memo: aliasMemo, slotKeys, catalog: state.meta, scope: currentScope() });
@@ -141,6 +343,11 @@ function onStepOption(step, key, v, form, meta) {
   }, { source: 'inspector', coalesceKey: meta?.coalesceKey ?? `${step.id}:${key}` });
   // Card summary/alias changed; the process view re-renders, the inspector keeps focus.
   fillPathDefaults(step, key, form);
+  if (step.type === 'query') {
+    refreshSoqlBox(step);
+    // Switching between builder and SOQL shows / hides the "SOQL sẽ chạy" line.
+    if (key === 'mode') updateWorkflow(() => {}, { source: 'inspector-structure', history: false });
+  }
 }
 
 /**
@@ -179,16 +386,24 @@ function fillPathDefaults(step, changedKey, form) {
  * Choices for a `kind: 'ref'` option at this step (Lookup "Bản ghi cha"): usable first, nearest
  * first, then the others with the reason (shared/scope.js refChoices).
  */
-function parentChoices(step, accepts, referenceTo) {
+function parentChoices(step, accepts, referenceTo, mode) {
   const targets = (Array.isArray(referenceTo) ? referenceTo : []).map((x) => String(x).toLowerCase());
   const list = refChoices(currentScope(), step.id, accepts).map((c) => {
+    // "acc (Account)", "accs (Account · đọc từ org)", "acc2 (Account · chọn từ accs)".
+    const detail = c.nodeType === 'query' ? `${c.sobject || '?'} · đọc từ org` : c.nodeType === 'pick' ? `${c.sobject || '?'} · chọn từ ${c.from ?? '?'}` : c.sobject;
     // A Lookup imported from the org knows which sObjects it points to (referenceTo).
     if (c.usable && targets.length && c.sobject && !targets.includes(c.sobject.toLowerCase())) {
-      return { alias: c.name, sobject: c.sobject, usable: false, note: `là ${c.sobject}, field này trỏ tới ${referenceTo.join(', ')}` };
+      return { alias: c.name, sobject: c.sobject, detail, usable: false, note: `là ${c.sobject}, field này trỏ tới ${referenceTo.join(', ')}` };
+    }
+    // "Bản ghi hiện tại" of a Query: a pool has none.
+    if (c.usable && mode === 'current' && c.current === 'none') {
+      return { alias: c.name, sobject: c.sobject, detail, usable: false, note: 'pool nhiều bản ghi: chọn "Ngẫu nhiên trong pool" hoặc thêm bước Chọn bản ghi' };
     }
     return {
       alias: c.name,
       sobject: c.sobject,
+      detail,
+      nodeType: c.nodeType,
       usable: c.usable,
       note: c.usable ? (c.certainty === 'maybe' ? 'có thể trống' : c.certainty === 'last' ? 'bản ghi cuối' : '') : c.note ?? '',
     };
@@ -268,7 +483,7 @@ function renderFields(node) {
                 f.options = { ...(f.options ?? {}), [k]: v };
               }, { source: 'inspector', coalesceKey: meta?.coalesceKey ?? `${key}:${k}` }),
               {
-                refChoices: (def, values) => parentChoices(node, def.accepts, values?.referenceTo),
+                refChoices: (def, values) => parentChoices(node, def.accepts, values?.referenceTo, values?.mode ?? 'current'),
                 vars: { stepId: node.id, fieldIndex: i, get fieldName() { return f.name; }, get field() { return `fields.${f.name}`; } },
               },
             ),
@@ -413,6 +628,8 @@ async function openImport(node) {
   if (input.value) load();
 }
 
+const NEW_QUERY = '+query:';
+
 function renderImportList(node, described, box, modal) {
   const existing = new Set((node.config.fields ?? []).map((f) => f.name.toLowerCase()));
   const aliases = parentChoices(node);
@@ -421,17 +638,26 @@ function renderImportList(node, described, box, modal) {
     const cb = h('input', { type: 'checkbox', checked: f.required && !has, disabled: has });
     let parentSel = null;
     if (f.type === 'lookup' || f.type === 'masterdetail') {
-      // Auto-pick only among parents usable at this position (above, not in the other branch, on).
-      const matches = aliases.filter((a) => a.usable && f.referenceTo?.includes(a.sobject));
+      // Auto-pick only among parents usable at this position (above, not in the other branch, on):
+      // one Record / Chọn bản ghi of that sObject (current), else one Query (random), else
+      // "＋ … có sẵn trong org" when nothing matches (design 0006).
+      const fits = (a) => a.usable && f.referenceTo?.includes(a.sobject);
+      const records = aliases.filter((a) => fits(a) && a.nodeType !== 'query');
+      const pools = aliases.filter((a) => fits(a) && a.nodeType === 'query');
+      let pre = '';
+      if (records.length === 1) pre = records[0].alias;
+      else if (!records.length && pools.length === 1) pre = pools[0].alias;
+      else if (!records.length && !pools.length && f.referenceTo?.length) pre = `${NEW_QUERY}${f.referenceTo[0]}`;
       const usable = aliases.filter((a) => a.usable);
       const other = aliases.filter((a) => !a.usable);
       parentSel = h(
         'select',
         { title: 'Bản ghi cha' },
         h('option', { value: '' }, '— bản ghi cha —'),
-        usable.map((a) => h('option', { value: a.alias, selected: matches.length === 1 && matches[0].alias === a.alias }, `${a.alias} (${a.sobject})${a.note ? ` · ${a.note}` : ''}`)),
+        usable.map((a) => h('option', { value: a.alias, selected: pre === a.alias }, `${a.alias} (${a.detail || a.sobject})${a.note ? ` · ${a.note}` : ''}`)),
+        (f.referenceTo ?? []).slice(0, 3).map((t) => h('option', { value: `${NEW_QUERY}${t}`, selected: pre === `${NEW_QUERY}${t}` }, `＋ ${t} có sẵn trong org (thêm bước Query)`)),
         other.length
-          ? h('optgroup', { label: 'Không dùng được ở đây' }, other.map((a) => h('option', { value: a.alias, disabled: true, title: a.note }, `${a.alias} (${a.sobject}) — ${a.note}`)))
+          ? h('optgroup', { label: 'Không dùng được ở đây' }, other.map((a) => h('option', { value: a.alias, disabled: true, title: a.note }, `${a.alias} (${a.detail || a.sobject}) — ${a.note}`)))
           : null,
       );
     }
@@ -451,14 +677,14 @@ function renderImportList(node, described, box, modal) {
   });
   const filter = h('input', {
     placeholder: 'Lọc field…',
-    style: { width: '100%', margin: '8px 0' },
+    class: 'dialog-filter',
     oninput: (e) => {
       const q = e.target.value.toLowerCase();
       for (const r of rows) r.el.hidden = q && !`${r.f.name} ${r.f.label}`.toLowerCase().includes(q);
     },
   });
   box.replaceChildren(
-    h('p', { class: 'hint' }, 'Field bắt buộc đã được chọn sẵn. Field Lookup tự chọn bản ghi cha nếu chỉ có một bước Record phía trên khớp sObject.'),
+    h('p', { class: 'hint' }, 'Field bắt buộc đã được chọn sẵn. Field Lookup tự chọn bản ghi cha nếu chỉ có một bước khớp sObject; chọn "＋ … có sẵn trong org" để dùng bản ghi có sẵn.'),
     filter,
     h('div', { class: 'list' }, rows.map((r) => r.el)),
     h(
@@ -469,20 +695,42 @@ function renderImportList(node, described, box, modal) {
         class: 'primary',
         onclick: () => {
           const picked = rows.filter((r) => r.cb.checked && !r.cb.disabled);
-          updateWorkflow(() => {
+          const added = []; // Query steps added for "＋ … có sẵn"
+          updateWorkflow((wf) => {
             node.config.sobject = described.sobject;
             if (!node.config.alias) node.config.alias = suggestAlias(described.sobject, node.id);
+            const newQueries = new Map(); // sObject → alias (one Query per sObject)
             for (const r of picked) {
               const options = { ...r.f.options };
-              if (r.parentSel) options.ref = r.parentSel.value;
+              const choice = r.parentSel?.value ?? '';
+              if (choice.startsWith(NEW_QUERY)) {
+                const sobject = choice.slice(NEW_QUERY.length);
+                if (!newQueries.has(sobject)) {
+                  // Same undo step as the fields; first in the workflow so it runs before every step.
+                  const q = newStep('query', { parentId: null, slot: null, index: 0 });
+                  q.config.sobject = sobject;
+                  Object.assign(q.config, structuredClone(state.meta?.queryPresets?.[sobject] ?? {}));
+                  delete q.config.alias;
+                  q.config.alias = suggestPoolAlias(sobject);
+                  if (sobject === 'RecordType') q.config.where = `${q.config.where ? `${q.config.where} AND ` : ''}SobjectType = '${described.sobject}'`;
+                  insertStep(wf, { parentId: null, slot: null, index: newQueries.size }, q);
+                  newQueries.set(sobject, q.config.alias);
+                  added.push({ alias: q.config.alias, sobject });
+                }
+                options.ref = newQueries.get(sobject);
+                options.mode = 'random';
+              } else if (r.parentSel) {
+                options.ref = choice;
+                if (aliases.find((a) => a.alias === choice)?.nodeType === 'query') options.mode = 'random';
+              }
               node.config.fields.push({ name: r.f.name, type: r.f.type, options });
             }
           }, { source: 'inspector-structure' });
           modal.close();
-          toast(`Đã thêm ${picked.length} field.`);
+          const qs = added.map((q) => `"${q.alias}" (${q.sobject} có sẵn trong org)`).join(', ');
+          toast(added.length ? `Đã thêm ${picked.length} field và bước Query ${qs}.` : `Đã thêm ${picked.length} field.`, added.length ? 5000 : undefined);
         },
       }, 'Thêm field đã chọn'),
     ),
   );
 }
-

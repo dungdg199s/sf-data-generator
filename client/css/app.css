@@ -877,3 +877,34 @@ dialog .actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap
   .sheet-close { display: inline-flex; margin-bottom: var(--space-2); }
   .issues { max-width: calc(100% - 2 * var(--space-3)); }
 }
+
+/* ---------- Query / Chọn bản ghi (design 0006) ---------- */
+.info-box {
+  display: flex; gap: var(--space-2); border: 1px solid var(--color-accent); border-left-width: var(--stripe-w);
+  background: var(--color-accent-subtle); color: var(--color-text); padding: var(--space-2) var(--space-3);
+  margin: var(--space-2) 0; border-radius: var(--radius-md); font-size: var(--text-sm);
+}
+.tag-sample {
+  display: inline-flex; align-items: center; font-size: var(--text-xs); border: 1px solid var(--color-warning);
+  border-radius: var(--radius-pill); padding: 0 var(--space-2); color: var(--color-warning-text);
+  background: var(--color-warning-subtle); font-weight: var(--weight-medium); white-space: nowrap;
+  max-width: 40%; overflow: hidden; text-overflow: ellipsis;
+}
+.soql-box { display: grid; gap: var(--space-1); margin-top: var(--space-3); padding-top: var(--space-2); border-top: 1px solid var(--color-border); }
+.soql-head { display: flex; justify-content: space-between; align-items: center; gap: var(--space-2); font-size: var(--text-sm); font-weight: var(--weight-semibold); }
+code.soql {
+  display: block; font-family: var(--font-mono); font-size: var(--text-xs); background: var(--color-surface-sunken);
+  border: 1px solid var(--color-border); border-radius: var(--radius-sm); padding: var(--space-1) var(--space-2);
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+textarea.mono { font-family: var(--font-mono); font-size: var(--text-sm); }
+.suggest-wrap { display: flex; gap: var(--space-1); align-items: flex-start; }
+.suggest-wrap > input, .suggest-wrap > textarea { flex: 1; min-width: 0; }
+.suggest-btn { flex: none; }
+.tabs button.tab-query::before {
+  content: ''; width: 14px; height: 14px; background: var(--c-text);
+  -webkit-mask: var(--ico) center / contain no-repeat; mask: var(--ico) center / contain no-repeat;
+}
+.query-hint { margin: var(--space-1) var(--space-2); }
+.dialog-filter { width: 100%; margin: var(--space-2) 0; }
+dialog .list .rel-check { font-size: var(--text-xs); color: var(--color-text-muted); white-space: nowrap; }

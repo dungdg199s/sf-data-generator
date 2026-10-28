@@ -11,6 +11,9 @@
 //  5b. variable picker (0005): {x} + search + Enter inserts {{acc.Industry}}, "{{in" puts loop.index first,
 //      chips are coloured by source type, a misspelt field turns its chip red with an error badge on the card,
 //      "Sửa thành" fixes it, renaming the field updates the template
+//  5c. Query → Chọn bản ghi → Record without an org (0006): the "Contact cho Account có sẵn" sample previews with
+//      5 sample rows (tab "↓ accs", warning on the Query card), "Chọn bản ghi" from the palette fills from/alias,
+//      "{{" in WHERE outlines the field
 //   6. a v1 autosave is migrated on load (toast) and the sfdg.workflow.v1 key is left untouched
 //   7. a malformed v2 autosave falls back to the sample without being overwritten
 //   8. a malformed v2 file is refused with a toast
@@ -291,6 +294,25 @@ const V1_ORPHAN = {
     await page.keyboard.press('ArrowDown');
     await page.keyboard.press('Tab');
     check((await page.inputValue(leftSel)) !== '', 'Tab after moving the selection did not insert');
+
+    // Query → Chọn bản ghi → Record without an org (0006): sample rows, warning, palette defaults, {{ }} refused.
+    await page.click('#sample-items .palette-item:has-text("Contact cho Account có sẵn")');
+    await page.waitForSelector('.step-card[data-id="accs"] .tag-sample');
+    await page.keyboard.press('Control+Enter');
+    const qTab = await page.waitForSelector('.tabs .tab-query[data-query="accs"]', { timeout: 3000 }).catch(() => null);
+    check(qTab && /↓ accs · Account \(5\)/.test(await qTab.textContent()), 'no "↓ accs · Account (5)" tab of sample rows');
+    check(/accs: 5 bản ghi mẫu/.test(await page.textContent('#results-summary')), 'results summary does not mention the sample rows');
+    check(/Contact: 10/.test(await page.textContent('#results-summary')), 'the Query sample did not generate 10 Contacts');
+    check(await page.isVisible('.step-card[data-id="accs"].has-warning'), 'no warning on the Query card without an org');
+    await page.click('.step-card[data-id="accs"] .type');
+    await page.click('#palette-items .palette-item[data-type="pick"]');
+    await page.waitForSelector('#inspector select[data-key="from"]');
+    const pickFrom = await page.$eval('#inspector select[data-key="from"]', (el) => el.value);
+    const pickAlias = await page.inputValue('#inspector input[data-key="alias"]');
+    check(pickFrom === 'accs' && /^acc\d*$/.test(pickAlias), `new Chọn bản ghi did not default to accs / acc… (${pickFrom}, ${pickAlias})`);
+    await page.click('.step-card[data-id="accs"] .type');
+    await page.fill('#inspector input[data-key="where"]', 'AccountId = {{acc.Id}}');
+    check(await page.waitForSelector('#inspector input[data-key="where"].invalid', { timeout: 3000 }).catch(() => null), '"{{" in WHERE is not outlined');
 
     // Migration of a v1 autosave on load.
     const v1Text = JSON.stringify(V1_SAMPLE);

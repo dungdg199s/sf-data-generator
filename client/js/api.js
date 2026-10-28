@@ -14,8 +14,15 @@ async function call(method, path, body) {
 export const api = {
   meta: () => call('GET', '/api/meta'),
   validate: (workflow) => call('POST', '/api/validate', { workflow }),
-  run: (workflow, { seed, target } = {}) => call('POST', '/api/run', { workflow, seed, target }),
+  /**
+   * org: the org Query steps read for a preview (none → sample rows); refreshQueries: bypass the
+   * server's query cache; expectQueries: fingerprints of the preview an insert must match (409).
+   */
+  run: (workflow, { seed, target, org, refreshQueries, expectQueries } = {}) => call('POST', '/api/run', { workflow, seed, target, org, refreshQueries, expectQueries }),
   orgs: () => call('GET', '/api/orgs'),
-  sobjects: (org) => call('GET', `/api/orgs/${encodeURIComponent(org)}/sobjects`),
+  /** purpose 'query': objects a Query can read; default: objects a Record can create. */
+  sobjects: (org, { purpose } = {}) => call('GET', `/api/orgs/${encodeURIComponent(org)}/sobjects${purpose === 'query' ? '?for=query' : ''}`),
   describe: (org, name) => call('GET', `/api/orgs/${encodeURIComponent(org)}/sobjects/${encodeURIComponent(name)}`),
+  /** Every field of an sObject (Query "Chọn field…"). */
+  fields: (org, name) => call('GET', `/api/orgs/${encodeURIComponent(org)}/sobjects/${encodeURIComponent(name)}/fields`),
 };

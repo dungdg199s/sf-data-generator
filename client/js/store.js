@@ -28,6 +28,7 @@ export const state = {
   org: '',
   result: null,
   lastRunKey: null,
+  lastRunOrg: null, // org the Query steps of the last preview read ('' = sample rows)
   lastRunSteps: null, // JSON of steps at the last run, to dim stale stat chips
   collapsed: loadCollapsed(), // ids of containers shown collapsed (UI only, no undo)
 };
@@ -224,6 +225,40 @@ export function suggestAlias(sobject, exceptStepId) {
   if (own) taken.delete(own);
   if (!taken.has(short)) return short;
   for (let i = 2; ; i++) if (!taken.has(`${short}${i}`)) return `${short}${i}`;
+}
+
+/**
+ * Pool name for a new / retyped Query step (0006): the preset's alias, else the record alias
+ * plus "s" (Account → accs); a number is added when taken (accs2).
+ */
+export function suggestPoolAlias(sobject, exceptStepId) {
+  const preset = state.meta?.queryPresets?.[sobject]?.alias;
+  return uniqueAlias(preset ?? `${baseAlias(sobject)}s`, exceptStepId);
+}
+
+/** Alias for a Chọn bản ghi step picking from `from`: accs → acc, users → user (acc2 when taken). */
+export function suggestPickAlias(from, exceptStepId) {
+  const base = from && from.length > 1 && from.endsWith('s') ? from.slice(0, -1) : from || 'rec';
+  return uniqueAlias(base, exceptStepId);
+}
+
+function baseAlias(sobject) {
+  const base = (sobject || 'rec').replace(/__c$/i, '').replace(/[^A-Za-z0-9]/g, '').toLowerCase().slice(0, 8) || 'rec';
+  return base.length > 4 ? base.slice(0, 3) : base;
+}
+
+function uniqueAlias(name, exceptStepId) {
+  const taken = collectAliases(state.workflow);
+  for (const s of allSteps(state.workflow, slotKeys)) if (s.type === 'loop') taken.add(s.config?.alias || 'loop');
+  const own = stepById(exceptStepId)?.config?.alias;
+  if (own) taken.delete(own);
+  if (!taken.has(name)) return name;
+  for (let i = 2; ; i++) if (!taken.has(`${name}${i}`)) return `${name}${i}`;
+}
+
+/** The last preview's result of a Query step (`queries[]` of /api/run), or null. */
+export function queryResultOf(stepId) {
+  return state.result?.queries?.find((q) => q.nodeId === stepId) ?? null;
 }
 
 /** Workflow as it affects the run, plus the seed. Stable key for "same as last preview". */

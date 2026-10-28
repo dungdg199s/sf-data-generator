@@ -42,6 +42,10 @@ It starts the server on a random port 3900–3989 and drives headless Chromium t
    Then a seeded workflow checks branch "Giá trị" (path mode): switching a root branch to "So sánh giá trị" fills
    `acc.Name` (not the invalid `loop.index`); tabbing into and out of an empty "Giá trị" neither opens the picker nor
    inserts; clicking it opens the list and Tab without typing inserts nothing; ↓ then Tab inserts.
+5c. **Query → Chọn bản ghi → Record without an org (design doc 0006).** The "Contact cho Account có sẵn" sample
+   shows "chưa chọn org" on the Query card; Ctrl+Enter generates 10 Contacts from 5 sample rows, with a "↓ accs ·
+   Account (5)" tab, "accs: 5 bản ghi mẫu" in the summary and a warning on the Query card. With the Query selected,
+   "Chọn bản ghi" in the palette fills "Chọn từ pool" = `accs` and alias `acc…`; `{{` typed in WHERE outlines it red.
 6. **v1 autosave.** A `sfdg.workflow.v1` autosave is migrated on load (toast), `sfdg.workflow.v2` is
    written and the v1 key is left untouched.
 7. **Malformed v2 autosave.** The sample is shown with a recovery toast and a "Tải bản lưu" button; the

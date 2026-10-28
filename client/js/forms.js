@@ -11,11 +11,16 @@ let uid = 0;
  * @param values   current values (missing → default shown)
  * @param onChange (key, value, meta?) => void; meta.coalesceKey is set for a variable insertion
  *                 (its own undo step)
- * @param ctx      { aliases: [{ alias, sobject, usable, note }], refChoices?(def, values), invalidKeys: Set,
- *                   vars?: { stepId, fieldIndex?, fieldName?, field } }
+ * @param ctx      { aliases: [{ alias, sobject, detail?, usable, note }], refChoices?(def, values), invalidKeys: Set,
+ *                   vars?: { stepId, fieldIndex?, fieldName?, field }, suggest? }
  *                 aliases (or refChoices) feed `ref` dropdowns; `usable: false` ones are listed
  *                 disabled, with `note` saying why (below this step, other branch, turned off).
  *                 Options declaring `vars` get the variable picker (var-picker.js) for `ctx.vars`.
+ *                 Options declaring `suggest` (design 0006: help from the org) get it from
+ *                 `ctx.suggest` = { org, sobjects(purpose) → Promise<[{ name, label }]>,
+ *                 pickFields(def, values, apply(list)), poolFields(poolAlias) → [path] }:
+ *                 kind 'sobject' → a datalist, 'fields' → a "Chọn field…" button (needs an org),
+ *                 'poolFields' → a datalist of the pool's fields.
  */
 export function renderOptions(defs, values, onChange, ctx = {}) {
   const root = h('div', { class: 'options' });
@@ -51,7 +56,8 @@ export function renderOptions(defs, values, onChange, ctx = {}) {
     const control = renderControl(def, values?.[def.key], set, id, ctx, current);
     control.dataset.key = def.key;
     control._set = set;
-    let field = control;
+    const helper = def.suggest && ctx.suggest ? suggestHelper(def, control, id, ctx.suggest, current) : null;
+    let field = helper ? h('div', { class: 'suggest-wrap' }, control, helper) : control;
     let strip = null;
     if (def.vars && ctx.vars && (def.kind === 'string' || def.kind === undefined)) {
       // Getters, not a spread: the field can be renamed while this form stays on screen.
@@ -69,7 +75,7 @@ export function renderOptions(defs, values, onChange, ctx = {}) {
     const row =
       def.kind === 'boolean'
         ? h('div', { class: 'form-row check' }, control, h('label', { for: id }, def.label), def.help && h('div', { class: 'help', style: { gridColumn: '1 / -1' } }, def.help))
-        : h('div', { class: 'form-row' }, h('label', { for: id }, def.label), field, strip, def.help && h('div', { class: 'help' }, def.help), ctx.vars && !ctx.vars.fieldName && def.vars ? h('div', { class: 'opt-error', hidden: true }) : null);
+        : h('div', { class: 'form-row' }, h('label', { for: id }, def.label), field, strip, def.help && h('div', { class: 'help' }, def.help), ctx.vars && !ctx.vars.fieldName ? h('div', { class: 'opt-error', hidden: true }) : null);
     if (ctx.invalidKeys?.has(def.key)) control.classList.add('invalid');
     rows.push({ def, row });
     root.append(row);
@@ -114,16 +120,16 @@ function renderControl(def, value, set, id, ctx, current) {
         },
       });
     case 'text':
-      return h('textarea', { id, rows: 3, value: v ?? '', oninput: (e) => set(e.target.value) });
+      return h('textarea', { id, rows: def.rows ?? 3, class: def.monospace ? 'mono' : undefined, spellcheck: def.monospace ? 'false' : undefined, value: v ?? '', oninput: (e) => set(e.target.value) });
     case 'ref': {
       const aliases = (ctx.refChoices ? ctx.refChoices(def, current) : ctx.aliases) ?? [];
       const usable = aliases.filter((a) => a.usable !== false);
       const other = aliases.filter((a) => a.usable === false);
-      const text = (a) => `${a.alias} (${a.sobject || '?'})${a.note ? `${a.usable === false ? ' — ' : ' · '}${a.note}` : ''}`;
+      const text = (a) => `${a.alias} (${a.detail || a.sobject || '?'})${a.note ? `${a.usable === false ? ' — ' : ' · '}${a.note}` : ''}`;
       const sel = h(
         'select',
         { id, onchange: (e) => set(e.target.value) },
-        h('option', { value: '' }, usable.length ? '— chọn bản ghi cha —' : '— chưa có bước Record nào phía trên —'),
+        h('option', { value: '' }, usable.length ? def.placeholder ?? '— chọn bản ghi cha —' : def.empty ?? '— chưa có bước Record nào phía trên —'),
         usable.map((a) => h('option', { value: a.alias, selected: a.alias === v, title: a.note || undefined }, text(a))),
         other.length
           ? h(
@@ -149,4 +155,43 @@ function renderControl(def, value, set, id, ctx, current) {
         oninput: (e) => set(e.target.value, e.target._varInsert ? { coalesceKey: `insert:${++insertSeq}` } : undefined),
       });
   }
+}
+
+let dlSeq = 0;
+
+/** The org helper of an option with `suggest` (see renderOptions). */
+function suggestHelper(def, control, id, sg, current) {
+  const kind = def.suggest.kind;
+  if (kind === 'sobject' || kind === 'poolFields') {
+    const list = h('datalist', { id: `dl-${id}-${++dlSeq}` });
+    control.setAttribute('list', list.id);
+    control.setAttribute('autocomplete', 'off');
+    const fill = async () => {
+      let items = [];
+      try {
+        items = kind === 'sobject'
+          ? (sg.org ? await sg.sobjects(def.suggest.purpose) : []).map((x) => ({ value: x.name, label: x.label }))
+          : (sg.poolFields?.(current[def.suggest.poolKey]) ?? []).map((x) => ({ value: x, label: '' }));
+      } catch {
+        items = [];
+      }
+      list.replaceChildren(...items.map((x) => h('option', { value: x.value }, x.label)));
+    };
+    control.addEventListener('focus', fill);
+    if (kind === 'sobject' && !sg.org) control.title = 'Chọn org ở thanh trên để có gợi ý sObject.';
+    return list;
+  }
+  if (kind === 'fields') {
+    return h('button', {
+      type: 'button',
+      class: 'suggest-btn',
+      disabled: !sg.org,
+      title: sg.org ? `Chọn field từ describe của ${current[def.suggest.sobjectKey] || 'sObject'} (${sg.org})` : 'Chọn org ở thanh trên trước',
+      onclick: () => sg.pickFields(def, current, (next) => {
+        control.value = next.join('\n');
+        control._set(next, { coalesceKey: `fields:${++dlSeq}` }); // its own undo step
+      }),
+    }, 'Chọn field…');
+  }
+  return null;
 }
