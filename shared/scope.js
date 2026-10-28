@@ -687,3 +687,53 @@ export function refsTo(scope, sourceId, member, { includeHidden = false } = {}) 
   return (scope?.refs ?? []).filter((r) => r.source === sourceId && (includeHidden || !r.hidden)
     && (member === undefined || r.member === member || r.member.startsWith(`${member}.`)));
 }
+
+/**
+ * What a run must remember about record pools (design 0004), worked out from the catalogue so a
+ * new step type only has to declare its options:
+ *   readers    — names given to a step option `kind: 'ref'` that accepts pools (`accepts.pool`:
+ *                Chọn bản ghi `from`, a Lặp over each record of 0010). Those steps read the whole
+ *                records of the pool, so the executor keeps them; every other generated pool only
+ *                counts its records (`alias#1…alias#n`).
+ *   referenced — names a Lookup (a field option `kind: 'ref'`) points at, plus, for a source whose
+ *                records come from another pool (`exposes.* = { fromSource }`, Chọn bản ghi), that
+ *                pool too: a Lookup to a picked record gives the `$ref` of the source record. The
+ *                inserter keeps the Ids of these aliases only.
+ * Turned-off steps and hidden options (showIf) do not run, so they are not counted.
+ * → { readers: Set<name>, referenced: Set<name> }
+ */
+export function poolUsage(wf, catalog) {
+  const cat = catalog?.nodeTypes instanceof Map ? catalog : catalogMaps(catalog);
+  const readers = new Set();
+  const lookups = new Set();
+  const fromOf = new Map(); // source name → name of the pool its records come from
+  const visit = (list) => {
+    for (const step of Array.isArray(list) ? list : []) {
+      if (!step || typeof step !== 'object' || step.disabled === true) continue;
+      const type = cat.nodeTypes.get(step.type);
+      const ex = type?.exposes;
+      if (ex?.kind === 'record') {
+        const c = step.config ?? {};
+        const name = c[ex.name?.key] || (ex.name?.fallback === 'id' ? step.id : '');
+        const key = ['members', 'label', 'origin'].map((k) => ex[k]?.fromSource).find(Boolean);
+        if (name && key && c[key]) fromOf.set(name, String(c[key]));
+      }
+      for (const o of referenceOptions(step, cat)) {
+        if (o.mode !== 'ref' || typeof o.value !== 'string' || !o.value.trim()) continue;
+        if (o.fieldIndex !== undefined) lookups.add(o.value.trim());
+        else if (o.def?.accepts?.pool) readers.add(o.value.trim());
+      }
+      for (const children of Object.values(step.slots ?? {})) visit(children);
+    }
+  };
+  visit(wf?.steps);
+  const referenced = new Set();
+  for (let name of lookups) {
+    // Follow pick → its pool → … (guarded against a cycle in an invalid workflow).
+    for (let hops = 0; name && !referenced.has(name) && hops < 64; hops++) {
+      referenced.add(name);
+      name = fromOf.get(name);
+    }
+  }
+  return { readers, referenced };
+}

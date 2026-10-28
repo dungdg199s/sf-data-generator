@@ -4,6 +4,7 @@ import { opt } from './common.js';
 // record Ids at insert time (server/sf/insert.js) once the parent record exists in the org.
 // A record read from the org (Query pool, or picked from one: `existing`, design 0006) gives its
 // real Id as a plain string, which insert.js sends as is.
+// A Record pool may be count-only ({ kind: 'generated', length, refAt }, server/workflow/executor.js).
 // mode 'fixed' picks from existing org Ids the user pastes in, so no placeholder is needed.
 
 const MODES = [
@@ -48,6 +49,9 @@ function makeReference(type, label, nullable) {
         }
         return null;
       }
+      // A generated pool nobody reads whole records of only counts them (design 0004): draw the
+      // index exactly like rng.pick, so the data is the same as with the full list.
+      if (pool.kind === 'generated') return { $ref: pool.refAt(Math.floor(rng.next() * pool.length)) };
       const rec = rng.pick(pool);
       if (rec.existing) {
         if (!rec.id) throw new Error(`Field ${fieldName}: pool "${o.ref}" không có cột Id. Thêm Id vào SELECT của bước Query.`);
