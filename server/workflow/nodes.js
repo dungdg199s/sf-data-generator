@@ -35,6 +35,15 @@ export const LIMITS = {
   queryTimeoutMs: 30000,
   queryTotalMs: 120000, // all Query steps of one run together, well under the HTTP timeouts
   queryCacheTtlMs: 600000,
+  // Org data operations (design 0011): a Record step with at least bulkMinRecords records and no
+  // Lookup pointing at it goes through Bulk API 2.0 in jobs of bulkJobRecords (deletes: any step
+  // with that many Ids left); a job is followed for at most bulkJobTimeoutMs. The insert history
+  // keeps historyMaxRuns runs and historyMaxBytes on disk.
+  bulkMinRecords: 10000,
+  bulkJobRecords: 10000,
+  bulkJobTimeoutMs: 1800000,
+  historyMaxRuns: 100,
+  historyMaxBytes: 268435456,
 };
 
 /**

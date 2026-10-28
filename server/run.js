@@ -10,14 +10,20 @@
 //   pass 2 (org target only): a fresh records() — same seed, now and queryResults, so the very same
 //                    sequence — streamed into the windowed inserter (server/sf/insert.js).
 //
-// Events (emit): start, progress (phase generate | insert), plan, done, error — the NDJSON lines
-// of /api/run (docs/workflow-schema.md). `executeRun` resolves with the final event.
+// Events (emit): start, progress (phase generate | insert | stopping), plan, done, error — the
+// NDJSON lines of /api/run (docs/workflow-schema.md). `executeRun` resolves with the final event.
+//
+// Design 0011: before the first write, the plan (shared/insert-plan.js: which Record steps go
+// through Bulk API 2.0) is computed from the dry pass, and the run is recorded in the history
+// (server/history.js, `record.history`): a history that cannot be written means nothing is written
+// to the org. Every Id the inserter gets is appended to the history before its next call.
 
 import { randomBytes } from 'node:crypto';
 import { WorkflowError } from './workflow/schema.js';
 import { LIMITS } from './workflow/nodes.js';
 import { createInserter, BATCH_SIZE } from './sf/insert.js';
 import { TICK } from './workflow/executor.js';
+import { planInsert } from '../shared/insert-plan.js';
 
 export const YIELD_EVERY = 1000;
 export const PROGRESS_INTERVAL_MS = 250;
@@ -27,7 +33,10 @@ export const YIELD_AFTER_MS = 50;
 const nextTick = () => new Promise((resolve) => setImmediate(resolve));
 const aliasOf = (ref) => String(ref).slice(0, String(ref).lastIndexOf('#'));
 
-/** Runs in progress: runId → AbortController (POST /api/runs/:runId/cancel). */
+/**
+ * Runs in progress (inserts, previews, deletes): runId → { controller, force } (POST
+ * /api/runs/:runId/cancel). `force` (Dừng ngay, design 0011) also aborts the Bulk job being processed.
+ */
 export function createRunRegistry() {
   const runs = new Map();
   return {
@@ -35,13 +44,15 @@ export function createRunRegistry() {
       let id;
       do id = `r${randomBytes(4).toString('hex')}`; while (runs.has(id));
       const controller = new AbortController();
-      runs.set(id, controller);
-      return { id, signal: controller.signal, close: () => runs.delete(id) };
+      const force = new AbortController();
+      runs.set(id, { controller, force });
+      return { id, signal: controller.signal, forceSignal: force.signal, close: () => runs.delete(id) };
     },
-    cancel(id) {
+    cancel(id, { force = false } = {}) {
       const c = runs.get(id);
       if (!c) return false;
-      c.abort();
+      c.controller.abort();
+      if (force) c.force.abort();
       return true;
     },
     get size() {
@@ -50,7 +61,7 @@ export function createRunRegistry() {
   };
 }
 
-/** API calls an insert needs at least: Σ ceil(n / 200) per sObject. */
+/** API calls an all-Collections insert needs at least: Σ ceil(n / 200) per sObject. */
 export function estimateApiCalls(bySobject) {
   return Object.values(bySobject).reduce((n, count) => n + Math.ceil(count / BATCH_SIZE), 0);
 }
@@ -66,8 +77,9 @@ export function estimateApiCalls(bySobject) {
  * → the final event: { type: 'done', result } or { type: 'error', error, issues?, insert }
  */
 export async function executeRun({
-  run, target = null, sfClient, signal, emit = () => {}, start = {}, collect = false,
+  run, target = null, sfClient, signal, forceSignal, emit = () => {}, start = {}, collect = false,
   previewRows = LIMITS.previewRows, progressIntervalMs = PROGRESS_INTERVAL_MS, clock = () => Date.now(), insertOptions = {},
+  bulk = 'auto', record = null,
 }) {
   const started = clock();
   const { runId, queries, warnings: extraWarnings = [] } = start;
@@ -84,6 +96,7 @@ export async function executeRun({
   // ---------- pass 1: preview / dry pass ----------
   const kept = [];
   const keptBySobject = {};
+  const stepOrder = new Map(); // nodeId → { alias, sobject, records }, in the order of each step's first record
   let it = run.records({ ticks: true });
   let end;
   let n = 0;
@@ -100,6 +113,9 @@ export async function executeRun({
       let breathe = false;
       if (rec === TICK) breathe = clock() - lastYield >= YIELD_AFTER_MS;
       else {
+        const so = stepOrder.get(rec.nodeId);
+        if (so) so.records++;
+        else stepOrder.set(rec.nodeId, { alias: rec.alias ?? aliasOf(rec.ref), sobject: rec.sobject, records: 1 });
         const k = (keptBySobject[rec.sobject] ?? 0);
         if (collect || k < previewRows) {
           kept.push(rec);
@@ -140,7 +156,37 @@ export async function executeRun({
   if (signal?.aborted) return finish(resultBase());
 
   // ---------- pass 2: insert ----------
-  emit({ type: 'plan', total, bySobject, apiCalls: estimateApiCalls(bySobject) });
+  const plan = planInsert({
+    steps: [...stepOrder].map(([nodeId, s]) => ({ nodeId, alias: s.alias, sobject: s.sobject, records: s.records })),
+    referenced: run.referencedAliases,
+    bulk,
+    limits: LIMITS,
+  });
+  // The history entry exists before the first write; without it nothing is written.
+  let entry = null;
+  if (record?.history) {
+    try {
+      const org = await Promise.resolve(record.org).catch(() => null);
+      entry = await record.history.create({ org: { alias: target, ...org }, workflow: record.workflow, seed: run.seed, now: run.now, bulk, steps: plan.steps, total });
+    } catch (e) {
+      const ev = {
+        type: 'error',
+        error: `Không ghi được Lịch sử (${e.message}), nên chưa ghi gì vào org. Kiểm tra quyền ghi thư mục ${record.history.dir} hoặc đặt SFDG_DATA_DIR.`,
+        insert: null,
+      };
+      emit(ev);
+      return ev;
+    }
+  }
+  emit({
+    type: 'plan',
+    total,
+    bySobject,
+    apiCalls: plan.apiCalls.total,
+    apiCallsBy: { collections: plan.apiCalls.collections, bulk: plan.apiCalls.bulk },
+    steps: plan.steps.map(({ nodeId, sobject, mode, probe, jobs }) => ({ nodeId, sobject, mode, probe, jobs })),
+    ...(entry ? { historyId: entry.id } : {}),
+  });
   const previewRefs = new Set(kept.map((r) => r.ref));
   const keepId = collect ? () => true : (ref) => previewRefs.has(ref) || run.referencedAliases.has(aliasOf(ref));
   const insertProgress = (s) => ({
@@ -150,12 +196,21 @@ export async function executeRun({
     failed: s.failed,
     total,
     bySobject: Object.fromEntries(Object.entries(bySobject).map(([so, t]) => [so, { inserted: s.bySobject[so]?.inserted ?? 0, failed: s.bySobject[so]?.failed ?? 0, total: t }])),
+    ...(s.bulk ? { bulk: s.bulk } : {}),
   });
   const inserter = createInserter(sfClient, target, {
     ...insertOptions,
     keepId,
     signal,
-    onBatch: (s) => { if (due()) emit(insertProgress(s)); },
+    forceSignal,
+    plan: Object.fromEntries(plan.steps.map((s) => [s.nodeId, s])),
+    onInserted: entry ? (rows) => entry.appendIds(rows) : null,
+    onBulkJob: entry ? (job) => entry.recordJob(job) : null,
+    onBatch: (s) => {
+      // Dừng while a Bulk job is processed: it is waited for (or aborted with Dừng ngay).
+      if (s.waitingBulk) emit({ type: 'progress', phase: 'stopping', waitingBulk: s.waitingBulk, inserted: s.inserted, failed: s.failed, total });
+      else if (due()) emit(insertProgress(s));
+    },
   });
   it = run.records({ ticks: true });
   let pushed = 0;
@@ -183,17 +238,53 @@ export async function executeRun({
     summary = await inserter.end();
   } catch (e) {
     summary = await inserter.end().catch(() => null);
-    return fail(e, summary && insertSummary(summary, pushed));
+    const partial = summary && insertSummary(summary, pushed);
+    await finishEntry(partial, 'error');
+    return fail(e, partial);
   }
   emit(insertProgress(summary));
-  return done({ ...resultBase(), insert: insertSummary(summary, pushed) });
+  const ins = insertSummary(summary, pushed);
+  await finishEntry(ins, ins.stopped ? 'stopped' : ins.cancelled ? 'cancelled' : 'done');
+  const base = resultBase();
+  return done({ ...base, warnings: [...base.warnings, ...bulkWarnings(summary.warnings)], insert: ins });
 
   function insertSummary(s, sent) {
     const notSent = total - sent + s.notSent;
     const cancelled = !s.stopped && (s.cancelled || (Boolean(signal?.aborted) && notSent > 0));
     // The streamed result carries the Ids of the preview rows only (Lookup targets were kept for the insert).
     const ids = collect ? s.ids : Object.fromEntries(Object.entries(s.ids).filter(([ref]) => previewRefs.has(ref)));
-    return { ...s, ids, notSent, cancelled, stopped: s.stopped, total };
+    const { bulkJobs, warnings: _w, ...rest } = s;
+    return { ...rest, ids, notSent, cancelled, stopped: s.stopped, total, ...(entry ? { historyId: entry.id } : {}) };
+  }
+
+  /** "Bước "con": Bulk API 2.0 không nhận …" warnings of steps that fell back to Collections. */
+  function bulkWarnings(list) {
+    return (list ?? []).map((w) => {
+      const step = plan.steps.find((s) => s.nodeId === w.nodeId);
+      return { nodeId: w.nodeId, message: `Bước "${step?.alias ?? w.nodeId}": Bulk API 2.0 không nhận ${w.sobject} (${w.error}), nên đã gửi bằng sObject Collections.` };
+    });
+  }
+
+  /** Final counts and status of the history entry (the Ids are on disk already). */
+  async function finishEntry(ins, status) {
+    if (!entry) return;
+    const byStep = ins?.byStep ?? {};
+    try {
+      await entry.finish({
+        status,
+        steps: entry.data.steps.map((st) => ({ ...st, inserted: byStep[st.nodeId]?.inserted ?? 0, failed: byStep[st.nodeId]?.failed ?? 0 })),
+        inserted: ins?.inserted ?? 0,
+        failed: ins?.failed ?? 0,
+        notSent: ins?.notSent ?? 0,
+        errorGroups: ins?.errorGroups ?? [],
+        errorGroupsOther: ins?.errorGroupsOther ?? null,
+        stopped: ins?.stopped ?? null,
+        bulkAborted: ins?.bulkAborted ?? null,
+        warnings: bulkWarnings(summary?.warnings),
+      });
+    } catch (e) {
+      console.error(e); // the Ids are on disk; only the summary of the json is stale
+    }
   }
 
   function done(result) {

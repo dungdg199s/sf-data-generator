@@ -1,3 +1,4 @@
+import './data-dir.js';
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
@@ -477,12 +478,13 @@ test('JSON mode stops when the client disconnects', async () => {
   }
 });
 
+// 0011: 40 000 leaf Contacts would go Bulk; this test is about the Collections error groups, so Bulk is off.
 test('error groups are bounded: Ids in messages are masked, at most 100 groups, the done line stays small', async () => {
   let n = 0;
   const { url, close } = await appWith({ create: async (_t, _s, recs) => recs.map((_, i) => (i === 0 ? { success: true, id: `003${++n}` }
     : { success: false, errors: [{ statusCode: 'DUPLICATE_VALUE', message: `duplicate value found: Email duplicates value on record with id: 003000000${String(++n).padStart(6, '0')}`, fields: [] }] })) });
   try {
-    const res = await fetch(`${url}/api/run`, { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson' }, body: JSON.stringify({ workflow: wf([record('c', 'Contact', 'con', [{ name: 'LastName', type: 'text', options: {} }], { count: 40000 })]), seed: 1, target: { kind: 'org', org: 'dev' } }) });
+    const res = await fetch(`${url}/api/run`, { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson' }, body: JSON.stringify({ workflow: wf([record('c', 'Contact', 'con', [{ name: 'LastName', type: 'text', options: {} }], { count: 40000 })]), seed: 1, target: { kind: 'org', org: 'dev', bulk: 'off' } }) });
     const last = (await res.text()).trim().split('\n').at(-1);
     const ins = JSON.parse(last).result.insert;
     assert.equal(ins.errorsTotal, 39800);
@@ -542,4 +544,34 @@ test('a malformed cancel id is a 404; the response ends before the query cache i
     release();
     close();
   }
+});
+
+// ---------- design 0011 ----------
+
+test('GET /api/meta serves the Bulk and history limits; target.bulk must be auto or off', async () => {
+  const meta = await (await fetch(base + '/api/meta')).json();
+  assert.deepEqual([meta.limits.bulkMinRecords, meta.limits.bulkJobRecords, meta.limits.bulkJobTimeoutMs, meta.limits.historyMaxRuns, meta.limits.historyMaxBytes], [10000, 10000, 1800000, 100, 268435456]);
+  const before = inserted.length;
+  const res = await post('/api/run', { workflow: wf([record('a', 'Account', 'acc', [], { count: 2 })]), target: { kind: 'org', org: 'dev', bulk: 'x' } });
+  assert.equal(res.status, 400);
+  assert.equal((await res.json()).error, 'target.bulk phải là "auto" hoặc "off".');
+  assert.equal(inserted.length, before);
+});
+
+test('cancel with force: true is accepted like a cancel (404 for an unknown run); history ids are checked (404)', async () => {
+  assert.equal((await post('/api/runs/rdeadbeef/cancel', { force: true })).status, 404);
+  const bad = await fetch(`${base}/api/history/..%2F..%2Fetc`);
+  assert.equal(bad.status, 404);
+  assert.equal((await bad.json()).error, 'Không tìm thấy lần insert này trong Lịch sử (có thể đã bị dọn vì vượt giới hạn lưu trữ).');
+  assert.equal((await fetch(`${base}/api/history/h20261028T103200Z-a1b2c3/ids.csv`)).status, 404);
+  assert.equal((await post('/api/history/h20261028T103200Z-a1b2c3/forget', {})).status, 404);
+  assert.equal((await fetch(`${base}/api/history/h20261028T103200Z-a1b2c3/forget`, { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: '{}' })).status, 415);
+});
+
+test('JSON-mode insert is recorded too: historyId, status done, the Ids in the history', async () => {
+  const r = await (await post('/api/run', { workflow: wf([record('a', 'Account', 'acc', [], { count: 3 })]), seed: 2, target: { kind: 'org', org: 'dev' } })).json();
+  assert.match(r.insert.historyId, /^h\d{8}T\d{6}Z-[0-9a-f]{6}$/);
+  const run = await (await fetch(`${base}/api/history/${r.insert.historyId}`)).json();
+  assert.deepEqual([run.status, run.inserted, run.remaining.total, run.org.alias, run.org.username, run.workflowName], ['done', 3, 3, 'dev', 'a@x.com', 'test']);
+  assert.ok(!('workflow' in run));
 });

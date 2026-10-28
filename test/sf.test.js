@@ -480,3 +480,243 @@ test('error groups: Ids and quoted values are masked in the key, at most 100 gro
   assert.deepEqual(res.errorGroupsOther, { groups: 200, count: 200 });
   assert.equal(res.errorGroups.reduce((n, g) => n + g.count, 0) + res.errorGroupsOther.count, res.errorsTotal);
 });
+
+// ---------- Bulk API 2.0 in the inserter (design 0011) ----------
+
+import { parseCsv } from './fake-salesforce.js';
+
+/**
+ * Fake client with Collections `create` and Bulk jobs: a job processes its CSV on the check after
+ * `checksBeforeDone` checks, gives successfulResults in REVERSED order, and `fail(row, sobject)`
+ * (row = CSV line as strings) decides failures. `onCheck(job)` runs before every check (Dừng tests).
+ */
+function bulkClient({ fail = () => null, createJobError = null, jobState = () => 'JobComplete', checksBeforeDone = 1, onCheck, noResults = false } = {}) {
+  const calls = [];
+  const jobs = [];
+  let n = 0;
+  return {
+    calls,
+    jobs,
+    async create(_t, sobject, recs) {
+      calls.push({ sobject, recs });
+      return recs.map((r) => {
+        const errors = fail(r, sobject, 'create');
+        return errors ? { success: false, errors } : { success: true, id: `${sobject.slice(0, 3)}${String(++n).padStart(6, '0')}` };
+      });
+    },
+    bulkJob(_t, { object, operation }) {
+      const job = { object, operation, state: 'Open', checks: 0, log: [], csv: '', ok: [], ko: [] };
+      jobs.push(job);
+      return {
+        get id() { return job.id; },
+        async open() {
+          job.log.push('open');
+          if (createJobError) throw Object.assign(new Error(`Salesforce: ${createJobError}: nope`), { cause: { errorCode: createJobError } });
+          job.id = `7504x${jobs.length}`;
+        },
+        async upload(csv) { job.log.push('upload'); job.csv = csv; },
+        async close() { job.log.push('close'); job.state = 'UploadComplete'; },
+        async abort() { job.log.push('abort'); if (!['JobComplete', 'Failed'].includes(job.state)) job.state = 'Aborted'; },
+        async check() {
+          job.log.push('check');
+          await onCheck?.(job);
+          if (job.state === 'UploadComplete' || job.state === 'InProgress') {
+            if (++job.checks > checksBeforeDone) {
+              const [cols, ...lines] = parseCsv(job.csv);
+              job.state = jobState(job);
+              if (job.state === 'JobComplete') {
+                for (const l of lines) {
+                  const row = Object.fromEntries(cols.map((c, i) => [c, l[i]]));
+                  const e = fail(row, object, 'bulk');
+                  if (e) job.ko.push({ sf__Id: '', sf__Error: `${e[0].statusCode}:${e[0].message}:${(e[0].fields ?? []).join(',')} --`, ...row });
+                  else job.ok.push({ sf__Id: `${object.slice(0, 3)}B${String(++n).padStart(6, '0')}`, sf__Created: 'true', ...row });
+                }
+              }
+            } else job.state = 'InProgress';
+          }
+          return { state: job.state, numberRecordsProcessed: job.ok.length + job.ko.length, numberRecordsFailed: job.ko.length, ...(job.state === 'Failed' ? { errorMessage: 'InvalidBatch' } : {}) };
+        },
+        async successfulResults() { if (noResults) throw new Error('no results'); job.log.push('ok'); return [...job.ok].reverse(); },
+        async failedResults() { if (noResults) throw new Error('no results'); job.log.push('ko'); return job.ko; },
+      };
+    },
+  };
+}
+const fastBulk = { sleep: async () => {} };
+/** 300 Accounts with 40 Contacts each (12 000 leaves pointing at their Account). */
+function accConRecords(accounts = 300, per = 40) {
+  const out = [];
+  let c = 0;
+  for (let a = 1; a <= accounts; a++) {
+    out.push(acc(a));
+    for (let k = 0; k < per; k++) out.push(con(++c, a));
+  }
+  return out;
+}
+const bulkPlan = (jobs = 2) => ({ c: { mode: 'bulk', sobject: 'Contact', jobs } });
+
+test('Bulk: Account only through create; Contact probe of 200 through create, then 2 jobs with the real Account Ids', async () => {
+  const client = bulkClient();
+  const recorded = [];
+  const jobLog = [];
+  const ins = createInserter(client, 'dev', { keepId: (ref) => ref.startsWith('acc#'), plan: bulkPlan(), bulk: fastBulk, onInserted: async (rows) => { recorded.push(...rows); }, onBulkJob: async (e) => { jobLog.push({ ...e }); } });
+  for (const r of accConRecords()) await ins.push(r);
+  const res = await ins.end();
+  assert.deepEqual([res.inserted, res.failed, res.notSent, res.stopped], [12300, 0, 0, null]);
+  const contactCalls = client.calls.filter((c) => c.sobject === 'Contact');
+  assert.equal(contactCalls.length, 1, 'one probe call');
+  assert.equal(contactCalls[0].recs.length, 200);
+  assert.equal(client.calls.filter((c) => c.sobject === 'Account').reduce((n, c) => n + c.recs.length, 0), 300);
+  assert.deepEqual(client.jobs.map((j) => [j.object, j.operation, parseCsv(j.csv).length - 1]), [['Contact', 'insert', 10000], ['Contact', 'insert', 1800]]);
+  assert.deepEqual(client.jobs[0].log.slice(0, 4), ['open', 'upload', 'close', 'check']);
+  // The CSV carries the real Account Id of each Contact (from earlier windows too).
+  const [cols, ...lines] = parseCsv(client.jobs[1].csv);
+  assert.deepEqual(cols, ['LastName', 'AccountId']);
+  assert.ok(lines.every((l) => /^Acc\d{6}$/.test(l[1])), 'AccountId is an inserted Account Id');
+  // Every Id (reversed results included) went to the history, the Bulk ones without a ref.
+  assert.equal(recorded.length, 12300);
+  assert.equal(new Set(recorded.map((r) => r.id)).size, 12300);
+  assert.equal(recorded.filter((r) => r.ref === '').length, 11800);
+  assert.deepEqual(res.bulk, [{ nodeId: 'c', sobject: 'Contact', jobs: 2, records: 11800, inserted: 11800, failed: 0 }]);
+  assert.deepEqual(res.byStep, { a: { inserted: 300, failed: 0 }, c: { inserted: 12000, failed: 0 } });
+  // The job Id was recorded before its upload (Open), then with its end state.
+  assert.deepEqual(jobLog.map((e) => [e.state, e.idsCollected]), [['Open', false], ['JobComplete', true], ['Open', false], ['JobComplete', true]]);
+});
+
+test('Bulk: a probe failing 3 times stops with allFailing and creates no job', async () => {
+  const client = bulkClient({ fail: (_r, s) => (s === 'Contact' ? [{ statusCode: 'REQUIRED_FIELD_MISSING', message: 'Required fields are missing: [Email]', fields: ['Email'] }] : null) });
+  const ins = createInserter(client, 'dev', { keepId: (ref) => ref.startsWith('acc#'), plan: bulkPlan(), bulk: fastBulk });
+  for (const r of accConRecords()) await ins.push(r);
+  const res = await ins.end();
+  assert.equal(res.stopped.reason, 'allFailing');
+  assert.equal(client.jobs.length, 0);
+  assert.equal(client.calls.filter((c) => c.sobject === 'Contact').length, 3);
+});
+
+test('Bulk: failures map back to their ref when the line is unique; two all-failing jobs stop with bulkFailing', async () => {
+  // Probe passes (create), every Bulk line with LastName C2xxx fails.
+  const client = bulkClient({ fail: (_r, _s, via) => (via === 'bulk' ? [{ statusCode: 'FIELD_CUSTOM_VALIDATION_EXCEPTION', message: 'no', fields: ['LastName'] }] : null) });
+  const ins = createInserter(client, 'dev', { keepId: (ref) => ref.startsWith('acc#'), plan: bulkPlan(3), bulk: { ...fastBulk, jobRecords: 1000 } });
+  for (const r of accConRecords(300, 40)) await ins.push(r);
+  const res = await ins.end();
+  assert.equal(res.stopped.reason, 'bulkFailing');
+  assert.deepEqual([res.stopped.sobject, res.stopped.nodeId, res.stopped.jobs], ['Contact', 'c', 2]);
+  assert.equal(client.jobs.length, 2, 'no third job');
+  const e = res.errors.find((x) => x.sobject === 'Contact');
+  assert.match(e.ref, /^con#\d+$/, 'a unique line gets its ref back');
+  assert.equal(e.field, 'fields.LastName');
+  assert.ok(res.notSent > 0);
+  assert.equal(res.inserted + res.failed + res.notSent, 12300);
+});
+
+test('Bulk: a job Salesforce refuses to create sends the step through Collections, with a warning', async () => {
+  const client = bulkClient({ createJobError: 'INVALIDENTITY' });
+  const ins = createInserter(client, 'dev', { keepId: (ref) => ref.startsWith('acc#'), plan: bulkPlan(), bulk: fastBulk });
+  for (const r of accConRecords()) await ins.push(r);
+  const res = await ins.end();
+  assert.equal(res.inserted, 12300);
+  assert.equal(client.jobs.length, 1);
+  assert.equal(client.calls.filter((c) => c.sobject === 'Contact').reduce((n, c) => n + c.recs.length, 0), 12000, 'every Contact through create');
+  assert.deepEqual(res.warnings.map((w) => [w.nodeId, w.code]), [['c', 'bulkFallback']]);
+});
+
+test('Bulk: a Failed job counts its records as failed with the job message', async () => {
+  const client = bulkClient({ jobState: () => 'Failed' });
+  const ins = createInserter(client, 'dev', { keepId: (ref) => ref.startsWith('acc#'), plan: bulkPlan(), bulk: fastBulk });
+  for (const r of accConRecords(300, 40)) await ins.push(r);
+  const res = await ins.end();
+  assert.equal(res.stopped.reason, 'bulkFailing');
+  assert.match(res.errorGroups.find((g) => g.sobject === 'Contact').message, /^Job Bulk 7504x1 \(Contact\) thất bại: InvalidBatch\. Bản ghi của job này chưa được insert\. Bỏ chọn "Dùng Bulk API 2\.0"/);
+});
+
+test('Bulk: Dừng while a job is processed waits for JobComplete (no abort); counts and Ids exact', async () => {
+  const controller = new AbortController();
+  const client = bulkClient({ checksBeforeDone: 3, onCheck: (job) => { if (job.checks === 1) controller.abort(); } });
+  const recorded = [];
+  const ins = createInserter(client, 'dev', { keepId: (ref) => ref.startsWith('acc#'), plan: bulkPlan(), bulk: fastBulk, signal: controller.signal, onInserted: async (rows) => { recorded.push(...rows); } });
+  for (const r of accConRecords()) await ins.push(r);
+  const res = await ins.end();
+  assert.ok(!client.jobs[0].log.includes('abort'));
+  assert.equal(client.jobs.length, 1, 'no new job after Dừng');
+  assert.equal(res.cancelled, true);
+  assert.equal(recorded.filter((r) => r.ref === '').length, 10000, 'the Ids of the job waited for');
+  assert.equal(res.inserted + res.failed + res.notSent, 12300);
+  assert.equal(res.inserted, recorded.length);
+});
+
+test('Bulk: Dừng while uploading aborts the job (never closed); its records are not sent', async () => {
+  const controller = new AbortController();
+  const client = bulkClient();
+  const base = client.bulkJob.bind(client);
+  client.bulkJob = (...a) => {
+    const j = base(...a);
+    const up = j.upload;
+    j.upload = async (csv) => { await up(csv); controller.abort(); };
+    return j;
+  };
+  const ins = createInserter(client, 'dev', { keepId: (ref) => ref.startsWith('acc#'), plan: bulkPlan(), bulk: fastBulk, signal: controller.signal });
+  for (const r of accConRecords()) await ins.push(r);
+  const res = await ins.end();
+  assert.deepEqual(client.jobs[0].log, ['open', 'upload', 'abort']);
+  assert.equal(res.cancelled, true);
+  assert.equal(res.inserted + res.failed + res.notSent, 12300);
+  assert.ok(res.notSent >= 10000);
+});
+
+test('Bulk: Dừng ngay aborts the job, then reads its results (bulkAborted); unknown Ids are flagged', async () => {
+  const controller = new AbortController();
+  const force = new AbortController();
+  const client = bulkClient({ checksBeforeDone: 5, onCheck: (job) => { if (job.checks === 1) { controller.abort(); force.abort(); } } });
+  const ins = createInserter(client, 'dev', { keepId: (ref) => ref.startsWith('acc#'), plan: bulkPlan(), bulk: fastBulk, signal: controller.signal, forceSignal: force.signal });
+  for (const r of accConRecords()) await ins.push(r);
+  const res = await ins.end();
+  assert.ok(client.jobs[0].log.includes('abort'));
+  assert.ok(client.jobs[0].log.indexOf('ok') > client.jobs[0].log.indexOf('abort'), 'results read after the abort');
+  assert.deepEqual([res.bulkAborted.jobId, res.bulkAborted.idsKnown], ['7504x1', true]);
+  assert.equal(res.cancelled, true);
+
+  const c2 = new AbortController();
+  const f2 = new AbortController();
+  const jobs = [];
+  const unknown = bulkClient({ noResults: true, checksBeforeDone: 5, onCheck: (job) => { if (job.checks === 1) { c2.abort(); f2.abort(); } } });
+  const ins2 = createInserter(unknown, 'dev', { keepId: (ref) => ref.startsWith('acc#'), plan: bulkPlan(), bulk: fastBulk, signal: c2.signal, forceSignal: f2.signal, onBulkJob: async (e) => { jobs.push({ ...e }); } });
+  for (const r of accConRecords()) await ins2.push(r);
+  const res2 = await ins2.end();
+  assert.equal(res2.bulkAborted.idsKnown, false);
+  assert.equal(jobs.at(-1).idsUnknown, true);
+});
+
+test('Bulk: a job not finished after bulkJobTimeoutMs stops the run (bulkTimeout), job Id kept for later', async () => {
+  let t = 0;
+  const client = bulkClient({ checksBeforeDone: 1e9 });
+  const jobs = [];
+  const ins = createInserter(client, 'dev', { keepId: (ref) => ref.startsWith('acc#'), plan: bulkPlan(), bulk: { sleep: async (ms) => { t += ms; }, clock: () => t, timeoutMs: 60000 }, onBulkJob: async (e) => { jobs.push({ ...e }); } });
+  for (const r of accConRecords()) await ins.push(r);
+  const res = await ins.end();
+  assert.equal(res.stopped.reason, 'bulkTimeout');
+  assert.match(res.stopped.message, /^Job Bulk 7504x1 \(Contact\) chưa xong sau 1 phút/);
+  assert.equal(jobs.at(-1).idsCollected, false);
+  // Backoff: 2 s, ×1.5, at most 15 s.
+  const waits = [];
+  let w = 2000;
+  while (waits.reduce((a, b) => a + b, 0) < 60000) { waits.push(w); w = Math.min(w * 1.5, 15000); }
+  assert.equal(t, waits.reduce((a, b) => a + b, 0));
+});
+
+test('history write failing stops the insert after the call in flight (stopped.reason history)', async () => {
+  const client = fakeClient();
+  let n = 0;
+  const ins = createInserter(client, 'dev', { onInserted: async () => { if (++n === 2) throw new Error('ENOSPC: no space left on device'); } });
+  for (let i = 1; i <= 1000; i++) await ins.push(acc(i));
+  const res = await ins.end();
+  assert.equal(client.calls.length, 2);
+  assert.deepEqual([res.stopped.reason, res.stopped.message], ['history', 'ENOSPC: no space left on device']);
+  assert.equal(res.inserted, 400);
+  assert.equal(res.notSent, 600);
+});
+
+test('sf org display gives the orgId (design 0011)', async () => {
+  const run = async () => ({ stdout: JSON.stringify({ status: 0, result: { id: '00D5g000000AbCdEAK', accessToken: 'SECRET', instanceUrl: 'https://x.my.salesforce.com/', username: 'me@x.com' } }) });
+  const c = await createSfCli({ run }).getConnection('dev');
+  assert.deepEqual([c.orgId, c.instanceUrl, c.username], ['00D5g000000AbCdEAK', 'https://x.my.salesforce.com', 'me@x.com']);
+});

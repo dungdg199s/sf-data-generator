@@ -71,7 +71,11 @@ test('org target emits plan before insert progress; the insert gets the same rec
   assert.ok(planAt > 0 && types.slice(0, planAt).every((t) => t === 'start' || t === 'progress:generate'));
   assert.ok(types.slice(planAt + 1, -1).every((t) => t === 'progress:insert'));
   assert.equal(types.at(-1), 'done');
-  assert.deepEqual(events[planAt], { type: 'plan', total: 2500, bySobject: { Account: 500, Contact: 2000 }, apiCalls: 13 });
+  // 0011: the plan also says how each step is sent (no Bulk below 10 000 records).
+  assert.deepEqual(events[planAt], {
+    type: 'plan', total: 2500, bySobject: { Account: 500, Contact: 2000 }, apiCalls: 13, apiCallsBy: { collections: 13, bulk: 0 },
+    steps: [{ nodeId: 'a', sobject: 'Account', mode: 'collections', probe: 0, jobs: 0 }, { nodeId: 'c', sobject: 'Contact', mode: 'collections', probe: 0, jobs: 0 }],
+  });
   const ins = events.filter((e) => e.phase === 'insert');
   assert.deepEqual(ins.at(-1).bySobject, { Account: { inserted: 500, failed: 0, total: 500 }, Contact: { inserted: 2000, failed: 0, total: 2000 } });
   const sent = client.calls.flatMap((c) => c.recs);
@@ -234,4 +238,37 @@ test('loop iterations count as step visits: a body of turned-off steps hits maxS
   // Each-loop iterations count too.
   const each = wf([record('acc', 'Account', 'acc', [], { count: 2000 }), loop('o', { count: 1000 }, [loop('e', { mode: 'each', from: 'acc', itemAlias: 'a' }, [off])])]);
   assert.throws(() => runWorkflow(each, { seed: 1, now: NOW }), (e) => /quá 2000000 bước/.test(e.message));
+});
+
+// ---------- design 0011: history ----------
+
+test('a history entry that cannot be created ends the run with an error before any write (insert null)', async () => {
+  const client = fakeClient();
+  const history = { dir: '/nope/history', create: async () => { throw new Error('EACCES: permission denied'); } };
+  const { events, end } = await drive({ run: createRun(accCon(10), { seed: 1, now: NOW }), target: 'dev', sfClient: client, record: { history, org: {}, workflow: null } });
+  assert.equal(client.calls.length, 0);
+  assert.equal(end.type, 'error');
+  assert.equal(end.insert, null);
+  assert.equal(end.error, 'Không ghi được Lịch sử (EACCES: permission denied), nên chưa ghi gì vào org. Kiểm tra quyền ghi thư mục /nope/history hoặc đặt SFDG_DATA_DIR.');
+  assert.ok(!events.some((e) => e.type === 'plan'));
+});
+
+test('an Id append failing mid-run stops after the call in flight (stopped.reason history); the entry is finished', async () => {
+  const client = fakeClient();
+  let appends = 0;
+  const finished = [];
+  const entry = {
+    id: 'h20261028T103200Z-abcdef',
+    data: { steps: [{ nodeId: 'a' }, { nodeId: 'c' }] },
+    appendIds: async () => { if (++appends === 3) throw new Error('ENOSPC: no space left on device'); },
+    recordJob: async () => {},
+    finish: async (patch) => { finished.push(patch); },
+  };
+  const history = { dir: '/d', create: async () => entry };
+  const { events, end } = await drive({ run: createRun(accCon(500), { seed: 1, now: NOW }), target: 'dev', sfClient: client, record: { history, org: {}, workflow: null } });
+  assert.equal(events.find((e) => e.type === 'plan').historyId, entry.id);
+  assert.equal(client.calls.length, 3);
+  const ins = end.result.insert;
+  assert.deepEqual([ins.stopped.reason, ins.historyId, ins.inserted], ['history', entry.id, 600]);
+  assert.deepEqual([finished[0].status, finished[0].inserted, finished[0].stopped.reason], ['stopped', 600, 'history']);
 });
