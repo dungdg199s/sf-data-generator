@@ -945,3 +945,15 @@ Làm từng phần theo [Kế hoạch](#kế-hoạch-thực-hiện); phần chư
   hỏi (field phía trên chỉ bị kẹp). Lỗi của generator vẫn là 422 (kèm `issues[].field`); lỗi khác là 500 có log. Mẫu và hash vàng
   không đổi (không mẫu nào dùng giá trị ngoài khoảng). Test: `test/generators.test.js`, `test/server.test.js`;
   `docs/field-types.md`, `docs/workflow-schema.md`.
+- **[Đổi] của C an toàn với hoàn tác.** `shared/each-wrap.js` (mới, thuần): `eachWrapPlan(wf, catalog, id, { slotKeys, scope })`
+  và `applyEachRewire(wf, rewire, { loopId, itemAlias, slotKeys })`; `client/js/ops.js` chỉ gọi chúng. [Đổi] chỉ đổi khi Lặp mới
+  còn, vẫn là "Mỗi bản ghi trong pool" với cùng tên bản ghi, và bước của Lookup còn nằm trong nó (field và `ref` chưa bị sửa);
+  không thì không đổi gì, toast `Không đổi được: Lặp qua từng bản ghi đã bị hoàn tác hoặc sửa.` Test `test/each-wrap.test.js`.
+- **H dùng đúng luật đọc của server:** `estimate.js` lấy số dòng tối đa bằng `maxFetchFor(config, maxQueryRows)` của
+  `shared/soql.js` (bỏ hàm đọc `LIMIT` riêng), nên `LIMIT 5000` được kẹp còn 2 000 như khi đọc thật (test).
+- **D nhẹ hơn:** hai view tra bước qua `stepsById()` (Map id → bước, dựng một lần mỗi phiên bản workflow) thay vì `stepById`
+  từng thẻ; `resultStale()` chỉ tuần tự hóa workflow một lần mỗi phiên bản / lần chạy (`client/js/run-cards.js`).
+- **E:** `title` của hàng ví dụ nói đúng seed đang dùng; hàng (`aria-live`) chỉ ghi lại chữ khi chữ đổi; cache chỉ giữ câu trả lời
+  thành công và 422 (lỗi 500 / mất kết nối được hỏi lại). Chú thích `vi-VN` trong `summary.js` sửa theo định dạng thật.
+- `docs/ui-design-system.md` §6.4: tag lỗi insert trên Sơ đồ không tới được bằng bàn phím (`tabindex="-1"`); đường bàn phím là
+  tab "Lỗi insert".

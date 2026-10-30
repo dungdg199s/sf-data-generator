@@ -56,6 +56,11 @@ test('a Lặp each runs once per record of a Record pool above (exact) and of a 
   // SOQL: its LIMIT.
   const soql = wf([query('q', 'qs', { mode: 'soql', soql: 'SELECT Id FROM Account ORDER BY Id LIMIT 30' }), loop('e', { mode: 'each', from: 'qs', itemAlias: 'q1' }, [record('c', 'Contact', 'con')])]);
   assert.equal(est(soql).byStep.c.records, 30);
+  // A LIMIT over the server's maxQueryRows (2 000) is capped like the read itself (maxFetchFor).
+  const big = wf([query('q', 'qs', { mode: 'soql', soql: 'SELECT Id FROM Account LIMIT 5000' }), loop('e', { mode: 'each', from: 'qs', itemAlias: 'q1' }, [record('c', 'Contact', 'con')])]);
+  assert.equal(est(big).byStep.c.records, LIMITS.maxQueryRows);
+  const builderBig = wf([query('q', 'qs', { limit: 5000 }), loop('e', { mode: 'each', from: 'qs', itemAlias: 'q1' }, [record('c', 'Contact', 'con')])]);
+  assert.equal(est(builderBig).byStep.c.records, LIMITS.maxQueryRows);
   // A pick pool holds one record per pick.
   const p = wf([query('q', 'qs'), loop('l', { count: 4 }, [pick('p', 'acc', 'qs')]), loop('e', { mode: 'each', from: 'acc', itemAlias: 'x' }, [record('c', 'Contact', 'con')])]);
   assert.deepEqual(est(p).byStep.c, { records: 4, min: 4, max: 4, exact: true });

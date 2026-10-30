@@ -20,7 +20,7 @@ import { openField, openSheet } from './inspector.js';
 import { openAddMenu, openStepMenu } from './menus.js';
 import { START_ID } from './layout.js';
 import { bindRefTarget, refSourceStep, sourceTitle, refTargetId } from './ref-target.js';
-import { paintCardRun, resultStale, noteText } from './run-cards.js';
+import { paintCardRun, resultStale, noteText, stepsById } from './run-cards.js';
 
 const MAX_FIELD_CHIPS = 12;
 
@@ -269,9 +269,8 @@ function fieldChips(step) {
 // ---------- decoration (selection, issues) without rebuilding ----------
 
 /** Chip, insert-error tag and the collapsed note's insert count of one card (design 0012 D, H). */
-function paintRun(card, note = card.parentElement.querySelector(':scope > .collapsed-note')) {
-  const id = card.dataset.id;
-  const step = id === START_ID ? null : stepById(id);
+function paintRun(card, note = card.parentElement.querySelector(':scope > .collapsed-note'), steps = stepsById()) {
+  const step = steps.get(card.dataset.id);
   if (!step) return;
   paintCardRun(card, step, { stale: staleStats, parent: card, before: card.querySelector(':scope > .badges') });
   if (note) note.textContent = noteText(note.dataset.base ?? '', step);
@@ -281,12 +280,14 @@ function paintRun(card, note = card.parentElement.querySelector(':scope > .colla
 export function paintRunInfo() {
   if (!root || !active()) return;
   staleStats = resultStale();
-  for (const card of root.querySelectorAll('.step-card')) paintRun(card);
+  const steps = stepsById();
+  for (const card of root.querySelectorAll('.step-card')) paintRun(card, undefined, steps);
 }
 
 function decorate() {
   if (!root) return;
   const issues = issuesByStep();
+  const steps = stepsById();
   const sel = state.selection;
   const selectedId = sel?.kind === 'step' && stepById(sel.id) ? sel.id : sel?.kind === 'workflow' ? START_ID : null;
   let focusable = null;
@@ -333,7 +334,7 @@ function decorate() {
       else if (inner.warnings) parts.push(`${inner.warnings} cảnh báo`);
       note.dataset.base = parts.join(' · ');
     }
-    paintRun(card, note);
+    paintRun(card, note, steps);
     // Field chips and slots of this step.
     const fieldIssues = [...own.errors, ...own.warnings];
     for (const chip of stepEl.querySelectorAll(':scope > .details .field-chip')) {

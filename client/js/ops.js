@@ -7,7 +7,8 @@ import {
   state, subscribe, updateWorkflow, select, undo, nodeType, slotKeys, locate, stepById, newId, suggestAlias, workflowRevision, currentScope,
   suggestPoolAlias, suggestPickAlias,
 } from './store.js';
-import { analyzeScope, refChoices, sourceStep, referenceOptions } from '/shared/scope.js';
+import { analyzeScope, refChoices, sourceStep } from '/shared/scope.js';
+import { eachWrapPlan as planEachWrap, applyEachRewire } from '/shared/each-wrap.js';
 import {
   insertStep, removeStep, moveStep, wrapStep, cloneSteps, collectIds, collectAliases,
   defaultInsertTarget, neighbourTarget, findStep, walkSteps, slotList, subtreeIds,
@@ -282,53 +283,11 @@ export function toggleDisabled(id = selectedId()) {
 }
 
 /**
- * The pool a source's records come from, following Chọn bản ghi (`picked`) back towards the
- * pool they were picked from: [source name, its pool, that pool's pool…] (nearest first).
- */
-function poolChain(scope, name) {
-  const byName = (n) => Object.values(scope.sources).find((s) => s.name === n && s.kind === 'record');
-  const out = [];
-  for (let s = byName(name); s && !out.includes(s.name); s = s.current === 'picked' && s.from ? byName(s.from) : null) out.push(s.name);
-  return out;
-}
-
-/**
- * Plan of "Bọc trong Lặp qua từng bản ghi" (design 0012 C) around step `id`: the pool the new
- * Lặp `each` loops over — among the pools usable at the step's place (where the Lặp goes), the
- * one the wrapped steps refer to most (Lookup `ref`, `pick.from`, `{{accs.…}}`; a reference to
- * a Chọn bản ghi counts for the pool it picks from), ties and no reference: the nearest — and
- * the Lookups worth re-pointing at the record being looped over.
- * → { from, rewire: [{ stepId, alias, fieldIndex, fieldName, ref }] } or null (no usable pool).
+ * Plan of "Bọc trong Lặp qua từng bản ghi" (design 0012 C) around step `id`: see
+ * shared/each-wrap.js. → { from, rewire } or null (no usable pool).
  */
 export function eachWrapPlan(id) {
-  const at = locate(id);
-  if (!at) return null;
-  const scope = currentScope();
-  const pools = refChoices(scope, id, { pool: true }).filter((c) => c.usable);
-  if (!pools.length) return null;
-  const usable = new Set(pools.map((c) => c.name));
-  const target = (name) => poolChain(scope, name).filter((n) => usable.has(n)).at(-1);
-  const inside = subtreeIds(at.step, slotKeys);
-  const hits = new Map();
-  for (const r of scope.refs) {
-    if (r.hidden || !inside.has(r.nodeId)) continue;
-    const name = target(scope.sources[r.source]?.name);
-    if (name) hits.set(name, (hits.get(name) ?? 0) + 1);
-  }
-  const best = Math.max(0, ...hits.values());
-  const from = (best ? pools.find((c) => hits.get(c.name) === best) : pools[0]).name;
-  const rewire = [];
-  walkSteps([at.step], (s) => {
-    for (const o of referenceOptions(s, state.meta)) {
-      if (o.fieldIndex === undefined || o.def.kind !== 'ref' || !o.value) continue;
-      const mode = s.config.fields[o.fieldIndex].options?.mode;
-      const chain = poolChain(scope, o.value);
-      if ((o.value === from && mode === 'random') || (o.value !== from && chain.includes(from))) {
-        rewire.push({ stepId: s.id, alias: s.config?.alias || s.id, fieldIndex: o.fieldIndex, fieldName: o.fieldName, ref: o.value });
-      }
-    }
-  }, slotKeys);
-  return { from, rewire };
+  return planEachWrap(state.workflow, state.meta, id, { slotKeys, scope: currentScope() });
 }
 
 /**
@@ -352,24 +311,20 @@ export function wrapInEach(id) {
     const question = plan.rewire.length === 1
       ? `Đổi Lookup ${one.fieldName} (${one.alias}) sang bản ghi đang lặp "${itemAlias}"?`
       : `Đổi ${plan.rewire.length} Lookup sang bản ghi đang lặp "${itemAlias}"?`;
-    toast(question, 8000, { label: 'Đổi', onClick: () => rewireLookups(plan.rewire, itemAlias) });
+    toast(question, 8000, { label: 'Đổi', onClick: () => rewireLookups(plan.rewire, container.id, itemAlias) });
   }
   return container;
 }
 
-/** [Đổi] of wrapInEach: the Lookups still pointing where they did take the loop's record. */
-function rewireLookups(rewire, itemAlias) {
-  let n = 0;
-  updateWorkflow((wf) => {
-    for (const r of rewire) {
-      const f = findStep(wf, r.stepId, slotKeys)?.step.config?.fields?.[r.fieldIndex];
-      if (f?.name !== r.fieldName || f.options?.ref !== r.ref) continue;
-      f.options = { ...f.options, ref: itemAlias, mode: 'current' };
-      n++;
-    }
-    return n > 0;
-  });
-  toast(n ? `Đã đổi ${n} Lookup sang bản ghi đang lặp "${itemAlias}".` : 'Không đổi được: các Lookup đó đã được sửa sau khi bọc.');
+/**
+ * [Đổi] of wrapInEach: only while the Lặp still exists with the same record name and the Lookups
+ * are still inside it, unchanged (shared/each-wrap.js); another undo step.
+ */
+function rewireLookups(rewire, loopId, itemAlias) {
+  let n = null;
+  updateWorkflow((wf) => { n = applyEachRewire(wf, rewire, { loopId, itemAlias, slotKeys }); });
+  if (n === null) toast('Không đổi được: Lặp qua từng bản ghi đã bị hoàn tác hoặc sửa.');
+  else toast(n ? `Đã đổi ${n} Lookup sang bản ghi đang lặp "${itemAlias}".` : 'Không đổi được: các Lookup đó đã được sửa sau khi bọc.');
 }
 
 export function wrapIn(id, type) {

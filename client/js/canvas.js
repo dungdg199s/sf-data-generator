@@ -22,7 +22,7 @@ import * as ops from './ops.js';
 import { openSheet } from './inspector.js';
 import { openAddMenu, openStepMenu } from './menus.js';
 import { refTargetId } from './ref-target.js';
-import { paintCardRun, resultStale, noteText } from './run-cards.js';
+import { paintCardRun, resultStale, noteText, stepsById } from './run-cards.js';
 
 const SVG = 'http://www.w3.org/2000/svg';
 const ZOOM_MIN = 0.1;
@@ -480,8 +480,8 @@ function decorateCard(card) {
 }
 
 /** Chip, insert-error tag and the collapsed note's insert count of one card (design 0012 D, H). */
-function paintRun(card) {
-  const step = card.dataset.id === START_ID ? null : stepById(card.dataset.id);
+function paintRun(card, steps = stepsById()) {
+  const step = steps.get(card.dataset.id);
   if (!step) return;
   const tags = card.querySelector(':scope > .dg-tags');
   const note = card.querySelector('.dg-note[data-count]');
@@ -495,7 +495,8 @@ function paintRun(card) {
 export function paintRunInfo() {
   if (!lay || state.view !== 'canvas') return;
   staleStats = resultStale();
-  for (const el of els.values()) if (el.classList.contains('step-card')) paintRun(el);
+  const steps = stepsById();
+  for (const el of els.values()) if (el.classList.contains('step-card')) paintRun(el, steps);
 }
 
 function decorateSlot(el) {

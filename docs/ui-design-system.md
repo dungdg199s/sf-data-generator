@@ -297,7 +297,9 @@ không `aria-live` trên thẻ) ghi số của lượt đang chạy; khi insert,
 (`.tag-insert-err`, là nút): icon ⊗ + `lỗi 3`, chữ `danger-text`, viền 1 px `danger`, nền `danger-subtle` (khác badge validate nền
 đỏ đặc); `aria-label`/`title` `3 bản ghi của bước này insert lỗi. Bấm để xem nhóm lỗi.`; workflow đổi sau đó ⇒ `.stale` (viền nét
 đứt, chữ nghiêng). Bấm: tab "Lỗi insert", dòng nhóm đầu của bước có `.current` (nền `accent-subtle`, viền trên/dưới `accent`) và
-focus. Khung thu gọn ghi thêm `· lỗi insert 12`.
+focus. Khung thu gọn ghi thêm `· lỗi insert 12`. Ở Quy trình tag là nút Tab tới được; ở Sơ đồ tag có `tabindex="-1"` (cây chỉ có
+một điểm Tab, như badge) nên **không tới được bằng bàn phím**: đường bàn phím là tab "Lỗi insert" của panel kết quả (dòng nhóm là
+`role=button`, Enter / Space chọn bước), và toast cuối lần insert nhắc tab đó.
 
 **Điện thoại (≤ 720 px, [0014](design/0014-hoan-thien-giao-dien.md), dự kiến):** hàng thẻ không bao giờ rộng hơn thẻ; `⋯` và
 chevron luôn thấy. Tag `chưa chọn org` ẩn (badge ▲ và thanh lỗi đã nói cùng điều). Thứ tự co: tóm tắt → chip số liệu

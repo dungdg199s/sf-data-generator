@@ -8,13 +8,9 @@
 // Lặp / Rẽ nhánh / Query options (count, min/max, mode, probability, limit) is read here, like
 // client/js/summary.js does for the card text; slots come from the catalogue.
 
-const isStep = (s) => s && typeof s === 'object' && !Array.isArray(s) && s.id !== undefined && s.id !== null && s.id !== '';
+import { maxFetchFor } from './soql.js';
 
-/** `LIMIT n` at the end of a hand-written SOQL, or null. */
-function soqlLimit(soql) {
-  const m = /\blimit\s+(\d+)\s*(?:offset\s+\d+\s*)?$/i.exec(String(soql ?? '').trim());
-  return m ? Number(m[1]) : null;
-}
+const isStep = (s) => s && typeof s === 'object' && !Array.isArray(s) && s.id !== undefined && s.id !== null && s.id !== '';
 
 /**
  * @param wf workflow v2
@@ -114,7 +110,8 @@ export function estimateSteps(wf, catalog, { queryCounts = {} } = {}) {
         }
         case 'query': {
           const known = Object.hasOwn(queryCounts, step.id);
-          const limit = (opt(step, 'mode') ?? 'builder') === 'soql' ? soqlLimit(step.config?.soql) ?? maxQueryRows : num(opt(step, 'limit'), maxQueryRows);
+          // The rows the server would fetch at most (the same rule as server/sf/query.js).
+          const limit = maxFetchFor(step.config, maxQueryRows);
           const size = known ? num(queryCounts[step.id]) : limit;
           if (step.config?.alias) pools.set(step.config.alias, { size, min: known ? size : 0, max: size, exact: known, grownIn: new Set() });
           e.rows = size;

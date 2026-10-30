@@ -88,7 +88,7 @@ export function statChip(step, byStep) {
   return s.records ? `${s.records} bản ghi` : `${s.runs} lần chạy`;
 }
 
-/** A record count of the estimate (design 0012 H): "12", "12,5", "1 250", "> 200 000". */
+/** A record count of the estimate (design 0012 H), vi-VN: "12", "12,5", "1.250", "> 200.000". */
 export function formatEstimate(n) {
   const hard = state.meta?.limits?.maxRecordsHard ?? 200000;
   if (n > hard) return `> ${hard.toLocaleString('vi-VN')}`;
@@ -111,7 +111,7 @@ export function estimateChip(step) {
 }
 
 /**
- * Start card (design 0012 H): "≈ 1 250 bản ghi · ≤ 50 000", and a warning when the expected
+ * Start card (design 0012 H): "≈ 1.250 bản ghi · ≤ 50.000", and a warning when the expected
  * count is over the run's limit. → { text, over: { label, title } | null }
  */
 export function startEstimate() {

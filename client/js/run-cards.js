@@ -8,13 +8,35 @@
 //   { phase: 'insert', base, insertByStep }          insert (base: the confirmed preview)
 
 import { h, toast } from './dom.js';
-import { state, slotKeys } from './store.js';
+import { state, slotKeys, workflowRevision } from './store.js';
 import { statChip, estimateChip } from './summary.js';
-import { walkSteps } from '/shared/workflow-tree.js';
+import { walkSteps, allSteps } from '/shared/workflow-tree.js';
 import { fmt, showInsertErrorsFor } from './results.js';
 
-/** The workflow changed since the last run (chips and tags of that run are old). */
-export const resultStale = () => state.lastRunSteps !== null && state.lastRunSteps !== JSON.stringify(state.workflow.steps);
+let staleCache = { revision: -1, workflow: null, lastRunSteps: undefined, value: false };
+/**
+ * The workflow changed since the last run (chips and tags of that run are old). Serializes the
+ * steps once per workflow revision and run, not once per card or progress event.
+ */
+export function resultStale() {
+  const c = staleCache;
+  if (c.revision !== workflowRevision() || c.workflow !== state.workflow || c.lastRunSteps !== state.lastRunSteps) {
+    staleCache = {
+      revision: workflowRevision(), workflow: state.workflow, lastRunSteps: state.lastRunSteps,
+      value: state.lastRunSteps !== null && state.lastRunSteps !== JSON.stringify(state.workflow.steps),
+    };
+  }
+  return staleCache.value;
+}
+
+let idCache = { revision: -1, workflow: null, map: new Map() };
+/** id → step of the whole workflow, built once per workflow revision (decoration passes look cards up in it). */
+export function stepsById() {
+  if (idCache.revision !== workflowRevision() || idCache.workflow !== state.workflow) {
+    idCache = { revision: workflowRevision(), workflow: state.workflow, map: new Map(allSteps(state.workflow, slotKeys).map((s) => [s.id, s])) };
+  }
+  return idCache.map;
+}
 
 const STALE_TITLE = 'Số liệu của lần xem trước gần nhất; workflow đã đổi sau đó.';
 

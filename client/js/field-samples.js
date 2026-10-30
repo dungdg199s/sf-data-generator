@@ -13,8 +13,10 @@ import { api } from './api.js';
 import { formatSample, samplesStale } from './variables.js';
 
 const DEBOUNCE_MS = 300;
-const INDEPENDENT_TITLE = 'Ba giá trị sinh riêng cho field này (seed 1) để thấy ngay tác dụng của tùy chọn. Xem trước có thể ra giá trị khác.';
-const cache = new Map(); // request JSON → { values } | { error } (the last 50)
+const independentTitle = (seed) => `Ba giá trị sinh riêng cho field này (seed ${seed}) để thấy ngay tác dụng của tùy chọn. Xem trước có thể ra giá trị khác.`;
+// request JSON → { values } | { error } (the last 50): answers and 422s only, which the same request
+// would get again; a 500 or a lost connection is shown but asked again next time.
+const cache = new Map();
 const rows = new Set();
 
 // Dependent rows follow a new preview, and every row its field's edits (typed options do not
@@ -74,14 +76,16 @@ export function samplesRow(step, index) {
   let timer = 0;
   let seq = 0;
   let controller = null;
+  // Only what changed is written: the row is aria-live, and refreshes come on every edit.
   const show = (text, { cls = '', title = '' } = {}) => {
-    row.className = `field-samples${cls ? ` ${cls}` : ''}`;
-    row.textContent = text;
-    row.title = title;
+    const className = `field-samples${cls ? ` ${cls}` : ''}`;
+    if (row.className !== className) row.className = className;
+    if (row.textContent !== text) row.textContent = text;
+    if (row.title !== title) row.title = title;
   };
-  const showValues = (res) => {
+  const showValues = (res, seed) => {
     if (res.error) show(`Không tạo được ví dụ: ${res.error}`, { cls: 'error' });
-    else show(`Ví dụ: ${res.values.map(formatSample).join(' · ')}`, { title: INDEPENDENT_TITLE });
+    else show(`Ví dụ: ${res.values.map(formatSample).join(' · ')}`, { title: independentTitle(seed) });
   };
 
   row.refresh = () => {
@@ -117,10 +121,10 @@ export function samplesRow(step, index) {
     if (hit) {
       controller?.abort();
       seq++;
-      showValues(hit);
+      showValues(hit, body.seed);
       return;
     }
-    if (!row.textContent) show('Ví dụ: …', { title: INDEPENDENT_TITLE });
+    if (!row.textContent) show('Ví dụ: …', { title: independentTitle(body.seed) });
     const mine = ++seq;
     timer = setTimeout(async () => {
       controller?.abort();
@@ -130,15 +134,19 @@ export function samplesRow(step, index) {
         res = await api.fieldSamples(body, { signal: controller.signal });
       } catch (e) {
         if (e.name === 'AbortError') return;
-        res = { error: e.issues?.[0]?.message ?? e.message };
-        if (e.lost || !e.status) {
+        if (!e.status) {
           if (mine === seq) show('Không lấy được ví dụ: mất kết nối với server.', { cls: 'error' });
+          return;
+        }
+        res = { error: e.issues?.[0]?.message ?? e.message };
+        if (e.status !== 422) {
+          if (mine === seq) showValues(res, body.seed);
           return;
         }
       }
       cache.set(key, res);
       if (cache.size > 50) cache.delete(cache.keys().next().value);
-      if (mine === seq) showValues(res);
+      if (mine === seq) showValues(res, body.seed);
     }, row.isConnected ? DEBOUNCE_MS : 0);
   };
 
