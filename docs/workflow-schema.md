@@ -388,9 +388,12 @@ Trả `{ "values": ["Banking", "Retail", "Banking"] }` (`null` giữ là `null`)
   phía trên. Server sinh `count` bản ghi (mặc định 3, kẹp trong 1–5) chỉ gồm các field đó, theo thứ tự, `n` = 1…count, scope rỗng
   (không có bước khác, không có biến lặp), rng có seed (`seed`, mặc định `1`) và `now` truyền vào (bắt buộc). Template trỏ tới
   bước khác ra chuỗi rỗng; field phía trên không sinh được ở đây (Lookup…) bị bỏ qua.
-- Request sai dạng (`fields` rỗng / quá 500, `index` ngoài danh sách, thiếu `now`) ⇒ 400. Field `index` không tên hoặc kiểu lạ ⇒
-  422 `{ error, issues: [{ field: "fields.<Name>", message }] }`. Lỗi khi sinh (ví dụ hết giá trị duy nhất) ⇒ 422
-  `{ error: "<câu của generator>" }`.
+- Request sai dạng (`fields` rỗng / quá 500, `index` ngoài danh sách, thiếu `now`) ⇒ 400. Field `index` không tên, kiểu lạ, hoặc
+  option số ngoài `min`/`max` của nó (cùng kiểm tra `optionIssues` với validate, xem [field-types.md](field-types.md)) ⇒ 422
+  `{ error, issues: [{ field: "fields.<Name>", option?, message }] }`. Lỗi khi sinh (ví dụ hết giá trị duy nhất) ⇒ 422
+  `{ error: "<câu của generator>", issues: [{ field, message }] }`. Lỗi khác (lỗi lập trình) ⇒ 500, có log ở server. Field phía
+  trên có option ngoài khoảng được kẹp, không bị từ chối; `options: null` coi như không có option.
+- Validate (và `/api/run`) báo cùng lỗi option ngoài khoảng: issue `code: "optionRange"`, `field: "fields.<Name>"`, `option`.
 - Cùng `requestGuard` và giới hạn body như mọi `/api/*`.
 
 ### `POST /api/export`

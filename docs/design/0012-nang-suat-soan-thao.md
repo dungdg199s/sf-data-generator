@@ -935,3 +935,13 @@ Làm từng phần theo [Kế hoạch](#kế-hoạch-thực-hiện); phần chư
 - Khác thiết kế: request không có `now` bị từ chối (400) thay vì lấy giờ server, để ví dụ luôn tái lập được; `sobject` được nhận
   nhưng chưa dùng. Field phụ thuộc mà lần xem trước không có bản ghi nào của bước hiện `Lần xem trước không sinh bản ghi nào của
   bước này.`
+
+### Sửa sau review (C, H, D, E)
+
+- **Option số có giới hạn thật (E, `/api/run`).** `maxWords`/`minWords` ≤ 1 000, `maxSentences`/`minSentences` ≤ 200,
+  `maxParagraphs`/`minParagraphs` ≤ 50 (`server/generators/text.js`); `resolveOptions` kẹp mọi option `integer`/`number` vào
+  `min`/`max`, `options: null` coi như `{}`. Hàm chung `optionIssues(field)` (`server/generators/index.js`): validate báo lỗi
+  `optionRange` (`fields.<Name>`, `option`), `/api/field-samples` trả 422 `issues: [{ field, option, message }]` cho field được
+  hỏi (field phía trên chỉ bị kẹp). Lỗi của generator vẫn là 422 (kèm `issues[].field`); lỗi khác là 500 có log. Mẫu và hash vàng
+  không đổi (không mẫu nào dùng giá trị ngoài khoảng). Test: `test/generators.test.js`, `test/server.test.js`;
+  `docs/field-types.md`, `docs/workflow-schema.md`.

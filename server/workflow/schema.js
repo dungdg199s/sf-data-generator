@@ -8,7 +8,7 @@
 
 import { NODE_TYPES, nodeTypeMap, CONDITION_OPS, LIMITS, recordPreset } from './nodes.js';
 import { checkSoql, checkBuilder, isFieldPath, buildSoql, soqlSobject, selectFields, builderLimit, addSelectField } from '../../shared/soql.js';
-import { getGenerator, describeGenerators } from '../generators/index.js';
+import { getGenerator, describeGenerators, optionIssues } from '../generators/index.js';
 import { migrateV1, describeReport, reportNeedsReview } from '../../shared/migrate-v1.js';
 import { analyzeScope, referenceOptions, hasUnclosed } from '../../shared/scope.js';
 import { stepNames } from '../../shared/workflow-tree.js';
@@ -341,6 +341,8 @@ function validateRecord(step, c, { err, warn, scope }) {
       err(`Field "${f.name}": kiểu "${f.type}" không được hỗ trợ.`, step.id, key);
       continue;
     }
+    // Out-of-range numeric options (also the check of /api/field-samples): generation clamps them.
+    for (const i of optionIssues(f)) err(i.message, step.id, key, { code: 'optionRange', option: i.option });
     if (REF_TYPES.has(f.type) && (f.options?.mode ?? 'current') !== 'fixed') {
       if (!f.options?.ref) err(`Field "${f.name}": chưa chọn bản ghi cha. Chọn một bước Record phía trên trong ô "Bản ghi cha".`, step.id, key);
       else {

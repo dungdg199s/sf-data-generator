@@ -624,3 +624,25 @@ test('POST /api/field-samples: unknown type ⇒ 422 with the field; count is cla
   assert.equal((await post('/api/field-samples', { fields: [industry], index: 0 })).status, 400);
   assert.equal((await post('/api/field-samples', { fields: Array.from({ length: 501 }, () => industry), index: 0, now: NOW0 })).status, 400);
 });
+
+test('POST /api/field-samples and /api/run refuse out-of-range options (no long loop); options: null is no options', async () => {
+  const huge = { name: 'Description', type: 'textarea', options: { maxSentences: 1e9 } };
+  const res = await post('/api/field-samples', { fields: [huge], index: 0, now: NOW0 });
+  assert.equal(res.status, 422);
+  const body = await res.json();
+  assert.deepEqual(body.issues.map((i) => [i.field, i.option]), [['fields.Description', 'maxSentences']]);
+  assert.match(body.issues[0].message, /"Số câu tối đa" phải từ 1 đến 200 \(đang là 1000000000\)/);
+  // A field above with a huge option is clamped, not refused (only the asked field is checked).
+  const above = await post('/api/field-samples', { fields: [{ name: 'A', type: 'text', options: { maxWords: 1e9 } }, industry], index: 1, now: NOW0 });
+  assert.equal(above.status, 200);
+  const nul = await post('/api/field-samples', { fields: [{ name: 'Industry', type: 'picklist', options: null }], index: 0, now: NOW0 });
+  assert.equal(nul.status, 200);
+  assert.equal((await nul.json()).values.length, 3);
+  // Generator errors carry the field too.
+  const unique = await (await post('/api/field-samples', { fields: [{ name: 'N__c', type: 'number', options: { min: 1, max: 2, unique: true } }], index: 0, count: 3, now: NOW0 })).json();
+  assert.equal(unique.issues[0].field, 'fields.N__c');
+  const run = await post('/api/run', { seed: 1, workflow: wf([record('a', 'Account', 'acc', [{ name: 'Name', type: 'text', options: { maxWords: 1e9 } }])]) });
+  assert.equal(run.status, 422);
+  const issue = (await run.json()).issues[0];
+  assert.deepEqual([issue.nodeId, issue.field, issue.option, issue.code], ['a', 'fields.Name', 'maxWords', 'optionRange']);
+});

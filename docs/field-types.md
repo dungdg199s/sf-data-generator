@@ -14,9 +14,9 @@ Option chung (registry tự thêm, generator không cần khai báo):
 
 | `type` | Salesforce | Option riêng | Giá trị sinh ra |
 | --- | --- | --- | --- |
-| `text` | Text | `mode` (words, name, firstName, lastName, company, city, pattern, list), `minWords`, `maxWords`, `pattern`, `values`, `prefix`, `suffix`, `maxLength` | chuỗi |
-| `textarea` | Text Area | `minSentences`, `maxSentences`, `maxLength` (≤255) | chuỗi |
-| `longtextarea` | Text Area (Long) | `minParagraphs`, `maxParagraphs`, `maxLength` | chuỗi có `\n\n` |
+| `text` | Text | `mode` (words, name, firstName, lastName, company, city, pattern, list), `minWords`, `maxWords` (1–1 000), `pattern`, `values`, `prefix`, `suffix`, `maxLength` | chuỗi |
+| `textarea` | Text Area | `minSentences`, `maxSentences` (1–200), `maxLength` (≤255) | chuỗi |
+| `longtextarea` | Text Area (Long) | `minParagraphs`, `maxParagraphs` (1–50), `maxLength` | chuỗi có `\n\n` |
 | `richtextarea` | Text Area (Rich) | như trên | HTML `<p>` (không cắt giữa thẻ) |
 | `encryptedtext` | Text (Encrypted) | `pattern`, `maxLength` (≤175) | chuỗi |
 | `email` | Email | `mode` (fromName, random), `domains`; mặc định `unique` | `first.last12@example.com` |
@@ -73,6 +73,14 @@ export const myType = {
 | `n` | Số thứ tự của bản ghi đang sinh (`n` trong `alias#n`), cho `{{this.$n}}` |
 
 Lỗi do generator `throw` sẽ được executor gắn `nodeId` và `field` để UI chỉ ra đúng field.
+
+**Giới hạn option số** ([0012](design/0012-nang-suat-soan-thao.md), sau review): `min` / `max` của option `integer` / `number`
+là giới hạn thật, không chỉ cho UI. `resolveOptions` (`server/generators/common.js`) **kẹp** giá trị vào `[min, max]` trước khi gọi
+`generate`, nên không option nào làm generator chạy quá lâu (ví dụ `maxSentences: 1e9`); option số nào có thể làm vòng lặp dài
+phải khai báo `max`. `optionIssues(field)` (`server/generators/index.js`) liệt kê option đang hiện (`showIf`) mà giá trị ngoài
+khoảng hoặc không phải số; validate dùng nó (lỗi `code: "optionRange"`, `field: "fields.<Name>"`, `option`) và
+`POST /api/field-samples` cũng vậy (422). `options` là `null` / không phải object được coi như `{}`. Generator báo lỗi đầu vào bằng
+`Error` thường; lỗi khác (`TypeError`…) là lỗi lập trình: `/api/field-samples` trả 500 và ghi log.
 
 Các `kind` của option mà UI dựng được: `string`, `text`, `integer`, `number`, `boolean`, `select` (cần `choices`),
 `list`, `numberList`, `time`, `ref` (dropdown dựng từ `refChoices` của `shared/scope.js`: bước dùng được ở vị trí này, gần
