@@ -21,6 +21,7 @@ import { openAddMenu, openStepMenu } from './menus.js';
 import { START_ID } from './layout.js';
 import { bindRefTarget, refSourceStep, sourceTitle, refTargetId } from './ref-target.js';
 import { paintCardRun, resultStale, noteText, stepsById } from './run-cards.js';
+import { isSelected, clickSelect, toggleSelected, extendBy, inSelectMode, selectionInfo } from './selection.js';
 
 const MAX_FIELD_CHIPS = 12;
 
@@ -180,10 +181,16 @@ function renderStep(step, level, at) {
       'aria-setsize': String(at.setsize),
       'aria-expanded': container ? String(!collapsed) : undefined,
       tabindex: '-1',
+      // Shift+click must not select the page's text (it selects a range of cards, design 0012 B).
+      onmousedown: (e) => { if (e.shiftKey) e.preventDefault(); },
       onclick: (e) => {
         if (e.target.closest('button, .handle')) return;
-        select({ kind: 'step', id: step.id });
-        openSheet(); // narrow screens: a tap on the selected card shows the sheet a run (or ‹ Xong) closed
+        if (inSelectMode()) toggleSelected(step.id); // narrow select mode: a tap adds / removes the card
+        else if (e.shiftKey || e.ctrlKey || e.metaKey) clickSelect(step.id, { range: e.shiftKey, toggle: !e.shiftKey });
+        else {
+          select({ kind: 'step', id: step.id });
+          openSheet(); // narrow screens: a tap on the selected card shows the sheet a run (or ‹ Xong) closed
+        }
         card.focus({ preventScroll: true });
       },
     },
@@ -305,12 +312,14 @@ function decorate() {
       errors += inner.errors;
       warnings += inner.warnings;
     }
-    const selected = id === selectedId;
+    // Every selected card has the selected style (design 0012 B); the primary one is the tab stop.
+    const primary = id === selectedId;
+    const selected = primary || (id !== START_ID && isSelected(id));
     card.classList.toggle('selected', selected);
     card.classList.toggle('is-ref-target', id === refTargetId());
     card.setAttribute('aria-selected', String(selected));
     card.tabIndex = -1;
-    if (selected) focusable = card;
+    if (primary) focusable = card;
     card.classList.toggle('has-error', errors > 0);
     card.classList.toggle('has-warning', !errors && warnings > 0);
     const badges = card.querySelector(':scope > .badges');
@@ -388,6 +397,12 @@ export function revealStep(id, { flash = false, focus = true, block = 'center' }
 
 function onTreeKey(e) {
   if (e.target.closest('input, textarea, select, .popup') || e.altKey || e.ctrlKey || e.metaKey) return;
+  // Shift+↑ / Shift+↓: grow or shrink the range inside the anchor's sequence (design 0012 B).
+  if (e.shiftKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+    e.preventDefault();
+    if (extendBy(e.key === 'ArrowUp' ? -1 : 1)) focusSelected();
+    return;
+  }
   const cards = [...root.querySelectorAll('.step-card')];
   const current = e.target.closest('.step-card') ?? cards.find((c) => c.classList.contains('selected'));
   const idx = cards.indexOf(current);
@@ -508,8 +523,13 @@ function onHandleDown(e, step) {
   if (e.pointerType === 'mouse' && e.button !== 0) return;
   e.preventDefault();
   e.stopPropagation();
+  if (inSelectMode()) return; // no dragging while tapping cards in and out of the selection
   const handle = e.currentTarget;
   const stepEl = handle.closest('.step');
+  // A card of a selected block drags the whole block; any other card drags alone (design 0012 B).
+  const sel = isSelected(step.id) ? selectionInfo() : null;
+  const block = sel && sel.ids.length > 1 && sel.contiguous ? sel.ids : null;
+  const blockEls = block ? block.map((id) => root.querySelector(`.step[data-step="${CSS.escape(id)}"]`)).filter(Boolean) : [stepEl];
   const start = { x: e.clientX, y: e.clientY };
   let drag = null;
   let holdTimer = null;
@@ -517,7 +537,7 @@ function onHandleDown(e, step) {
   let scrollRaf = 0;
 
   const begin = () => {
-    select({ kind: 'step', id: step.id });
+    if (!block) select({ kind: 'step', id: step.id });
     const card = stepEl.querySelector(':scope > .step-card');
     const r = card.getBoundingClientRect();
     const ghost = card.cloneNode(true);
@@ -525,9 +545,9 @@ function onHandleDown(e, step) {
     ghost.style.width = `${r.width}px`;
     document.body.append(ghost);
     root.classList.add('dragging');
-    stepEl.classList.add('drag-source');
-    // No drop inside the dragged step itself.
-    for (const p of stepEl.querySelectorAll('.add-point, .slot-empty')) p.classList.add('no-drop');
+    for (const el of blockEls) el.classList.add('drag-source');
+    // No drop inside the dragged step(s) itself.
+    for (const el of blockEls) for (const p of el.querySelectorAll('.add-point, .slot-empty')) p.classList.add('no-drop');
     drag = { ghost, offX: start.x - r.left, offY: start.y - r.top, target: null };
     position(last);
     const tick = () => {
@@ -555,7 +575,7 @@ function onHandleDown(e, step) {
     if (drag) {
       drag.ghost.remove();
       root.classList.remove('dragging');
-      stepEl.classList.remove('drag-source');
+      for (const el of blockEls) el.classList.remove('drag-source');
       for (const p of root.querySelectorAll('.no-drop')) p.classList.remove('no-drop');
       highlightDrop(null);
     }
@@ -576,7 +596,8 @@ function onHandleDown(e, step) {
     const wasDragging = Boolean(drag);
     cleanup();
     drag = null;
-    if (target) ops.moveTo(step.id, target);
+    if (target && block) ops.moveBlockTo(block, target);
+    else if (target) ops.moveTo(step.id, target);
     else if (!wasDragging) {
       select({ kind: 'step', id: step.id });
       cardOf(step.id)?.focus({ preventScroll: true });

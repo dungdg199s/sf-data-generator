@@ -652,7 +652,8 @@ function loopVarsAround(wf, target, slotKeys) {
  * pasted loop's variable is renamed when it would shadow a loop enclosing the target or equals a
  * record alias (references inside its body follow). References to steps outside the paste keep
  * their text. Mutates `wf`. → { ids: top-level pasted ids, renamed: [{ from, to }], missing:
- * names referenced by the pasted steps that do not exist here (with a catalogue) }.
+ * names referenced by the pasted steps that do not exist here, missingRefs: how many such
+ * references (both with a catalogue) }.
  */
 export function pasteSteps(wf, target, steps, { catalog, slotKeys } = {}) {
   const list = targetList(wf, target);
@@ -681,14 +682,13 @@ export function pasteSteps(wf, target, steps, { catalog, slotKeys } = {}) {
   }
   const index = Math.max(0, Math.min(target.index ?? list.length, list.length));
   list.splice(index, 0, ...copy);
-  let missing = [];
+  let broken = [];
   if (catalog?.nodeTypes) {
     const inside = new Set();
     walkSteps(copy, (s) => { inside.add(s.id); }, slotKeys);
-    const scope = analyzeScope(wf, catalog);
-    missing = [...new Set(scope.refs.filter((r) => inside.has(r.nodeId) && r.code === 'unknownName' && !r.hidden).map((r) => r.name))];
+    broken = analyzeScope(wf, catalog).refs.filter((r) => inside.has(r.nodeId) && r.code === 'unknownName' && !r.hidden);
   }
-  return { ids: copy.map((s) => s.id), renamed: changes, missing };
+  return { ids: copy.map((s) => s.id), renamed: changes, missing: [...new Set(broken.map((r) => r.name))], missingRefs: broken.length };
 }
 
 /** Number of steps in `steps`, everything inside included. Stops counting past `max`. */

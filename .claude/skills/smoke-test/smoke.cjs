@@ -46,6 +46,9 @@
 //      H — estimate chips before a run (≈ on con, total and limit on Start, over-limit tag)
 //      D — a mocked insert (route NDJSON with byStep): live "insert n/N" chip and "lỗi 3" tag, the tag opens the group
 //      E — "Ví dụ:" row of an open picklist (POST /api/field-samples) follows its weights; a dependent field shows the preview's
+//  17. multi-select and copy / paste (0012 B): Shift+click two cards (inspector "2 bước đã chọn", aria-multiselectable,
+//      aria-selected), "Bọc trong Lặp" then one ↶, Shift+↓ + Ctrl+C / Ctrl+V pastes renamed copies (acc2, con2), Ctrl+/
+//      turns both off; at 390 px "⋯ → Chọn nhiều bước" shows the select bar, a tap adds a card, Xong leaves
 // The flows run in parallel, one browser context each (independent storage): see SKILL.md.
 // Usage: node .claude/skills/smoke-test/smoke.cjs [screenshotDir]
 // Needs Playwright with a Chromium build available (require('playwright')).
@@ -1273,6 +1276,64 @@ async function productivityRest(page) {
   check(/^Lần xem trước/.test(await samplesText(conTitle)), `a field reading {{acc.Industry}}: ${await samplesText(conTitle)}`);
 }
 
+/** The workflow the app saved automatically (what the checks read after an edit). */
+const savedWorkflow = (page) => page.evaluate(() => JSON.parse(localStorage.getItem('sfdg.workflow.v2')));
+const toastIs = (page, re) => page.waitForFunction((src) => new RegExp(src).test(document.getElementById('toast').textContent), re.source, { timeout: 3000 }).then(() => true, () => false);
+
+/** Flow 17: multi-select, group operations and copy / paste (design 0012 B). */
+async function flowLibrary() {
+  const page = await newPage('library');
+  await page.goto(base);
+  await page.waitForSelector('.step-card[data-id="con"]');
+  await selectionSteps(page);
+  await page.context().close();
+}
+
+/** 17 B: the "Account + Contact" sample (loopAcc { acc, loopCon { con } }). */
+async function selectionSteps(page) {
+  const selectedCards = () => page.$$eval('#process .step-card[aria-selected="true"]', (n) => n.map((c) => c.dataset.id).join());
+  const bodyOf = async (id) => {
+    const find = (steps) => steps.flatMap((s) => [s, ...Object.values(s.slots ?? {}).flatMap(find)]);
+    return find((await savedWorkflow(page)).steps).find((s) => s.id === id)?.slots?.body ?? [];
+  };
+  await page.click('.step-card[data-id="acc"] .type');
+  await page.click('.step-card[data-id="loopCon"] .type', { modifiers: ['Shift'] });
+  check(await page.waitForSelector('#inspector h2:text-is("2 bước đã chọn")', { timeout: 3000 }).catch(() => null), 'Shift+click: the inspector does not say "2 bước đã chọn"');
+  check((await page.getAttribute('#process', 'aria-multiselectable')) === 'true', '#process has no aria-multiselectable');
+  check((await selectedCards()) === 'acc,loopCon', `Shift+click selected ${await selectedCards()}`);
+  await page.click('#inspector .multi-actions button:text-is("Bọc trong Lặp")');
+  await page.waitForFunction(() => document.querySelectorAll('#process .step.frame[data-type="loop"]').length === 3);
+  const wrapped = await bodyOf('loopAcc');
+  check(wrapped.length === 1 && wrapped[0].type === 'loop' && wrapped[0].slots.body.map((s) => s.id).join() === 'acc,loopCon', `Bọc trong Lặp of 2 steps: ${JSON.stringify(wrapped).slice(0, 200)}`);
+  await page.click('#btn-undo');
+  check((await bodyOf('loopAcc')).map((s) => s.id).join() === 'acc,loopCon', 'one ↶ did not undo the group wrap');
+  // Shift+↓ from acc, Ctrl+C, Ctrl+V: two copies after loopCon, renamed where the names are taken.
+  await page.click('.step-card[data-id="acc"] .type');
+  await page.keyboard.press('Shift+ArrowDown');
+  check((await selectedCards()) === 'acc,loopCon', `Shift+↓ selected ${await selectedCards()}`);
+  await page.keyboard.press('Control+c');
+  check(await toastIs(page, /^Đã sao chép 2 bước\.$/), `no copy toast (${await page.textContent('#toast')})`);
+  await page.keyboard.press('Control+v');
+  check(await toastIs(page, /^Đã dán 2 bước\. Đổi tên alias: acc → acc2, con → con2\.$/), `paste toast: ${await page.textContent('#toast')}`);
+  const pasted = (await bodyOf('loopAcc')).slice(2);
+  check(pasted.map((s) => (s.type === 'loop' ? s.slots.body[0] : s).config.alias).join() === 'acc2,con2', `pasted aliases ${JSON.stringify(pasted.map((s) => s.config.alias))}`);
+  check((await selectedCards()) === pasted.map((s) => s.id).join(), `the pasted steps are not selected (${await selectedCards()})`);
+  await page.keyboard.press('Control+/');
+  check((await bodyOf('loopAcc')).slice(2).every((s) => s.disabled), 'Ctrl+/ did not turn both pasted steps off');
+  // Narrow screen: no Shift / Ctrl, a select mode with a bar instead.
+  await page.setViewportSize({ width: 390, height: 800 });
+  await page.click('.step-card[data-id="acc"] .menu-btn');
+  await page.click('.popup .popup-item:has-text("Chọn nhiều bước")');
+  check(await page.waitForSelector('.select-bar:not([hidden])', { timeout: 3000 }).catch(() => null), '"Chọn nhiều bước" did not show the select bar');
+  await page.click('.step-card[data-id="con"] .type');
+  check(/^2 đã chọn/.test(await page.textContent('.select-bar .sb-count')), `select bar after a tap: ${await page.textContent('.select-bar')}`);
+  check(!(await page.evaluate(() => document.getElementById('inspector').classList.contains('open'))), 'the bottom sheet opened in select mode');
+  await page.click('.select-bar button:has-text("Xong")');
+  check(await page.evaluate(() => !document.body.classList.contains('select-mode') && document.querySelector('.select-bar').hidden), 'Xong did not leave the select mode');
+  check((await selectedCards()) === 'acc', `Xong did not keep only the primary step (${await selectedCards()})`);
+  await page.setViewportSize({ width: 1440, height: 900 });
+}
+
 /** Flow 15: the Sơ đồ view (design 0003 đợt B, + review fixes). Own contexts (wide, then phone). */
 async function flowCanvas() {
   const page = await newPage('canvas');
@@ -1458,7 +1519,7 @@ async function flowCanvas() {
     check(orgs.status === 503 && /smoke:/.test((await orgs.json()).error), 'the smoke server is not using the sf CLI stub');
     // Independent flows, one context each, in parallel. A flow that throws (timed-out wait) is
     // reported and the others still finish.
-    let flows = { flowEditing, flowPicker, flowFiles, flowDark, flowLayoutWide, flowLayoutNarrow, flowEach, flowCanvas, flowProductivity };
+    let flows = { flowEditing, flowPicker, flowFiles, flowDark, flowLayoutWide, flowLayoutNarrow, flowEach, flowCanvas, flowProductivity, flowLibrary };
     // SMOKE_ONLY=flowCanvas,flowEach runs only those flows (while working on one area).
     const only = process.env.SMOKE_ONLY?.split(',').filter(Boolean);
     if (only?.length) flows = Object.fromEntries(Object.entries(flows).filter(([n]) => only.includes(n)));

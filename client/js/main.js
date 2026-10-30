@@ -18,6 +18,8 @@ import { initIssues, renderIssues, expandIssues, goToNextIssue } from './issues.
 import { openPopup, closePopup, popupAnchor } from './popup.js';
 import { SAMPLES } from './samples.js';
 import { stepAlias } from './summary.js';
+import { initSelection, selectedIds, isMulti, collapseToPrimary, selectAllInSequence, inSelectMode } from './selection.js';
+import { initSelectBar, exitSelectMode } from './select-bar.js';
 
 const $ = (id) => document.getElementById(id);
 const ORG_KEY = 'sfdg.org';
@@ -35,11 +37,14 @@ async function boot() {
   renderPalette();
   initViews();
   initInspector();
+  initSelection();
+  initSelectBar();
   initResults({ onRefresh: () => run(false, { refresh: true }), onGoTo: goToIssue });
   initIssues({ onGoTo: goToIssue });
   firstRender();
   wireToolbar();
   wireShortcuts();
+  wireClipboard();
   wireValidation();
   loadOrgs();
   afterBoot?.();
@@ -361,14 +366,19 @@ function wireShortcuts() {
       e.preventDefault();
       redo();
     } else if (mod && key === 'd') {
+      // One-step keys act on the whole selection (design 0012 B).
       e.preventDefault();
-      if (sel) ops.duplicateStep(sel);
+      if (sel) ops.duplicateSelection();
     } else if (mod && (e.key === '/' || e.code === 'Slash')) {
       e.preventDefault();
-      if (sel) ops.toggleDisabled(sel);
+      if (sel) ops.toggleSelectionDisabled();
+    } else if (mod && key === 'a' && e.target.closest('#process, #canvas')) {
+      // Ctrl+A in the tree: every step of the primary step's sequence.
+      e.preventDefault();
+      selectAllInSequence();
     } else if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
       e.preventDefault();
-      if (sel) ops.moveBy(sel, e.key === 'ArrowUp' ? -1 : 1);
+      if (sel) ops.moveSelectionBy(e.key === 'ArrowUp' ? -1 : 1);
     } else if (!mod && !e.altKey && e.key === '/') {
       e.preventDefault();
       openAddMenuAtDefault();
@@ -379,7 +389,7 @@ function wireShortcuts() {
     } else if (e.key === 'Delete' || e.key === 'Backspace') {
       if (!sel) return;
       e.preventDefault();
-      ops.deleteStep(sel);
+      ops.deleteSelection();
     } else if (e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10')) {
       const card = sel && document.querySelector(`.step-card[data-id="${CSS.escape(sel)}"] .menu-btn`);
       if (card) {
@@ -387,8 +397,40 @@ function wireShortcuts() {
         openStepMenu(card, sel);
       }
     } else if (e.key === 'Escape') {
-      select(null);
+      // Two steps: several selected ⇒ keep the primary one; then ⇒ nothing selected.
+      if (inSelectMode()) exitSelectMode();
+      else if (isMulti()) collapseToPrimary();
+      else select(null);
     }
+  });
+}
+
+/**
+ * Copy / cut / paste of steps (design 0012 B) through the document's clipboard events, so they
+ * work without clipboard permissions and outside a secure context (HOST on a LAN address). Inputs
+ * keep their own copy / paste; text the user selected on the page is copied as text.
+ */
+function wireClipboard() {
+  const typing = () => document.activeElement?.closest?.('input, textarea, select, [contenteditable]');
+  const blocked = () => document.querySelector('dialog[open]') || typing();
+  const onCopy = (cut) => (e) => {
+    if (blocked() || !selectedIds().length || document.getSelection()?.toString()) return;
+    const clip = ops.selectionClipboard();
+    if (!clip) return;
+    e.preventDefault();
+    e.clipboardData.setData('text/plain', clip.text);
+    if (cut) ops.removeCut();
+    else toast(`Đã sao chép ${clip.count} bước.`);
+  };
+  document.addEventListener('copy', onCopy(false));
+  document.addEventListener('cut', onCopy(true));
+  document.addEventListener('paste', (e) => {
+    if (blocked()) return;
+    const text = e.clipboardData?.getData('text/plain') ?? '';
+    // Text that is not steps is only answered when focus is in the tree (a paste meant for it).
+    const inTree = Boolean(document.activeElement?.closest?.('#process, #canvas'));
+    e.preventDefault();
+    ops.pasteText(text, { quiet: !inTree });
   });
 }
 

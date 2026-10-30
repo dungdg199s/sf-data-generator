@@ -63,9 +63,9 @@
         <button id="btn-collapse-all" title="Thu gọn mọi khung Lặp / Rẽ nhánh">Thu gọn tất cả</button>
         <button id="btn-expand-all" title="Mở mọi khung Lặp / Rẽ nhánh">Mở tất cả</button>
       </div>
-      <div id="process" class="process view" role="tree" aria-label="Các bước của workflow"></div>
+      <div id="process" class="process view" role="tree" aria-multiselectable="true" aria-label="Các bước của workflow"></div>
       <div id="canvas-wrap" class="canvas-wrap view" hidden>
-        <div id="canvas" class="canvas" role="tree" tabindex="-1" aria-label="Sơ đồ các bước của workflow" aria-describedby="canvas-help"></div>
+        <div id="canvas" class="canvas" role="tree" aria-multiselectable="true" tabindex="-1" aria-label="Sơ đồ các bước của workflow" aria-describedby="canvas-help"></div>
         <div class="dg-zoom" role="group" aria-label="Thu phóng sơ đồ">
           <button id="btn-zoom-out" class="icon" title="Thu nhỏ (−)" aria-label="Thu nhỏ">−</button>
           <button id="btn-zoom-reset" class="dg-zoom-level">100%</button>
@@ -103,6 +103,7 @@
 
   <dialog id="modal"></dialog>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <div id="sel-live" class="sr-only" aria-live="polite"></div>
 
   <script type="module" src="/js/main.js"></script>
 </body>

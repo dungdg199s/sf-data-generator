@@ -1,6 +1,6 @@
 # 0012 — Năng suất soạn thảo: thư viện workflow, chọn nhiều, copy/paste, sửa nhanh, số liệu trên thẻ
 
-- **Trạng thái:** Đang làm (đã xong G, F1, C, I, H, D, E)
+- **Trạng thái:** Đang làm (đã xong G, F1, C, I, H, D, E, B)
 - **Ngày:** 2026-10-28
 - **Liên quan:** [0003](0003-process-mode.md) (cây bước, phím, "Việc tiếp theo": chọn nhiều, copy/paste, ước tính số bản
   ghi, tô thẻ cha, field tên mặc định), [0004](0004-streaming-execution.md) (sự kiện tiến độ, nhóm lỗi insert),
@@ -979,5 +979,36 @@ Làm từng phần theo [Kế hoạch](#kế-hoạch-thực-hiện); phần chư
   thu gọn, `pasteSteps` giữ alias trống / đổi alias trùng và tham chiếu bên trong theo / đổi biến lặp che vòng ngoài / id luôn
   mới / `missing`), `test/clipboard.test.js` (mới: khứ hồi, nhận file v2, từ chối v1, loại lạ lồng bên trong, sai dạng, > 2 000
   bước, > 5 MB, JSON hỏng / không phải của app), `test/each-wrap.test.js` (khối).
-- Khác thiết kế (làm rõ): biến lặp của bản dán cũng được đổi khi trùng **biến lặp** đã có ở đích không bao quanh? Không — chỉ khi
-  che Lặp bao quanh vị trí dán hoặc trùng alias bản ghi (đúng bảng); tên mới tránh mọi alias và biến lặp đã có.
+- Làm rõ: biến lặp của bản dán chỉ đổi khi che Lặp bao quanh vị trí dán hoặc trùng alias bản ghi (đúng bảng; trùng biến của một
+  Lặp khác không bao quanh thì giữ); tên mới tránh mọi alias và biến lặp đã có. `pasteSteps` trả thêm `missingRefs` (số tham
+  chiếu hỏng) để toast nói đúng "1 tham chiếu …".
+
+### B2 — Chọn nhiều, thao tác nhóm, copy/paste ở giao diện (bước 9)
+
+- `client/js/selection.js` (mới): `state.selection = { kind: 'step', id, ids?, anchor? }` (`id` = bước chính như cũ), `selectedIds`,
+  `selectionInfo` (= `normalizeSelection`), `clickSelect` (Shift: `rangeBetween`, Ctrl/⌘: bật/tắt; bước trong khung đã chọn đi theo
+  khung), `extendBy` (Shift+↑/↓ trong dãy của anchor), `selectAllInSequence` (Ctrl+A), `collapseToPrimary` (Esc nấc 1), chế độ
+  chọn (`body.select-mode`), vùng `#sel-live` đọc `Đã chọn 3 bước.`. `store.js`: undo/redo chỉ giữ bước chính.
+- `client/js/ops.js`: `deleteSelection` (hộp `Xóa 3 bước và 5 bước bên trong?` khi có khung chứa bước con; không thì xóa ngay +
+  toast [Hoàn tác] và câu "đang được dùng ở N chỗ"), `toggleSelectionDisabled`, `duplicateSelection` (khối: một bản sao cả khối
+  sau khối, tham chiếu giữa các bước trong khối đi theo; rời: mỗi bước sau chính nó), `wrapSelection`, `wrapSelectionEach`
+  (`wrapInEach` nhận khối), `moveSelectionBy` (gộp undo `move:<ids>`), `moveBlockTo` (kéo ⠿ một thẻ của khối đang chọn kéo cả
+  khối), copy/cut/paste (`selectionClipboard`, `removeCut`, `clipboardCommand` = `execCommand`, `pasteCommand` = `readText` rồi
+  bản trong tab, `pasteText` với các câu toast của thiết kế). Mỗi thao tác một bước undo.
+- `client/js/main.js`: phím một-bước áp cho cả lựa chọn, Ctrl+A (focus trong cây), Esc hai nấc; sự kiện `copy`/`cut`/`paste`
+  của `document` (bỏ qua khi focus ở ô nhập, khi có hộp thoại, hoặc khi người dùng đang bôi đen chữ trên trang).
+- `client/js/menus.js`: menu ⋯ chia nhóm Chỉnh sửa / Di chuyển / Bọc / Chọn, rồi Tắt/Bật và Xóa sau một đường kẻ
+  (`popup.js`: mục `{ separator: true }`); trên thẻ thuộc lựa chọn nhiều: tiêu đề `3 bước đã chọn`, mục khóa theo bảng (`title`
+  nói vì sao). `wrapItems`/`editItems`/`moveItems`/`offDeleteItems` dùng chung cho menu, inspector và thanh chọn.
+- `client/js/inspector.js`: panel `3 bước đã chọn` (danh sách, hàng Bọc, hàng Sao chép / Cắt / Nhân bản / Tắt n bước / Xóa n bước,
+  mẹo); tab Phím tắt thêm các phím mới. `client/js/select-bar.js` (mới): `.select-bar` `[n đã chọn] [Bọc ▾] [Xóa] [⋯] [Xong]`
+  (≈ 274 px ở 390 px), `Bọc ▾` mở popup 3 kiểu bọc (phần C hoãn lại ở đây), `⋯` có Sao chép, Cắt, Dán, Nhân bản, Tắt/Bật, Lên,
+  Xuống. Hai view: Shift/Ctrl+bấm, chạm trong chế độ chọn, Shift+↑/↓, mọi thẻ được chọn có `.selected` + `aria-selected`,
+  `aria-multiselectable` trên `role="tree"`. `app.css`: `.select-bar`, `.multi-actions`, `.popup-sep`.
+- Smoke: luồng mới `flowLibrary` (17), phần B (chạy song song với các luồng khác thay vì nối vào `flowProductivity`, vốn đã là
+  luồng dài nhất).
+- Khác thiết kế (làm rõ): dán khi **nhiều** bước được chọn đặt ngay sau bước cuối (không vào slot trống của khung cuối như
+  `defaultInsertTarget`); một bước được chọn thì đúng `defaultInsertTarget`. Trong chế độ chọn, chạm thêm thẻ không đổi bước chính
+  (Xong về lại thẻ bắt đầu); Ctrl+bấm ở màn hình rộng thì thẻ vừa bấm thành bước chính. Bản dán đổi tên cả biến lặp nên toast
+  `Đổi tên alias:` có thể kể cả `loop → loop2`. Menu "Sao chép" khi trình duyệt không cho `execCommand` vẫn giữ bản sao trong tab
+  (toast nói rõ chỉ dán được trong tab này).

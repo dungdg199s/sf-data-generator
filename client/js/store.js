@@ -24,7 +24,9 @@ export function emptyWorkflow() {
 export const state = {
   meta: null, // { fieldTypes, nodeTypes, stepCategories, limits }
   workflow: emptyWorkflow(),
-  selection: null, // { kind: 'step', id } | { kind: 'workflow' }
+  // { kind: 'step', id, ids?, anchor? } | { kind: 'workflow' }. `id`: the primary step; `ids`: every
+  // selected step when several are (design 0012 B, selection.js); `anchor`: start of a Shift range.
+  selection: null,
   issues: { errors: [], warnings: [] },
   orgs: [],
   org: '',
@@ -107,7 +109,8 @@ function restore(json) {
   state.workflow = JSON.parse(json);
   lastCoalesce = { key: null, at: 0 };
   revision++;
-  if (state.selection?.kind === 'step' && !stepById(state.selection.id)) state.selection = null;
+  // Undo / redo keep the primary step selected if it is still there; a multi-selection is not restored (0012 B).
+  if (state.selection?.kind === 'step') state.selection = stepById(state.selection.id) ? { kind: 'step', id: state.selection.id } : null;
   persist();
   emit('history', 'workflow');
 }

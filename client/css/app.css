@@ -762,6 +762,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--color-accent); }
 .popup-item kbd { font-size: var(--text-xs); color: var(--color-text-muted); font-family: var(--font-mono); }
 .popup-item.danger { color: var(--color-danger-text); }
 .pi-check { display: inline-block; width: 1em; color: var(--color-accent-text); }
+.popup-sep { height: 1px; background: var(--color-border); margin: var(--space-1) var(--space-2); }
 .popup-field {
   display: grid; grid-template-columns: auto 1fr; gap: var(--space-2); align-items: center; padding: var(--space-1) var(--space-2);
   font-size: var(--text-sm); font-weight: var(--weight-medium);
@@ -1127,3 +1128,19 @@ textarea.mono { font-family: var(--font-mono); font-size: var(--text-sm); }
 .query-hint { margin: var(--space-1) var(--space-2); }
 .dialog-filter { width: 100%; margin: var(--space-2) 0; }
 dialog .list .rel-check { font-size: var(--text-xs); color: var(--color-text-muted); white-space: nowrap; }
+
+/* ---------- multi-select (design 0012 B; docs/ui-design-system.md §6.4, §6.11) ---------- */
+.multi-panel .multi-list { overflow-wrap: anywhere; }
+.multi-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); margin: var(--space-2) 0; }
+/* Narrow select mode: the bar takes the bottom sheet's place; no drag handle (a tap toggles a card). */
+.select-bar {
+  position: fixed; left: 0; right: 0; bottom: 0; height: 56px; z-index: var(--z-sheet);
+  display: flex; align-items: center; gap: var(--space-2); padding: 0 var(--space-3);
+  background: var(--color-surface); border-top: 1px solid var(--color-border); box-shadow: var(--shadow-3);
+}
+.select-bar[hidden] { display: none; }
+.select-bar .sb-count { font-weight: var(--weight-semibold); white-space: nowrap; margin-right: auto; }
+.select-bar button { min-height: var(--control-h-md); }
+body.select-mode .step-card .handle { display: none; }
+body.select-mode .toast { bottom: calc(56px + var(--space-3)); }
+body.select-mode .process::after { content: ''; display: block; height: 56px; }

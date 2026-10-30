@@ -20,6 +20,9 @@ import { START_ID } from './layout.js';
 import { placesText } from './variables.js';
 import { applySuggestion, closePicker } from './var-picker.js';
 import { samplesRow } from './field-samples.js';
+import { selectedIds, selectionInfo, inSelectMode } from './selection.js';
+import { wrapItems, editItems, offDeleteItems } from './menus.js';
+import { stepLabel } from './summary.js';
 
 let root;
 const expanded = new Set(); // `${stepId}:${fieldIndex}` with options panel open
@@ -50,14 +53,33 @@ export function openField(stepId, index) {
 function render() {
   const s = state.selection;
   const step = s?.kind === 'step' ? stepById(s.id) : null;
-  const key = step ? `step:${step.id}` : s?.kind ?? 'none';
+  const multi = step ? selectedIds() : [];
+  const key = multi.length > 1 ? `steps:${multi.join(',')}` : step ? `step:${step.id}` : s?.kind ?? 'none';
   if (key !== lastSelectionKey) sheetClosed = false;
   lastSelectionKey = key;
   // The "‹ Xong" row sticks to the top of the sheet, so it closes without scrolling back up.
   const head = h('div', { class: 'sheet-head' }, h('button', { class: 'sheet-close', title: 'Đóng bảng cấu hình (vẫn giữ bước đang chọn)', onclick: closeSheet }, '‹ Xong'));
-  root.replaceChildren(head, step ? renderStep(step) : renderWorkflow());
-  setSheetOpen(Boolean(s) && !sheetClosed);
+  root.replaceChildren(head, multi.length > 1 ? renderMulti() : step ? renderStep(step) : renderWorkflow());
+  // The narrow select mode has its own bar instead of the sheet (design 0012 B).
+  setSheetOpen(Boolean(s) && !sheetClosed && !inSelectMode());
   markIssues();
+}
+
+/** Several steps selected (design 0012 B): what they are and what can be done with all of them. */
+function renderMulti() {
+  const ids = selectionInfo().ids;
+  const n = ids.length;
+  const button = (it) => h('button', { class: it.danger ? 'danger' : undefined, disabled: it.disabled, title: it.title, onclick: it.onSelect }, it.label);
+  const [copy, cut, , dup] = editItems();
+  return h(
+    'div',
+    { class: 'multi-panel' },
+    h('div', { class: 'node-head' }, h('h2', {}, `${n} bước đã chọn`)),
+    h('p', { class: 'desc multi-list' }, ids.map((id) => stepLabel(stepById(id))).join(' · ')),
+    h('div', { class: 'multi-actions', role: 'group', 'aria-label': 'Bọc' }, wrapItems().map(button)),
+    h('div', { class: 'multi-actions', role: 'group', 'aria-label': 'Thao tác' }, [copy, cut, dup, ...offDeleteItems()].map(button)),
+    h('p', { class: 'hint' }, 'Mẹo: Shift+bấm để chọn dải, Ctrl+bấm để chọn rời, Esc để bỏ.'),
+  );
 }
 
 const NARROW = window.matchMedia('(max-width: 900px)');
@@ -145,6 +167,8 @@ function renderWorkflow() {
       { class: 'hint shortcuts' },
       h('li', {}, '↑ / ↓: chọn bước trước / sau; ← / →: thu gọn / mở khung'),
       h('li', {}, '/: thêm bước ở vị trí mặc định'),
+      h('li', {}, 'Shift+bấm / Shift+↑ / Shift+↓: chọn dải bước liền nhau; Ctrl+bấm: chọn rời; Ctrl+A: cả dãy; Esc: bỏ chọn'),
+      h('li', {}, 'Ctrl+C / Ctrl+X / Ctrl+V: sao chép / cắt / dán bước (cả sang workflow khác)'),
       h('li', {}, 'Alt+↑ / Alt+↓: di chuyển bước'),
       h('li', {}, 'Ctrl+D: nhân bản; Ctrl+/: tắt / bật bước'),
       h('li', {}, 'Delete: xóa bước (khung có bước con thì hỏi)'),

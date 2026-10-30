@@ -3,6 +3,7 @@
 //
 // Items:
 //   { group }                                   group header
+//   { separator: true }                         ends the group; the next rows stand alone under a line
 //   { type, label, desc, kbd, disabled, title, danger, onSelect }   a menu row (`type`: step-type icon tile)
 //   { label, checked, onSelect }                a radio row (role=menuitemradio, ✓ when checked)
 //   { field: { label, value, placeholder, title, onInput, onEnter } }  a label + text input row
@@ -64,12 +65,18 @@ export function openPopup(anchor, { title, items, search = false, onClose = null
   const build = (q = '') => {
     focusables.length = 0;
     const needle = q.trim().toLowerCase();
-    const shown = items.filter((it) => it.group || it.field || !needle || `${it.label} ${it.desc ?? ''}`.toLowerCase().includes(needle));
+    const shown = items.filter((it) => it.group || it.separator || it.field || !needle || `${it.label} ${it.desc ?? ''}`.toLowerCase().includes(needle));
     const out = [];
     let group = null; // the role=group rows go into, after a group header
     for (const [i, it] of shown.entries()) {
+      if (it.separator) {
+        // Ends the current group: the rows after it stand alone, under a line.
+        group = null;
+        if (out.length && shown[i + 1] && !shown[i + 1].group) out.push(h('div', { class: 'popup-sep', role: 'separator' }));
+        continue;
+      }
       if (it.group) {
-        if (!shown[i + 1] || shown[i + 1].group) continue; // empty after filtering
+        if (!shown[i + 1] || shown[i + 1].group || shown[i + 1].separator) continue; // empty after filtering
         group = h('div', { class: 'popup-groupbox', role: 'group', 'aria-label': it.group }, h('div', { class: 'popup-group', 'aria-hidden': 'true' }, it.group));
         out.push(group);
         continue;

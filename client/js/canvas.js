@@ -23,6 +23,7 @@ import { openSheet } from './inspector.js';
 import { openAddMenu, openStepMenu } from './menus.js';
 import { refTargetId } from './ref-target.js';
 import { paintCardRun, resultStale, noteText, stepsById } from './run-cards.js';
+import { isSelected, clickSelect, toggleSelected, extendBy, inSelectMode } from './selection.js';
 
 const SVG = 'http://www.w3.org/2000/svg';
 const ZOOM_MIN = 0.1;
@@ -319,8 +320,12 @@ function startCard() {
 
 function cardClick(e, id) {
   if (e.target.closest('button')) return;
-  select(id === START_ID ? { kind: 'workflow' } : { kind: 'step', id });
-  openSheet(); // narrow screens: a tap on the selected card shows the sheet a run (or ‹ Xong) closed
+  if (id !== START_ID && inSelectMode()) toggleSelected(id); // narrow select mode (design 0012 B)
+  else if (id !== START_ID && (e.shiftKey || e.ctrlKey || e.metaKey)) clickSelect(id, { range: e.shiftKey, toggle: !e.shiftKey });
+  else {
+    select(id === START_ID ? { kind: 'workflow' } : { kind: 'step', id });
+    openSheet(); // narrow screens: a tap on the selected card shows the sheet a run (or ‹ Xong) closed
+  }
   e.currentTarget.focus({ preventScroll: true });
 }
 
@@ -353,6 +358,7 @@ function cardEl(n) {
     'aria-setsize': String(n.setsize),
     'aria-expanded': n.container ? String(!n.collapsed) : undefined,
     tabindex: '-1',
+    onmousedown: (e) => { if (e.shiftKey) e.preventDefault(); }, // Shift+click: a range of cards, not text
     onclick: (e) => cardClick(e, step.id),
   };
   // A frame header is one row, like a Quy trình card; other cards have three short rows.
@@ -448,12 +454,14 @@ function decorateCard(card) {
     errors += inner.errors;
     warnings += inner.warnings;
   }
-  const selected = id === (selectedId() ?? null);
+  const primary = id === (selectedId() ?? null);
+  // Every selected card has the selected style (design 0012 B); cards made again after cull too.
+  const selected = primary || (id !== START_ID && isSelected(id));
   card.classList.toggle('selected', selected);
   card.classList.toggle('is-ref-target', id === refTargetId()); // 0012 I (a card made again by cull)
   card.setAttribute('aria-selected', String(selected));
-  // Roving tab stop: the selected card, or the Start card when nothing is selected.
-  card.tabIndex = selected || (id === START_ID && !selectedId()) ? 0 : -1;
+  // Roving tab stop: the primary selected card, or the Start card when nothing is selected.
+  card.tabIndex = primary || (id === START_ID && !selectedId()) ? 0 : -1;
   card.classList.toggle('has-error', errors > 0);
   card.classList.toggle('has-warning', !errors && warnings > 0);
   const jump = (e) => {
@@ -738,6 +746,12 @@ export function revealStep(id, { flash = false, focus = true, block = 'center' }
 
 function onKey(e) {
   if (e.target.closest('input, textarea, select, .popup') || e.altKey || e.ctrlKey || e.metaKey || !lay) return;
+  // Shift+↑ / Shift+↓: grow or shrink the range inside the anchor's sequence (design 0012 B).
+  if (e.shiftKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+    e.preventDefault();
+    if (extendBy(e.key === 'ArrowUp' ? -1 : 1)) focusSelected();
+    return;
+  }
   // Zoom keys anywhere in the diagram.
   if (e.key === '+' || e.key === '=') return void (e.preventDefault(), zoomBy(ZOOM_STEP));
   if (e.key === '-') return void (e.preventDefault(), zoomBy(1 / ZOOM_STEP));

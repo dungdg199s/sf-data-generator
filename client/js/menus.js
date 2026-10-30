@@ -2,6 +2,7 @@
 // insertion point and the ⋯ menu of a step. Rendering is popup.js; the actions are ops.js.
 
 import { state, select, nodeType, slotKeys, stepById } from './store.js';
+import { selectedIds, selectionInfo, isSelected, setSelectMode } from './selection.js';
 import { exposesOf } from '/shared/scope.js';
 import { stepLabel } from './summary.js';
 import * as ops from './ops.js';
@@ -25,34 +26,89 @@ export function openAddMenu(anchor, target) {
 /** A step whose records a Lặp `each` can loop over: a pool (`exposes.pool`) named by `alias` (catalogue). */
 const isPoolStep = (step) => exposesOf(nodeType(step.type), step.config).some(({ ex }) => ex.pool === true && ex.name?.key === 'alias');
 
-/** ⋯ menu of a step (also ContextMenu / Shift+F10 on the selected step). */
+/** Wide pointer-less screens have no Shift / Ctrl: "Chọn nhiều bước" starts the select mode there. */
+const SELECT_MODE_MQ = window.matchMedia('(max-width: 900px), (pointer: coarse)');
+
+/**
+ * Wrap rows of the selection (menu ⋯, the narrow select bar's "Bọc ▾", the inspector's multi
+ * panel): Lặp, Lặp qua từng bản ghi (C), Rẽ nhánh; locked with the reason when the selection is
+ * not one block, or when no pool is usable.
+ */
+export function wrapItems() {
+  const block = selectionInfo().contiguous;
+  const each = block ? ops.selectionEachPlan() : null;
+  const locked = block ? null : { disabled: true, title: ops.NOT_BLOCK_WRAP };
+  const n = selectedIds().length;
+  const what = n > 1 ? `${n} bước này` : 'bước này';
+  return [
+    { label: 'Bọc trong Lặp', ...locked, onSelect: () => ops.wrapSelection('loop') },
+    // Design 0012 C: a Lặp `each` around the steps, over the pool they refer to (else the nearest).
+    locked
+      ? { label: 'Bọc trong Lặp qua từng bản ghi', ...locked, onSelect: () => {} }
+      : each
+        ? { label: 'Bọc trong Lặp qua từng bản ghi', title: `Bọc ${what} trong Lặp chạy một lần cho mỗi bản ghi của "${each.from}".`, onSelect: () => ops.wrapSelectionEach() }
+        : { label: 'Bọc trong Lặp qua từng bản ghi', disabled: true, title: ops.NO_POOL, onSelect: () => {} },
+    { label: 'Bọc trong Rẽ nhánh', ...locked, onSelect: () => ops.wrapSelection('branch') },
+  ];
+}
+
+/** Sao chép, Cắt, Dán, Nhân bản of the selection. */
+export function editItems({ pasteLabel = 'Dán sau bước này' } = {}) {
+  return [
+    { label: 'Sao chép', kbd: 'Ctrl+C', onSelect: () => ops.clipboardCommand(false) },
+    { label: 'Cắt', kbd: 'Ctrl+X', onSelect: () => ops.clipboardCommand(true) },
+    { label: pasteLabel, kbd: 'Ctrl+V', onSelect: () => ops.pasteCommand() },
+    { label: 'Nhân bản', kbd: 'Ctrl+D', onSelect: () => ops.duplicateSelection() },
+  ];
+}
+
+/** Lên / Xuống of the selection (locked for scattered steps). */
+export function moveItems() {
+  const locked = selectionInfo().contiguous ? null : { disabled: true, title: ops.NOT_BLOCK_MOVE };
+  return [
+    { label: 'Lên', kbd: 'Alt+↑', ...locked, onSelect: () => ops.moveSelectionBy(-1) },
+    { label: 'Xuống', kbd: 'Alt+↓', ...locked, onSelect: () => ops.moveSelectionBy(1) },
+  ];
+}
+
+/** Tắt / Bật and Xóa of the selection. */
+export function offDeleteItems() {
+  const ids = selectedIds();
+  const steps = ids.map(stepById);
+  const n = ids.length;
+  const off = steps.some((s) => !s.disabled);
+  return [
+    { label: n > 1 ? `${off ? 'Tắt' : 'Bật'} ${n} bước` : off ? 'Tắt bước' : 'Bật bước', kbd: 'Ctrl+/', onSelect: () => ops.toggleSelectionDisabled() },
+    { label: n > 1 ? `Xóa ${n} bước` : 'Xóa', kbd: 'Delete', danger: true, onSelect: () => ops.deleteSelection() },
+  ];
+}
+
+/**
+ * ⋯ menu of a step (also ContextMenu / Shift+F10 on the selected step), grouped (design 0012 B).
+ * On a card of a multi-selection it acts on the whole selection; on any other card the selection
+ * becomes that card.
+ */
 export function openStepMenu(anchor, id) {
   const step = stepById(id);
   if (!step) return;
-  const container = slotKeys(step.type).length > 0;
-  const each = ops.eachWrapPlan(id);
-  const items = [
-    { label: 'Nhân bản', kbd: 'Ctrl+D', onSelect: () => ops.duplicateStep(id) },
-    { label: 'Lên', kbd: 'Alt+↑', onSelect: () => ops.moveBy(id, -1) },
-    { label: 'Xuống', kbd: 'Alt+↓', onSelect: () => ops.moveBy(id, 1) },
-    { label: 'Bọc trong Lặp', onSelect: () => ops.wrapIn(id, 'loop') },
-    // Design 0012 C: a Lặp `each` around the step, over the pool it refers to (else the nearest).
-    each
-      ? { label: 'Bọc trong Lặp qua từng bản ghi', title: `Bọc bước này trong Lặp chạy một lần cho mỗi bản ghi của "${each.from}".`, onSelect: () => ops.wrapInEach(id) }
-      : { label: 'Bọc trong Lặp qua từng bản ghi', disabled: true, title: 'Chưa có pool nào phía trên (bước Query, Record hoặc Chọn bản ghi có alias). Thêm một bước như vậy ở phía trên trước.' },
-    { label: 'Bọc trong Rẽ nhánh', onSelect: () => ops.wrapIn(id, 'branch') },
+  if (!isSelected(id) || selectedIds().length < 2) select({ kind: 'step', id });
+  const n = selectedIds().length;
+  const items = [{ group: 'Chỉnh sửa' }, ...editItems(), { group: 'Di chuyển' }, ...moveItems(), { group: 'Bọc' }, ...wrapItems()];
+  if (n === 1) {
+    const container = slotKeys(step.type).length > 0;
     // Design 0010: a Lặp over each record of this step's pool, right after it.
-    isPoolStep(step)
-      ? step.config?.alias
+    if (isPoolStep(step)) {
+      items.push(step.config?.alias
         ? { label: 'Lặp qua từng bản ghi', title: `Thêm bước Lặp ngay sau bước này, chạy một lần cho mỗi bản ghi của "${step.config.alias}".`, onSelect: () => ops.addEachLoopAfter(id) }
-        : { label: 'Lặp qua từng bản ghi', disabled: true, title: 'Đặt alias cho bước này trước.' }
-      : null,
-    container
-      ? { label: 'Bỏ vỏ (giữ các bước bên trong)', disabled: !ops.canUnwrap(step), title: ops.canUnwrap(step) ? undefined : 'Chỉ bỏ vỏ được khi một nhánh trống.', onSelect: () => ops.unwrap(id) }
-      : null,
-    { label: step.disabled ? 'Bật bước' : 'Tắt bước', kbd: 'Ctrl+/', onSelect: () => ops.toggleDisabled(id) },
-    { label: 'Xóa', kbd: 'Delete', danger: true, onSelect: () => ops.deleteStep(id) },
-  ].filter(Boolean);
-  select({ kind: 'step', id });
-  openPopup(anchor, { title: stepLabel(step), items });
+        : { label: 'Lặp qua từng bản ghi', disabled: true, title: 'Đặt alias cho bước này trước.', onSelect: () => {} });
+    }
+    if (container) {
+      items.push({ label: 'Bỏ vỏ (giữ các bước bên trong)', disabled: !ops.canUnwrap(step), title: ops.canUnwrap(step) ? undefined : 'Chỉ bỏ vỏ được khi một nhánh trống.', onSelect: () => ops.unwrap(id) });
+    }
+    if (SELECT_MODE_MQ.matches) {
+      items.push({ group: 'Chọn' }, { label: 'Chọn nhiều bước', title: 'Chạm các thẻ khác để chọn thêm; thao tác ở thanh dưới đáy.', onSelect: () => setSelectMode(true) });
+    }
+  }
+  items.push({ separator: true }, ...offDeleteItems());
+  openPopup(anchor, { title: n > 1 ? `${n} bước đã chọn` : stepLabel(step), items });
 }
