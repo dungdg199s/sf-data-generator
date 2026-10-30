@@ -7,7 +7,7 @@
 // migrated with shared/migrate-v1.js first, and the conversion is reported as warnings.
 
 import { NODE_TYPES, nodeTypeMap, CONDITION_OPS, LIMITS, recordPreset } from './nodes.js';
-import { checkSoql, checkBuilder, isFieldPath, buildSoql, soqlSobject, selectFields, builderLimit } from '../../shared/soql.js';
+import { checkSoql, checkBuilder, isFieldPath, buildSoql, soqlSobject, selectFields, builderLimit, addSelectField } from '../../shared/soql.js';
 import { getGenerator, describeGenerators } from '../generators/index.js';
 import { migrateV1, describeReport, reportNeedsReview } from '../../shared/migrate-v1.js';
 import { analyzeScope, referenceOptions, hasUnclosed } from '../../shared/scope.js';
@@ -272,7 +272,7 @@ export function prepareWorkflow(wf) {
       const key = `${ref.nodeId}|${ref.field}|${ref.path}|${ref.code}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      const issue = referenceIssue(ref, scope, stepById.get(ref.nodeId));
+      const issue = referenceIssue(ref, scope, stepById.get(ref.nodeId), (id) => stepById.get(id));
       if (!issue) continue;
       (ref.level === 'warning' ? warn : err)(issue.message, ref.nodeId, ref.field, issue.extra);
     }
@@ -408,10 +408,11 @@ function checkReferenceTo(step, f, key, { warn, scope }) {
 // ---------- variable references (design 0005, "Thông báo lỗi và cảnh báo") ----------
 
 /**
- * Issue for one problem reference found by analyzeScope: { message, extra: { code, path, option, suggestion? } }.
+ * Issue for one problem reference found by analyzeScope: { message, extra: { code, path, option, suggestion?, fix? } }.
  * Field options get the `Field "<Name>": ` prefix; step options (branch `left`) do not.
+ * `stepOf(id)` finds another step (the Query a missing field can be added to: `fix`, design 0012 F1).
  */
-export function referenceIssue(ref, scope, step) {
+export function referenceIssue(ref, scope, step, stepOf = () => undefined) {
   const src = ref.source !== undefined ? scope.sources[ref.source] : null;
   const fieldName = ref.field.startsWith('fields.') ? ref.field.slice('fields.'.length) : null;
   const prefix = fieldName !== null ? `Field "${fieldName}": ` : '';
@@ -422,6 +423,7 @@ export function referenceIssue(ref, scope, step) {
   const firstField = (source) => source?.members.find((m) => !m.builtin)?.key ?? 'Name';
   const isMD = fieldName !== null && (step?.config?.fields ?? []).find((f) => f?.name === fieldName)?.type === 'masterdetail';
   let message;
+  let fix = null;
 
   const isLoop = step?.type === 'loop';
   if (ref.mode === 'ref' && ref.option === 'from') {
@@ -485,11 +487,15 @@ export function referenceIssue(ref, scope, step) {
         if (src?.kind === 'vars') {
           message = `biến lặp "${s}" chỉ có ${src.members.map((m) => m.key).join(', ')}; không có "${ref.missing ?? ref.member}".`;
         } else if (src?.origin === 'org' || src?.nodeType === 'query') {
-          // For a Chọn bản ghi, name the Query its rows come from.
+          // For a Chọn bản ghi or the record a Lặp `each` loops over, name the Query its rows come from.
           const q = src.root !== undefined ? scope.sources[src.root]?.name ?? s : s;
+          // The missing field as a SELECT path: `Owner.Email` when `Owner.Name` is read but not Email.
+          const missing = ref.memberOf ? `${ref.memberOf}.${ref.missing}` : ref.missing;
           message = ref.mode === 'template'
-            ? `Template dùng ${show(ref.path)} nhưng Query "${q}" không lấy field ${ref.missing}. Thêm ${ref.missing} vào "Field cần lấy" của bước Query.`
-            : `Biến ${ref.path} cần field ${ref.missing} nhưng Query "${q}" không lấy field này. Thêm ${ref.missing} vào "Field cần lấy" của bước Query.`;
+            ? `Template dùng ${show(ref.path)} nhưng Query "${q}" không lấy field ${missing}. Thêm ${missing} vào "Field cần lấy" của bước Query.`
+            : `Biến ${ref.path} cần field ${missing} nhưng Query "${q}" không lấy field này. Thêm ${missing} vào "Field cần lấy" của bước Query.`;
+          // (`Name.Foo` on a plain field is not a field to add.)
+          if (!String(ref.missing).includes('.')) fix = selectFieldFix(stepOf(src.root ?? src.nodeId ?? src.id), missing);
         } else if (ref.memberOf) {
           const hint = suggest ? suggest.split('.').pop() : null;
           message = `field "${ref.memberOf}" của bước "${s}" chỉ có ${ref.validMembers.join(', ')}; không có "${ref.missing}".${hint ? ` Ý bạn là "${hint}"?` : ''}`;
@@ -574,7 +580,19 @@ export function referenceIssue(ref, scope, step) {
   }
   const extra = { code: ref.code, path: ref.path, option: ref.option };
   if (ref.suggestion) extra.suggestion = ref.suggestion;
+  if (fix) extra.fix = fix;
   return { message: prefix + message, extra };
+}
+
+/**
+ * "Thêm <Field> vào SELECT" (design 0012 F1): a fix when `field` can be added to Query step `q`
+ * (builder: always; hand-written SOQL: when shared/soql.js addSelectField can edit it). Null otherwise.
+ */
+function selectFieldFix(q, field) {
+  if (q?.type !== 'query' || !isFieldPath(field)) return null;
+  const c = q.config ?? {};
+  if ((c.mode ?? 'builder') === 'soql' && addSelectField(c.soql, field) === null) return null;
+  return { kind: 'addSelectField', stepId: q.id, field };
 }
 
 function maybeMessage(ref, s, isLookup, isMD) {

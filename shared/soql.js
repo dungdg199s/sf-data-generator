@@ -106,6 +106,29 @@ export function parseSoql(text) {
   return out;
 }
 
+/**
+ * `soql` with `field` appended to its outer SELECT list (right after the last item, before
+ * FROM; the spacing around FROM is kept), for the "Thêm <Field> vào SELECT" quick fix (design
+ * 0012 F1). Unchanged when the list already has the field (ignoring case). Null when the
+ * statement cannot be edited safely: not a valid read-only SELECT, a subquery or FIELDS(…) /
+ * TYPEOF in the SELECT list, or `field` is not a field path.
+ */
+export function addSelectField(soql, field) {
+  const raw = String(soql ?? '');
+  const name = String(field ?? '').trim();
+  if (!isFieldPath(name)) return null;
+  if (checkSoql(raw).some((i) => i.level === 'error')) return null;
+  const p = parseSoql(raw);
+  if (p.subquery || p.open || !p.fields.length) return null;
+  if (p.fields.some((f) => f.toLowerCase() === name.toLowerCase())) return raw;
+  const head = /^\s*SELECT\s/i.exec(blankStrings(raw));
+  const from = topLevel(blankStrings(raw), /\bFROM\s+([A-Za-z][A-Za-z0-9_]*)/i, head[0].length);
+  if (!from) return null;
+  const before = raw.slice(0, from.index);
+  const at = before.length - /\s*$/.exec(before)[0].length;
+  return `${raw.slice(0, at)}, ${name}${raw.slice(at)}`;
+}
+
 // Checked on text whose string literals are blanked, anywhere (not only at the top level).
 const FOR_CLAUSE = /\bFOR\s+(?:UPDATE|VIEW|REFERENCE)\b/i;
 const UPDATE_WORD = /\bUPDATE\b/i;

@@ -161,7 +161,10 @@ the others; never add a fixed `waitForTimeout`.
     Name field shows "Task không có field Name nên insert sẽ lỗi. Đổi thành Subject…" with the button "Đổi thành Subject"; the
     button clears the warning, the field becomes `Subject` with the preset's list options and the template becomes
     `{{task.Subject}}`. A Record from the palette starts with `Name`; filling its sObject with `Task` turns the list into
-    `Subject` at once while focus stays in the sObject field.
+    `Subject` at once while focus stays in the sObject field. F1: the "Contact cho Account có sẵn" sample, `con`'s Title template set
+    to `Ngành {{acc.Industry}}`: the field shows the button `Thêm Industry vào SELECT của "accs"`; clicking it clears the card's
+    error, the Query's fields become `Id, Name, Industry` and the toast says "Đã thêm Industry vào Query "accs". Bấm Xem trước để
+    đọc lại."
 
 It also fails on any page error or a run over 12 s (typically ~5.5–6.5 s since the flows run in parallel, flow 14 included, ~7–8.5 s with flow 15 on a 4-CPU machine; ~10 s before;
 ~7–8 s with two CPU-bound processes running alongside).

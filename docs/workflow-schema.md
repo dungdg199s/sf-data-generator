@@ -398,6 +398,7 @@ câu lỗi trong inspector, cả với cảnh báo có `fix`):
 
 | `fix.kind` | Khóa | Gắn trên | Nút |
 | --- | --- | --- | --- |
+| `addSelectField` | `stepId` (bước Query), `field` (đường dẫn field, ví dụ `Industry`, `Owner.Email`) | lỗi `unknownMember` của nguồn đọc từ org: Query, Chọn bản ghi hoặc bản ghi đang lặp có gốc là Query (`stepId` luôn là Query gốc). Không có `fix` khi SOQL tự viết không sửa được (subquery hay `FIELDS(…)` / `TYPEOF` trong SELECT, SOQL lỗi) | `Thêm Industry vào SELECT của "accs"`: builder thêm vào cuối `fields` (nếu chưa có, không phân biệt hoa thường); SOQL tự viết dùng `addSelectField` của `shared/soql.js` (chèn `, Industry` trước `FROM` của SELECT ngoài). Một bước hoàn tác |
 | `renameField` | `stepId`, `from`, `to` | cảnh báo `code: "noNameField"` (field `fields.Name` của Record trên sObject `noName`, ví dụ Task: `Task không có field Name nên insert sẽ lỗi. Đổi thành Subject hoặc xóa field này.`). Không có `fix` khi bước đã có field `to` | `Đổi thành Subject`: đổi tên field, tham chiếu `{{task.Name}}` đi theo, một bước hoàn tác |
 `POST /api/validate` trả `{ errors, warnings, derived }`; phạm vi biến không gửi kèm vì trình duyệt tự tính bằng `shared/scope.js`.
 `derived[<id>]` (0006): Query `{ soql, sobject, fields }` (câu SOQL server sẽ chạy), Chọn bản ghi `{ sobject, fields, from }`.

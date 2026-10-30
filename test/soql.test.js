@@ -1,7 +1,7 @@
 // Design 0006: pure SOQL helpers shared by validation, pre-fetch and the browser (shared/soql.js).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildSoql, checkSoql, checkBuilder, selectFields, soqlSobject, sampleRows, normalizeRow, parseSoql, maxFetchFor, rekeyRow } from '../shared/soql.js';
+import { buildSoql, checkSoql, checkBuilder, selectFields, soqlSobject, sampleRows, normalizeRow, parseSoql, maxFetchFor, rekeyRow, addSelectField } from '../shared/soql.js';
 
 test('buildSoql adds Id once, ORDER BY and LIMIT', () => {
   assert.equal(buildSoql({}), 'SELECT Id, Name FROM Account ORDER BY Id LIMIT 200');
@@ -99,4 +99,34 @@ test('rekeyRow and sampleRows use the spelling of the SELECT list, case-insensit
   assert.deepEqual(rekeyRow(row, ['id', 'name', 'owner.name', 'Owner.email']), { id: '001', name: 'Acme', owner: { name: 'Lan', email: 'l@x' }, Industry: 'Banking' });
   const sample = sampleRows({ mode: 'soql', soql: 'SELECT id, name, owner.Name, OWNER.Email FROM Contact LIMIT 1' }, 'cons')[0];
   assert.deepEqual(sample, { id: 'mẫu:cons#1', name: 'Contact mẫu 1', owner: { Name: 'owner.Name mẫu 1', Email: 'OWNER.Email mẫu 1' } });
+});
+
+// Design 0012 F1: "Thêm <Field> vào SELECT" on hand-written SOQL.
+test('addSelectField appends to the outer SELECT list of plain SOQL', () => {
+  assert.equal(addSelectField('SELECT Id, Name FROM Account', 'Industry'), 'SELECT Id, Name, Industry FROM Account');
+  // WHERE / ORDER BY / LIMIT and the spacing (a newline before FROM) are kept.
+  assert.equal(
+    addSelectField("SELECT Id, Name\nFROM Account WHERE Name LIKE 'A FROM%' ORDER BY Id LIMIT 10", 'Owner.Email'),
+    "SELECT Id, Name, Owner.Email\nFROM Account WHERE Name LIKE 'A FROM%' ORDER BY Id LIMIT 10",
+  );
+  assert.equal(addSelectField('select Id from Contact', 'Email'), 'select Id, Email from Contact');
+  assert.equal(addSelectField('SELECT Id, toLabel(Status) FROM Case', 'Subject'), 'SELECT Id, toLabel(Status), Subject FROM Case');
+  // A parenthesised WHERE (a semi-join) is not a SELECT-list subquery.
+  assert.equal(
+    addSelectField('SELECT Id FROM Account WHERE Id IN (SELECT AccountId FROM Contact)', 'Name'),
+    'SELECT Id, Name FROM Account WHERE Id IN (SELECT AccountId FROM Contact)',
+  );
+});
+
+test('addSelectField: field already there is unchanged; subquery, FIELDS(ALL), broken SOQL → null', () => {
+  assert.equal(addSelectField('SELECT Id, industry FROM Account', 'Industry'), 'SELECT Id, industry FROM Account');
+  assert.equal(addSelectField('SELECT Id, (SELECT Id FROM Contacts) FROM Account', 'Name'), null);
+  assert.equal(addSelectField('SELECT FIELDS(ALL) FROM Account LIMIT 200', 'Name'), null);
+  assert.equal(addSelectField('SELECT TYPEOF What WHEN Account THEN Name END FROM Task', 'Subject'), null);
+  assert.equal(addSelectField('SELECT Id FROM', 'Name'), null);
+  assert.equal(addSelectField('DELETE FROM Account', 'Name'), null);
+  assert.equal(addSelectField('SELECT Id FROM Account FOR UPDATE', 'Name'), null);
+  assert.equal(addSelectField('SELECT Id FROM Account WHERE Id = {{acc.Id}}', 'Name'), null);
+  assert.equal(addSelectField('SELECT Id FROM Account', 'bad field'), null);
+  assert.equal(addSelectField('', 'Name'), null);
 });

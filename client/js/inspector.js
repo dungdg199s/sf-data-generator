@@ -14,7 +14,7 @@ import {
 } from './store.js';
 import { setStepAlias, renameField, insertStep } from '/shared/workflow-tree.js';
 import { refChoices, refsToRecords, referenceOptions, exposesList } from '/shared/scope.js';
-import { buildSoql, QUERY_DEFAULTS, SAMPLE_ROWS } from '/shared/soql.js';
+import { buildSoql, QUERY_DEFAULTS, SAMPLE_ROWS, addSelectField } from '/shared/soql.js';
 import { deleteStep, duplicateStep, toggleDisabled, newStep, fillEach, reveal, recordPresetFields } from './ops.js';
 import { START_ID } from './layout.js';
 import { placesText } from './variables.js';
@@ -747,6 +747,7 @@ function fillErrors(box, issues) {
 /** Button text of an issue's `fix`, or null for a kind this client does not know. */
 function fixText(fix) {
   if (fix.kind === 'renameField') return `Đổi thành ${fix.to}`;
+  if (fix.kind === 'addSelectField') return `Thêm ${fix.field} vào SELECT của "${stepById(fix.stepId)?.config?.alias || fix.stepId}"`;
   return null;
 }
 
@@ -769,6 +770,27 @@ function applyQuickFix(fix) {
       return out;
     }, { source: 'inspector-structure' });
     toast(`Đã đổi field ${fix.from} thành ${fix.to}${res?.count ? ` và cập nhật ${res.count} tham chiếu` : ''}. Ctrl+Z để hoàn tác.`);
+  } else if (fix.kind === 'addSelectField') {
+    // The Query is another step: its builder list or its hand-written SOQL gets the field.
+    const q = stepById(fix.stepId);
+    if (q?.type !== 'query') return;
+    const name = q.config?.alias || q.id;
+    const done = updateWorkflow(() => {
+      const c = (q.config ??= {});
+      if ((c.mode ?? 'builder') === 'soql') {
+        const next = addSelectField(c.soql, fix.field);
+        if (next === null) return false;
+        c.soql = next;
+        return true;
+      }
+      const raw = c.fields ?? QUERY_DEFAULTS.fields;
+      const list = (Array.isArray(raw) ? raw : String(raw).split(/[\n,;]/)).map((x) => String(x ?? '').trim()).filter(Boolean);
+      if (!list.some((x) => x.toLowerCase() === fix.field.toLowerCase())) list.push(fix.field);
+      c.fields = list;
+      return true;
+    }, { source: 'inspector-structure' });
+    if (done) toast(`Đã thêm ${fix.field} vào Query "${name}". Bấm Xem trước để đọc lại.`);
+    else toast(`Không sửa được SOQL của Query "${name}". Thêm ${fix.field} vào SELECT bằng tay.`);
   }
 }
 

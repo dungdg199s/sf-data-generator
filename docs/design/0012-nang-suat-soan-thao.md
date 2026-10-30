@@ -1,6 +1,6 @@
 # 0012 — Năng suất soạn thảo: thư viện workflow, chọn nhiều, copy/paste, sửa nhanh, số liệu trên thẻ
 
-- **Trạng thái:** Đang làm (đã xong G)
+- **Trạng thái:** Đang làm (đã xong G, F1)
 - **Ngày:** 2026-10-28
 - **Liên quan:** [0003](0003-process-mode.md) (cây bước, phím, "Việc tiếp theo": chọn nhiều, copy/paste, ước tính số bản
   ghi, tô thẻ cha, field tên mặc định), [0004](0004-streaming-execution.md) (sự kiện tiến độ, nhóm lỗi insert),
@@ -821,3 +821,21 @@ Làm từng phần theo [Kế hoạch](#kế-hoạch-thực-hiện); phần chư
   danh sách field; Contact có `FirstName` đứng trước `LastName`). Field mặc định theo describe không tự thêm bước Query cho Lookup
   bắt buộc chưa có bản ghi cha ("＋ … có sẵn trong org" chỉ có ở hộp Import): `ref` để trống, lỗi "chưa chọn bản ghi cha" chỉ đúng
   field — tự thêm bước sau một độ trễ 0,5 s thì bất ngờ hơn.
+
+### F1 — "Thêm <Field> vào SELECT" (bước 2)
+
+- `shared/soql.js`: `addSelectField(soql, field)` → câu mới (chèn `, Field` sau mục cuối của SELECT ngoài, giữ khoảng trắng trước
+  `FROM`), câu cũ nếu đã có field (không phân biệt hoa thường), `null` khi SOQL có lỗi mức error của `checkSoql`, subquery hay
+  `FIELDS(…)`/`TYPEOF` trong SELECT, hoặc `field` không phải đường dẫn field.
+- `server/workflow/schema.js`: `referenceIssue(ref, scope, step, stepOf)` gắn `fix: { kind: "addSelectField", stepId, field }` lên
+  `unknownMember` của nguồn org; `stepId` là Query gốc (`source.root`, nên qua Chọn bản ghi, Chọn bản ghi của Chọn bản ghi và bản
+  ghi đang lặp của Lặp `each`). Field con của quan hệ được thêm dạng đường dẫn (`Owner.Email` khi Query chỉ lấy `Owner.Name`);
+  câu lỗi cũng gọi đúng `Owner.Email` thay vì `Email`.
+- `client/js/inspector.js`: nút `Thêm Industry vào SELECT của "accs"` (`.quick-fix`) dưới câu lỗi, cạnh "Sửa thành …"; bấm sửa bước
+  Query (builder: thêm vào cuối `fields`; SOQL: `addSelectField`), một bước hoàn tác (`inspector-structure`), toast
+  `Đã thêm Industry vào Query "accs". Bấm Xem trước để đọc lại.` Thanh lỗi không thêm nút (như thiết kế).
+- Test: `test/soql.test.js` (`addSelectField` với SOQL thường, có WHERE/ORDER BY/LIMIT và chuỗi chứa `FROM`, semi-join trong WHERE,
+  `toLabel`, đã có field, subquery / `FIELDS(ALL)` / `TYPEOF` / SOQL lỗi ⇒ `null`), `test/workflow.test.js` (`unknownMember of a
+  Query source carries an addSelectField fix`: qua Chọn bản ghi, bản ghi đang lặp, Chọn bản ghi lồng, `left` của Rẽ nhánh,
+  `Owner.Email`, SOQL sửa được / có subquery, pool Record sinh ra thì không có `fix`). Smoke `flowProductivity` bước F1.
+- Khác thiết kế: không.

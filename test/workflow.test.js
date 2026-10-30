@@ -832,3 +832,29 @@ test('no noNameField warning for Account, Opportunity or a custom sObject', () =
     assert.deepEqual(validateWorkflow(w), { errors: [], warnings: [] }, sobject);
   }
 });
+
+// Design 0012 F1: "Thêm <Field> vào SELECT" — the fix names the Query the rows come from.
+test('unknownMember of a Query source carries an addSelectField fix', () => {
+  const fixOf = (w) => errorsOf(w).find((e) => e.code === 'unknownMember')?.fix;
+  const contact = (tpl) => record('c', 'Contact', 'con', [{ name: 'LastName', type: 'text' }, tplField('Title', tpl)]);
+  // Through a Chọn bản ghi.
+  const viaPick = wf([query('q', 'accs', { fields: ['Id', 'Name'] }), pick('p', 'acc', 'accs'), contact('{{acc.Industry}}')]);
+  const issue = errorsOf(viaPick).find((e) => e.code === 'unknownMember');
+  assert.equal(issue.field, 'fields.Title');
+  assert.deepEqual(issue.fix, { kind: 'addSelectField', stepId: 'q', field: 'Industry' });
+  // Through the record a Lặp `each` loops over (0010), and a pick from a pick.
+  assert.deepEqual(fixOf(wf([query('q', 'accs'), loop('l', { mode: 'each', from: 'accs', itemAlias: 'acc' }, [contact('{{acc.Industry}}')])])), { kind: 'addSelectField', stepId: 'q', field: 'Industry' });
+  assert.deepEqual(fixOf(wf([query('q', 'accs'), pick('p', 'acc', 'accs'), pick('p2', 'acc2', 'acc'), contact('{{acc2.Industry}}')])), { kind: 'addSelectField', stepId: 'q', field: 'Industry' });
+  // A path option (branch `left`) gets it too; a relationship sub-field is added as a path.
+  const left = errorsOf(wf([query('q', 'accs'), pick('p', 'acc', 'accs'), branch('b', { kind: 'compare', left: 'acc.Type', op: 'eq', right: 'x' }, [contact('x')])])).find((e) => e.code === 'unknownMember');
+  assert.deepEqual([left.nodeId, left.field, left.fix], ['b', 'left', { kind: 'addSelectField', stepId: 'q', field: 'Type' }]);
+  const owner = errorsOf(wf([query('q', 'accs', { fields: ['Id', 'Owner.Name'] }), pick('p', 'acc', 'accs'), contact('{{acc.Owner.Email}}')])).find((e) => e.code === 'unknownMember');
+  assert.deepEqual(owner.fix, { kind: 'addSelectField', stepId: 'q', field: 'Owner.Email' });
+  assert.match(owner.message, /không lấy field Owner\.Email\. Thêm Owner\.Email vào/);
+  // Hand-written SOQL: a fix only when the SELECT list can be edited.
+  assert.deepEqual(fixOf(wf([query('q', 'accs', { mode: 'soql', soql: 'SELECT Id, Name FROM Account ORDER BY Id' }), pick('p', 'acc', 'accs'), contact('{{acc.Industry}}')])), { kind: 'addSelectField', stepId: 'q', field: 'Industry' });
+  const sub = wf([query('q', 'accs', { mode: 'soql', soql: 'SELECT Id, Name, (SELECT Id FROM Contacts) FROM Account ORDER BY Id' }), pick('p', 'acc', 'accs'), contact('{{acc.Industry}}')]);
+  assert.equal(errorsOf(sub).find((e) => e.code === 'unknownMember').fix, undefined);
+  // A generated Record pool: no SELECT to fix.
+  assert.equal(fixOf(wf([record('a', 'Account', 'acc', [{ name: 'Name', type: 'text' }]), contact('{{acc.Industry}}')])), undefined);
+});

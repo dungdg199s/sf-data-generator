@@ -39,7 +39,8 @@
 //      connector adds a Record there; Delete removes it; ↑ walks the tree; M back; dark screenshot; at 390 px
 //      the saved Sơ đồ is not applied, the ⋯ menu switches (not saved) and a tap opens the sheet above the card
 //  16. editor productivity (0012): G — a saved Task with Name warns, "Đổi thành Subject" fixes it (template
-//      follows); a new Record switched to Task gets Subject at once
+//      follows); a new Record switched to Task gets Subject at once. F1 — {{acc.Industry}} from Query "accs"
+//      gets "Thêm Industry vào SELECT của "accs"", which adds it to the Query and clears the error
 // The flows run in parallel, one browser context each (independent storage): see SKILL.md.
 // Usage: node .claude/skills/smoke-test/smoke.cjs [screenshotDir]
 // Needs Playwright with a Chromium build available (require('playwright')).
@@ -1031,7 +1032,8 @@ async function flowEach() {
 /**
  * Flow 16: editor productivity (design 0012), own context. G: a saved Task with a `Name` field
  * gets the noNameField warning and "Đổi thành Subject" fixes it (the template follows); a new
- * Record switched to Task gets the preset field Subject at once.
+ * Record switched to Task gets the preset field Subject at once. F1: a template reading a field
+ * the Query does not select gets "Thêm <Field> vào SELECT", which fixes the Query.
  */
 async function flowProductivity() {
   const page = await newPage('productivity');
@@ -1067,6 +1069,24 @@ async function flowProductivity() {
     focus: document.activeElement?.dataset.key,
   }));
   check(after.names.join() === 'Subject' && after.focus === 'sobject', `Record switched to Task: ${JSON.stringify(after)}`);
+
+  // F1: {{acc.Industry}} with acc picked from Query "accs" (Id, Name): one click adds Industry to its SELECT.
+  await page.click('#sample-items .palette-item:has-text("Contact cho Account có sẵn")');
+  await page.waitForSelector('.step-card[data-id="con"]');
+  await page.click('.step-card[data-id="con"] .type');
+  const title = '#inspector .field-card[data-field="fields.Title"]';
+  await page.click(`${title} .actions button[title="Tùy chọn"]`);
+  await page.fill(`${title} input[data-key="template"]`, 'Ngành {{acc.Industry}}');
+  const addBtn = await page.waitForSelector(`${title} .quick-fix[data-fix="addSelectField"]`, { timeout: 3000 }).catch(() => null);
+  check(addBtn && (await addBtn.textContent()) === 'Thêm Industry vào SELECT của "accs"', `addSelectField button: ${addBtn && await addBtn.textContent()}`);
+  if (addBtn) {
+    await addBtn.click();
+    await page.waitForFunction(() => !document.querySelector('.step-card[data-id="con"].has-error'), null, { timeout: 3000 }).catch(() => {});
+    check(!(await page.$('.step-card[data-id="con"].has-error')), 'the unknownMember error stayed after "Thêm Industry vào SELECT"');
+    const fields = await page.evaluate(() => JSON.parse(localStorage.getItem('sfdg.workflow.v2')).steps[0].config.fields);
+    check(fields.join() === 'Id,Name,Industry', `Query fields after the fix: ${fields}`);
+    check(/Đã thêm Industry vào Query "accs"\. Bấm Xem trước để đọc lại\./.test(await page.textContent('#toast')), 'no "Đã thêm Industry vào Query" toast');
+  }
   await page.context().close();
 }
 
