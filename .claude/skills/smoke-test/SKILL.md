@@ -25,7 +25,10 @@ needs before its first load is written by `addInitScript` (once, guarded by a ma
 checks resize one page (`setViewportSize`) instead of opening a context per width; waits for the sheet or toast
 transition use `document.getAnimations()` instead of fixed timeouts. A run went from ~10 s (sequential) to ~5.5 s with
 flow 13 added. When you add a flow, put it in the function it depends on, or in a new function if it needs nothing from
-the others; never add a fixed `waitForTimeout`.
+the others; never add a fixed `waitForTimeout`: the smoke fails at start if its own source contains one (`noFixedWaits`).
+Every context is created with `reducedMotion: 'reduce'` (the app honours it), so no transition has to finish before a check.
+A flow that needs another workflow mid-way opens it through `#file-input` (`setInputFiles` with a buffer) rather than writing
+storage and reloading (one app boot less; flow 5b).
 
 1. **Wide (1440 px), light scheme.** Loads the "Account + Contact" sample. Every step, the Start card
    and every palette item carries `data-type` and an icon tile (`.ico-tile .ico`) and no inline `--c`;
@@ -184,11 +187,13 @@ the others; never add a fixed `waitForTimeout`.
     weights `0, 0, 0, 1` turn it into `Ví dụ: "Healthcare" · "Healthcare" · "Healthcare"` once the server answers (waits on the
     response, no fixed wait); `con`'s Title (reads `{{acc.Industry}}`) shows a "Lần xem trước…" line instead.
 
-It also fails on any page error or a run over 12 s (typically ~5.5–6.5 s since the flows run in parallel, flow 14 included, ~7–8.5 s with flow 15 on a 4-CPU machine; ~10 s before;
-~7–8 s with two CPU-bound processes running alongside). With flow 16 complete (0012 G, F1, C, I, H, D, E) a 4-CPU sandbox measured
-10.5–12.3 s for the commit before C/I/H/D/E and 11.3–11.9 s after (idle machine): the run is CPU-bound, every flow ends at 6–11 s,
-so a second context for flow 16 made it slower, not faster. The run prints `flows: <name> <ms>, …` (longest first) before
-`duration=`, to see which flow is the critical path.
+It also fails on any page error or a run over the **time budget**: `SMOKE_BUDGET_MS` when set, else
+`15 000 × max(1, 4 / os.availableParallelism())` ms (15 s on 4 or more CPUs, 30 s on 2). The flows run in parallel and are
+CPU-bound, so the cap scales with the CPUs; it is there to catch fixed waits and runaway flows, not to benchmark. The run prints
+`flows: <name> <ms>, …` (longest first) and `duration=… (budget …)`, to see which flow is the critical path. History: the cap was
+12 s until the 0012 review; with flow 16 complete a 4-CPU sandbox measured 11.3–11.9 s (10.5–12.3 s for the commit before
+0012 C/I/H/D/E), ~9.5–10 s once reduced motion and the flow 5b file-open went in. A second context for flow 16 made it slower,
+not faster.
 Screenshots (only when a directory is given): `smoke-1440.png`, `smoke-390.png`, `smoke-390-sheet.png`,
 `smoke-390-dark.png`, `smoke-390-topbar.png`, `smoke-1280-issues.png`, `smoke-1440-dark.png`, `smoke-1440-dark-insert.png`,
 `smoke-1440-canvas.png`, `smoke-1440-canvas-dark.png`, `smoke-390-canvas.png`.

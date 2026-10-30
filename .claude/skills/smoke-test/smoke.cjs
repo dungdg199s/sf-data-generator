@@ -104,12 +104,31 @@ const V1_ORPHAN = {
 
 const errors = [];
 const check = (cond, msg) => { if (!cond) errors.push(msg); };
+
+/**
+ * Total time cap (ms): SMOKE_BUDGET_MS, else 15 000 on 4 or more CPUs, scaled up on fewer
+ * (15 000 × 4 / CPUs), since the parallel flows are CPU-bound.
+ */
+function smokeBudgetMs() {
+  const env = Number(process.env.SMOKE_BUDGET_MS);
+  if (Number.isFinite(env) && env > 0) return env;
+  const cpus = typeof os.availableParallelism === 'function' ? os.availableParallelism() : os.cpus().length;
+  return Math.round(15000 * Math.max(1, 4 / Math.max(1, cpus)));
+}
+
+/** Fixed waits make the smoke slow and flaky: wait on a response, an element or a function instead. */
+function noFixedWaits() {
+  const banned = 'waitFor' + 'Timeout('; // split so this check does not match itself
+  const lines = fs.readFileSync(__filename, 'utf8').split('\n').map((l, i) => [i + 1, l]).filter(([, l]) => l.includes(banned));
+  for (const [n] of lines) errors.push(`smoke.cjs:${n} uses ${banned}…): wait on a response, a selector or waitForFunction instead`);
+}
 let browser;
 let base;
 
 /** A fresh context (empty storage) and page; page errors are reported with `label`. */
 async function newPage(label, ctxOpts = {}) {
-  const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, ...ctxOpts });
+  // Reduced motion: no transition to wait for (the app honours prefers-reduced-motion).
+  const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, reducedMotion: 'reduce', ...ctxOpts });
   const page = await ctx.newPage();
   page.on('pageerror', (e) => errors.push(`${label ? `[${label}] ` : ''}${e}`));
   page.on('dialog', (d) => d.accept());
@@ -378,13 +397,14 @@ async function flowPicker() {
   check(/trỏ tới Lead/.test(refText), `"Bản ghi cha" did not refresh after referenceTo (${refText})`);
 
   // Path fields (branch "Giá trị"): a valid default outside loops, no opening on focus, Tab never inserts untouched.
-  await page.evaluate(() => {
+  {
     const rec = { id: 'a', type: 'record', config: { sobject: 'Account', alias: 'acc', fields: [{ name: 'Name', type: 'text', options: {} }] } };
     const top = { id: 'top', type: 'branch', config: { kind: 'chance', probability: 0.5 }, slots: { true: [], false: [] } };
     const inner = { id: 'B', type: 'branch', config: { kind: 'compare', left: '', op: 'eq', right: '1' }, slots: { true: [], false: [] } };
-    localStorage.setItem('sfdg.workflow.v2', JSON.stringify({ version: 2, name: 'p', steps: [rec, top, { id: 'L', type: 'loop', config: { count: 2, alias: 'loop' }, slots: { body: [inner] } }] }));
-  });
-  await page.reload();
+    const wf = { version: 2, name: 'p', steps: [rec, top, { id: 'L', type: 'loop', config: { count: 2, alias: 'loop' }, slots: { body: [inner] } }] };
+    // Opened as a file (no reload: one app boot less for this flow).
+    await page.setInputFiles('#file-input', { name: 'p.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(wf)) });
+  }
   await page.waitForSelector('.step-card[data-id="top"]');
   await page.click('.step-card[data-id="top"] .type');
   await page.selectOption('#inspector select[data-key="kind"]', 'compare');
@@ -1427,6 +1447,7 @@ async function flowCanvas() {
   // A Playwright error outside a flow's promise (e.g. in an event handler) fails the run.
   process.on('uncaughtException', (e) => { console.error('SMOKE FAILED\n' + e); process.exit(1); });
   const t0 = Date.now();
+  noFixedWaits();
   let server;
   try {
     // Browser start and server start overlap.
@@ -1458,10 +1479,11 @@ async function flowCanvas() {
     await browser?.close();
   }
   const ms = Date.now() - t0;
-  console.log(`duration=${ms}ms`);
-  // 12 s budget. Since 0009 the flows run in parallel (≈ 5–6 s); the budget stays to catch a flow
-  // that starts waiting on fixed timeouts again.
-  if (ms > 12000) errors.push(`smoke test took ${ms} ms (limit 12 s)`);
+  const budget = smokeBudgetMs();
+  console.log(`duration=${ms}ms (budget ${budget} ms)`);
+  // The flows run in parallel and are CPU-bound, so the budget scales with the CPUs; it is there to
+  // catch a flow that starts waiting on fixed timeouts (also refused statically, see noFixedWaits).
+  if (ms > budget) errors.push(`smoke test took ${ms} ms (budget ${budget} ms; SMOKE_BUDGET_MS overrides)`);
   if (errors.length) {
     console.error('SMOKE FAILED\n' + errors.join('\n'));
     process.exit(1);

@@ -744,8 +744,8 @@ Ba đợt, mỗi đợt một commit có test; sau mỗi đợt `npm test` xanh 
    `{{accs.$count}} lần`); Ctrl+Enter không org ra đúng số bản ghi; Lặp `each` qua `cons` trong thân Lặp `acc` → bật lọc ⇒ ô điền
    `AccountId` / `{{acc.Id}}` và toast, một ↶ bỏ cả hai; ở `fixed` mọi ô lọc ẩn; Xáo trộn + Tối đa 2 ⇒ chip `n lần lặp` đúng; Lặp
    "Mỗi giá trị trong danh sách" rỗng ⇒ viền đỏ `values` và câu `valuesEmpty`; nhập `Hot/Warm/Cold` ⇒ thẻ `3 giá trị: Hot, Warm, Cold`;
-   Rẽ nhánh `{x}` ở "So với" chèn `{{opp.Amount}}`; `{{run.seed}}` trong template có mẫu. `SMOKE OK` ba lần liên tiếp, thời gian không
-   vượt trần 12 giây.
+   Rẽ nhánh `{x}` ở "So với" chèn `{{opp.Amount}}`; `{{run.seed}}` trong template có mẫu. `SMOKE OK` ba lần liên tiếp, thời gian
+   trong ngân sách của skill `smoke-test` (`SMOKE_BUDGET_MS` hoặc 15 s × max(1, 4 / số CPU); trước đây 12 giây).
 8. Tài liệu: các file ở "Tài liệu tham chiếu cần cập nhật"; mục "Đã làm" của doc này; dòng 0013 trong `docs/design/README.md` (trạng
    thái `Đã duyệt` → `Đã làm`). Bảng đồng bộ hợp đồng trong `.claude/agents/implementer.md` áp dụng cho từng bước (danh mục, validate,
    executor, `shared/`, UI, doc, test cùng lúc).

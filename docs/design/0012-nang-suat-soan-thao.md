@@ -719,7 +719,7 @@ Mỗi bước một commit, có test hoặc bước smoke. Bảng đồng bộ h
 11. **Tài liệu:** các file ở [Tài liệu tham chiếu](#tài-liệu-tham-chiếu-cần-cập-nhật-khi-làm-implementer-làm-cùng-code-doc-này-không-sửa),
     "Đã làm" của doc này, chỉ mục `docs/design/README.md` (thêm dòng 0012, trạng thái theo lúc đó), skill `smoke-test`.
 
-**Smoke** (`.claude/skills/smoke-test/smoke.cjs`, trần 12 s, hiện ~8 s). Một hàm mới `flowProductivity` chạy song song (context
+**Smoke** (`.claude/skills/smoke-test/smoke.cjs`, ngân sách thời gian: `SMOKE_BUDGET_MS` hoặc 15 s × max(1, 4 / số CPU), xem skill `smoke-test`; lúc viết doc trần là 12 s, hiện ~8 s). Một hàm mới `flowProductivity` chạy song song (context
 riêng, không chờ cố định), các bước:
 
 - G: thêm Record, đổi sObject `Task` ⇒ một field `Subject`; mở mẫu có Record Task-với-Name dựng bằng `addInitScript` ⇒ cảnh báo
@@ -741,7 +741,7 @@ riêng, không chờ cố định), các bước:
 Sửa có chủ đích: **luồng 6** (autosave v1) kiểm mục thư viện được tạo và `sfdg.workflow.v1` không đổi (thay vì kiểm
 `sfdg.workflow.v2` được ghi); thêm kiểm: `sfdg.workflow.v2` có sẵn ⇒ thành mục thư viện, khóa v2 không đổi từng byte. **Luồng 7**
 (autosave hỏng) giữ nguyên ý: `.broken` còn bản sao. Luồng 8/9 (mở file) đi qua `#file-input` như cũ. Ước tính thêm ~1,5 s cho
-luồng mới, chạy song song nên tổng ~9 s, dưới 12 s.
+luồng mới, chạy song song nên tổng ~9 s, trong ngân sách.
 
 ## Đã chốt
 
@@ -957,3 +957,8 @@ Làm từng phần theo [Kế hoạch](#kế-hoạch-thực-hiện); phần chư
   thành công và 422 (lỗi 500 / mất kết nối được hỏi lại). Chú thích `vi-VN` trong `summary.js` sửa theo định dạng thật.
 - `docs/ui-design-system.md` §6.4: tag lỗi insert trên Sơ đồ không tới được bằng bàn phím (`tabindex="-1"`); đường bàn phím là
   tab "Lỗi insert".
+- **Ngân sách smoke (quyết định của điều phối):** `smoke.cjs` đọc `SMOKE_BUDGET_MS`, mặc định 15 000 × max(1, 4 /
+  `os.availableParallelism()`) ms thay cho 12 s cố định; tự kiểm tra tĩnh không có `waitForTimeout(` trong chính file; mọi context
+  `reducedMotion: 'reduce'`; luồng 5b mở workflow thứ hai qua `#file-input` thay vì reload; in thời gian từng luồng. Cập nhật skill
+  `smoke-test` và câu "12 s" ở 0012, 0013, 0014 (các mục "Đã làm" cũ của 0004/0006/0009/0010 giữ nguyên vì là số đo lịch sử).
+
