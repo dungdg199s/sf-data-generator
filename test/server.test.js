@@ -568,3 +568,59 @@ test('a malformed cancel id is a 404; the response ends before the query cache i
     close();
   }
 });
+
+// ---------- design 0012 E: POST /api/field-samples ----------
+
+const NOW0 = Date.parse('2026-10-28T00:00:00Z');
+const industry = { name: 'Industry', type: 'picklist', options: { values: ['Banking', 'Retail', 'Tech'], weights: [3, 1, 1] } };
+
+test('POST /api/field-samples returns 3 deterministic values (same seed ⇒ same values)', async () => {
+  const body = { sobject: 'Account', fields: [{ name: 'Name', type: 'text', options: { mode: 'company' } }, industry], index: 1, seed: 1, now: NOW0 };
+  const a = await post('/api/field-samples', body);
+  assert.equal(a.status, 200);
+  const { values } = await a.json();
+  assert.equal(values.length, 3);
+  assert.ok(values.every((v) => industry.options.values.includes(v)), values.join());
+  const b = await (await post('/api/field-samples', body)).json();
+  assert.deepEqual(b.values, values);
+  // Another seed (very likely) changes them; an empty seed is seed 1.
+  const c = await (await post('/api/field-samples', { ...body, seed: 999 })).json();
+  assert.equal(c.values.length, 3);
+  assert.deepEqual((await (await post('/api/field-samples', { ...body, seed: undefined })).json()).values, values);
+});
+
+test('POST /api/field-samples: {{this.FirstName}} uses the field above; a reference to another step is empty', async () => {
+  const fields = [
+    { name: 'FirstName', type: 'text', options: { mode: 'firstName' } },
+    { name: 'AccountId', type: 'lookup', options: { mode: 'current', ref: 'acc' } }, // cannot be made here: left out
+    { name: 'Title', type: 'template', options: { template: 'Chào {{this.FirstName}}{{acc.Name}}' } },
+  ];
+  const first = (await (await post('/api/field-samples', { fields, index: 0, seed: 3, now: NOW0 })).json()).values;
+  const res = await post('/api/field-samples', { fields, index: 2, seed: 3, now: NOW0 });
+  assert.equal(res.status, 200);
+  const { values } = await res.json();
+  assert.equal(values.length, 3);
+  for (const v of values) assert.match(v, /^Chào \S+$/);
+  assert.equal(values[0], `Chào ${first[0]}`);
+});
+
+test('POST /api/field-samples: unknown type ⇒ 422 with the field; count is clamped to 5; exhausted unique values ⇒ 422', async () => {
+  const unknown = await post('/api/field-samples', { fields: [{ name: 'X__c', type: 'nope', options: {} }], index: 0, now: NOW0 });
+  assert.equal(unknown.status, 422);
+  const u = await unknown.json();
+  assert.equal(u.issues[0].field, 'fields.X__c');
+  assert.match(u.issues[0].message, /kiểu "nope" không được hỗ trợ/);
+
+  const many = await (await post('/api/field-samples', { fields: [industry], index: 0, count: 50, now: NOW0 })).json();
+  assert.equal(many.values.length, 5);
+
+  const unique = await post('/api/field-samples', { fields: [{ name: 'N__c', type: 'number', options: { min: 1, max: 2, unique: true } }], index: 0, count: 3, now: NOW0 });
+  assert.equal(unique.status, 422);
+  assert.match((await unique.json()).error, /không tạo được giá trị duy nhất/);
+
+  // Malformed requests: 400.
+  assert.equal((await post('/api/field-samples', { fields: [], index: 0, now: NOW0 })).status, 400);
+  assert.equal((await post('/api/field-samples', { fields: [industry], index: 1, now: NOW0 })).status, 400);
+  assert.equal((await post('/api/field-samples', { fields: [industry], index: 0 })).status, 400);
+  assert.equal((await post('/api/field-samples', { fields: Array.from({ length: 501 }, () => industry), index: 0, now: NOW0 })).status, 400);
+});

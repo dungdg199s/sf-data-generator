@@ -45,6 +45,7 @@
 //      C — "Bọc trong Lặp qua từng bản ghi" on con: Lặp each over accs, [Đổi] re-points the Lookup
 //      H — estimate chips before a run (≈ on con, total and limit on Start, over-limit tag)
 //      D — a mocked insert (route NDJSON with byStep): live "insert n/N" chip and "lỗi 3" tag, the tag opens the group
+//      E — "Ví dụ:" row of an open picklist (POST /api/field-samples) follows its weights; a dependent field shows the preview's
 // The flows run in parallel, one browser context each (independent storage): see SKILL.md.
 // Usage: node .claude/skills/smoke-test/smoke.cjs [screenshotDir]
 // Needs Playwright with a Chromium build available (require('playwright')).
@@ -1034,35 +1035,61 @@ async function flowEach() {
 }
 
 /**
- * Flow 16: editor productivity (design 0012), own context. G: a saved Task with a `Name` field
- * gets the noNameField warning and "Đổi thành Subject" fixes it (the template follows); a new
- * Record switched to Task gets the preset field Subject at once. F1: a template reading a field
- * the Query does not select gets "Thêm <Field> vào SELECT", which fixes the Query.
+ * Flow 16: editor productivity (design 0012), own context. G: a saved Task with
+ * a `Name` field gets the noNameField warning and "Đổi thành Subject" fixes it (the template
+ * follows); a new Record switched to Task gets the preset field Subject at once. F1: a template
+ * reading a field the Query does not select gets "Thêm <Field> vào SELECT", which fixes the Query.
+ * I: hovering / focusing a chip outlines its source card. C: "Bọc trong Lặp qua từng bản ghi".
+ * H: estimate chips before a run. D: live chips and the insert-error tag of a mocked insert.
+ * E: the "Ví dụ" row of an open field.
  */
 async function flowProductivity() {
-  const page = await newPage('productivity');
-  await seedStorage(page, { workflow: { version: 2, name: 'Task cũ', steps: [
+  // One page (a second context costs more CPU than it saves: the flows run in parallel and the
+  // smoke is CPU-bound). G first, then F1, I, C, H, D, E, each going on from the workflow the
+  // previous part left.
+  const page = await productivityPage('productivity', PRODUCTIVITY_G);
+  await productivityG(page);
+  await productivityRest(page);
+  await page.context().close();
+}
+
+/** A page of flow 16 with the mocked org `dev` selected (`describes`: answered by the route, never the sf CLI). */
+async function productivityPage(label, { workflow, describes = {} } = {}) {
+  const page = await newPage(label);
+  await seedStorage(page, { workflow, org: 'dev' });
+  await page.route('**/api/orgs', (r) => r.fulfill({ json: [{ alias: 'dev', username: 'dev@acme.com', isSandbox: true, isScratch: false, connectedStatus: 'Connected' }] }));
+  await page.route('**/api/orgs/dev/**', (r) => {
+    const m = /\/sobjects(?:\/([^/?]+))?(?:\?|$)/.exec(r.request().url());
+    if (m && !m[1]) return r.fulfill({ json: Object.keys(describes).map((name) => ({ name, label: name })) });
+    if (m && describes[m[1]]) return r.fulfill({ json: describes[m[1]] });
+    return r.fulfill({ status: 404, json: { error: 'smoke: org giả lập' } });
+  });
+  await page.goto(base);
+  return page;
+}
+
+/**
+ * Flow 16's start: a saved Task with a Name field and a Contact reading it; a mocked org (never the
+ * sf CLI) whose describes are shaped like mapDescribe's. Task / Event mark nothing required except
+ * a custom Event field; Invoice__c has an auto-number Name (not createable).
+ */
+const PRODUCTIVITY_G = {
+  workflow: { version: 2, name: 'Task cũ', steps: [
     { id: 't', type: 'record', config: { sobject: 'Task', alias: 'task', count: 1, fields: [{ name: 'Name', type: 'text', options: { mode: 'name' } }] } },
     { id: 'c', type: 'record', config: { sobject: 'Contact', alias: 'con', count: 1, fields: [{ name: 'LastName', type: 'text', options: {} }, { name: 'Description', type: 'template', options: { template: 'Việc {{task.Name}}' } }] } },
-  ] }, org: 'dev' });
-  // A mocked org (never the sf CLI): describes shaped like mapDescribe's. Task / Event mark nothing
-  // required except a custom Event field; Invoice__c has an auto-number Name (not createable).
-  const DESCRIBES = {
+  ] },
+  describes: {
     Task: { sobject: 'Task', label: 'Task', nameField: 'Subject', fields: [{ name: 'Subject', type: 'text', options: {}, label: 'Subject', required: false }] },
     Event: { sobject: 'Event', label: 'Event', nameField: 'Subject', fields: [
       { name: 'Type__c', type: 'picklist', options: { values: ['A'] }, label: 'Type', required: true },
       { name: 'Subject', type: 'text', options: {}, label: 'Subject', required: false },
     ] },
     Invoice__c: { sobject: 'Invoice__c', label: 'Invoice', nameField: 'Name', fields: [{ name: 'Amount__c', type: 'currency', options: {}, label: 'Amount', required: false }] },
-  };
-  await page.route('**/api/orgs', (r) => r.fulfill({ json: [{ alias: 'dev', username: 'dev@acme.com', isSandbox: true, isScratch: false, connectedStatus: 'Connected' }] }));
-  await page.route('**/api/orgs/dev/**', (r) => {
-    const m = /\/sobjects(?:\/([^/?]+))?(?:\?|$)/.exec(r.request().url());
-    if (m && !m[1]) return r.fulfill({ json: Object.keys(DESCRIBES).map((name) => ({ name, label: name })) });
-    if (m && DESCRIBES[m[1]]) return r.fulfill({ json: DESCRIBES[m[1]] });
-    return r.fulfill({ status: 404, json: { error: 'smoke: org giả lập' } });
-  });
-  await page.goto(base);
+  },
+};
+
+/** Flow 16, G (field names per sObject). */
+async function productivityG(page) {
   // G: the old Task warns on its Name field; the fix renames it and the reference follows.
   await page.waitForSelector('.step-card[data-id="t"].has-warning', { timeout: 3000 });
   await page.click('.step-card[data-id="t"] .type');
@@ -1100,7 +1127,10 @@ async function flowProductivity() {
   await page.waitForFunction(() => /auto-number/.test(document.getElementById('toast').textContent), null, { timeout: 3000 }).catch(() => {});
   check(await names() === '', `Invoice__c (auto-number Name) after describe: ${await names()}`);
   check(await page.evaluate(() => document.activeElement?.dataset.key) === 'sobject', 'focus left the sObject field when the describe landed');
+}
 
+/** Flow 16, F1, I, C, H, D, E: each part goes on from the workflow the previous one left. */
+async function productivityRest(page) {
   // F1: {{acc.Industry}} with acc picked from Query "accs" (Id, Name): one click adds Industry to its SELECT.
   await page.click('#sample-items .palette-item:has-text("Contact cho Account có sẵn")');
   await page.waitForSelector('.step-card[data-id="con"]');
@@ -1202,7 +1232,25 @@ async function flowProductivity() {
   await page.click(tag);
   const row = await page.evaluate(() => ({ tab: document.querySelector('.tabs .tab-issues.active') !== null, current: document.activeElement?.matches('table.error-groups tr.current[data-node="con"]') }));
   check(row.tab && row.current, `insert-error tag click: ${JSON.stringify(row)}`);
-  await page.context().close();
+
+  // E: ⚙ of the picklist Industry on acc shows three example values from /api/field-samples; new weights (only
+  // Healthcare) change them once the server answers. con's Title reads {{acc.Industry}}: it shows the last preview's.
+  await page.click('.step-card[data-id="acc"] .type');
+  const ind = '#inspector .field-card[data-field="fields.Industry"]';
+  const samplesText = (sel) => page.$eval(`${sel} .field-samples`, (e) => e.textContent).catch(() => null);
+  await page.click(`${ind} .actions button[title="Tùy chọn"]`);
+  await page.waitForFunction((sel) => /^Ví dụ: "[^"]+" · "[^"]+" · "[^"]+"$/.test(document.querySelector(`${sel} .field-samples`)?.textContent ?? ''), ind, { timeout: 3000 }).catch(() => {});
+  check(/^Ví dụ: "[^"]+" · "[^"]+" · "[^"]+"$/.test(await samplesText(ind)) && /seed 1/.test(await page.getAttribute(`${ind} .field-samples`, 'title')), `Industry examples: ${await samplesText(ind)}`);
+  await Promise.all([
+    page.waitForResponse((res) => res.url().endsWith('/api/field-samples'), { timeout: 3000 }).catch(() => null),
+    page.fill(`${ind} textarea[data-key="weights"]`, '0, 0, 0, 1'),
+  ]);
+  await page.waitForFunction((sel) => document.querySelector(`${sel} .field-samples`)?.textContent === 'Ví dụ: "Healthcare" · "Healthcare" · "Healthcare"', ind, { timeout: 3000 }).catch(() => {});
+  check(await samplesText(ind) === 'Ví dụ: "Healthcare" · "Healthcare" · "Healthcare"', `Industry examples after new weights: ${await samplesText(ind)}`);
+  await page.click('.step-card[data-id="con"] .type');
+  const conTitle = '#inspector .field-card[data-field="fields.Title"]';
+  if (await page.$(`${conTitle} .actions button[title="Tùy chọn"]`)) await page.click(`${conTitle} .actions button[title="Tùy chọn"]`); // still open since F1
+  check(/^Lần xem trước/.test(await samplesText(conTitle)), `a field reading {{acc.Industry}}: ${await samplesText(conTitle)}`);
 }
 
 /** Flow 15: the Sơ đồ view (design 0003 đợt B, + review fixes). Own contexts (wide, then phone). */
@@ -1393,7 +1441,13 @@ async function flowCanvas() {
     // SMOKE_ONLY=flowCanvas,flowEach runs only those flows (while working on one area).
     const only = process.env.SMOKE_ONLY?.split(',').filter(Boolean);
     if (only?.length) flows = Object.fromEntries(Object.entries(flows).filter(([n]) => only.includes(n)));
-    const results = await Promise.allSettled(Object.values(flows).map((f) => f()));
+    // Each flow's own duration (they overlap): the longest is the smoke's critical path.
+    const took = {};
+    const results = await Promise.allSettled(Object.entries(flows).map(async ([name, f]) => {
+      const t = Date.now();
+      try { return await f(); } finally { took[name] = Date.now() - t; }
+    }));
+    console.log(`flows: ${Object.entries(took).sort((a, b) => b[1] - a[1]).map(([n, ms]) => `${n} ${ms}`).join(', ')}`);
     results.forEach((r, i) => { if (r.status === 'rejected') errors.push(`${Object.keys(flows)[i]}: ${r.reason}`); });
   } catch (e) {
     errors.push(String(e));

@@ -11,7 +11,7 @@
 
 import { h, icoTile } from './dom.js';
 import { state, subscribe, stepById, currentScope } from './store.js';
-import { groupsFor, matchScore, tokenize, refAt, previewOf, formatSample, typeLabel, MAX_ROWS } from './variables.js';
+import { groupsFor, matchScore, tokenize, refAt, typeLabel, MAX_ROWS } from './variables.js';
 import { bindRefTarget, refSourceStep, sourceTitle } from './ref-target.js';
 
 let uid = 0;
@@ -114,9 +114,8 @@ function renderStrip(input, opts, chips, preview) {
   const keep = list.find((c) => c.dataset.path === focused) ?? list[0];
   if (keep) keep.tabIndex = 0;
   if (focused && keep) keep.focus();
-  const value = opts.fieldName !== undefined ? previewOf(opts.stepId, opts.fieldName) : null;
-  preview.hidden = value === null;
-  preview.textContent = value === null ? '' : `Lần xem trước: ${formatSample(value)}`;
+  // A field's last-preview value moved to the "Ví dụ" row at the end of its options (design 0012 E).
+  preview.hidden = true;
 }
 
 const stripPathLocal = (v) => v.trim().replace(/^\{\{\s*([\s\S]*?)\s*\}\}$/, '$1').trim();

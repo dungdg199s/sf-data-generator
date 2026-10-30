@@ -83,6 +83,15 @@ export const api = {
     const filename = /filename="([^"]+)"/.exec(res.headers.get('content-disposition') ?? '')?.[1] ?? 'export';
     return { blob: await res.blob(), filename };
   },
+  /**
+   * Values of one field for the inspector (design 0012 E): body { sobject, fields, index, seed, now,
+   * count } → { values }. A 422 throws with the server's message (and `issues`).
+   */
+  fieldSamples: async (body, { signal } = {}) => {
+    const res = await fetch('/api/field-samples', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal });
+    if (!res.ok) throw await errorOf(res);
+    return res.json();
+  },
   orgs: () => call('GET', '/api/orgs'),
   /** purpose 'query': objects a Query can read; default: objects a Record can create. */
   sobjects: (org, { purpose } = {}) => call('GET', `/api/orgs/${encodeURIComponent(org)}/sobjects${purpose === 'query' ? '?for=query' : ''}`),

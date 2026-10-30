@@ -70,13 +70,6 @@ export function sampleFor(nodeId, keys) {
   return { text: formatSample(v), title: stale ? 'Từ lần xem trước; workflow đã thay đổi sau đó.' : 'Từ lần xem trước.', stale };
 }
 
-/** Value the server generated for `fieldName` in the first record of the step (the "Lần xem trước" line). */
-export function previewOf(nodeId, fieldName) {
-  const rec = state.result ? firstRecords().get(nodeId) : null;
-  if (!rec || !(fieldName in (rec.fields ?? {}))) return null;
-  return rec.fields[fieldName];
-}
-
 function flatten(members, prefix = []) {
   const out = [];
   for (const m of members ?? []) {

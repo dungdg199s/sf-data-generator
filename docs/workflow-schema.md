@@ -372,6 +372,27 @@ application/json` (không thì 415). curl và script không gửi `Origin` nên 
 Dừng lần chạy sau lô đang gửi. Trả `{ "ok": true }`; lần chạy đã xong hoặc không tồn tại ⇒ 404 `Lần chạy này đã kết thúc.`
 Đóng kết nối của `/api/run` (đóng tab) cũng dừng lần chạy.
 
+### `POST /api/field-samples`
+
+Vài giá trị mẫu của **một field** cho inspector ([0012](design/0012-nang-suat-soan-thao.md) E). Không I/O, không org.
+
+```json
+{ "sobject": "Account", "fields": [{ "name": "Name", "type": "text", "options": { "mode": "company" } },
+  { "name": "Industry", "type": "picklist", "options": { "values": ["Banking", "Retail"] } }],
+  "index": 1, "seed": 1, "now": 1761552000000, "count": 3 }
+```
+
+Trả `{ "values": ["Banking", "Retail", "Banking"] }` (`null` giữ là `null`).
+
+- `fields`: các field của bước **tới và gồm** field `index` (1–500 field), để `{{this.FirstName}}` và Email "theo tên" thấy field
+  phía trên. Server sinh `count` bản ghi (mặc định 3, kẹp trong 1–5) chỉ gồm các field đó, theo thứ tự, `n` = 1…count, scope rỗng
+  (không có bước khác, không có biến lặp), rng có seed (`seed`, mặc định `1`) và `now` truyền vào (bắt buộc). Template trỏ tới
+  bước khác ra chuỗi rỗng; field phía trên không sinh được ở đây (Lookup…) bị bỏ qua.
+- Request sai dạng (`fields` rỗng / quá 500, `index` ngoài danh sách, thiếu `now`) ⇒ 400. Field `index` không tên hoặc kiểu lạ ⇒
+  422 `{ error, issues: [{ field: "fields.<Name>", message }] }`. Lỗi khi sinh (ví dụ hết giá trị duy nhất) ⇒ 422
+  `{ error: "<câu của generator>" }`.
+- Cùng `requestGuard` và giới hạn body như mọi `/api/*`.
+
 ### `POST /api/export`
 
 Body `{ workflow, seed, now, format: "csv" | "json", sobject?, org?, expectQueries?, runId? }`. Server sinh lại lần chạy

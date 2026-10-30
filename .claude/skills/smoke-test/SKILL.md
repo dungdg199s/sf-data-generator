@@ -156,7 +156,7 @@ the others; never add a fixed `waitForTimeout`.
     not under the zoom bar, its ⋯ is 32 px; ⋯ → "Quy trình" there leaves `sfdg.view` = `canvas` (landscape phone = phone).
     `SMOKE_ONLY=flowCanvas` (comma list) runs only the named flows.
 
-16. **Editor productivity (design 0012), `flowProductivity`, own context.** G: a saved workflow (`addInitScript`) with a Task
+16. **Editor productivity (design 0012), `flowProductivity`, own context (one page: G, then F1, I, C, H, D, E in that order).** G: a saved workflow (`addInitScript`) with a Task
     Record that has a `Name` field and a Contact whose template reads `{{task.Name}}`: the Task card has the warning badge, its
     Name field shows "Task không ghi được field Name nên insert sẽ lỗi. Đổi thành Subject…" with the button "Đổi thành Subject"; the
     button clears the warning, the field becomes `Subject` with the preset's list options and the template becomes
@@ -180,9 +180,15 @@ the others; never add a fixed `waitForTimeout`.
     before the confirmation goes to the server. A MutationObserver on `#process` records the texts the chips take: `con` shows
     `insert 0/N` then `insert 4/N` and the tag `lỗi 3`; after the run the tag stays (aria-label "3 bản ghi của bước này insert lỗi.
     Bấm để xem nhóm lỗi."), `acc` has none, and clicking it opens "Lỗi insert" with the `con` group row `.current` and focused.
+    E: ⚙ of the picklist `Industry` on `acc` shows `Ví dụ: "…" · "…" · "…"` (title mentions seed 1) from `/api/field-samples`;
+    weights `0, 0, 0, 1` turn it into `Ví dụ: "Healthcare" · "Healthcare" · "Healthcare"` once the server answers (waits on the
+    response, no fixed wait); `con`'s Title (reads `{{acc.Industry}}`) shows a "Lần xem trước…" line instead.
 
 It also fails on any page error or a run over 12 s (typically ~5.5–6.5 s since the flows run in parallel, flow 14 included, ~7–8.5 s with flow 15 on a 4-CPU machine; ~10 s before;
-~7–8 s with two CPU-bound processes running alongside).
+~7–8 s with two CPU-bound processes running alongside). With flow 16 complete (0012 G, F1, C, I, H, D, E) a 4-CPU sandbox measured
+10.5–12.3 s for the commit before C/I/H/D/E and 11.3–11.9 s after (idle machine): the run is CPU-bound, every flow ends at 6–11 s,
+so a second context for flow 16 made it slower, not faster. The run prints `flows: <name> <ms>, …` (longest first) before
+`duration=`, to see which flow is the critical path.
 Screenshots (only when a directory is given): `smoke-1440.png`, `smoke-390.png`, `smoke-390-sheet.png`,
 `smoke-390-dark.png`, `smoke-390-topbar.png`, `smoke-1280-issues.png`, `smoke-1440-dark.png`, `smoke-1440-dark-insert.png`,
 `smoke-1440-canvas.png`, `smoke-1440-canvas-dark.png`, `smoke-390-canvas.png`.

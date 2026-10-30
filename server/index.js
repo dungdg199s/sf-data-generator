@@ -13,6 +13,7 @@ import { serializableNodeTypes, STEP_CATEGORIES, LIMITS, QUERY_PRESETS, RECORD_P
 import { TEMPLATE_TOKEN } from './workflow/paths.js';
 import { validateWorkflow, prepareWorkflow, insertBlockedReason, WorkflowError } from './workflow/schema.js';
 import { createRun } from './workflow/executor.js';
+import { fieldSamples } from './workflow/samples.js';
 import { executeRun, createRunRegistry, YIELD_EVERY } from './run.js';
 import { createSfCli } from './sf/cli.js';
 import { createSfClient } from './sf/client.js';
@@ -128,6 +129,8 @@ export function createApp({ cli = createSfCli(), client, queryCache = createQuer
       }),
     ],
     ['POST', /^\/api\/validate$/, (_m, body) => validateWorkflow(body?.workflow, { derived: true })],
+    // Design 0012 E: a few values of one field for the inspector (no I/O, no org).
+    ['POST', /^\/api\/field-samples$/, (_m, body) => fieldSamples(body)],
     [
       'POST',
       /^\/api\/run$/,

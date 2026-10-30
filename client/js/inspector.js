@@ -19,6 +19,7 @@ import { deleteStep, duplicateStep, toggleDisabled, newStep, fillEach, reveal, r
 import { START_ID } from './layout.js';
 import { placesText } from './variables.js';
 import { applySuggestion, closePicker } from './var-picker.js';
+import { samplesRow } from './field-samples.js';
 
 let root;
 const expanded = new Set(); // `${stepId}:${fieldIndex}` with options panel open
@@ -717,6 +718,8 @@ function renderFields(node) {
                 vars: { stepId: node.id, fieldIndex: i, get fieldName() { return f.name; }, get field() { return `fields.${f.name}`; } },
               },
             ),
+            // Design 0012 E: three example values (or the last preview's, for a field that depends on another step).
+            samplesRow(node, i),
           ),
         );
       }

@@ -1,6 +1,6 @@
 # 0012 — Năng suất soạn thảo: thư viện workflow, chọn nhiều, copy/paste, sửa nhanh, số liệu trên thẻ
 
-- **Trạng thái:** Đang làm (đã xong G, F1, C, I, H, D)
+- **Trạng thái:** Đang làm (đã xong G, F1, C, I, H, D, E)
 - **Ngày:** 2026-10-28
 - **Liên quan:** [0003](0003-process-mode.md) (cây bước, phím, "Việc tiếp theo": chọn nhiều, copy/paste, ước tính số bản
   ghi, tô thẻ cha, field tên mặc định), [0004](0004-streaming-execution.md) (sự kiện tiến độ, nhóm lỗi insert),
@@ -915,3 +915,23 @@ Làm từng phần theo [Kế hoạch](#kế-hoạch-thực-hiện); phần chư
 - Khác thiết kế: bấm tag khi insert còn chạy chỉ hiện toast `Nhóm lỗi hiện ở tab "Lỗi insert" khi insert xong.` (nhóm lỗi chỉ có
   trong kết quả cuối). Tag trên Sơ đồ có `tabindex="-1"` như badge (một điểm Tab cho cây); ở Quy trình là nút Tab tới được.
   Trên thẻ Record, chip ước tính (H) và chip số liệu là cùng một chỗ (`paintCardRun`), không phải hai phần tử.
+
+### E — Giá trị mẫu trong inspector (bước 7)
+
+- `server/workflow/samples.js` (mới): `fieldSamples(body)` dùng `createRandom` (seed, mặc định 1) và `generateValue`, scope rỗng,
+  `now` truyền vào; field phía trên không sinh được ở đây thì bỏ qua (chỉ lỗi của field được hỏi mới báo). `server/index.js`:
+  `POST /api/field-samples` (400 khi request sai dạng, 422 với `issues` khi kiểu lạ / chưa tên, 422 với câu của generator khi
+  sinh lỗi). `docs/workflow-schema.md`.
+- `client/js/field-samples.js` (mới): hàng `.field-samples` cuối khối option của field đang mở; `fieldDepends` phân loại
+  (kiểu `valueType: 'reference'` của danh mục, tham chiếu tới bước khác / biến lặp trong `currentScope().refs`, bắc cầu qua
+  `{{this.X}}`); field độc lập gọi server (300 ms, số thứ tự + `AbortController`, cache 50 câu trả lời), field phụ thuộc hiện 3
+  bản ghi đầu của bước trong lần xem trước (xám nghiêng khi cũ) hoặc lời nhắc Xem trước. Hàng tự làm mới khi workflow đổi
+  (kể cả gõ trong option, vốn không vẽ lại inspector) và khi có kết quả mới. `client/js/api.js` (`fieldSamples`),
+  `client/js/inspector.js`. Dòng "Lần xem trước" một giá trị của dải chip (`var-picker.js`) bỏ, `previewOf` bỏ; bảng chọn biến
+  giữ dòng của nó.
+- Test: `test/server.test.js` (`POST /api/field-samples returns 3 deterministic values`, `{{this.FirstName}}` dùng field phía
+  trên còn tham chiếu tới bước khác ra rỗng, kiểu lạ ⇒ 422 có `field`, `count` > 5 bị kẹp, hết giá trị duy nhất ⇒ 422 với câu của
+  generator, request sai ⇒ 400). Smoke `flowProductivity` bước E.
+- Khác thiết kế: request không có `now` bị từ chối (400) thay vì lấy giờ server, để ví dụ luôn tái lập được; `sobject` được nhận
+  nhưng chưa dùng. Field phụ thuộc mà lần xem trước không có bản ghi nào của bước hiện `Lần xem trước không sinh bản ghi nào của
+  bước này.`
