@@ -30,11 +30,16 @@ export function openStepMenu(anchor, id) {
   const step = stepById(id);
   if (!step) return;
   const container = slotKeys(step.type).length > 0;
+  const each = ops.eachWrapPlan(id);
   const items = [
     { label: 'Nhân bản', kbd: 'Ctrl+D', onSelect: () => ops.duplicateStep(id) },
     { label: 'Lên', kbd: 'Alt+↑', onSelect: () => ops.moveBy(id, -1) },
     { label: 'Xuống', kbd: 'Alt+↓', onSelect: () => ops.moveBy(id, 1) },
     { label: 'Bọc trong Lặp', onSelect: () => ops.wrapIn(id, 'loop') },
+    // Design 0012 C: a Lặp `each` around the step, over the pool it refers to (else the nearest).
+    each
+      ? { label: 'Bọc trong Lặp qua từng bản ghi', title: `Bọc bước này trong Lặp chạy một lần cho mỗi bản ghi của "${each.from}".`, onSelect: () => ops.wrapInEach(id) }
+      : { label: 'Bọc trong Lặp qua từng bản ghi', disabled: true, title: 'Chưa có pool nào phía trên (bước Query, Record hoặc Chọn bản ghi có alias). Thêm một bước như vậy ở phía trên trước.' },
     { label: 'Bọc trong Rẽ nhánh', onSelect: () => ops.wrapIn(id, 'branch') },
     // Design 0010: a Lặp over each record of this step's pool, right after it.
     isPoolStep(step)

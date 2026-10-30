@@ -167,7 +167,9 @@ the others; never add a fixed `waitForTimeout`.
     to `Invoice__c` (auto-number Name), the list becomes empty with an "auto-number" toast and focus stays in sObject. F1: the "Contact cho Account có sẵn" sample, `con`'s Title template set
     to `Ngành {{acc.Industry}}`: the field shows the button `Thêm Industry vào SELECT của "accs"`; clicking it clears the card's
     error, the Query's fields become `Id, Name, Industry` and the toast says "Đã thêm Industry vào Query "accs". Bấm Xem trước để
-    đọc lại."
+    đọc lại." C: ⋯ on `con` → "Bọc trong Lặp qua từng bản ghi" wraps it in a selected Lặp `each` over `accs` (con refers to the pick
+    `acc` of `accs`) with the record `acc2`; the toast "Đổi Lookup AccountId (con) sang bản ghi đang lặp "acc2"?" [Đổi] sets the
+    Lookup to `acc2`, mode `current`.
 
 It also fails on any page error or a run over 12 s (typically ~5.5–6.5 s since the flows run in parallel, flow 14 included, ~7–8.5 s with flow 15 on a 4-CPU machine; ~10 s before;
 ~7–8 s with two CPU-bound processes running alongside).

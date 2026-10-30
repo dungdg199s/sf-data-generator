@@ -41,6 +41,7 @@
 //  16. editor productivity (0012): G — a saved Task with Name warns, "Đổi thành Subject" fixes it (template
 //      follows); a new Record switched to Task gets Subject at once. F1 — {{acc.Industry}} from Query "accs"
 //      gets "Thêm Industry vào SELECT của "accs"", which adds it to the Query and clears the error
+//      C — "Bọc trong Lặp qua từng bản ghi" on con: Lặp each over accs, [Đổi] re-points the Lookup
 // The flows run in parallel, one browser context each (independent storage): see SKILL.md.
 // Usage: node .claude/skills/smoke-test/smoke.cjs [screenshotDir]
 // Needs Playwright with a Chromium build available (require('playwright')).
@@ -960,7 +961,7 @@ async function flowEach() {
 
   // ⋯ on the Query card → "Lặp qua từng bản ghi": a filled Lặp right after it, selected.
   await page.click('.step-card[data-id="accs"] .menu-btn');
-  await page.click('.popup [role="menuitem"]:has-text("Lặp qua từng bản ghi")');
+  await page.click('.popup [role="menuitem"]:has(.pi-label:text-is("Lặp qua từng bản ghi"))'); // not "Bọc trong Lặp qua…" (0012 C)
   await page.waitForSelector('#inspector select[data-key="from"]');
   const filled = await page.evaluate(() => ({
     mode: document.querySelector('#inspector select[data-key="mode"]').value,
@@ -1114,6 +1115,21 @@ async function flowProductivity() {
     check(fields.join() === 'Id,Name,Industry', `Query fields after the fix: ${fields}`);
     check(/Đã thêm Industry vào Query "accs"\. Bấm Xem trước để đọc lại\./.test(await page.textContent('#toast')), 'no "Đã thêm Industry vào Query" toast');
   }
+
+  // C: ⋯ on con → "Bọc trong Lặp qua từng bản ghi": a Lặp each over accs (con refers to the pick acc
+  // of accs), the record named acc2 (acc is taken); [Đổi] of the toast re-points the Lookup.
+  const saved = () => page.evaluate(() => JSON.parse(localStorage.getItem('sfdg.workflow.v2')).steps);
+  await page.click('.step-card[data-id="con"] .menu-btn');
+  await page.click('.popup [role="menuitem"]:has-text("Bọc trong Lặp qua từng bản ghi")');
+  const wrapped = (await saved())[1].slots.body[1];
+  check(wrapped.type === 'loop' && wrapped.config.mode === 'each' && wrapped.config.from === 'accs' && wrapped.config.itemAlias === 'acc2'
+    && wrapped.slots.body.map((s) => s.id).join() === 'con', `Bọc trong Lặp qua từng bản ghi: ${JSON.stringify(wrapped).slice(0, 300)}`);
+  check(await page.$eval('.step-card.selected', (c) => c.dataset.id) === wrapped.id, 'the new each-loop is not selected');
+  const ask = await page.textContent('#toast');
+  check(ask.startsWith('Đổi Lookup AccountId (con) sang bản ghi đang lặp "acc2"?'), `rewire toast: ${ask}`);
+  await page.click('#toast .toast-action');
+  const lookup = (await saved())[1].slots.body[1].slots.body[0].config.fields.find((f) => f.name === 'AccountId').options;
+  check(lookup.ref === 'acc2' && lookup.mode === 'current', `[Đổi] did not re-point the Lookup: ${JSON.stringify(lookup)}`);
   await page.context().close();
 }
 

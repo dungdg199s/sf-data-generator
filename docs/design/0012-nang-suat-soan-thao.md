@@ -1,6 +1,6 @@
 # 0012 — Năng suất soạn thảo: thư viện workflow, chọn nhiều, copy/paste, sửa nhanh, số liệu trên thẻ
 
-- **Trạng thái:** Đang làm (đã xong G, F1)
+- **Trạng thái:** Đang làm (đã xong G, F1, C)
 - **Ngày:** 2026-10-28
 - **Liên quan:** [0003](0003-process-mode.md) (cây bước, phím, "Việc tiếp theo": chọn nhiều, copy/paste, ước tính số bản
   ghi, tô thẻ cha, field tên mặc định), [0004](0004-streaming-execution.md) (sự kiện tiến độ, nhóm lỗi insert),
@@ -849,3 +849,18 @@ Làm từng phần theo [Kế hoạch](#kế-hoạch-thực-hiện); phần chư
   `fix`). Smoke `flowProductivity` bước F1.
 - Khác thiết kế: câu lỗi `unknownMember` của nguồn org nay gọi cả đường dẫn field thiếu (`… không lấy field Owner.Email. Thêm
   Owner.Email vào …`) thay vì chỉ cấp đầu bị thiếu (`Owner` hay `Email`), để câu và nút sửa nói cùng một field.
+
+### C — Bọc trong Lặp qua từng bản ghi (bước 3)
+
+- `client/js/ops.js`: `eachWrapPlan(id)` chọn pool và danh sách Lookup nên nối lại; `wrapInEach(id)` tạo Lặp `each`
+  (`newStep('loop', …, [bước])`, nên biến lặp không che vòng ngoài) thay chỗ bước, `from` theo kế hoạch, `itemAlias` =
+  `suggestPickAlias(from)`; một bước hoàn tác, Lặp mới được chọn và nháy. Toast 8 s `Đổi Lookup AccountId (con) sang bản ghi đang
+  lặp "acc2"?` / `Đổi 2 Lookup …` [Đổi] (bước hoàn tác riêng; Lookup đã bị sửa sau khi bọc thì không đổi).
+- `client/js/menus.js`: mục `Bọc trong Lặp qua từng bản ghi` ngay sau `Bọc trong Lặp` (menu chưa chia nhóm: việc của B), `title`
+  nói pool sẽ dùng; không có pool dùng được ⇒ mục khóa với `title` của thiết kế.
+- Test: theo kế hoạch không có test Node (dùng `wrapStep`); smoke `flowProductivity` bước C (mẫu "Contact cho Account có sẵn":
+  `con` được bọc trong Lặp `each` qua `accs`, bản ghi `acc2`, [Đổi] đặt `AccountId` = `acc2`, chế độ "Bản ghi hiện tại").
+- Khác thiết kế (làm rõ): tham chiếu tới một Chọn bản ghi được tính cho pool mà nó chọn từ đó (đi ngược chuỗi Chọn bản ghi tới pool
+  xa nhất còn dùng được), vì lặp qua một bản ghi đã chọn chỉ chạy một lần — đúng ví dụ smoke của thiết kế (`con` trỏ `acc` ⇒
+  `from` = `accs`). "Hòa" chọn pool gần nhất **trong các pool hòa**. Bấm [Đổi] có toast xác nhận `Đã đổi 1 Lookup sang bản ghi
+  đang lặp "acc2".` Chưa có ở inspector chọn nhiều và popup `Bọc ▾` (thuộc B).
