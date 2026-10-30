@@ -78,3 +78,17 @@ test('[Đổi] changes nothing once the wrap was undone, the record renamed, or 
   findStep(edited, 'c', slotKeys).step.config.fields[0].options.ref = 'other';
   assert.equal(applyEachRewire(edited, p.rewire, opts), 0);
 });
+
+test('a block of steps (0012 B): pools usable where the first one is, references of every step count', () => {
+  const w = wf([
+    query('q1', 'accs'),
+    query('q2', 'opps', { sobject: 'Opportunity' }),
+    record('a', 'Contact', 'con', [lookup('AccountId', 'accs', 'random')]),
+    record('b', 'Task', 'task', [lookup('WhatId', 'accs', 'random')]),
+  ]);
+  const p = plan(w, ['a', 'b']);
+  assert.equal(p.from, 'accs');
+  assert.deepEqual(p.rewire.map((r) => r.stepId), ['a', 'b']);
+  assert.equal(plan(w, ['a', 'missing']), null);
+  assert.equal(plan(w, ['q1', 'q2']), null, 'no pool above the first step');
+});

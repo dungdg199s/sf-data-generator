@@ -962,3 +962,22 @@ Làm từng phần theo [Kế hoạch](#kế-hoạch-thực-hiện); phần chư
   `reducedMotion: 'reduce'`; luồng 5b mở workflow thứ hai qua `#file-input` thay vì reload; in thời gian từng luồng. Cập nhật skill
   `smoke-test` và câu "12 s" ở 0012, 0013, 0014 (các mục "Đã làm" cũ của 0004/0006/0009/0010 giữ nguyên vì là số đo lịch sử).
 
+
+### B1 — Thao tác nhóm ở `shared/` (bước 8)
+
+- `shared/workflow-tree.js`: `normalizeSelection(wf, ids, slotKeys)` (thứ tự đọc, bỏ bước nằm trong khung đã chọn, `contiguous`
+  + `parentId`/`slot`/`start`/`end` của khối), `rangeBetween` (hai đầu nâng lên dãy chung gần nhất; hai cột của một Rẽ nhánh ⇒
+  chính Rẽ nhánh đó), `wrapSteps`, `removeSteps`, `moveBlock` (tọa độ trước khi di chuyển, như `moveStep`),
+  `neighbourTargetBlock` (Alt+↑/↓ cho khối, nhảy qua khung thu gọn), `cloneSteps(…, { keepFree })`, `pasteSteps(wf, target,
+  steps, { catalog, slotKeys })` → `{ ids, renamed: [{ from, to }], missing }` (`missing`: tên bản dán tham chiếu mà đích không
+  có, từ `analyzeScope`, cho câu toast), `countSteps`.
+- `shared/each-wrap.js`: `eachWrapPlan` nhận thêm một danh sách id (khối): pool dùng được ở chỗ bước đầu, tham chiếu của mọi bước
+  trong khối được đếm.
+- `client/js/clipboard.js` (mới, thuần): `toClipboard(steps, name)`, `parseClipboard(text, meta)` → `{ steps, from }` hoặc
+  `{ kind, error }` với câu của bảng "Từ chối dán". Import tương đối `../../shared/…` nên chạy cả trong Node lẫn trình duyệt.
+- Test: `test/workflow-tree.test.js` (dải qua hai dãy, bỏ con của khung đã chọn, bọc giữ thứ tự, khối vào/ra khung và nhảy khung
+  thu gọn, `pasteSteps` giữ alias trống / đổi alias trùng và tham chiếu bên trong theo / đổi biến lặp che vòng ngoài / id luôn
+  mới / `missing`), `test/clipboard.test.js` (mới: khứ hồi, nhận file v2, từ chối v1, loại lạ lồng bên trong, sai dạng, > 2 000
+  bước, > 5 MB, JSON hỏng / không phải của app), `test/each-wrap.test.js` (khối).
+- Khác thiết kế (làm rõ): biến lặp của bản dán cũng được đổi khi trùng **biến lặp** đã có ở đích không bao quanh? Không — chỉ khi
+  che Lặp bao quanh vị trí dán hoặc trùng alias bản ghi (đúng bảng); tên mới tránh mọi alias và biến lặp đã có.

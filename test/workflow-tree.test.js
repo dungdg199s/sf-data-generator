@@ -394,3 +394,121 @@ test('renameField follows references through the record of an each loop and a Ch
   assert.equal(res.count, 6);
   assert.deepEqual(res.names.sort(), ['a', 'acc', 'pk', 'pk2']);
 });
+
+// ---------- design 0012 B: groups of steps, paste ----------
+
+import {
+  normalizeSelection, rangeBetween, wrapSteps, removeSteps, moveBlock, neighbourTargetBlock, pasteSteps, countSteps,
+} from '../shared/workflow-tree.js';
+
+test('rangeBetween lifts both ends to the nearest common sequence', () => {
+  const wf = tree([r('a'), loop('loopCon', [r('con'), r('task')]), r('opp'), r('z')]);
+  assert.deepEqual(rangeBetween(wf, 'con', 'task', slotKeys), ['con', 'task'], 'same sequence');
+  assert.deepEqual(rangeBetween(wf, 'con', 'opp', slotKeys), ['loopCon', 'opp'], 'anchor in a loop, end at the root');
+  assert.deepEqual(rangeBetween(wf, 'z', 'con', slotKeys), ['loopCon', 'opp', 'z'], 'backwards');
+  assert.deepEqual(rangeBetween(wf, 'loopCon', 'task', slotKeys), ['loopCon'], 'a step and its own child');
+  const br = tree([branch('b', [r('t')], [r('f')])]);
+  assert.deepEqual(rangeBetween(br, 't', 'f', slotKeys), ['b'], 'two columns of one branch: the branch');
+  assert.deepEqual(rangeBetween(wf, 'gone', 'opp', slotKeys), ['opp']);
+});
+
+test('normalizeSelection: reading order, steps inside a selected frame dropped, contiguous or not', () => {
+  const wf = tree([r('a'), loop('l', [r('b'), r('c')]), r('d'), r('e')]);
+  const sel = normalizeSelection(wf, ['d', 'b', 'l', 'gone'], slotKeys);
+  assert.deepEqual(sel.ids, ['l', 'd']);
+  assert.equal(sel.contiguous, true);
+  assert.deepEqual([sel.parentId, sel.slot, sel.start, sel.end], [null, null, 1, 2]);
+  assert.equal(normalizeSelection(wf, ['a', 'd'], slotKeys).contiguous, false, 'a gap');
+  assert.equal(normalizeSelection(wf, ['a', 'b'], slotKeys).contiguous, false, 'two sequences');
+  assert.deepEqual(normalizeSelection(wf, ['c', 'b'], slotKeys), { ...normalizeSelection(wf, ['b', 'c'], slotKeys) });
+  assert.deepEqual(normalizeSelection(wf, [], slotKeys).ids, []);
+});
+
+test('wrapSteps keeps the order of the block; refuses a selection that is not one block', () => {
+  const wf = tree([r('a'), r('b'), r('c'), r('d')]);
+  assert.equal(wrapSteps(wf, ['a', 'c'], { id: 'L', type: 'loop', config: {} }, { slotKeys }), null);
+  assert.equal(shape(wf.steps), 'a,b,c,d');
+  wrapSteps(wf, ['c', 'b'], { id: 'L', type: 'loop', config: {} }, { slotKeys });
+  assert.equal(shape(wf.steps), 'a,L{b,c},d');
+  wrapSteps(wf, ['L', 'd'], { id: 'B', type: 'branch', config: {} }, { slotKeys });
+  assert.equal(shape(wf.steps), 'a,B{L{b,c},d|}');
+});
+
+test('removeSteps removes scattered steps with what is inside them', () => {
+  const wf = tree([r('a'), loop('l', [r('b'), r('c')]), r('d')]);
+  const removed = removeSteps(wf, ['d', 'b', 'l'], { slotKeys });
+  assert.deepEqual(removed.map((s) => s.id), ['l', 'd']);
+  assert.equal(shape(wf.steps), 'a');
+});
+
+test('moveBlock / neighbourTargetBlock: a block walks in and out of frames, jumping over collapsed ones', () => {
+  const wf = tree([r('a'), r('x'), r('y'), loop('l', [r('b')]), r('c')]);
+  const step = (dir, collapsed) => {
+    const t = neighbourTargetBlock(wf, ['x', 'y'], dir, collapsed, slotKeys);
+    if (t) assert.equal(moveBlock(wf, ['x', 'y'], t, slotKeys), true);
+    return t ? shape(wf.steps) : null;
+  };
+  assert.equal(step(+1), 'a,l{x,y,b},c', 'enters the open loop at the top');
+  assert.equal(step(+1), 'a,l{b,x,y},c');
+  assert.equal(step(+1), 'a,l{b},x,y,c', 'leaves the loop right after it');
+  assert.equal(step(+1), 'a,l{b},c,x,y');
+  assert.equal(step(+1), null, 'already last');
+  assert.equal(step(-1), 'a,l{b},x,y,c');
+  assert.equal(step(-1, new Set(['l'])), 'a,x,y,l{b},c', 'collapsed containers are jumped over');
+  assert.equal(step(-1), 'x,y,a,l{b},c');
+  assert.equal(step(-1), null, 'already first');
+  // Drag and drop of a block: before-move coordinates; into itself and in place are refused.
+  assert.equal(moveBlock(wf, ['x', 'y'], { parentId: null, slot: null, index: 4 }, slotKeys), true);
+  assert.equal(shape(wf.steps), 'a,l{b},x,y,c');
+  assert.equal(moveBlock(wf, ['x', 'y'], { parentId: null, slot: null, index: 3 }, slotKeys), false, 'already there');
+  assert.equal(moveBlock(wf, ['l', 'x'], { parentId: 'l', slot: 'body', index: 0 }, slotKeys), false, 'into itself');
+  assert.equal(moveBlock(wf, ['a', 'x'], { parentId: null, slot: null, index: 5 }, slotKeys), false, 'not one block');
+  assert.equal(neighbourTargetBlock(wf, ['a', 'x'], 1, new Set(), slotKeys), null);
+});
+
+test('pasteSteps keeps free aliases, renames taken ones (inner references follow), ids always new', () => {
+  const catalog = scopeCatalog();
+  const lookup = (ref) => ({ name: 'AccountId', type: 'lookup', options: { mode: 'random', ref } });
+  const tpl = (t) => ({ name: 'Title', type: 'template', options: { template: t } });
+  const copied = [r('acc', 'acc'), loop('loopCon', [r('con', 'con', [lookup('acc'), tpl('{{acc.Name}} {{users.Name}}')])], { count: 2 })];
+
+  // Into an empty workflow: names kept.
+  const empty = tree([]);
+  const res = pasteSteps(empty, { parentId: null, slot: null, index: 0 }, copied, { catalog, slotKeys });
+  assert.deepEqual(res.ids, ['acc_2', 'loopCon_2']);
+  assert.deepEqual(res.renamed, []);
+  assert.deepEqual(res.missing, ['users']);
+  assert.equal(findStep(empty, 'con_2').step.config.fields[0].options.ref, 'acc');
+
+  // Into the workflow it came from: taken names get the next free one, references inside follow.
+  const same = tree(structuredClone(copied));
+  const res2 = pasteSteps(same, { parentId: null, slot: null, index: 2 }, copied, { catalog, slotKeys });
+  assert.deepEqual(res2.ids, ['acc_2', 'loopCon_2']);
+  assert.deepEqual(res2.renamed, [{ from: 'acc', to: 'acc2' }, { from: 'con', to: 'con2' }]);
+  const con2 = findStep(same, 'con_2').step;
+  assert.deepEqual([con2.config.alias, con2.config.fields[0].options.ref, con2.config.fields[1].options.template], ['con2', 'acc2', '{{acc2.Name}} {{users.Name}}']);
+  assert.equal(findStep(same, 'con').step.config.fields[0].options.ref, 'acc', 'the original is untouched');
+  assert.equal(collectIds(same).size, 6);
+});
+
+test('pasteSteps renames a loop variable that would shadow an enclosing loop; its body follows', () => {
+  const catalog = scopeCatalog();
+  const tpl = (t) => ({ name: 'T', type: 'template', options: { template: t } });
+  const copied = [loop('inner', [r('c', 'c', [tpl('{{loop.index}}')])], { count: 2 })];
+  const wf = tree([loop('outer', [], { count: 3 })]);
+  const res = pasteSteps(wf, { parentId: 'outer', slot: 'body', index: 0 }, copied, { catalog, slotKeys });
+  const pasted = findStep(wf, res.ids[0]).step;
+  assert.equal(pasted.config.alias, 'loop2');
+  assert.equal(pasted.slots.body[0].config.fields[0].options.template, '{{loop2.index}}');
+  assert.deepEqual(res.renamed, [{ from: 'loop', to: 'loop2' }]);
+  // At the root nothing is shadowed: the name stays.
+  const root = tree([loop('outer', [], { count: 3 })]);
+  const res2 = pasteSteps(root, { parentId: null, slot: null, index: 1 }, copied, { catalog, slotKeys });
+  assert.equal(findStep(root, res2.ids[0]).step.config.alias, 'loop');
+  assert.deepEqual(res2.renamed, []);
+});
+
+test('countSteps counts nested steps', () => {
+  assert.equal(countSteps([r('a'), loop('l', [r('b'), branch('br', [r('t')], [])])]), 5);
+  assert.equal(countSteps([]), 0);
+});

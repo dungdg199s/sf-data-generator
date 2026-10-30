@@ -18,8 +18,8 @@ export function poolChain(scope, name) {
 }
 
 /**
- * Plan of a Lặp `each` around step `id`: among the pools usable at the step's place (where the
- * Lặp goes), the one the wrapped steps refer to most (Lookup `ref`, `pick.from`, `{{accs.…}}`; a
+ * Plan of a Lặp `each` around step `id` (or a block of steps: a list of ids): among the pools
+ * usable at the step's place (where the Lặp goes), the one the wrapped steps refer to most (Lookup `ref`, `pick.from`, `{{accs.…}}`; a
  * reference to a Chọn bản ghi counts for the farthest usable pool it picks from), ties and no
  * reference: the nearest of them; and the Lookups worth re-pointing: random over that pool, or at
  * a Chọn bản ghi of it.
@@ -27,13 +27,16 @@ export function poolChain(scope, name) {
  * → { from, rewire: [{ stepId, alias, fieldIndex, fieldName, ref }] } or null (no usable pool).
  */
 export function eachWrapPlan(wf, catalog, id, { slotKeys, scope = analyzeScope(wf, catalog) } = {}) {
-  const at = findStep(wf, id, slotKeys);
-  if (!at) return null;
-  const pools = refChoices(scope, id, { pool: true }).filter((c) => c.usable);
+  // A block of steps (design 0012 B, multi-select): `id` is a list of ids, side by side in one
+  // sequence; the Lặp goes where the first one is.
+  const ids = Array.isArray(id) ? id : [id];
+  const wrapped = ids.map((x) => findStep(wf, x, slotKeys)).filter(Boolean);
+  if (!wrapped.length || wrapped.length !== ids.length) return null;
+  const pools = refChoices(scope, ids[0], { pool: true }).filter((c) => c.usable);
   if (!pools.length) return null;
   const usable = new Set(pools.map((c) => c.name));
   const target = (name) => poolChain(scope, name).filter((n) => usable.has(n)).at(-1);
-  const inside = subtreeIds(at.step, slotKeys);
+  const inside = new Set(wrapped.flatMap((at) => [...subtreeIds(at.step, slotKeys)]));
   const hits = new Map();
   for (const r of scope.refs) {
     if (r.hidden || !inside.has(r.nodeId)) continue;
@@ -43,7 +46,7 @@ export function eachWrapPlan(wf, catalog, id, { slotKeys, scope = analyzeScope(w
   const best = Math.max(0, ...hits.values());
   const from = (best ? pools.find((c) => hits.get(c.name) === best) : pools[0]).name;
   const rewire = [];
-  walkSteps([at.step], (s) => {
+  walkSteps(wrapped.map((at) => at.step), (s) => {
     for (const o of referenceOptions(s, catalog)) {
       if (o.fieldIndex === undefined || o.def.kind !== 'ref' || !o.value) continue;
       const mode = s.config.fields[o.fieldIndex].options?.mode;
