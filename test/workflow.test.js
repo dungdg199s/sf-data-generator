@@ -808,7 +808,7 @@ test('a Task record with a Name field warns with a renameField fix', () => {
   assert.deepEqual(errors, []);
   const [warn] = warnings.filter((x) => x.code === 'noNameField');
   assert.deepEqual(warn, {
-    message: 'Task không có field Name nên insert sẽ lỗi. Đổi thành Subject hoặc xóa field này.',
+    message: 'Task không ghi được field Name nên insert sẽ lỗi. Đổi thành Subject hoặc xóa field này.',
     nodeId: 't',
     field: 'fields.Name',
     code: 'noNameField',
@@ -816,7 +816,7 @@ test('a Task record with a Name field warns with a renameField fix', () => {
   });
   // Contact / Lead: LastName; case of the sObject and field name is ignored.
   const con = warningsOf(wf([record('c', 'contact', 'con', [{ name: 'name', type: 'text' }])])).find((x) => x.code === 'noNameField');
-  assert.match(con.message, /^contact không có field Name nên insert sẽ lỗi\. Đổi thành LastName/);
+  assert.match(con.message, /^contact không ghi được field Name nên insert sẽ lỗi\. Đổi thành LastName/);
   assert.deepEqual(con.fix, { kind: 'renameField', stepId: 'c', from: 'name', to: 'LastName' });
   // The target already exists: no rename fix, the message says to delete the field.
   const both = warningsOf(wf([record('c', 'Contact', 'con', [{ name: 'Name', type: 'text' }, { name: 'LastName', type: 'text' }])])).find((x) => x.code === 'noNameField');
@@ -851,6 +851,16 @@ test('unknownMember of a Query source carries an addSelectField fix', () => {
   const owner = errorsOf(wf([query('q', 'accs', { fields: ['Id', 'Owner.Name'] }), pick('p', 'acc', 'accs'), contact('{{acc.Owner.Email}}')])).find((e) => e.code === 'unknownMember');
   assert.deepEqual(owner.fix, { kind: 'addSelectField', stepId: 'q', field: 'Owner.Email' });
   assert.match(owner.message, /không lấy field Owner\.Email\. Thêm Owner\.Email vào/);
+  // The whole member path, also when the Query lacks the relationship itself or a deeper level
+  // (review: cutting at the first missing level gave "SELECT Id, Name, Owner").
+  for (const [fields, path] of [[['Id', 'Name'], 'Owner.Email'], [['Id', 'Owner.Name'], 'Owner.Manager.Email'], [['Id', 'Name'], 'Owner.Manager.Email']]) {
+    const e = errorsOf(wf([query('q', 'accs', { fields }), pick('p', 'acc', 'accs'), contact(`{{acc.${path}}}`)])).find((x) => x.code === 'unknownMember');
+    assert.deepEqual(e.fix, { kind: 'addSelectField', stepId: 'q', field: path }, `${fields} + ${path}`);
+    assert.ok(e.message.includes(`không lấy field ${path}. Thêm ${path} vào`), e.message);
+  }
+  // A path below a plain field (Name.Foo): nothing to add to the SELECT.
+  const plain = errorsOf(wf([query('q', 'accs'), pick('p', 'acc', 'accs'), contact('{{acc.Name.Foo}}')])).find((x) => x.code === 'unknownMember');
+  assert.ok(plain && plain.fix === undefined, JSON.stringify(plain));
   // Hand-written SOQL: a fix only when the SELECT list can be edited.
   assert.deepEqual(fixOf(wf([query('q', 'accs', { mode: 'soql', soql: 'SELECT Id, Name FROM Account ORDER BY Id' }), pick('p', 'acc', 'accs'), contact('{{acc.Industry}}')])), { kind: 'addSelectField', stepId: 'q', field: 'Industry' });
   const sub = wf([query('q', 'accs', { mode: 'soql', soql: 'SELECT Id, Name, (SELECT Id FROM Contacts) FROM Account ORDER BY Id' }), pick('p', 'acc', 'accs'), contact('{{acc.Industry}}')]);

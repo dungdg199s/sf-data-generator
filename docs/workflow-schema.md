@@ -108,10 +108,12 @@ khi chưa chọn org. `/api/meta` còn có `queryPresets` (giá trị builder th
 định của bước Record theo sObject: `{ "<sObject>": { "fields": [{ name, type, options }], "noName"?: true, "nameField"?: "<field>" } }`
 cho `Account` (`Name` tên công ty), `Contact` (`FirstName`, `LastName`), `Lead` (thêm `Company`), `Task` (`Subject` từ danh sách
 `Call`, `Send Letter`, `Send Quote`, `Other`), `Event` (`Subject`, `ActivityDateTime`, `DurationInMinutes`), `Case` (`Subject`) và
-`Opportunity` (`Name`, `StageName`, `CloseDate`). sObject khác (kể cả custom) bắt đầu với `Name` (Text, Họ tên). `noName`: sObject
+`Opportunity` (`Name`, `StageName`, `CloseDate`). sObject khác (kể cả custom) bắt đầu với `recordDefaultFields` (cũng trong
+`/api/meta`, `RECORD_DEFAULT_FIELDS`: `[{ "name": "Name", "type": "text", "options": { "mode": "name" } }]`). `noName`: sObject
 không có field `Name` tạo được; `nameField`: field thay cho nó (Contact/Lead → `LastName`, Task/Event/Case → `Subject`). Bước
 Record mới dùng preset của sObject; đổi sObject khi danh sách field chưa sửa thì đổi theo preset mới (có org thì ~0,5 s sau theo
-describe: mọi field bắt buộc tạo được, không có thì name field).
+describe: sObject có preset giữ preset và thêm field bắt buộc còn thiếu; sObject khác lấy mọi field bắt buộc tạo được, không có thì
+name field; xem [org-connection.md](org-connection.md)).
 
 Từ [0005](design/0005-variable-picker.md), mỗi loại bước còn khai báo cách chạy các slot và biến nó cung cấp; phân tích
 phạm vi (`analyzeScope` trong `shared/scope.js`) chỉ đọc hai khóa này, không biết riêng về `loop` hay `branch`:
@@ -399,7 +401,7 @@ câu lỗi trong inspector, cả với cảnh báo có `fix`):
 | `fix.kind` | Khóa | Gắn trên | Nút |
 | --- | --- | --- | --- |
 | `addSelectField` | `stepId` (bước Query), `field` (đường dẫn field, ví dụ `Industry`, `Owner.Email`) | lỗi `unknownMember` của nguồn đọc từ org: Query, Chọn bản ghi hoặc bản ghi đang lặp có gốc là Query (`stepId` luôn là Query gốc). Không có `fix` khi SOQL tự viết không sửa được (subquery hay `FIELDS(…)` / `TYPEOF` trong SELECT, SOQL lỗi) | `Thêm Industry vào SELECT của "accs"`: builder thêm vào cuối `fields` (nếu chưa có, không phân biệt hoa thường); SOQL tự viết dùng `addSelectField` của `shared/soql.js` (chèn `, Industry` trước `FROM` của SELECT ngoài). Một bước hoàn tác |
-| `renameField` | `stepId`, `from`, `to` | cảnh báo `code: "noNameField"` (field `fields.Name` của Record trên sObject `noName`, ví dụ Task: `Task không có field Name nên insert sẽ lỗi. Đổi thành Subject hoặc xóa field này.`). Không có `fix` khi bước đã có field `to` | `Đổi thành Subject`: đổi tên field, tham chiếu `{{task.Name}}` đi theo, một bước hoàn tác |
+| `renameField` | `stepId`, `from`, `to` | cảnh báo `code: "noNameField"` (field `fields.Name` của Record trên sObject `noName`, ví dụ Task: `Task không ghi được field Name nên insert sẽ lỗi. Đổi thành Subject hoặc xóa field này.`). Không có `fix` khi bước đã có field `to` | `Đổi thành Subject`: đổi tên field, tham chiếu `{{task.Name}}` đi theo, một bước hoàn tác. Field Text còn ở option mặc định (rỗng, hoặc chỉ `mode: name` / `company`) nhận option của field đó trong preset (Subject: danh sách Call…). Không làm gì nếu field `from` không còn hoặc đã có field `to` |
 `POST /api/validate` trả `{ errors, warnings, derived }`; phạm vi biến không gửi kèm vì trình duyệt tự tính bằng `shared/scope.js`.
 `derived[<id>]` (0006): Query `{ soql, sobject, fields }` (câu SOQL server sẽ chạy), Chọn bản ghi `{ sobject, fields, from }`.
 `nodeId` là id bước. `field` có dạng `alias`, `count`, … cho option của bước; `fields.<Name>` cho field của record;

@@ -42,10 +42,18 @@ Nếu máy chưa cài `sf` thì `/api/orgs` trả 503 kèm thông báo; UI vẫn
 ### Field mặc định của bước Record theo describe (0012 G)
 
 Đổi sObject của bước Record khi danh sách field chưa bị sửa: field đổi ngay theo `meta.recordPresets` (Task → `Subject`), rồi nếu
-đã chọn org và sObject có trong danh sách sObject tạo được của org, khoảng 0,5 s sau inspector gọi describe trên và thay bằng
-**mọi field bắt buộc** (`required`, Lookup tự chọn bản ghi cha như Import; không tự thêm bước Query); không có field bắt buộc thì
-`nameField` nếu nó tạo được; không có cả hai thì giữ preset. Chỉ thay khi danh sách vẫn là danh sách vừa tự điền; không có bước
-hoàn tác riêng (Ctrl+Z bỏ việc đổi sObject cũng trả lại field). Toast `Đã đặt field mặc định cho Task theo dev-sb: Subject.`
+đã chọn org và sObject có trong danh sách sObject tạo được của org, khoảng 0,5 s sau inspector gọi describe trên:
+
+- sObject **có preset** (`meta.recordPresets`): giữ field của preset và chỉ **thêm** field bắt buộc (`required`) còn thiếu (so tên
+  không phân biệt hoa thường), toast `Đã thêm field bắt buộc của Opportunity theo dev-sb: …`. (Describe thật của Task / Event không
+  đánh dấu field nào bắt buộc; thay cả danh sách thì Event mất `ActivityDateTime`/`DurationInMinutes` và insert lỗi.)
+- sObject **khác**: thay bằng **mọi field bắt buộc** (Lookup tự chọn bản ghi cha như Import; không tự thêm bước Query); không có
+  field bắt buộc thì `nameField` nếu nó tạo được. Name field không tạo được (auto-number) và danh sách đang đúng `[Name]` ⇒ danh
+  sách thành rỗng, toast nói field tên là auto-number; cảnh báo "Bước chưa có field nào…" hướng dẫn tiếp. Không có gì để đổi thì
+  giữ nguyên. Toast `Đã đặt field mặc định cho Invoice__c theo dev-sb: …`.
+
+Chỉ thay khi danh sách vẫn là danh sách vừa tự điền; không có bước hoàn tác riêng (Ctrl+Z bỏ việc đổi sObject cũng trả lại field).
+Mỗi bước Record có hẹn giờ describe riêng; focus đang ở trong danh sách field thì được đặt lại đúng chỗ sau khi vẽ lại.
 
 ## Insert
 

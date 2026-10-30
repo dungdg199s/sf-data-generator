@@ -474,7 +474,7 @@ Bước Record mới từ palette (`newStep`): field mặc định = preset củ
 mẫu và hash vàng).
 
 **Workflow cũ đã lỡ có `Name` trên sObject `noName`.** Validate thêm **cảnh báo** gắn `fields.Name`:
-`Task không có field Name nên insert sẽ lỗi. Đổi thành Subject hoặc xóa field này.` (Contact/Lead: `… Đổi thành LastName …`), kèm
+`Task không ghi được field Name nên insert sẽ lỗi. Đổi thành Subject hoặc xóa field này.` (Contact/Lead: `… Đổi thành LastName …`), kèm
 `suggestion`-kiểu sửa nhanh `fix: { kind: 'renameField', stepId, from: 'Name', to: 'Subject' }` ⇒ nút `Đổi thành Subject` (dùng
 `renameField`, tham chiếu `{{task.Name}}` đi theo, một bước undo). Cảnh báo không chặn xem trước (xem trước không cần org).
 
@@ -821,6 +821,14 @@ Làm từng phần theo [Kế hoạch](#kế-hoạch-thực-hiện); phần chư
   danh sách field; Contact có `FirstName` đứng trước `LastName`). Field mặc định theo describe không tự thêm bước Query cho Lookup
   bắt buộc chưa có bản ghi cha ("＋ … có sẵn trong org" chỉ có ở hộp Import): `ref` để trống, lỗi "chưa chọn bản ghi cha" chỉ đúng
   field — tự thêm bước sau một độ trễ 0,5 s thì bất ngờ hơn.
+- Khác thiết kế (G.2, sau review): sObject có preset **giữ preset** và chỉ thêm field bắt buộc còn thiếu theo describe (không phân
+  biệt hoa thường); "mọi field bắt buộc, rồi `nameField`" chỉ áp cho sObject không có preset. Lý do: describe thật của Task/Event
+  không đánh dấu field nào bắt buộc, nên Event mất `ActivityDateTime`/`DurationInMinutes` (insert lỗi), Contact/Lead mất `FirstName`.
+  Thêm: name field auto-number (không tạo được) của sObject không preset và danh sách đang là `[Name]` ⇒ danh sách rỗng + toast
+  (cảnh báo "Bước chưa có field nào…" hướng dẫn tiếp). Hẹn giờ describe theo từng bước; focus trong danh sách field được giữ.
+- Khác thiết kế (câu chữ): cảnh báo `noNameField` viết `Task không ghi được field Name nên insert sẽ lỗi. …` (đã sửa ở phần G phía
+  trên). Field mặc định của sObject không preset (`Name`, Họ tên) cũng do server phục vụ (`meta.recordDefaultFields`), client không
+  giữ bản riêng. Nút `Đổi thành …` không làm gì khi issue đã cũ (field `from` không còn, hoặc đã có field `to`).
 
 ### F1 — "Thêm <Field> vào SELECT" (bước 2)
 
@@ -829,13 +837,15 @@ Làm từng phần theo [Kế hoạch](#kế-hoạch-thực-hiện); phần chư
   `FIELDS(…)`/`TYPEOF` trong SELECT, hoặc `field` không phải đường dẫn field.
 - `server/workflow/schema.js`: `referenceIssue(ref, scope, step, stepOf)` gắn `fix: { kind: "addSelectField", stepId, field }` lên
   `unknownMember` của nguồn org; `stepId` là Query gốc (`source.root`, nên qua Chọn bản ghi, Chọn bản ghi của Chọn bản ghi và bản
-  ghi đang lặp của Lặp `each`). Field con của quan hệ được thêm dạng đường dẫn (`Owner.Email` khi Query chỉ lấy `Owner.Name`);
-  câu lỗi cũng gọi đúng `Owner.Email` thay vì `Email`.
+  ghi đang lặp của Lặp `each`). Field qua quan hệ được thêm bằng **cả đường dẫn** của tham chiếu (`Owner.Email`,
+  `Owner.Manager.Email`, kể cả khi Query chưa lấy `Owner` nào); `{{acc.Name.Foo}}` trên field thường thì không có `fix`.
 - `client/js/inspector.js`: nút `Thêm Industry vào SELECT của "accs"` (`.quick-fix`) dưới câu lỗi, cạnh "Sửa thành …"; bấm sửa bước
   Query (builder: thêm vào cuối `fields`; SOQL: `addSelectField`), một bước hoàn tác (`inspector-structure`), toast
   `Đã thêm Industry vào Query "accs". Bấm Xem trước để đọc lại.` Thanh lỗi không thêm nút (như thiết kế).
 - Test: `test/soql.test.js` (`addSelectField` với SOQL thường, có WHERE/ORDER BY/LIMIT và chuỗi chứa `FROM`, semi-join trong WHERE,
   `toLabel`, đã có field, subquery / `FIELDS(ALL)` / `TYPEOF` / SOQL lỗi ⇒ `null`), `test/workflow.test.js` (`unknownMember of a
   Query source carries an addSelectField fix`: qua Chọn bản ghi, bản ghi đang lặp, Chọn bản ghi lồng, `left` của Rẽ nhánh,
-  `Owner.Email`, SOQL sửa được / có subquery, pool Record sinh ra thì không có `fix`). Smoke `flowProductivity` bước F1.
-- Khác thiết kế: không.
+  `Owner.Email`, `Owner.Manager.Email`, `Name.Foo` không có `fix`, SOQL sửa được / có subquery, pool Record sinh ra thì không có
+  `fix`). Smoke `flowProductivity` bước F1.
+- Khác thiết kế: câu lỗi `unknownMember` của nguồn org nay gọi cả đường dẫn field thiếu (`… không lấy field Owner.Email. Thêm
+  Owner.Email vào …`) thay vì chỉ cấp đầu bị thiếu (`Owner` hay `Email`), để câu và nút sửa nói cùng một field.

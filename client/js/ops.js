@@ -56,12 +56,18 @@ function loopVarsIn(steps) {
 
 /**
  * Default fields of a Record step for `sobject` (design 0012 G): meta.recordPresets (Task →
- * Subject, Contact → FirstName + LastName…), else `Name` (Text, Họ tên). A fresh copy.
+ * Subject, Contact → FirstName + LastName…), else meta.recordDefaultFields (`Name`, Họ tên). A
+ * fresh copy.
  */
 export function recordPresetFields(sobject) {
+  return structuredClone(recordPreset(sobject)?.fields ?? state.meta?.recordDefaultFields ?? []);
+}
+
+/** The meta.recordPresets entry of `sobject` (API names ignore case), or null. */
+export function recordPreset(sobject) {
   const presets = state.meta?.recordPresets ?? {};
   const key = Object.keys(presets).find((k) => k.toLowerCase() === String(sobject ?? '').toLowerCase());
-  return structuredClone(key ? presets[key].fields : [{ name: 'Name', type: 'text', options: { mode: 'name' } }]);
+  return key ? presets[key] : null;
 }
 
 /**

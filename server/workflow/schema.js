@@ -334,8 +334,8 @@ function validateRecord(step, c, { err, warn, scope }) {
       const to = preset.nameField;
       const taken = fields.some((x) => x !== f && String(x?.name ?? '').toLowerCase() === to.toLowerCase());
       const so = c.sobject;
-      if (taken) warn(`${so} không có field Name nên insert sẽ lỗi. Xóa field này (bước đã có field ${to}).`, step.id, key, { code: 'noNameField' });
-      else warn(`${so} không có field Name nên insert sẽ lỗi. Đổi thành ${to} hoặc xóa field này.`, step.id, key, { code: 'noNameField', fix: { kind: 'renameField', stepId: step.id, from: f.name, to } });
+      if (taken) warn(`${so} không ghi được field Name nên insert sẽ lỗi. Xóa field này (bước đã có field ${to}).`, step.id, key, { code: 'noNameField' });
+      else warn(`${so} không ghi được field Name nên insert sẽ lỗi. Đổi thành ${to} hoặc xóa field này.`, step.id, key, { code: 'noNameField', fix: { kind: 'renameField', stepId: step.id, from: f.name, to } });
     }
     if (!getGenerator(f.type)) {
       err(`Field "${f.name}": kiểu "${f.type}" không được hỗ trợ.`, step.id, key);
@@ -489,8 +489,9 @@ export function referenceIssue(ref, scope, step, stepOf = () => undefined) {
         } else if (src?.origin === 'org' || src?.nodeType === 'query') {
           // For a Chọn bản ghi or the record a Lặp `each` loops over, name the Query its rows come from.
           const q = src.root !== undefined ? scope.sources[src.root]?.name ?? s : s;
-          // The missing field as a SELECT path: `Owner.Email` when `Owner.Name` is read but not Email.
-          const missing = ref.memberOf ? `${ref.memberOf}.${ref.missing}` : ref.missing;
+          // The missing field as its whole SELECT path (`Owner.Email`, `Owner.Manager.Email`), not
+          // cut at the first level the Query lacks.
+          const missing = ref.member || ref.missing;
           message = ref.mode === 'template'
             ? `Template dùng ${show(ref.path)} nhưng Query "${q}" không lấy field ${missing}. Thêm ${missing} vào "Field cần lấy" của bước Query.`
             : `Biến ${ref.path} cần field ${missing} nhưng Query "${q}" không lấy field này. Thêm ${missing} vào "Field cần lấy" của bước Query.`;

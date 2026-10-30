@@ -395,6 +395,8 @@ test('GET /api/meta has recordPresets; Task has Subject and noName (0012 G)', as
   assert.equal(p.Opportunity.noName, undefined);
   // Account keeps today's default (company name), so the samples and golden hashes do not move.
   assert.deepEqual(p.Account, { fields: [{ name: 'Name', type: 'text', options: { mode: 'company' } }] });
+  // Any other sObject (custom ones included) starts with the served default list.
+  assert.deepEqual(meta.recordDefaultFields, [{ name: 'Name', type: 'text', options: { mode: 'name' } }]);
   // Every preset field is a known field type, and each preset alone validates without errors.
   const types = new Set(meta.fieldTypes.map((t) => t.type));
   for (const [sobject, preset] of Object.entries(p)) {

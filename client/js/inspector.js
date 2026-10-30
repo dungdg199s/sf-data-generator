@@ -15,7 +15,7 @@ import {
 import { setStepAlias, renameField, insertStep } from '/shared/workflow-tree.js';
 import { refChoices, refsToRecords, referenceOptions, exposesList } from '/shared/scope.js';
 import { buildSoql, QUERY_DEFAULTS, SAMPLE_ROWS, addSelectField } from '/shared/soql.js';
-import { deleteStep, duplicateStep, toggleDisabled, newStep, fillEach, reveal, recordPresetFields } from './ops.js';
+import { deleteStep, duplicateStep, toggleDisabled, newStep, fillEach, reveal, recordPresetFields, recordPreset } from './ops.js';
 import { START_ID } from './layout.js';
 import { placesText } from './variables.js';
 import { applySuggestion, closePicker } from './var-picker.js';
@@ -397,7 +397,7 @@ function onStepOption(step, key, v, form, meta) {
     if (key === 'sobject' && step.type === 'record') {
       // Keep the alias in sync while it is still the auto-suggested one.
       const auto = !c.alias || c.alias === suggestAlias(c.sobject, step.id);
-      const old = c.sobject ?? 'Account';
+      const old = c.sobject ?? nodeType('record')?.options.find((o) => o.key === 'sobject')?.default;
       c.sobject = v;
       if (auto) follow(suggestAlias(v, step.id));
       fieldsChanged = applyRecordPreset(step, old, v);
@@ -518,20 +518,23 @@ function parentChoices(step, accepts, referenceTo, mode) {
 // ---------- Record default fields (design 0012 G) ----------
 
 const autoRecordFields = new Map(); // Record step id → JSON of the field list filled automatically
-let recordDescribeTimer = 0;
+const recordDescribeTimers = new Map(); // Record step id → pending describe timer
 const API_NAME = /^[A-Za-z][A-Za-z0-9_]*$/;
 
 /**
  * The sObject of a Record changed (inside the sObject edit's update, so one Ctrl+Z restores
  * both): a field list still at the old sObject's preset (meta.recordPresets) or at the list
  * filled earlier for this step takes the new one's (Task → Subject). With an org, 500 ms later
- * the list follows the describe: every required createable field, else the name field.
+ * the list follows the describe: a preset gets the required fields it lacks appended; another
+ * sObject gets every required createable field, else its name field (an auto-number name
+ * field: no field at all).
  * → true when the field list changed.
  */
 function applyRecordPreset(step, from, to) {
   const c = step.config;
   const cur = JSON.stringify(c.fields ?? []);
-  clearTimeout(recordDescribeTimer);
+  clearTimeout(recordDescribeTimers.get(step.id));
+  recordDescribeTimers.delete(step.id);
   const untouched = cur === JSON.stringify(recordPresetFields(from)) || autoRecordFields.get(step.id) === cur;
   if (!untouched) {
     autoRecordFields.delete(step.id);
@@ -549,7 +552,8 @@ function applyRecordPreset(step, from, to) {
 function scheduleRecordDescribe(stepId, sobject) {
   const org = state.org;
   if (!org || !API_NAME.test(String(sobject ?? ''))) return;
-  recordDescribeTimer = setTimeout(async () => {
+  recordDescribeTimers.set(stepId, setTimeout(async () => {
+    recordDescribeTimers.delete(stepId);
     let described;
     try {
       const known = await suggestContext(stepById(stepId)).sobjects('create');
@@ -562,18 +566,37 @@ function scheduleRecordDescribe(stepId, sobject) {
     if (!live || state.org !== org || live.config?.sobject !== sobject || autoRecordFields.get(stepId) !== JSON.stringify(live.config.fields ?? [])) return;
     const fields = described?.fields ?? [];
     const required = fields.filter((f) => f.required);
-    const name = described?.nameField ? fields.find((f) => f.name === described.nameField) : null;
-    const picked = required.length ? required : name ? [name] : [];
-    if (!picked.length) return;
+    const cur = live.config.fields ?? [];
     const aliases = parentChoices(live);
-    const next = picked.map((f) => describedFieldSpec(f, aliases));
-    if (same(next, live.config.fields ?? [])) return;
+    let next;
+    let message;
+    if (recordPreset(sobject)) {
+      // Real describes of Task / Event mark nothing required: the preset (Event's
+      // ActivityDateTime, Contact's FirstName) stays, only missing required fields are added.
+      const have = new Set(cur.map((f) => String(f?.name ?? '').toLowerCase()));
+      const missing = required.filter((f) => !have.has(f.name.toLowerCase()));
+      if (!missing.length) return;
+      next = [...structuredClone(cur), ...missing.map((f) => describedFieldSpec(f, aliases))];
+      message = `Đã thêm field bắt buộc của ${sobject} theo ${org}: ${missing.map((f) => f.name).join(', ')}.`;
+    } else if (required.length) {
+      next = required.map((f) => describedFieldSpec(f, aliases));
+    } else if (described?.nameField) {
+      const name = fields.find((f) => f.name === described.nameField);
+      if (name) next = [describedFieldSpec(name, aliases)];
+      else if (cur.length === 1 && String(cur[0]?.name ?? '').toLowerCase() === described.nameField.toLowerCase()) {
+        // An auto-number Name: Salesforce fills it, so writing it would fail every insert.
+        next = [];
+        message = `Field tên ${described.nameField} của ${sobject} là auto-number (Salesforce tự đánh số) nên đã bỏ khỏi danh sách field. Thêm field cần sinh, hoặc bấm "Import từ org…".`;
+      }
+    }
+    if (!next || same(next, cur)) return;
+    message ??= `Đã đặt field mặc định cho ${sobject} theo ${org}: ${next.map((f) => f.name).join(', ')}.`;
     // No undo step of its own: undoing the sObject edit also restores the field list.
     updateWorkflow(() => { live.config.fields = next; }, { source: 'inspector', history: false });
     autoRecordFields.set(stepId, JSON.stringify(next));
     refreshFieldsSection(live);
-    toast(`Đã đặt field mặc định cho ${sobject} theo ${org}: ${next.map((f) => f.name).join(', ')}.`);
-  }, 500);
+    toast(message, 5000);
+  }, 500));
 }
 
 /** A field spec from describe (mapDescribe), its Lookup parent chosen like "Import từ org…". */
@@ -590,13 +613,32 @@ function describedFieldSpec(f, aliases) {
   return { name: f.name, type: f.type, options };
 }
 
-/** Redraw the field list of `step` if the inspector shows it (the rest of the form keeps focus). */
+/**
+ * Redraw the field list of `step` if the inspector shows it (the rest of the form keeps focus).
+ * Focus inside the list (describe landing while a field is being edited) moves to the control
+ * at the same place in the new list, with its caret.
+ */
 function refreshFieldsSection(step) {
   if (lastSelectionKey !== `step:${step.id}`) return;
   const box = root.querySelector('.fields-section');
   if (!box) return;
-  box.replaceWith(renderFields(step));
+  const active = document.activeElement;
+  const path = [];
+  if (active && active !== box && box.contains(active)) {
+    for (let el = active; el !== box; el = el.parentElement) path.unshift([...el.parentElement.children].indexOf(el));
+  }
+  const caret = path.length && typeof active.selectionStart === 'number' ? [active.selectionStart, active.selectionEnd] : null;
+  const next = renderFields(step);
+  box.replaceWith(next);
   markIssues();
+  if (!path.length) return;
+  let el = next;
+  for (const i of path) el = el?.children[i];
+  if (!el || el.tagName !== active.tagName) return;
+  el.focus({ preventScroll: true });
+  if (caret && typeof el.setSelectionRange === 'function') {
+    try { el.setSelectionRange(...caret); } catch { /* not a text control */ }
+  }
 }
 
 // ---------- fields editor ----------
@@ -755,6 +797,9 @@ function fixText(fix) {
 function applyQuickFix(fix) {
   closePicker();
   if (fix.kind === 'renameField') {
+    // The issue may be stale (the field was renamed or the target added since): change nothing.
+    const fields = stepById(fix.stepId)?.config?.fields ?? [];
+    if (!fields.some((x) => x?.name === fix.from) || fields.some((x) => String(x?.name ?? '').toLowerCase() === String(fix.to).toLowerCase())) return;
     // References ({{task.Name}}) move first, while the field still has its old name.
     const res = updateWorkflow((wf) => {
       const out = renameField(wf, fix.stepId, fix.from, fix.to, { catalog: state.meta });

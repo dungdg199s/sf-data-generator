@@ -158,10 +158,13 @@ the others; never add a fixed `waitForTimeout`.
 
 16. **Editor productivity (design 0012), `flowProductivity`, own context.** G: a saved workflow (`addInitScript`) with a Task
     Record that has a `Name` field and a Contact whose template reads `{{task.Name}}`: the Task card has the warning badge, its
-    Name field shows "Task không có field Name nên insert sẽ lỗi. Đổi thành Subject…" with the button "Đổi thành Subject"; the
+    Name field shows "Task không ghi được field Name nên insert sẽ lỗi. Đổi thành Subject…" with the button "Đổi thành Subject"; the
     button clears the warning, the field becomes `Subject` with the preset's list options and the template becomes
     `{{task.Subject}}`. A Record from the palette starts with `Name`; filling its sObject with `Task` turns the list into
-    `Subject` at once while focus stays in the sObject field. F1: the "Contact cho Account có sẵn" sample, `con`'s Title template set
+    `Subject` at once while focus stays in the sObject field. The context has a mocked org `dev` (`/api/orgs` and its
+    `sobjects` / describe answered by the route, never the sf CLI): switched to `Event`, the preset stays and the describe's only
+    required field is appended (`Subject,ActivityDateTime,DurationInMinutes,Type__c`, toast "Đã thêm field bắt buộc…"); switched
+    to `Invoice__c` (auto-number Name), the list becomes empty with an "auto-number" toast and focus stays in sObject. F1: the "Contact cho Account có sẵn" sample, `con`'s Title template set
     to `Ngành {{acc.Industry}}`: the field shows the button `Thêm Industry vào SELECT của "accs"`; clicking it clears the card's
     error, the Query's fields become `Id, Name, Industry` and the toast says "Đã thêm Industry vào Query "accs". Bấm Xem trước để
     đọc lại."

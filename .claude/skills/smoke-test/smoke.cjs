@@ -1040,7 +1040,24 @@ async function flowProductivity() {
   await seedStorage(page, { workflow: { version: 2, name: 'Task cũ', steps: [
     { id: 't', type: 'record', config: { sobject: 'Task', alias: 'task', count: 1, fields: [{ name: 'Name', type: 'text', options: { mode: 'name' } }] } },
     { id: 'c', type: 'record', config: { sobject: 'Contact', alias: 'con', count: 1, fields: [{ name: 'LastName', type: 'text', options: {} }, { name: 'Description', type: 'template', options: { template: 'Việc {{task.Name}}' } }] } },
-  ] } });
+  ] }, org: 'dev' });
+  // A mocked org (never the sf CLI): describes shaped like mapDescribe's. Task / Event mark nothing
+  // required except a custom Event field; Invoice__c has an auto-number Name (not createable).
+  const DESCRIBES = {
+    Task: { sobject: 'Task', label: 'Task', nameField: 'Subject', fields: [{ name: 'Subject', type: 'text', options: {}, label: 'Subject', required: false }] },
+    Event: { sobject: 'Event', label: 'Event', nameField: 'Subject', fields: [
+      { name: 'Type__c', type: 'picklist', options: { values: ['A'] }, label: 'Type', required: true },
+      { name: 'Subject', type: 'text', options: {}, label: 'Subject', required: false },
+    ] },
+    Invoice__c: { sobject: 'Invoice__c', label: 'Invoice', nameField: 'Name', fields: [{ name: 'Amount__c', type: 'currency', options: {}, label: 'Amount', required: false }] },
+  };
+  await page.route('**/api/orgs', (r) => r.fulfill({ json: [{ alias: 'dev', username: 'dev@acme.com', isSandbox: true, isScratch: false, connectedStatus: 'Connected' }] }));
+  await page.route('**/api/orgs/dev/**', (r) => {
+    const m = /\/sobjects(?:\/([^/?]+))?(?:\?|$)/.exec(r.request().url());
+    if (m && !m[1]) return r.fulfill({ json: Object.keys(DESCRIBES).map((name) => ({ name, label: name })) });
+    if (m && DESCRIBES[m[1]]) return r.fulfill({ json: DESCRIBES[m[1]] });
+    return r.fulfill({ status: 404, json: { error: 'smoke: org giả lập' } });
+  });
   await page.goto(base);
   // G: the old Task warns on its Name field; the fix renames it and the reference follows.
   await page.waitForSelector('.step-card[data-id="t"].has-warning', { timeout: 3000 });
@@ -1048,7 +1065,7 @@ async function flowProductivity() {
   const nameCard = '#inspector .field-card[data-field="fields.Name"]';
   const fixBtn = await page.waitForSelector(`${nameCard} .quick-fix[data-fix="renameField"]`, { timeout: 3000 }).catch(() => null);
   check(fixBtn && (await fixBtn.textContent()) === 'Đổi thành Subject', `noNameField fix button: ${fixBtn && await fixBtn.textContent()}`);
-  check(/^Task không có field Name nên insert sẽ lỗi\. Đổi thành Subject/.test(await page.textContent(`${nameCard} .error-text`)), 'no noNameField message under the Name field');
+  check(/^Task không ghi được field Name nên insert sẽ lỗi\. Đổi thành Subject/.test(await page.textContent(`${nameCard} .error-text`)), 'no noNameField message under the Name field');
   if (fixBtn) {
     await fixBtn.click();
     await page.waitForFunction(() => !document.querySelector('.step-card[data-id="t"].has-warning'), null, { timeout: 3000 }).catch(() => {});
@@ -1069,6 +1086,16 @@ async function flowProductivity() {
     focus: document.activeElement?.dataset.key,
   }));
   check(after.names.join() === 'Subject' && after.focus === 'sobject', `Record switched to Task: ${JSON.stringify(after)}`);
+  // With the org: Event keeps its preset and only gains the required field the describe adds.
+  const names = () => page.$$eval('#inspector .fields-section .field-card input[aria-label="Tên field"]', (els) => els.map((e) => e.value).join());
+  await page.fill('#inspector input[data-key="sobject"]', 'Event');
+  await page.waitForFunction(() => /Đã thêm field bắt buộc của Event theo dev: Type__c\./.test(document.getElementById('toast').textContent), null, { timeout: 3000 }).catch(() => {});
+  check(await names() === 'Subject,ActivityDateTime,DurationInMinutes,Type__c', `Event after describe: ${await names()}`);
+  // A custom object whose Name is auto-number: the auto-filled [Name] becomes empty, with a toast.
+  await page.fill('#inspector input[data-key="sobject"]', 'Invoice__c');
+  await page.waitForFunction(() => /auto-number/.test(document.getElementById('toast').textContent), null, { timeout: 3000 }).catch(() => {});
+  check(await names() === '', `Invoice__c (auto-number Name) after describe: ${await names()}`);
+  check(await page.evaluate(() => document.activeElement?.dataset.key) === 'sobject', 'focus left the sObject field when the describe landed');
 
   // F1: {{acc.Industry}} with acc picked from Query "accs" (Id, Name): one click adds Industry to its SELECT.
   await page.click('#sample-items .palette-item:has-text("Contact cho Account có sẵn")');
