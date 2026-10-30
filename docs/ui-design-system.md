@@ -276,6 +276,7 @@ bo 10 px, sọc trái 4 px `--c`, nền `surface-raised`, viền 1 px `border`, 
 | Đã tắt | nền `bg-disabled`, **viền và sọc nét đứt**, không bóng | tag `⏻ Đã tắt` | tên loại, alias, ô icon chuyển `text-muted`. **Không dùng opacity**, để badge lỗi vẫn đọc được |
 | Nguồn đang kéo | opacity 0.5 | viền nét đứt, không bóng | — |
 | Chớp khi nhảy tới | nền `accent-subtle-strong` → `surface-raised` trong 0.6 s | — | Giảm chuyển động: giữ nền, không animation |
+| Nguồn của chip đang rê / focus (`.is-ref-target`, [0012](design/0012-nang-suat-soan-thao.md) I) | outline 2 px **nét đứt** `accent`, hở 2 px (khác vòng chọn liền nét và vòng focus) | `title` của chip có `Nguồn: Record "acc"` | Không cuộn, không đổi lựa chọn; chip đỏ không tô |
 
 Badge là nút: cao 22 px, rộng tối thiểu 24 px, icon 13 px + số, 12 px, 600. Hover và nhấn (`:active`, kể cả bằng bàn phím) cùng
 nền đậm hơn (`danger-hover` / `warning`), không về nền xám của nút thường. Tag "Đã tắt": viền `border-strong`, chữ

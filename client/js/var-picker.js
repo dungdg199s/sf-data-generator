@@ -12,6 +12,7 @@
 import { h, icoTile } from './dom.js';
 import { state, subscribe, stepById, currentScope } from './store.js';
 import { groupsFor, matchScore, tokenize, refAt, previewOf, formatSample, typeLabel, MAX_ROWS } from './variables.js';
+import { bindRefTarget, refSourceStep, sourceTitle } from './ref-target.js';
 
 let uid = 0;
 let open = null; // { el, input, opts, mode, query, items, active, replace, render }
@@ -149,6 +150,9 @@ function chip(part, input, opts, issues) {
     const owner = src.kind === 'vars' ? `${src.name}` : src.sobject || src.name;
     title = `${owner}.${rest.join('.')}${member ? ` · ${typeLabel(member)}` : ''}`;
   }
+  // Design 0012 I: hover / focus outlines the source step's card; the title names it.
+  const srcStep = known ? refSourceStep(ref) : null;
+  if (srcStep) title += `\n${sourceTitle(srcStep)}`;
   const el = h(
     'button',
     {
@@ -169,7 +173,7 @@ function chip(part, input, opts, issues) {
     h('span', { class: 'var-src' }, name),
     rest.length ? ` · ${rest.join('.')}` : '',
   );
-  return el;
+  return bindRefTarget(el, srcStep);
 }
 
 // ---------- opening ----------

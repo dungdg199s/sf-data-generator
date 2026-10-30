@@ -167,7 +167,9 @@ the others; never add a fixed `waitForTimeout`.
     to `Invoice__c` (auto-number Name), the list becomes empty with an "auto-number" toast and focus stays in sObject. F1: the "Contact cho Account có sẵn" sample, `con`'s Title template set
     to `Ngành {{acc.Industry}}`: the field shows the button `Thêm Industry vào SELECT của "accs"`; clicking it clears the card's
     error, the Query's fields become `Id, Name, Industry` and the toast says "Đã thêm Industry vào Query "accs". Bấm Xem trước để
-    đọc lại." C: ⋯ on `con` → "Bọc trong Lặp qua từng bản ghi" wraps it in a selected Lặp `each` over `accs` (con refers to the pick
+    đọc lại." I: hovering the chip `[acc · Industry]` gives the card `acc` `.is-ref-target`, leaving it clears it; focusing the
+    Lookup chip `AccountId · Lookup → acc` on `con`'s card (after "Hiện các field") does the same and its title has
+    `Nguồn: Chọn bản ghi "acc"`; blur clears it. C: ⋯ on `con` → "Bọc trong Lặp qua từng bản ghi" wraps it in a selected Lặp `each` over `accs` (con refers to the pick
     `acc` of `accs`) with the record `acc2`; the toast "Đổi Lookup AccountId (con) sang bản ghi đang lặp "acc2"?" [Đổi] sets the
     Lookup to `acc2`, mode `current`.
 

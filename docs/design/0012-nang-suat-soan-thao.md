@@ -1,6 +1,6 @@
 # 0012 — Năng suất soạn thảo: thư viện workflow, chọn nhiều, copy/paste, sửa nhanh, số liệu trên thẻ
 
-- **Trạng thái:** Đang làm (đã xong G, F1, C)
+- **Trạng thái:** Đang làm (đã xong G, F1, C, I)
 - **Ngày:** 2026-10-28
 - **Liên quan:** [0003](0003-process-mode.md) (cây bước, phím, "Việc tiếp theo": chọn nhiều, copy/paste, ước tính số bản
   ghi, tô thẻ cha, field tên mặc định), [0004](0004-streaming-execution.md) (sự kiện tiến độ, nhóm lỗi insert),
@@ -864,3 +864,18 @@ Làm từng phần theo [Kế hoạch](#kế-hoạch-thực-hiện); phần chư
   xa nhất còn dùng được), vì lặp qua một bản ghi đã chọn chỉ chạy một lần — đúng ví dụ smoke của thiết kế (`con` trỏ `acc` ⇒
   `from` = `accs`). "Hòa" chọn pool gần nhất **trong các pool hòa**. Bấm [Đổi] có toast xác nhận `Đã đổi 1 Lookup sang bản ghi
   đang lặp "acc2".` Chưa có ở inspector chọn nhiều và popup `Bọc ▾` (thuộc B).
+
+### I — Tô thẻ nguồn khi rê / focus chip (bước 4)
+
+- `client/js/ref-target.js` (mới): `refSourceStep(ref)` (bước nguồn của một tham chiếu `analyzeScope` qua `sourceStep`: alias ⇒
+  Record / Query / Chọn bản ghi, biến lặp và bản ghi đang lặp ⇒ Lặp; `null` với chip đỏ `unknownName` và `this.*`),
+  `bindRefTarget(chip, id)` (`pointerenter`/`focus` thêm, `pointerleave`/`blur` bỏ), `paintRefTarget()` chỉ vá class trên thẻ của
+  hai view, `refTargetId()` (bỏ khi chip đã rời trang do vẽ lại).
+- `client/js/var-picker.js`: chip biến gắn `bindRefTarget`; `title` thêm dòng `Nguồn: Chọn bản ghi "acc"`. `client/js/process.js`:
+  chip field Lookup / Master-Detail (`→ acc`) cũng vậy, `decorate` giữ class khi vẽ lại. `client/js/canvas.js`: `decorateCard` đặt
+  class cho thẻ được tạo lại sau cull (Sơ đồ không có chip field nên chỉ là nơi hiện thẻ nguồn của chip ở inspector).
+- `client/css/app.css`: `.step-card.is-ref-target` (outline 2 px nét đứt `accent`, hở 2 px); `docs/ui-design-system.md` §6.4.
+- Smoke `flowProductivity` bước I: rê chip `[acc · Industry]` ⇒ thẻ `acc` được tô, rời chuột ⇒ hết; focus chip `AccountId · Lookup →
+  acc` trên thẻ `con` ⇒ tô `acc`, `title` có `Nguồn: Chọn bản ghi "acc"`, blur ⇒ hết.
+- Khác thiết kế: dòng `Nguồn: …` có trong `title` của mọi chip có nguồn (không chỉ khi thẻ ngoài khung nhìn), vì `title` không
+  biết thẻ có đang hiện hay không lúc rê.

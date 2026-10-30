@@ -41,6 +41,7 @@
 //  16. editor productivity (0012): G — a saved Task with Name warns, "Đổi thành Subject" fixes it (template
 //      follows); a new Record switched to Task gets Subject at once. F1 — {{acc.Industry}} from Query "accs"
 //      gets "Thêm Industry vào SELECT của "accs"", which adds it to the Query and clears the error
+//      I — hovering / focusing a variable or Lookup chip outlines the source card (.is-ref-target).
 //      C — "Bọc trong Lặp qua từng bản ghi" on con: Lặp each over accs, [Đổi] re-points the Lookup
 // The flows run in parallel, one browser context each (independent storage): see SKILL.md.
 // Usage: node .claude/skills/smoke-test/smoke.cjs [screenshotDir]
@@ -1115,6 +1116,20 @@ async function flowProductivity() {
     check(fields.join() === 'Id,Name,Industry', `Query fields after the fix: ${fields}`);
     check(/Đã thêm Industry vào Query "accs"\. Bấm Xem trước để đọc lại\./.test(await page.textContent('#toast')), 'no "Đã thêm Industry vào Query" toast');
   }
+
+  // I: hovering the chip [acc · Industry] outlines the card of the pick acc; leaving it clears it. Focusing
+  // the Lookup chip "AccountId · Lookup → acc" on con's card does the same, and its title names the source.
+  const target = () => page.$$eval('.step-card.is-ref-target', (els) => els.map((e) => e.dataset.id).join());
+  await page.hover(`${title} .var-chip[data-path="acc.Industry"]`);
+  check(await target() === 'acc', `hovering [acc · Industry]: outlined ${await target()}`);
+  await page.mouse.move(5, 5);
+  check(await target() === '', `after leaving the chip: outlined ${await target()}`);
+  const lookupChip = '.step-card[data-id="con"] ~ .details .field-chip[data-field="fields.AccountId"]';
+  await page.click('.step-card[data-id="con"] button.toggle[aria-label="Hiện các field"]');
+  await page.focus(lookupChip);
+  check(await target() === 'acc' && /Nguồn: Chọn bản ghi "acc"/.test(await page.getAttribute(lookupChip, 'title')), `focused Lookup chip: outlined ${await target()}`);
+  await page.focus(`${title} input[data-key="template"]`);
+  check(await target() === '', `after blurring the Lookup chip: outlined ${await target()}`);
 
   // C: ⋯ on con → "Bọc trong Lặp qua từng bản ghi": a Lặp each over accs (con refers to the pick acc
   // of accs), the record named acc2 (acc is taken); [Đổi] of the toast re-points the Lookup.

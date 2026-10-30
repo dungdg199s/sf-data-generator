@@ -9,7 +9,7 @@
 // does not render.
 
 import { h, icoTile } from './dom.js';
-import { state, subscribe, select, nodeType, fieldType, slotKeys, stepById, setCollapsed } from './store.js';
+import { state, subscribe, select, nodeType, fieldType, slotKeys, stepById, setCollapsed, currentScope } from './store.js';
 import { allSteps, slotList } from '/shared/workflow-tree.js';
 import {
   stepSummary, stepAlias, statChip, stepLabel, addPointLabel, issuesByStep, innerIssues, innerCount, emptySlotLabel,
@@ -18,6 +18,7 @@ import * as ops from './ops.js';
 import { openField, openSheet } from './inspector.js';
 import { openAddMenu, openStepMenu } from './menus.js';
 import { START_ID } from './layout.js';
+import { bindRefTarget, refSourceStep, sourceTitle, refTargetId } from './ref-target.js';
 
 const MAX_FIELD_CHIPS = 12;
 
@@ -246,15 +247,18 @@ function renderSlot(step, def, level, labelled) {
 
 function fieldChips(step) {
   const fields = Array.isArray(step.config?.fields) ? step.config.fields : [];
+  const scope = currentScope();
   const chips = fields.slice(0, MAX_FIELD_CHIPS).map((f, i) => {
     const t = fieldType(f.type)?.label ?? f.type;
     const ref = (f.type === 'lookup' || f.type === 'masterdetail') && f.options?.ref ? ` → ${f.options.ref}` : '';
-    return h('button', {
+    // Design 0012 I: a Lookup chip outlines its parent step's card on hover / focus.
+    const src = ref ? refSourceStep(scope.refs.find((r) => r.nodeId === step.id && r.field === `fields.${f.name}` && r.option === 'ref' && !r.hidden)) : null;
+    return bindRefTarget(h('button', {
       class: 'field-chip',
       'data-field': `fields.${f.name}`,
-      title: 'Mở tùy chọn của field này trong panel bên phải',
+      title: `Mở tùy chọn của field này trong panel bên phải${src ? `\n${sourceTitle(src)}` : ''}`,
       onclick: () => openField(step.id, i),
-    }, `${f.name || '(chưa đặt tên)'} · ${t}${ref}`);
+    }, `${f.name || '(chưa đặt tên)'} · ${t}${ref}`), src);
   });
   if (fields.length > MAX_FIELD_CHIPS) chips.push(h('span', { class: 'field-more' }, `+${fields.length - MAX_FIELD_CHIPS} field`));
   if (!fields.length) chips.push(h('span', { class: 'field-more' }, 'Chưa có field nào.'));
@@ -285,6 +289,7 @@ function decorate() {
     }
     const selected = id === selectedId;
     card.classList.toggle('selected', selected);
+    card.classList.toggle('is-ref-target', id === refTargetId());
     card.setAttribute('aria-selected', String(selected));
     card.tabIndex = -1;
     if (selected) focusable = card;

@@ -20,6 +20,7 @@ import {
 import * as ops from './ops.js';
 import { openSheet } from './inspector.js';
 import { openAddMenu, openStepMenu } from './menus.js';
+import { refTargetId } from './ref-target.js';
 
 const SVG = 'http://www.w3.org/2000/svg';
 const ZOOM_MIN = 0.1;
@@ -445,6 +446,7 @@ function decorateCard(card) {
   }
   const selected = id === (selectedId() ?? null);
   card.classList.toggle('selected', selected);
+  card.classList.toggle('is-ref-target', id === refTargetId()); // 0012 I (a card made again by cull)
   card.setAttribute('aria-selected', String(selected));
   // Roving tab stop: the selected card, or the Start card when nothing is selected.
   card.tabIndex = selected || (id === START_ID && !selectedId()) ? 0 : -1;

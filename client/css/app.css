@@ -505,6 +505,8 @@ input:focus, select:focus, textarea:focus { border-color: var(--color-accent); }
 .step-card.has-error { border-color: var(--color-danger); border-left-color: var(--c); box-shadow: inset 0 0 0 1px var(--color-danger), var(--shadow-1); }
 .step-card.has-warning:not(.has-error) { border-color: var(--color-warning); border-left-color: var(--c); }
 .step-card.selected.has-error { box-shadow: inset 0 0 0 1px var(--color-danger), 0 0 0 var(--ring-w) var(--color-accent); }
+/* 0012 I: the source of a hovered / focused chip (dashed, unlike the selection ring and the focus ring). */
+.step-card.is-ref-target { outline: var(--ring-w) dashed var(--color-accent); outline-offset: var(--space-0-5); }
 .step-card .type { font-weight: var(--weight-semibold); white-space: nowrap; display: inline-flex; align-items: center; gap: var(--space-2); }
 .step-card .alias {
   color: var(--c-text); font-family: var(--font-mono); font-size: var(--text-xs); background: var(--c-subtle);
