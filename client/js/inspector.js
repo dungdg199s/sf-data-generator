@@ -15,7 +15,7 @@ import {
 import { setStepAlias, renameField, insertStep } from '/shared/workflow-tree.js';
 import { refChoices, refsToRecords, referenceOptions, exposesList } from '/shared/scope.js';
 import { buildSoql, QUERY_DEFAULTS, SAMPLE_ROWS } from '/shared/soql.js';
-import { deleteStep, duplicateStep, toggleDisabled, newStep, fillEach, reveal } from './ops.js';
+import { deleteStep, duplicateStep, toggleDisabled, newStep, fillEach, reveal, recordPresetFields } from './ops.js';
 import { START_ID } from './layout.js';
 import { placesText } from './variables.js';
 import { applySuggestion, closePicker } from './var-picker.js';
@@ -387,6 +387,7 @@ function onStepOption(step, key, v, form, meta) {
     if (input) input.value = next;
   };
   let filled = null;
+  let fieldsChanged = false;
   updateWorkflow((wf) => {
     const c = (step.config ??= {});
     const follow = (next, nameKey = 'alias') => {
@@ -396,8 +397,10 @@ function onStepOption(step, key, v, form, meta) {
     if (key === 'sobject' && step.type === 'record') {
       // Keep the alias in sync while it is still the auto-suggested one.
       const auto = !c.alias || c.alias === suggestAlias(c.sobject, step.id);
+      const old = c.sobject ?? 'Account';
       c.sobject = v;
       if (auto) follow(suggestAlias(v, step.id));
+      fieldsChanged = applyRecordPreset(step, old, v);
     } else if (key === 'sobject' && step.type === 'query') {
       const old = c.sobject ?? QUERY_DEFAULTS.sobject;
       const auto = !c.alias || c.alias === suggestPoolAlias(old, step.id);
@@ -427,6 +430,8 @@ function onStepOption(step, key, v, form, meta) {
   }, { source: 'inspector', coalesceKey: meta?.coalesceKey ?? `${step.id}:${key}` });
   // Card summary/alias changed; the process view re-renders, the inspector keeps focus.
   fillPathDefaults(step, key, form);
+  // Only the field list is redrawn, so the sObject input keeps focus while typing.
+  if (fieldsChanged) refreshFieldsSection(step);
   // Pool / record names filled in: show them (the mode select loses nothing by a re-render).
   if (filled && Object.keys(filled).length) updateWorkflow(() => {}, { source: 'inspector-structure', history: false });
   if (step.type === 'query') {
@@ -508,6 +513,90 @@ function parentChoices(step, accepts, referenceTo, mode) {
     };
   });
   return [...list.filter((c) => c.usable), ...list.filter((c) => !c.usable)];
+}
+
+// ---------- Record default fields (design 0012 G) ----------
+
+const autoRecordFields = new Map(); // Record step id → JSON of the field list filled automatically
+let recordDescribeTimer = 0;
+const API_NAME = /^[A-Za-z][A-Za-z0-9_]*$/;
+
+/**
+ * The sObject of a Record changed (inside the sObject edit's update, so one Ctrl+Z restores
+ * both): a field list still at the old sObject's preset (meta.recordPresets) or at the list
+ * filled earlier for this step takes the new one's (Task → Subject). With an org, 500 ms later
+ * the list follows the describe: every required createable field, else the name field.
+ * → true when the field list changed.
+ */
+function applyRecordPreset(step, from, to) {
+  const c = step.config;
+  const cur = JSON.stringify(c.fields ?? []);
+  clearTimeout(recordDescribeTimer);
+  const untouched = cur === JSON.stringify(recordPresetFields(from)) || autoRecordFields.get(step.id) === cur;
+  if (!untouched) {
+    autoRecordFields.delete(step.id);
+    return false;
+  }
+  const next = recordPresetFields(to);
+  autoRecordFields.set(step.id, JSON.stringify(next));
+  scheduleRecordDescribe(step.id, to);
+  if (JSON.stringify(next) === cur) return false;
+  c.fields = next;
+  for (const k of [...expanded]) if (k.startsWith(`${step.id}:`)) expanded.delete(k);
+  return true;
+}
+
+function scheduleRecordDescribe(stepId, sobject) {
+  const org = state.org;
+  if (!org || !API_NAME.test(String(sobject ?? ''))) return;
+  recordDescribeTimer = setTimeout(async () => {
+    let described;
+    try {
+      const known = await suggestContext(stepById(stepId)).sobjects('create');
+      if (!known.some((x) => x.name === sobject)) return;
+      described = await api.describe(org, sobject);
+    } catch {
+      return; // the sObject input reports describe problems
+    }
+    const live = stepById(stepId);
+    if (!live || state.org !== org || live.config?.sobject !== sobject || autoRecordFields.get(stepId) !== JSON.stringify(live.config.fields ?? [])) return;
+    const fields = described?.fields ?? [];
+    const required = fields.filter((f) => f.required);
+    const name = described?.nameField ? fields.find((f) => f.name === described.nameField) : null;
+    const picked = required.length ? required : name ? [name] : [];
+    if (!picked.length) return;
+    const aliases = parentChoices(live);
+    const next = picked.map((f) => describedFieldSpec(f, aliases));
+    if (same(next, live.config.fields ?? [])) return;
+    // No undo step of its own: undoing the sObject edit also restores the field list.
+    updateWorkflow(() => { live.config.fields = next; }, { source: 'inspector', history: false });
+    autoRecordFields.set(stepId, JSON.stringify(next));
+    refreshFieldsSection(live);
+    toast(`Đã đặt field mặc định cho ${sobject} theo ${org}: ${next.map((f) => f.name).join(', ')}.`);
+  }, 500);
+}
+
+/** A field spec from describe (mapDescribe), its Lookup parent chosen like "Import từ org…". */
+function describedFieldSpec(f, aliases) {
+  const options = { ...(f.options ?? {}) };
+  if (f.type === 'lookup' || f.type === 'masterdetail') {
+    const pre = preselectParent(f, aliases);
+    // "＋ … có sẵn trong org" (a new Query step) is only offered in the Import dialog.
+    if (pre && !pre.startsWith(NEW_QUERY)) {
+      options.ref = pre;
+      if (aliases.find((a) => a.alias === pre)?.nodeType === 'query') options.mode = 'random';
+    }
+  }
+  return { name: f.name, type: f.type, options };
+}
+
+/** Redraw the field list of `step` if the inspector shows it (the rest of the form keeps focus). */
+function refreshFieldsSection(step) {
+  if (lastSelectionKey !== `step:${step.id}`) return;
+  const box = root.querySelector('.fields-section');
+  if (!box) return;
+  box.replaceWith(renderFields(step));
+  markIssues();
 }
 
 // ---------- fields editor ----------
@@ -596,7 +685,7 @@ function renderFields(node) {
 
   return h(
     'div',
-    {},
+    { class: 'fields-section' },
     h('h3', {}, `Fields (${fields.length})`),
     h('p', { class: 'hint' }, 'Thứ tự field là thứ tự sinh: {{this.Field}} và Email "theo tên" chỉ thấy field phía trên.'),
     list,
@@ -621,31 +710,66 @@ function renderFields(node) {
 function markIssues() {
   const s = state.selection;
   if (s?.kind !== 'step') return;
-  const issues = [...state.issues.errors].filter((i) => i.nodeId === s.id);
+  // Warnings show here only when they come with a quick fix (design 0012: "Đổi thành Subject").
+  const issues = [...state.issues.errors, ...state.issues.warnings.filter((w) => w.fix)].filter((i) => i.nodeId === s.id);
+  const isError = (i) => state.issues.errors.includes(i);
   for (const card of root.querySelectorAll('.field-card')) {
     const mine = issues.filter((i) => i.field === card.dataset.field);
-    card.classList.toggle('has-error', mine.length > 0);
+    card.classList.toggle('has-error', mine.some(isError));
+    card.classList.toggle('has-warning', mine.length > 0 && !mine.some(isError));
     fillErrors(card.querySelector('.error-text'), mine);
   }
   for (const input of root.querySelectorAll('.options [data-key]')) {
     if (input.closest('.field-card')) continue;
     const mine = issues.filter((i) => i.field === input.dataset.key);
-    input.classList.toggle('invalid', mine.length > 0);
+    input.classList.toggle('invalid', mine.some(isError));
     const box = input.closest('.form-row')?.querySelector('.opt-error');
     if (box) fillErrors(box, mine);
   }
 }
 
-/** Error lines with a one-click "Sửa thành …" button when the issue has a suggestion. */
+/**
+ * Error lines with a one-click "Sửa thành …" button when the issue has a suggestion, and a
+ * quick-fix button when the server attached a `fix` (design 0012 F/G).
+ */
 function fillErrors(box, issues) {
   if (!box) return;
   box.hidden = !issues.length;
   box.replaceChildren(...issues.map((i) => h(
     'div',
-    { class: 'error-line' },
+    { class: `error-line${state.issues.errors.includes(i) ? '' : ' warn-line'}` },
     i.message,
     i.suggestion ? h('button', { class: 'link fix-btn', onclick: () => applyFix(i) }, `Sửa thành ${suggestionText(i)}`) : null,
+    i.fix && fixText(i.fix) ? h('button', { class: 'link fix-btn quick-fix', 'data-fix': i.fix.kind, onclick: () => applyQuickFix(i.fix) }, fixText(i.fix)) : null,
   )));
+}
+
+/** Button text of an issue's `fix`, or null for a kind this client does not know. */
+function fixText(fix) {
+  if (fix.kind === 'renameField') return `Đổi thành ${fix.to}`;
+  return null;
+}
+
+/** Apply an issue's `fix` (one undo step). */
+function applyQuickFix(fix) {
+  closePicker();
+  if (fix.kind === 'renameField') {
+    // References ({{task.Name}}) move first, while the field still has its old name.
+    const res = updateWorkflow((wf) => {
+      const out = renameField(wf, fix.stepId, fix.from, fix.to, { catalog: state.meta });
+      const live = stepById(fix.stepId);
+      const f = live?.config?.fields?.find((x) => x?.name === fix.from);
+      if (!f) return out;
+      f.name = fix.to;
+      // A Name still at the old defaults takes the preset's options for the new field (Subject:
+      // the Call / Send Letter list), so the generated values fit the field.
+      const spec = recordPresetFields(live.config.sobject).find((x) => x.name === fix.to);
+      const plain = !f.options || !Object.keys(f.options).length || ['name', 'company'].includes(f.options.mode) && Object.keys(f.options).length === 1;
+      if (spec && f.type === 'text' && plain) Object.assign(f, structuredClone({ type: spec.type, options: spec.options }));
+      return out;
+    }, { source: 'inspector-structure' });
+    toast(`Đã đổi field ${fix.from} thành ${fix.to}${res?.count ? ` và cập nhật ${res.count} tham chiếu` : ''}. Ctrl+Z để hoàn tác.`);
+  }
 }
 
 function issueOption(issue) {
@@ -729,6 +853,25 @@ async function openImport(node) {
 
 const NEW_QUERY = '+query:';
 
+/**
+ * The parent a Lookup from describe starts with (Import, Record defaults): only among parents
+ * usable at this position (above, not in the other branch, on): one Record / Chọn bản ghi of that
+ * sObject (current), else one Query (random), else "＋ … có sẵn trong org" (NEW_QUERY + sObject)
+ * when nothing matches (design 0006); '' when it is ambiguous.
+ */
+function preselectParent(f, aliases) {
+  const fits = (a) => a.usable && f.referenceTo?.includes(a.sobject);
+  const records = aliases.filter((a) => fits(a) && a.nodeType !== 'query');
+  const pools = aliases.filter((a) => fits(a) && a.nodeType === 'query');
+  // Inside a Lặp `each`, the record looped over of that sObject (nearest first) wins (0010).
+  const items = records.filter((a) => a.current === 'item');
+  if (items.length) return items[0].alias;
+  if (records.length === 1) return records[0].alias;
+  if (!records.length && pools.length === 1) return pools[0].alias;
+  if (!records.length && !pools.length && f.referenceTo?.length) return `${NEW_QUERY}${f.referenceTo[0]}`;
+  return '';
+}
+
 function renderImportList(node, described, box, modal) {
   const existing = new Set((node.config.fields ?? []).map((f) => f.name.toLowerCase()));
   const aliases = parentChoices(node);
@@ -740,16 +883,7 @@ function renderImportList(node, described, box, modal) {
       // Auto-pick only among parents usable at this position (above, not in the other branch, on):
       // one Record / Chọn bản ghi of that sObject (current), else one Query (random), else
       // "＋ … có sẵn trong org" when nothing matches (design 0006).
-      const fits = (a) => a.usable && f.referenceTo?.includes(a.sobject);
-      const records = aliases.filter((a) => fits(a) && a.nodeType !== 'query');
-      const pools = aliases.filter((a) => fits(a) && a.nodeType === 'query');
-      let pre = '';
-      // Inside a Lặp `each`, the record looped over of that sObject (nearest first) wins (0010).
-      const items = records.filter((a) => a.current === 'item');
-      if (items.length) pre = items[0].alias;
-      else if (records.length === 1) pre = records[0].alias;
-      else if (!records.length && pools.length === 1) pre = pools[0].alias;
-      else if (!records.length && !pools.length && f.referenceTo?.length) pre = `${NEW_QUERY}${f.referenceTo[0]}`;
+      const pre = preselectParent(f, aliases);
       const usable = aliases.filter((a) => a.usable);
       const other = aliases.filter((a) => !a.usable);
       parentSel = h(

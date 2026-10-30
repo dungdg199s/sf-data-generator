@@ -19,7 +19,7 @@ flows
 
 **Speed (since design 0009).** The flows are grouped into seven independent functions that run **in parallel**, each in
 its own browser context (so storage, routes and dialogs never leak between them): `flowEditing` (1–5), `flowPicker`
-(5b), `flowFiles` (5c–10), `flowDark` (12), `flowLayoutWide` and `flowLayoutNarrow` (11, 13), `flowEach` (14), `flowCanvas` (15). The browser launches
+(5b), `flowFiles` (5c–10), `flowDark` (12), `flowLayoutWide` and `flowLayoutNarrow` (11, 13), `flowEach` (14), `flowCanvas` (15), `flowProductivity` (16). The browser launches
 while the server starts; a fresh context starts with empty storage, so no `localStorage.clear()` + reload; storage a flow
 needs before its first load is written by `addInitScript` (once, guarded by a marker key, so reloads keep it); layout
 checks resize one page (`setViewportSize`) instead of opening a context per width; waits for the sheet or toast
@@ -155,6 +155,13 @@ the others; never add a fixed `waitForTimeout`.
     (`smoke-390-canvas.png`). At 844 × 390 with the sheet open, End selects `con`: its top is visible above the sheet,
     not under the zoom bar, its ⋯ is 32 px; ⋯ → "Quy trình" there leaves `sfdg.view` = `canvas` (landscape phone = phone).
     `SMOKE_ONLY=flowCanvas` (comma list) runs only the named flows.
+
+16. **Editor productivity (design 0012), `flowProductivity`, own context.** G: a saved workflow (`addInitScript`) with a Task
+    Record that has a `Name` field and a Contact whose template reads `{{task.Name}}`: the Task card has the warning badge, its
+    Name field shows "Task không có field Name nên insert sẽ lỗi. Đổi thành Subject…" with the button "Đổi thành Subject"; the
+    button clears the warning, the field becomes `Subject` with the preset's list options and the template becomes
+    `{{task.Subject}}`. A Record from the palette starts with `Name`; filling its sObject with `Task` turns the list into
+    `Subject` at once while focus stays in the sObject field.
 
 It also fails on any page error or a run over 12 s (typically ~5.5–6.5 s since the flows run in parallel, flow 14 included, ~7–8.5 s with flow 15 on a 4-CPU machine; ~10 s before;
 ~7–8 s with two CPU-bound processes running alongside).

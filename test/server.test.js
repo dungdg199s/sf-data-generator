@@ -381,6 +381,29 @@ test('export of a workflow with a Query reads through the cache; changed org dat
   assert.equal((await stale.json()).error, 'Dữ liệu đọc từ org đã đổi so với lần chạy này. Bấm Xem trước lại rồi tải.');
 });
 
+test('GET /api/meta has recordPresets; Task has Subject and noName (0012 G)', async () => {
+  const meta = await (await fetch(base + '/api/meta')).json();
+  const p = meta.recordPresets;
+  assert.deepEqual(p.Task.fields.map((f) => f.name), ['Subject']);
+  assert.equal(p.Task.noName, true);
+  assert.equal(p.Task.nameField, 'Subject');
+  assert.deepEqual(p.Task.fields[0].options.values, ['Call', 'Send Letter', 'Send Quote', 'Other']);
+  assert.deepEqual(p.Contact.fields.map((f) => f.name), ['FirstName', 'LastName']);
+  assert.deepEqual(p.Lead.fields.map((f) => f.name), ['FirstName', 'LastName', 'Company']);
+  assert.deepEqual(p.Event.fields.map((f) => [f.name, f.type]), [['Subject', 'text'], ['ActivityDateTime', 'datetime'], ['DurationInMinutes', 'number']]);
+  assert.deepEqual(p.Opportunity.fields.map((f) => f.name), ['Name', 'StageName', 'CloseDate']);
+  assert.equal(p.Opportunity.noName, undefined);
+  // Account keeps today's default (company name), so the samples and golden hashes do not move.
+  assert.deepEqual(p.Account, { fields: [{ name: 'Name', type: 'text', options: { mode: 'company' } }] });
+  // Every preset field is a known field type, and each preset alone validates without errors.
+  const types = new Set(meta.fieldTypes.map((t) => t.type));
+  for (const [sobject, preset] of Object.entries(p)) {
+    for (const f of preset.fields) assert.ok(types.has(f.type), `${sobject}.${f.name}: ${f.type}`);
+    const res = await (await fetch(base + '/api/validate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ workflow: { version: 2, steps: [{ id: 'r', type: 'record', config: { sobject, alias: 'r1', fields: preset.fields } }] } }) })).json();
+    assert.deepEqual([res.errors, res.warnings], [[], []], sobject);
+  }
+});
+
 test('GET /api/meta serves limits.previewRows', async () => {
   const meta = await (await fetch(base + '/api/meta')).json();
   assert.equal(meta.limits.previewRows, 200);

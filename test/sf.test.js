@@ -77,6 +77,24 @@ test('mapDescribe picks sensible defaults and skips non-createable fields', () =
   assert.ok(!byName.Id);
 });
 
+test('mapDescribe returns nameField (0012 G)', () => {
+  const task = mapDescribe({
+    name: 'Task',
+    fields: [
+      { name: 'Id', type: 'id', createable: false },
+      { name: 'Subject', type: 'combobox', length: 255, createable: true, nillable: true, nameField: true },
+      { name: 'OwnerId', type: 'reference', referenceTo: ['User'], createable: true, nillable: false, defaultedOnCreate: true },
+    ],
+  });
+  assert.equal(task.nameField, 'Subject');
+  assert.deepEqual(task.fields.filter((f) => f.required), [], 'OwnerId is defaulted on create');
+  // CaseNumber is the name field but not createable: still reported, not in fields.
+  const kase = mapDescribe({ name: 'Case', fields: [{ name: 'CaseNumber', type: 'string', createable: false, autoNumber: true, nameField: true }] });
+  assert.equal(kase.nameField, 'CaseNumber');
+  assert.deepEqual(kase.fields, []);
+  assert.equal(mapDescribe({ name: 'X__c', fields: [] }).nameField, null);
+});
+
 function fakeJsforce() {
   const made = [];
   const createConnection = (options) => {

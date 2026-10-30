@@ -104,6 +104,14 @@ Danh mục nằm ở `server/workflow/nodes.js` và được `GET /api/meta` tr�
 là giá trị của bước mới thêm từ UI (Lặp mới chạy 3 lần, `count` mặc định 0). `needsOrg: true` (Query): thẻ hiện "chưa chọn org"
 khi chưa chọn org. `/api/meta` còn có `queryPresets` (giá trị builder theo sObject: `User`, `Product2`, `Pricebook2`,
 `PricebookEntry`, `RecordType`, `Case`, `Task`, `Event`).
+`recordPresets` ([0012](design/0012-nang-suat-soan-thao.md) G, `RECORD_PRESETS` trong `nodes.js`) là danh sách field mặc
+định của bước Record theo sObject: `{ "<sObject>": { "fields": [{ name, type, options }], "noName"?: true, "nameField"?: "<field>" } }`
+cho `Account` (`Name` tên công ty), `Contact` (`FirstName`, `LastName`), `Lead` (thêm `Company`), `Task` (`Subject` từ danh sách
+`Call`, `Send Letter`, `Send Quote`, `Other`), `Event` (`Subject`, `ActivityDateTime`, `DurationInMinutes`), `Case` (`Subject`) và
+`Opportunity` (`Name`, `StageName`, `CloseDate`). sObject khác (kể cả custom) bắt đầu với `Name` (Text, Họ tên). `noName`: sObject
+không có field `Name` tạo được; `nameField`: field thay cho nó (Contact/Lead → `LastName`, Task/Event/Case → `Subject`). Bước
+Record mới dùng preset của sObject; đổi sObject khi danh sách field chưa sửa thì đổi theo preset mới (có org thì ~0,5 s sau theo
+describe: mọi field bắt buộc tạo được, không có thì name field).
 
 Từ [0005](design/0005-variable-picker.md), mỗi loại bước còn khai báo cách chạy các slot và biến nó cung cấp; phân tích
 phạm vi (`analyzeScope` trong `shared/scope.js`) chỉ đọc hai khóa này, không biết riêng về `loop` hay `branch`:
@@ -385,6 +393,12 @@ Request `/api/run` có thêm: `org` (org để Query đọc khi **xem trước**
 Lỗi validate trả về HTTP 422: `{ "error": "...", "issues": [{ "message", "nodeId", "field" }] }`.
 Issue về tham chiếu biến có thêm `code`, `path` (đường dẫn bị lỗi, ví dụ `acc.Nmae`), `option` (khóa option chứa nó, ví dụ
 `template`, `left`, `ref`) và có thể có `suggestion: { option, from, to }` (UI hiện nút "Sửa thành {{acc.Name}}").
+Issue có thể có `fix` (sửa nhanh ở bước khác hoặc đổi cấu trúc, [0012](design/0012-nang-suat-soan-thao.md); UI hiện nút ngay dưới
+câu lỗi trong inspector, cả với cảnh báo có `fix`):
+
+| `fix.kind` | Khóa | Gắn trên | Nút |
+| --- | --- | --- | --- |
+| `renameField` | `stepId`, `from`, `to` | cảnh báo `code: "noNameField"` (field `fields.Name` của Record trên sObject `noName`, ví dụ Task: `Task không có field Name nên insert sẽ lỗi. Đổi thành Subject hoặc xóa field này.`). Không có `fix` khi bước đã có field `to` | `Đổi thành Subject`: đổi tên field, tham chiếu `{{task.Name}}` đi theo, một bước hoàn tác |
 `POST /api/validate` trả `{ errors, warnings, derived }`; phạm vi biến không gửi kèm vì trình duyệt tự tính bằng `shared/scope.js`.
 `derived[<id>]` (0006): Query `{ soql, sobject, fields }` (câu SOQL server sẽ chạy), Chọn bản ghi `{ sobject, fields, from }`.
 `nodeId` là id bước. `field` có dạng `alias`, `count`, … cho option của bước; `fields.<Name>` cho field của record;

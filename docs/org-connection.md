@@ -28,7 +28,7 @@ Nếu máy chưa cài `sf` thì `/api/orgs` trả 503 kèm thông báo; UI vẫn
 | `GET /api/orgs` | Org từ sf CLI: `alias`, `username`, `isSandbox`, `isScratch`, `isDefault` |
 | `GET /api/orgs/:org/sobjects` | sObject có thể tạo (createable) |
 | `GET /api/orgs/:org/sobjects?for=query` | sObject đọc được (`queryable`, bỏ `deprecatedAndHidden`), cho ô sObject của bước Query |
-| `GET /api/orgs/:org/sobjects/:name` | Describe đã map sang field spec (`server/sf/describe-map.js`) |
+| `GET /api/orgs/:org/sobjects/:name` | Describe đã map sang field spec (`server/sf/describe-map.js`): `{ sobject, label, nameField, fields }`; `nameField` là field có `nameField: true` (tạo được hay không), hoặc `null` |
 | `GET /api/orgs/:org/sobjects/:name/fields` | **Mọi** field (`name`, `label`, `type`, `referenceTo`, `relationshipName`, `filterable`, `sortable`) và `nameField`; thứ tự `Id`, name field, rồi theo nhãn. Cho hộp "Chọn field…" |
 
 ### Map describe sang field
@@ -38,6 +38,14 @@ Nếu máy chưa cài `sf` thì `/api/orgs` trả 503 kèm thông báo; UI vẫn
 - `required` = không nillable và không có giá trị mặc định khi tạo; UI chọn sẵn các field này khi import.
 - Lookup: master-detail nhận ra qua `relationshipOrder`. `ref` để trống; UI tự chọn bản ghi cha
   nếu chỉ có một bước Record phía trên khớp `referenceTo`.
+
+### Field mặc định của bước Record theo describe (0012 G)
+
+Đổi sObject của bước Record khi danh sách field chưa bị sửa: field đổi ngay theo `meta.recordPresets` (Task → `Subject`), rồi nếu
+đã chọn org và sObject có trong danh sách sObject tạo được của org, khoảng 0,5 s sau inspector gọi describe trên và thay bằng
+**mọi field bắt buộc** (`required`, Lookup tự chọn bản ghi cha như Import; không tự thêm bước Query); không có field bắt buộc thì
+`nameField` nếu nó tạo được; không có cả hai thì giữ preset. Chỉ thay khi danh sách vẫn là danh sách vừa tự điền; không có bước
+hoàn tác riêng (Ctrl+Z bỏ việc đổi sObject cũng trả lại field). Toast `Đã đặt field mặc định cho Task theo dev-sb: Subject.`
 
 ## Insert
 

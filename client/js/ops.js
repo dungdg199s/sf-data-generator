@@ -55,6 +55,16 @@ function loopVarsIn(steps) {
 }
 
 /**
+ * Default fields of a Record step for `sobject` (design 0012 G): meta.recordPresets (Task →
+ * Subject, Contact → FirstName + LastName…), else `Name` (Text, Họ tên). A fresh copy.
+ */
+export function recordPresetFields(sobject) {
+  const presets = state.meta?.recordPresets ?? {};
+  const key = Object.keys(presets).find((k) => k.toLowerCase() === String(sobject ?? '').toLowerCase());
+  return structuredClone(key ? presets[key].fields : [{ name: 'Name', type: 'text', options: { mode: 'name' } }]);
+}
+
+/**
  * A new step of `type` with the catalogue defaults, ready to insert at `target`.
  * `around`: steps the new step will contain (wrapIn), whose loop variables it must not shadow.
  */
@@ -69,7 +79,7 @@ export function newStep(type, target, around = []) {
   if (def?.slots?.length) step.slots = Object.fromEntries(def.slots.map((s) => [s.key, []]));
   if (type === 'record') {
     step.config.alias = suggestAlias(step.config.sobject);
-    step.config.fields = [{ name: 'Name', type: 'text', options: { mode: step.config.sobject === 'Account' ? 'company' : 'name' } }];
+    step.config.fields = recordPresetFields(step.config.sobject);
   }
   if (type === 'query') step.config.alias = suggestPoolAlias(step.config.sobject);
   if (type === 'loop') {

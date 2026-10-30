@@ -6,7 +6,7 @@
 // Version 2 (tree of steps) is the current format. Version 1 (graph) is still accepted: it is
 // migrated with shared/migrate-v1.js first, and the conversion is reported as warnings.
 
-import { NODE_TYPES, nodeTypeMap, CONDITION_OPS, LIMITS } from './nodes.js';
+import { NODE_TYPES, nodeTypeMap, CONDITION_OPS, LIMITS, recordPreset } from './nodes.js';
 import { checkSoql, checkBuilder, isFieldPath, buildSoql, soqlSobject, selectFields, builderLimit } from '../../shared/soql.js';
 import { getGenerator, describeGenerators } from '../generators/index.js';
 import { migrateV1, describeReport, reportNeedsReview } from '../../shared/migrate-v1.js';
@@ -320,6 +320,7 @@ function validateRecord(step, c, { err, warn, scope }) {
   }
   if (!fields.length) warn('Bước chưa có field nào; bản ghi sẽ rỗng. Thêm field hoặc "Import từ org…".', step.id);
   const names = new Set();
+  const preset = recordPreset(c.sobject);
   for (const f of fields) {
     const key = `fields.${f?.name}`;
     if (!f?.name || !API_NAME.test(f.name)) {
@@ -328,6 +329,14 @@ function validateRecord(step, c, { err, warn, scope }) {
     }
     if (names.has(f.name.toLowerCase())) err(`Field "${f.name}" bị khai báo hai lần.`, step.id, key);
     names.add(f.name.toLowerCase());
+    if (f.name.toLowerCase() === 'name' && preset?.noName) {
+      // A Task / Contact / Case… has no createable Name: every insert would fail (design 0012 G).
+      const to = preset.nameField;
+      const taken = fields.some((x) => x !== f && String(x?.name ?? '').toLowerCase() === to.toLowerCase());
+      const so = c.sobject;
+      if (taken) warn(`${so} không có field Name nên insert sẽ lỗi. Xóa field này (bước đã có field ${to}).`, step.id, key, { code: 'noNameField' });
+      else warn(`${so} không có field Name nên insert sẽ lỗi. Đổi thành ${to} hoặc xóa field này.`, step.id, key, { code: 'noNameField', fix: { kind: 'renameField', stepId: step.id, from: f.name, to } });
+    }
     if (!getGenerator(f.type)) {
       err(`Field "${f.name}": kiểu "${f.type}" không được hỗ trợ.`, step.id, key);
       continue;

@@ -1,6 +1,6 @@
 # 0012 — Năng suất soạn thảo: thư viện workflow, chọn nhiều, copy/paste, sửa nhanh, số liệu trên thẻ
 
-- **Trạng thái:** Đã duyệt
+- **Trạng thái:** Đang làm (đã xong G)
 - **Ngày:** 2026-10-28
 - **Liên quan:** [0003](0003-process-mode.md) (cây bước, phím, "Việc tiếp theo": chọn nhiều, copy/paste, ước tính số bản
   ghi, tô thẻ cha, field tên mặc định), [0004](0004-streaming-execution.md) (sự kiện tiến độ, nhóm lỗi insert),
@@ -797,4 +797,27 @@ Không có câu hỏi chặn việc làm. Để sau:
 
 ## Đã làm
 
-(Chưa làm.)
+Làm từng phần theo [Kế hoạch](#kế-hoạch-thực-hiện); phần chưa có ở đây là chưa làm.
+
+### G — Field tên mặc định theo sObject (bước 1)
+
+- `server/workflow/nodes.js`: `RECORD_PRESETS` (bảng ở phần G) và `recordPreset(sobject)` (không phân biệt hoa thường);
+  `GET /api/meta` trả `recordPresets`. `server/sf/describe-map.js`: `mapDescribe` trả thêm `nameField`.
+- `server/workflow/schema.js`: cảnh báo `code: "noNameField"` gắn `fields.Name` của Record trên sObject `noName`, kèm
+  `fix: { kind: "renameField", stepId, from, to }`. Bước đã có field `to` thì không có `fix`, câu nói "Xóa field này (bước đã có
+  field LastName)." (đổi tên sẽ thành trùng field). Bước tắt không bị kiểm tra.
+- `client/js/ops.js`: `recordPresetFields(sobject)`; `newStep('record')` dùng preset (Account vẫn `Name` tên công ty: mẫu và hash
+  vàng không đổi). `client/js/inspector.js`: `applyRecordPreset` (trong cùng lần sửa sObject, nên một Ctrl+Z trả cả hai), describe
+  sau 500 ms (`scheduleRecordDescribe`, field bắt buộc rồi `nameField`, toast), chỉ vẽ lại khối Fields (`.fields-section`) nên ô
+  sObject giữ focus khi gõ. `preselectParent` tách từ hộp Import để dùng chung. Nút sửa nhanh `Đổi thành Subject` (`.quick-fix`):
+  dời tham chiếu (`renameField`) rồi đổi tên field; field còn ở option mặc định cũ (`mode: name/company` hoặc rỗng) nhận option của
+  preset (Subject: danh sách Call…). Inspector giờ hiện cả **cảnh báo có `fix`** dưới field (`.warn-line`, viền vàng), cảnh báo
+  khác vẫn chỉ ở thẻ và thanh lỗi.
+- Test: `test/server.test.js` (`GET /api/meta has recordPresets; Task has Subject and noName`, mỗi preset validate sạch),
+  `test/sf.test.js` (`mapDescribe returns nameField`), `test/workflow.test.js` (`a Task record with a Name field warns with a
+  renameField fix`, `no noNameField warning for Account, Opportunity or a custom sObject`); mẫu và hash vàng không đổi.
+  Smoke: luồng mới `flowProductivity` (16), bước G.
+- Khác thiết kế: preset có thêm khóa `nameField` (field thay cho `Name`, để server tạo `fix.to` và câu cảnh báo mà không đoán từ
+  danh sách field; Contact có `FirstName` đứng trước `LastName`). Field mặc định theo describe không tự thêm bước Query cho Lookup
+  bắt buộc chưa có bản ghi cha ("＋ … có sẵn trong org" chỉ có ở hộp Import): `ref` để trống, lỗi "chưa chọn bản ghi cha" chỉ đúng
+  field — tự thêm bước sau một độ trễ 0,5 s thì bất ngờ hơn.

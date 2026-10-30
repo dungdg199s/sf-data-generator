@@ -38,6 +38,8 @@
 //  15. Sơ đồ view (0003 đợt B): M switches with the selection kept, focused and inside the viewport; "+" on a
 //      connector adds a Record there; Delete removes it; ↑ walks the tree; M back; dark screenshot; at 390 px
 //      the saved Sơ đồ is not applied, the ⋯ menu switches (not saved) and a tap opens the sheet above the card
+//  16. editor productivity (0012): G — a saved Task with Name warns, "Đổi thành Subject" fixes it (template
+//      follows); a new Record switched to Task gets Subject at once
 // The flows run in parallel, one browser context each (independent storage): see SKILL.md.
 // Usage: node .claude/skills/smoke-test/smoke.cjs [screenshotDir]
 // Needs Playwright with a Chromium build available (require('playwright')).
@@ -1026,6 +1028,48 @@ async function flowEach() {
   await page.context().close();
 }
 
+/**
+ * Flow 16: editor productivity (design 0012), own context. G: a saved Task with a `Name` field
+ * gets the noNameField warning and "Đổi thành Subject" fixes it (the template follows); a new
+ * Record switched to Task gets the preset field Subject at once.
+ */
+async function flowProductivity() {
+  const page = await newPage('productivity');
+  await seedStorage(page, { workflow: { version: 2, name: 'Task cũ', steps: [
+    { id: 't', type: 'record', config: { sobject: 'Task', alias: 'task', count: 1, fields: [{ name: 'Name', type: 'text', options: { mode: 'name' } }] } },
+    { id: 'c', type: 'record', config: { sobject: 'Contact', alias: 'con', count: 1, fields: [{ name: 'LastName', type: 'text', options: {} }, { name: 'Description', type: 'template', options: { template: 'Việc {{task.Name}}' } }] } },
+  ] } });
+  await page.goto(base);
+  // G: the old Task warns on its Name field; the fix renames it and the reference follows.
+  await page.waitForSelector('.step-card[data-id="t"].has-warning', { timeout: 3000 });
+  await page.click('.step-card[data-id="t"] .type');
+  const nameCard = '#inspector .field-card[data-field="fields.Name"]';
+  const fixBtn = await page.waitForSelector(`${nameCard} .quick-fix[data-fix="renameField"]`, { timeout: 3000 }).catch(() => null);
+  check(fixBtn && (await fixBtn.textContent()) === 'Đổi thành Subject', `noNameField fix button: ${fixBtn && await fixBtn.textContent()}`);
+  check(/^Task không có field Name nên insert sẽ lỗi\. Đổi thành Subject/.test(await page.textContent(`${nameCard} .error-text`)), 'no noNameField message under the Name field');
+  if (fixBtn) {
+    await fixBtn.click();
+    await page.waitForFunction(() => !document.querySelector('.step-card[data-id="t"].has-warning'), null, { timeout: 3000 }).catch(() => {});
+    check(!(await page.$('.step-card[data-id="t"].has-warning')), 'the noNameField warning stayed after "Đổi thành Subject"');
+    const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('sfdg.workflow.v2')).steps);
+    const subject = saved[0].config.fields[0];
+    check(subject.name === 'Subject' && subject.options.mode === 'list', `renamed field: ${JSON.stringify(subject)}`);
+    check(saved[1].config.fields[1].options.template === 'Việc {{task.Subject}}', `template did not follow the rename: ${saved[1].config.fields[1].options.template}`);
+  }
+  // G: a new Record switched to Task has the preset field list right away (focus stays in sObject).
+  await page.click('#palette-items .palette-item[data-type="record"]');
+  await page.waitForSelector('#inspector input[data-key="sobject"]');
+  const before = await page.$$eval('#inspector .fields-section .field-card input[aria-label="Tên field"]', (els) => els.map((e) => e.value));
+  check(before.join() === 'Name', `a new Record (Account) starts with ${before}`);
+  await page.fill('#inspector input[data-key="sobject"]', 'Task');
+  const after = await page.evaluate(() => ({
+    names: [...document.querySelectorAll('#inspector .fields-section .field-card input[aria-label="Tên field"]')].map((e) => e.value),
+    focus: document.activeElement?.dataset.key,
+  }));
+  check(after.names.join() === 'Subject' && after.focus === 'sobject', `Record switched to Task: ${JSON.stringify(after)}`);
+  await page.context().close();
+}
+
 /** Flow 15: the Sơ đồ view (design 0003 đợt B, + review fixes). Own contexts (wide, then phone). */
 async function flowCanvas() {
   const page = await newPage('canvas');
@@ -1210,7 +1254,7 @@ async function flowCanvas() {
     check(orgs.status === 503 && /smoke:/.test((await orgs.json()).error), 'the smoke server is not using the sf CLI stub');
     // Independent flows, one context each, in parallel. A flow that throws (timed-out wait) is
     // reported and the others still finish.
-    let flows = { flowEditing, flowPicker, flowFiles, flowDark, flowLayoutWide, flowLayoutNarrow, flowEach, flowCanvas };
+    let flows = { flowEditing, flowPicker, flowFiles, flowDark, flowLayoutWide, flowLayoutNarrow, flowEach, flowCanvas, flowProductivity };
     // SMOKE_ONLY=flowCanvas,flowEach runs only those flows (while working on one area).
     const only = process.env.SMOKE_ONLY?.split(',').filter(Boolean);
     if (only?.length) flows = Object.fromEntries(Object.entries(flows).filter(([n]) => only.includes(n)));

@@ -797,3 +797,38 @@ test('0010 review: a field path is never suggested onto a pool without a current
   const [c] = errorsOf(wf([query('q', 'accs'), pick('p', 'pk', 'accs'), record('c', 'Contact', 'con', [tplField('T', '{{acc.$count}}')])]));
   assert.equal(c.suggestion?.to, 'accs.$count');
 });
+
+// Design 0012 G: a Record on an sObject without a createable Name (Task, Contact, Case…).
+test('a Task record with a Name field warns with a renameField fix', () => {
+  const w = wf([
+    record('t', 'Task', 'task', [{ name: 'Name', type: 'text', options: { mode: 'name' } }]),
+    record('c', 'Contact', 'con', [{ name: 'LastName', type: 'text' }, { name: 'Description', type: 'template', options: { template: '{{task.Name}}' } }]),
+  ]);
+  const { errors, warnings } = validateWorkflow(w);
+  assert.deepEqual(errors, []);
+  const [warn] = warnings.filter((x) => x.code === 'noNameField');
+  assert.deepEqual(warn, {
+    message: 'Task không có field Name nên insert sẽ lỗi. Đổi thành Subject hoặc xóa field này.',
+    nodeId: 't',
+    field: 'fields.Name',
+    code: 'noNameField',
+    fix: { kind: 'renameField', stepId: 't', from: 'Name', to: 'Subject' },
+  });
+  // Contact / Lead: LastName; case of the sObject and field name is ignored.
+  const con = warningsOf(wf([record('c', 'contact', 'con', [{ name: 'name', type: 'text' }])])).find((x) => x.code === 'noNameField');
+  assert.match(con.message, /^contact không có field Name nên insert sẽ lỗi\. Đổi thành LastName/);
+  assert.deepEqual(con.fix, { kind: 'renameField', stepId: 'c', from: 'name', to: 'LastName' });
+  // The target already exists: no rename fix, the message says to delete the field.
+  const both = warningsOf(wf([record('c', 'Contact', 'con', [{ name: 'Name', type: 'text' }, { name: 'LastName', type: 'text' }])])).find((x) => x.code === 'noNameField');
+  assert.equal(both.fix, undefined);
+  assert.match(both.message, /Xóa field này \(bước đã có field LastName\)\.$/);
+  // Disabled steps are not checked.
+  assert.deepEqual(warningsOf(wf([{ ...record('t', 'Task', 'task', [{ name: 'Name', type: 'text' }]), disabled: true }])), []);
+});
+
+test('no noNameField warning for Account, Opportunity or a custom sObject', () => {
+  for (const sobject of ['Account', 'Opportunity', 'Invoice__c', 'Foo']) {
+    const w = wf([record('r', sobject, 'r1', [{ name: 'Name', type: 'text' }])]);
+    assert.deepEqual(validateWorkflow(w), { errors: [], warnings: [] }, sobject);
+  }
+});
