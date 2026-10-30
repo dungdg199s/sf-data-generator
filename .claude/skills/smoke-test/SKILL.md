@@ -171,7 +171,10 @@ the others; never add a fixed `waitForTimeout`.
     Lookup chip `AccountId · Lookup → acc` on `con`'s card (after "Hiện các field") does the same and its title has
     `Nguồn: Chọn bản ghi "acc"`; blur clears it. C: ⋯ on `con` → "Bọc trong Lặp qua từng bản ghi" wraps it in a selected Lặp `each` over `accs` (con refers to the pick
     `acc` of `accs`) with the record `acc2`; the toast "Đổi Lookup AccountId (con) sang bản ghi đang lặp "acc2"?" [Đổi] sets the
-    Lookup to `acc2`, mode `current`.
+    Lookup to `acc2`, mode `current`. H: before any run `con` (Lặp 10 × each row of `accs`, unread: LIMIT 200) shows the
+    estimate chip `≈ 2.000 bản ghi` (title "khoảng 0–2.000"), the Start card ends with `≈ 2.000 bản ghi · ≤ 50.000`, and a limit of
+    1 000 adds the `.tag-est-over` tag ("quá giới hạn 1.000 mỗi lần chạy"). Flow 15 waits for `.stat:not(.est)` after Ctrl+Enter
+    (the estimate chip is there before the run); flow 14 picks "Lặp qua từng bản ghi" by exact label (not "Bọc trong Lặp qua…").
 
 It also fails on any page error or a run over 12 s (typically ~5.5–6.5 s since the flows run in parallel, flow 14 included, ~7–8.5 s with flow 15 on a 4-CPU machine; ~10 s before;
 ~7–8 s with two CPU-bound processes running alongside).

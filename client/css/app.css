@@ -518,6 +518,14 @@ input:focus, select:focus, textarea:focus { border-color: var(--color-accent); }
   padding: 0 var(--space-2); font-size: var(--text-xs); white-space: nowrap; font-variant-numeric: tabular-nums;
 }
 .step-card .stat.stale { background: transparent; border: 1px dashed var(--color-border-strong); color: var(--color-text-muted); font-style: italic; }
+/* 0012 H: estimate before a run (dashed like .stale, but not italic: it is not old data). */
+.step-card .stat.est { background: transparent; border: 1px dashed var(--color-border); color: var(--color-text); }
+.tag-est-over {
+  display: inline-flex; align-items: center; gap: var(--space-1); font-size: var(--text-xs); border: 1px solid var(--color-warning);
+  border-radius: var(--radius-pill); padding: 0 var(--space-2); color: var(--color-warning-text);
+  background: var(--color-warning-subtle); font-weight: var(--weight-medium); white-space: nowrap;
+}
+.tag-est-over::before { content: '▲'; }
 .step-card .badges { display: flex; gap: var(--space-1); }
 .step-card .badge, .start-card .badge {
   display: inline-flex; align-items: center; gap: var(--space-1); min-height: 22px; min-width: var(--hit-min); padding: 0 var(--space-2) 0 var(--space-1);

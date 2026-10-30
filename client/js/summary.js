@@ -2,7 +2,7 @@
 // Record, Query, Chọn bản ghi, Lặp and Rẽ nhánh have their own sentence; other step types fall
 // back to the options marked `summary: true` in /api/meta.
 
-import { state, nodeType, queryResultOf, stepById, slotKeys } from './store.js';
+import { state, nodeType, queryResultOf, stepById, slotKeys, currentEstimate } from './store.js';
 import { walkSteps } from '/shared/workflow-tree.js';
 import { START_ID } from './layout.js';
 import { selectFields, soqlSobject } from '/shared/soql.js';
@@ -86,6 +86,45 @@ export function statChip(step, byStep) {
   }
   if (step.type === 'pick') return `chọn ${s.picked ?? 0} lần${s.skipped ? ` · bỏ qua ${s.skipped}` : ''}`;
   return s.records ? `${s.records} bản ghi` : `${s.runs} lần chạy`;
+}
+
+/** A record count of the estimate (design 0012 H): "12", "12,5", "1 250", "> 200 000". */
+export function formatEstimate(n) {
+  const hard = state.meta?.limits?.maxRecordsHard ?? 200000;
+  if (n > hard) return `> ${hard.toLocaleString('vi-VN')}`;
+  return n.toLocaleString('vi-VN', { maximumFractionDigits: n < 100 ? 1 : 0 });
+}
+
+/**
+ * Estimate chip of a Record card before a run (or once the result is stale): { text, title } —
+ * "12 bản ghi" when certain, else "≈ 12,5 bản ghi" with the range in the title. Null for other
+ * step types (no estimate chip on frames) and turned-off steps.
+ */
+export function estimateChip(step) {
+  if (step?.type !== 'record') return null;
+  const e = currentEstimate().byStep[step.id];
+  if (!e) return null;
+  return {
+    text: `${e.exact ? '' : '≈ '}${formatEstimate(e.records)} bản ghi`,
+    title: e.exact ? 'Ước tính từ cấu hình, chưa chạy.' : `Ước tính từ cấu hình, chưa chạy (khoảng ${formatEstimate(e.min)}–${formatEstimate(e.max)}).`,
+  };
+}
+
+/**
+ * Start card (design 0012 H): "≈ 1 250 bản ghi · ≤ 50 000", and a warning when the expected
+ * count is over the run's limit. → { text, over: { label, title } | null }
+ */
+export function startEstimate() {
+  const max = Number(state.workflow.settings?.maxRecords ?? state.meta?.limits.maxRecordsDefault);
+  const t = currentEstimate().total;
+  const text = `${t.exact ? '' : '≈ '}${formatEstimate(t.records)} bản ghi · ≤ ${max.toLocaleString('vi-VN')}`;
+  const over = t.records > max
+    ? {
+      label: 'Ước tính vượt giới hạn',
+      title: `Ước tính khoảng ${formatEstimate(t.records)} bản ghi, quá giới hạn ${max.toLocaleString('vi-VN')} mỗi lần chạy. Giảm số lần lặp hoặc tăng giới hạn ở bước Bắt đầu.`,
+    }
+    : null;
+  return { text, over };
 }
 
 /** Name of a step in labels: its alias, else its type label. */

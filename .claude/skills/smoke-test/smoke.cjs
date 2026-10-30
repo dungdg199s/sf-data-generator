@@ -43,6 +43,7 @@
 //      gets "Thêm Industry vào SELECT của "accs"", which adds it to the Query and clears the error
 //      I — hovering / focusing a variable or Lookup chip outlines the source card (.is-ref-target).
 //      C — "Bọc trong Lặp qua từng bản ghi" on con: Lặp each over accs, [Đổi] re-points the Lookup
+//      H — estimate chips before a run (≈ on con, total and limit on Start, over-limit tag)
 // The flows run in parallel, one browser context each (independent storage): see SKILL.md.
 // Usage: node .claude/skills/smoke-test/smoke.cjs [screenshotDir]
 // Needs Playwright with a Chromium build available (require('playwright')).
@@ -1145,6 +1146,16 @@ async function flowProductivity() {
   await page.click('#toast .toast-action');
   const lookup = (await saved())[1].slots.body[1].slots.body[0].config.fields.find((f) => f.name === 'AccountId').options;
   check(lookup.ref === 'acc2' && lookup.mode === 'current', `[Đổi] did not re-point the Lookup: ${JSON.stringify(lookup)}`);
+
+  // H: before any run, con (in Lặp 10 × each row of accs, not read yet: LIMIT 200) shows "≈ 2.000 bản ghi" with the range in
+  // its title, the Start card the total and the limit; a limit of 1 000 adds the "Ước tính vượt giới hạn" tag.
+  const est = await page.$eval('.step-card[data-id="con"] .stat.est', (c) => ({ text: c.textContent, title: c.title })).catch(() => null);
+  check(est?.text === '≈ 2.000 bản ghi' && /khoảng 0–2\.000/.test(est.title), `con estimate chip: ${JSON.stringify(est)}`);
+  check(/≈ 2\.000 bản ghi · ≤ 50\.000$/.test(await page.textContent('.start-card .sum')), `Start estimate: ${await page.textContent('.start-card .sum')}`);
+  await page.click('.start-card .type');
+  await page.fill('#inspector input[data-key="maxRecords"]', '1000');
+  const over = await page.waitForSelector('.start-card .tag-est-over', { timeout: 3000 }).catch(() => null);
+  check(over && /quá giới hạn 1\.000 mỗi lần chạy/.test(await over.getAttribute('title')), 'no "Ước tính vượt giới hạn" tag on the Start card');
   await page.context().close();
 }
 
@@ -1243,7 +1254,7 @@ async function flowCanvas() {
   await page.mouse.move(low.x, low.y);
   await page.mouse.wheel(0, low.dy);
   await page.keyboard.press('Control+Enter');
-  await page.waitForSelector('#canvas .step-card[data-id="con"] .stat');
+  await page.waitForSelector('#canvas .step-card[data-id="con"] .stat:not(.est)');
   await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
   check((await inView('con'))?.inside, 'the results panel hid the selected card of the diagram');
   if (outDir) await page.screenshot({ path: path.join(outDir, 'smoke-1440-canvas.png') });

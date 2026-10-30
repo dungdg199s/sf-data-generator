@@ -1,6 +1,6 @@
 # 0012 — Năng suất soạn thảo: thư viện workflow, chọn nhiều, copy/paste, sửa nhanh, số liệu trên thẻ
 
-- **Trạng thái:** Đang làm (đã xong G, F1, C, I)
+- **Trạng thái:** Đang làm (đã xong G, F1, C, I, H)
 - **Ngày:** 2026-10-28
 - **Liên quan:** [0003](0003-process-mode.md) (cây bước, phím, "Việc tiếp theo": chọn nhiều, copy/paste, ước tính số bản
   ghi, tô thẻ cha, field tên mặc định), [0004](0004-streaming-execution.md) (sự kiện tiến độ, nhóm lỗi insert),
@@ -879,3 +879,20 @@ Làm từng phần theo [Kế hoạch](#kế-hoạch-thực-hiện); phần chư
   acc` trên thẻ `con` ⇒ tô `acc`, `title` có `Nguồn: Chọn bản ghi "acc"`, blur ⇒ hết.
 - Khác thiết kế: dòng `Nguồn: …` có trong `title` của mọi chip có nguồn (không chỉ khi thẻ ngoài khung nhìn), vì `title` không
   biết thẻ có đang hiện hay không lúc rê.
+
+### H — Ước tính số bản ghi (bước 5)
+
+- `shared/estimate.js` (mới): `estimateSteps(wf, catalog, { queryCounts })` → `{ byStep, total }`, mỗi bước `{ records, min, max,
+  exact }` (khung: tổng bên trong; Lặp thêm `iterations`). Đúng bảng của phần H; option thiếu lấy `default` của danh mục; Query
+  SOQL tự viết lấy `LIMIT` cuối câu (không có ⇒ `maxQueryRows`). Pool theo alias: Record và Chọn bản ghi cộng dồn, Query thay.
+- `client/js/store.js`: `currentEstimate()` (cache theo phiên bản workflow và kết quả chạy; `queryCounts` từ `result.queries`).
+  `client/js/summary.js`: `estimateChip(step)`, `startEstimate()`, `formatEstimate` (`vi-VN`, một chữ số lẻ dưới 100, `> 200.000`).
+  Hai view: thẻ Record có `.stat.est` khi chưa có kết quả hoặc kết quả đã cũ (thay chip `.stale` của Record), thẻ Bắt đầu
+  `≈ 17,5 bản ghi · ≤ 50.000` và tag `.tag-est-over` khi vượt `maxRecords`. `app.css`, `docs/ui-design-system.md` §6.4.
+- Test: `test/estimate.test.js` (Lặp cố định lồng 3 × 4 = 12 chính xác và khớp lần chạy, `range`, Rẽ nhánh `chance` 0,3 và
+  `compare`, `each` qua pool Record / Query (dòng đã đọc, `LIMIT` builder và SOQL) / Chọn bản ghi, pool lớn lên trong vòng lặp bao
+  ngoài ⇒ không chính xác, bước tắt bị bỏ, vượt `maxRecordsHard`, mẫu "Account + Contact" 5 Account ≈ 12,5 Contact, mặc định
+  danh mục). Smoke `flowProductivity` bước H; luồng 15 chờ `.stat:not(.est)` (chip ước tính có sẵn trước khi chạy).
+- Khác thiết kế: số dùng định dạng `vi-VN` như phần còn lại của app (`≈ 2.000`, `12,5`), không phải `1 250`. Lặp `each` qua pool
+  được sinh trong một vòng lặp cũng bao ngoài Lặp đó dùng cỡ pool tới lúc đó (cận trên, mỗi lần vào thấy một ảnh chụp khác) và
+  luôn "không chính xác". Thẻ Bắt đầu luôn hiện ước tính (kể cả khi có kết quả mới), vì đó là số so với giới hạn.
