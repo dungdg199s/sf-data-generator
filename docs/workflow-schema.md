@@ -316,6 +316,7 @@ Hai cách nhận kết quả ([0004](design/0004-streaming-execution.md)):
   "insert": {
     "inserted": 17, "failed": 0, "errorsTotal": 0, "errors": [], "errorGroups": [],
     "ids": { "acc#1": "001..." }, "bySobject": { "Account": { "inserted": 5, "failed": 0 } },
+    "byStep": { "acc": { "inserted": 5, "failed": 0 }, "con": { "inserted": 12, "failed": 0 } },
     "total": 17, "notSent": 0, "cancelled": false, "stopped": null
   }
 }
@@ -327,7 +328,7 @@ Các sự kiện NDJSON:
 {"type":"start","runId":"r7f3k2a9","seed":42,"now":1761552000000,"warnings":[],"queries":[]}
 {"type":"progress","phase":"generate","generated":120000,"bySobject":{"Account":24000,"Contact":96000},"byStep":{…}}
 {"type":"plan","total":200000,"bySobject":{"Account":40000,"Contact":160000},"apiCalls":1000}
-{"type":"progress","phase":"insert","inserted":12400,"failed":3,"total":200000,"bySobject":{"Account":{"inserted":2480,"failed":0,"total":40000},"Contact":{"inserted":9920,"failed":3,"total":160000}}}
+{"type":"progress","phase":"insert","inserted":12400,"failed":3,"total":200000,"bySobject":{"Account":{"inserted":2480,"failed":0,"total":40000},"Contact":{"inserted":9920,"failed":3,"total":160000}},"byStep":{"acc":{"inserted":2480,"failed":0},"con":{"inserted":9920,"failed":3}}}
 {"type":"done","result":{ …cùng hình dạng như JSON một cục… }}
 {"type":"error","error":"Lỗi khi sinh dữ liệu, chưa ghi bản ghi nào vào org: …","issues":[{"message":"…","nodeId":"acc","field":"fields.AccountNumber"}],"insert":null}
 ```
@@ -337,6 +338,11 @@ Các sự kiện NDJSON:
   chỉ để đếm, nên lỗi sinh dữ liệu dừng lần chạy trước khi ghi bản ghi đầu tiên vào org.
 - `plan` (chỉ khi insert): tổng chính xác và số lời gọi API ước tính `Σ ceil(n_sObject / 200)`; sau đó là `progress`
   (`insert`) sau các lô, rồi `done`.
+- `progress` (`insert`) và `insert` của kết quả có `byStep: { "<nodeId>": { inserted, failed } }`
+  ([0012](design/0012-nang-suat-soan-thao.md) D): đếm theo bước Record sinh ra bản ghi (`nodeId` của bản ghi), chỉ bước đã có bản
+  ghi gửi đi hoặc bị bỏ; `failed` gồm cả bản ghi con "Bỏ qua vì bản ghi cha lỗi." (tính cho bước của bản ghi con). Tổng
+  `inserted + failed` theo bước bằng tổng theo sObject. UI dùng nó cho chip `insert n/tổng` và tag `⊗ lỗi n` trên thẻ; `byStep`
+  của `progress` (`generate`, đã có từ 0004) cho chip trong lúc xem trước.
 - `done.result`: ở chế độ NDJSON, `records` chỉ có **200 bản ghi đầu mỗi sObject** (`stats.previewRows`;
   `stats.truncated: true` nếu bị cắt) và `insert.ids` chỉ có Id của **chính các bản ghi đó** (Id của alias được Lookup trỏ tới
   chỉ được giữ trong lúc insert, không gửi về). `runId` của lần chạy dùng cho `/api/export` (bên dưới). Một lần xem trước bị

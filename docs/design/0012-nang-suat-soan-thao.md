@@ -1,6 +1,6 @@
 # 0012 — Năng suất soạn thảo: thư viện workflow, chọn nhiều, copy/paste, sửa nhanh, số liệu trên thẻ
 
-- **Trạng thái:** Đang làm (đã xong G, F1, C, I, H)
+- **Trạng thái:** Đang làm (đã xong G, F1, C, I, H, D)
 - **Ngày:** 2026-10-28
 - **Liên quan:** [0003](0003-process-mode.md) (cây bước, phím, "Việc tiếp theo": chọn nhiều, copy/paste, ước tính số bản
   ghi, tô thẻ cha, field tên mặc định), [0004](0004-streaming-execution.md) (sự kiện tiến độ, nhóm lỗi insert),
@@ -896,3 +896,22 @@ Làm từng phần theo [Kế hoạch](#kế-hoạch-thực-hiện); phần chư
 - Khác thiết kế: số dùng định dạng `vi-VN` như phần còn lại của app (`≈ 2.000`, `12,5`), không phải `1 250`. Lặp `each` qua pool
   được sinh trong một vòng lặp cũng bao ngoài Lặp đó dùng cỡ pool tới lúc đó (cận trên, mỗi lần vào thấy một ảnh chụp khác) và
   luôn "không chính xác". Thẻ Bắt đầu luôn hiện ước tính (kể cả khi có kết quả mới), vì đó là số so với giới hạn.
+
+### D — Số liệu trực tiếp và lỗi insert trên thẻ (bước 6)
+
+- `server/sf/insert.js`: `createInserter` đếm `byStep[nodeId] = { inserted, failed }` cạnh `bySobject` (bản ghi con bị bỏ vì cha
+  lỗi tính cho bước của bản ghi con; bản ghi không có `nodeId` không được đếm theo bước), có trong `onBatch` và tóm tắt.
+  `server/run.js`: `progress` `insert` mang `byStep` (bản sao), `insert.byStep` của kết quả (kể cả `{}` khi Dừng trước khi ghi).
+- `client/js/run-cards.js` (mới): `cardChip` (đang chạy: `statChip` của `byStep` lượt sinh; khi insert, Record ghi `insert
+  n/tổng` với tổng = `stats.byStep[id].records` của bản xem trước được xác nhận, khung giữ số của bản đó; không chạy: ước tính H
+  hoặc kết quả cuối), `paintCardRun` vá chip `.stat` và tag `.tag-insert-err` của một thẻ (dùng lại phần tử), `noteText` cho
+  ghi chú khung thu gọn (`· lỗi insert 12`). `client/js/main.js`: `state.runLive` theo `progress`/`plan`, `liveCards()` gọi
+  `paintRunInfo()` (`views.js` → `process.js`/`canvas.js`), xóa khi chạy xong. Hai view vẽ chip qua `paintCardRun` trong
+  `decorate` (Sơ đồ: thẻ tạo lại sau cull cũng đúng). `client/js/results.js`: `showInsertErrorsFor(nodeId)`, hàng nhóm có
+  `data-node`, `.current`. `app.css`; `docs/ui-design-system.md` §6.4; `docs/workflow-schema.md` (`byStep`).
+- Test: `test/run.test.js` (`insert progress events and the result carry byStep counts per record step`: mỗi sự kiện tổng theo
+  bước = theo sObject, kết quả cuối), `test/sf.test.js` (inserter đếm `byStep`, con bị bỏ vì cha lỗi tính cho bước con, bản ghi
+  không có `nodeId`). Hash vàng không đổi. Smoke `flowProductivity` bước D.
+- Khác thiết kế: bấm tag khi insert còn chạy chỉ hiện toast `Nhóm lỗi hiện ở tab "Lỗi insert" khi insert xong.` (nhóm lỗi chỉ có
+  trong kết quả cuối). Tag trên Sơ đồ có `tabindex="-1"` như badge (một điểm Tab cho cây); ở Quy trình là nút Tab tới được.
+  Trên thẻ Record, chip ước tính (H) và chip số liệu là cùng một chỗ (`paintCardRun`), không phải hai phần tử.

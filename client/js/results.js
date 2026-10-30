@@ -236,6 +236,22 @@ function render() {
   body.replaceChildren(tabs, content);
 }
 
+/**
+ * Insert-error tag of a card (design 0012 D): the "Lỗi insert" tab, its first group of step
+ * `nodeId` highlighted (`.current`) and focused. A step whose groups are past MAX_ERROR_GROUPS
+ * only opens the tab.
+ */
+export function showInsertErrorsFor(nodeId) {
+  if (!(state.result?.insert?.errorsTotal ?? state.result?.insert?.errors?.length)) return;
+  activeTab = ERRORS_TAB;
+  render();
+  const row = body.querySelector(`.error-groups tr[data-node="${CSS.escape(nodeId)}"]`);
+  if (!row) return;
+  row.classList.add('current');
+  row.focus({ preventScroll: true });
+  row.scrollIntoView({ block: 'nearest' });
+}
+
 /** "📌 giữ seed": fills the Seed field; the input event updates the phone's "Seed n" chip. */
 function keepSeed(seed) {
   const input = document.getElementById('seed');
@@ -275,6 +291,7 @@ function errorGroupsView(ins) {
       h('tbody', {},
         groups.map((g) => h('tr', {
           class: g.nodeId ? 'clickable' : '',
+          'data-node': g.nodeId,
           role: g.nodeId ? 'button' : null,
           tabindex: g.nodeId ? '0' : null,
           title: g.nodeId ? 'Bấm để chọn bước' : '',

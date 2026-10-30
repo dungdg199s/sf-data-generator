@@ -86,6 +86,27 @@ test('org target emits plan before insert progress; the insert gets the same rec
   assert.equal(Object.keys(r.insert.ids).length, r.records.length);
 });
 
+test('insert progress events and the result carry byStep counts per record step (0012 D)', async () => {
+  // Every third Contact fails; nothing else does.
+  let k = 0;
+  const client = fakeClient({ fail: (_r, sobject) => sobject === 'Contact' && ++k % 3 === 0 });
+  const run = createRun(accCon(300, 2), { seed: 4, now: NOW });
+  const { events, end } = await drive({ run, target: 'dev', sfClient: client });
+  const ins = events.filter((e) => e.phase === 'insert');
+  assert.ok(ins.length > 1);
+  for (const e of ins) {
+    // Same totals by step as by sObject (a = Account, c = Contact), growing as the insert goes.
+    assert.deepEqual(Object.keys(e.byStep).sort(), Object.keys(e.byStep).length === 1 ? ['a'] : ['a', 'c']);
+    assert.equal(e.byStep.a.inserted + e.byStep.a.failed, e.bySobject.Account.inserted + e.bySobject.Account.failed);
+    assert.equal((e.byStep.c?.inserted ?? 0) + (e.byStep.c?.failed ?? 0), e.bySobject.Contact.inserted + e.bySobject.Contact.failed);
+  }
+  const last = ins.at(-1).byStep;
+  assert.deepEqual(last, { a: { inserted: 300, failed: 0 }, c: { inserted: 400, failed: 200 } });
+  assert.deepEqual(end.result.insert.byStep, last);
+  // Events carry copies: an early event is not rewritten by later batches.
+  assert.ok(ins[0].byStep.a.inserted < 300 || ins[0].byStep.c === undefined || ins[0].byStep.c.inserted < 400);
+});
+
 test('cancel during insert emits done with cancelled true and the exact counts', async () => {
   const controller = new AbortController();
   const client = fakeClient({ gate: async (n) => { if (n === 3) controller.abort(); } });

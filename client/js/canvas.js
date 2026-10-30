@@ -15,13 +15,14 @@ import { h, icoTile } from './dom.js';
 import { state, subscribe, select, nodeType, stepById, setCollapsed } from './store.js';
 import { layout, START_ID } from './layout.js';
 import {
-  stepSummary, stepAlias, statChip, stepLabel, addPointLabel, issuesByStep, innerIssues, innerCount, emptySlotLabel,
-  estimateChip, startEstimate,
+  stepSummary, stepAlias, stepLabel, addPointLabel, issuesByStep, innerIssues, innerCount, emptySlotLabel,
+  startEstimate,
 } from './summary.js';
 import * as ops from './ops.js';
 import { openSheet } from './inspector.js';
 import { openAddMenu, openStepMenu } from './menus.js';
 import { refTargetId } from './ref-target.js';
+import { paintCardRun, resultStale, noteText } from './run-cards.js';
 
 const SVG = 'http://www.w3.org/2000/svg';
 const ZOOM_MIN = 0.1;
@@ -147,7 +148,7 @@ function render() {
   if (!active()) return;
   const focused = root.contains(document.activeElement) && !document.activeElement.closest('.popup') ? document.activeElement : null;
   const focusKey = focused?.closest('[data-key]')?.dataset.key ?? null;
-  staleStats = state.lastRunSteps !== null && state.lastRunSteps !== JSON.stringify(state.workflow.steps);
+  staleStats = resultStale();
   lay = layout(state.workflow.steps ?? [], { slotsOf: (type) => nodeType(type)?.slots ?? [], collapsed: state.collapsed });
   buildItems();
   lines.setAttribute('d', lay.edges.map((p) => `M${p[0]} ${p[1]}${pointsTail(p)}`).join(''));
@@ -328,17 +329,11 @@ function cardEl(n) {
   const type = nodeType(step.type);
   const alias = stepAlias(step);
   const summary = stepSummary(step);
-  // Design 0012 H: a Record card shows the estimate until a run (and again once the result is stale).
-  const est = !state.result || staleStats ? estimateChip(step) : null;
-  const chip = !est && state.result ? statChip(step, state.result.stats?.byStep) : null;
   const head = n.kind === 'frame';
   const parts = {
     type: h('span', { class: 'type' }, icoTile(), h('span', { class: 'type-label' }, typeLabel(step))),
     alias: alias ? h('span', { class: 'alias', title: alias }, alias) : null,
     sum: h('span', { class: `sum${head ? '' : ' dg-sum'}`, title: summary }, summary),
-    chip: est
-      ? h('span', { class: 'stat est', title: est.title }, est.text)
-      : chip ? h('span', { class: `stat${staleStats ? ' stale' : ''}`, title: staleStats ? 'Số liệu của lần xem trước gần nhất; workflow đã đổi sau đó.' : 'Số liệu của lần xem trước gần nhất.' }, chip) : null,
     badges: h('span', { class: 'badges' }),
     off: step.disabled ? h('span', { class: 'tag-off', title: 'Bước này đang tắt: không chạy và không được kiểm tra. Ctrl+/ để bật lại.' }, 'Đã tắt') : null,
     sample: type?.needsOrg && !state.org && !step.disabled ? h('span', { class: 'tag-sample', title: 'Chưa chọn org: Xem trước dùng bản ghi mẫu (Id giả). Chọn org ở thanh trên để đọc dữ liệu thật.' }, 'chưa chọn org') : null,
@@ -361,14 +356,16 @@ function cardEl(n) {
     onclick: (e) => cardClick(e, step.id),
   };
   // A frame header is one row, like a Quy trình card; other cards have three short rows.
-  if (head) return h('div', attrs, parts.type, parts.alias, parts.sum, parts.chip, parts.badges, parts.off, parts.sample, parts.menu, parts.toggle);
+  // The stat chip and the insert-error tag are added by paintCardRun (decorateCard): before the
+  // badges of a frame header, after the note in the tag row of other cards.
+  if (head) return h('div', attrs, parts.type, parts.alias, parts.sum, parts.badges, parts.off, parts.sample, parts.menu, parts.toggle);
   // The alias goes on the summary row, so the type label keeps the first row ("Query (đọc org)").
   return h(
     'div',
     attrs,
     h('div', { class: 'dg-row' }, parts.type, parts.badges, parts.menu, parts.toggle),
     h('div', { class: 'dg-row' }, parts.alias, parts.sum),
-    h('div', { class: 'dg-tags' }, parts.note, parts.chip, parts.off, parts.sample),
+    h('div', { class: 'dg-tags' }, parts.note, parts.off, parts.sample),
   );
 }
 
@@ -477,8 +474,28 @@ function decorateCard(card) {
     const parts = [`${note.dataset.count} bước bên trong`];
     if (inner.errors) parts.push(`${inner.errors} lỗi`);
     else if (inner.warnings) parts.push(`${inner.warnings} cảnh báo`);
-    note.textContent = parts.join(' · ');
+    note.dataset.base = parts.join(' · ');
   }
+  paintRun(card);
+}
+
+/** Chip, insert-error tag and the collapsed note's insert count of one card (design 0012 D, H). */
+function paintRun(card) {
+  const step = card.dataset.id === START_ID ? null : stepById(card.dataset.id);
+  if (!step) return;
+  const tags = card.querySelector(':scope > .dg-tags');
+  const note = card.querySelector('.dg-note[data-count]');
+  paintCardRun(card, step, tags
+    ? { stale: staleStats, parent: tags, before: note ? note.nextSibling : tags.firstChild, tabindex: '-1' }
+    : { stale: staleStats, parent: card, before: card.querySelector(':scope > .badges'), tabindex: '-1' });
+  if (note) note.textContent = noteText(note.dataset.base ?? '', step);
+}
+
+/** Progress of a run (design 0012 D): patch the chip and tag of every card made, nothing else. */
+export function paintRunInfo() {
+  if (!lay || state.view !== 'canvas') return;
+  staleStats = resultStale();
+  for (const el of els.values()) if (el.classList.contains('step-card')) paintRun(el);
 }
 
 function decorateSlot(el) {

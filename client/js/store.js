@@ -34,6 +34,7 @@ export const state = {
   lastRunKey: null,
   lastRunOrg: null, // org the Query steps of the last preview read ('' = sample rows)
   lastRunSteps: null, // JSON of steps at the last run, to dim stale stat chips
+  runLive: null, // counts of the run going on, for the cards (design 0012 D, client/js/run-cards.js)
   collapsed: loadCollapsed(), // ids of containers shown collapsed (UI only, no undo)
   view: 'process', // 'process' | 'canvas' (views.js; UI only, no undo)
 };

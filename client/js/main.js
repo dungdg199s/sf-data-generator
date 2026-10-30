@@ -9,7 +9,7 @@ import {
 } from './store.js';
 import { migrateV1, describeReport, reportIsEmpty } from '/shared/migrate-v1.js';
 import { malformedSteps, allSteps } from '/shared/workflow-tree.js';
-import { initViews, focusSelected, openAddMenuAtDefault, paletteDragStart, paletteDragEnd, toggleView, setView, VIEWS } from './views.js';
+import { initViews, focusSelected, openAddMenuAtDefault, paletteDragStart, paletteDragEnd, toggleView, setView, VIEWS, paintRunInfo } from './views.js';
 import { openStepMenu } from './menus.js';
 import * as ops from './ops.js';
 import { initInspector, openField, openSheet, closeSheet } from './inspector.js';
@@ -567,9 +567,11 @@ async function preview({ seed, refresh = false, auto = false }) {
           r.generated = ev.generated;
           r.bySobject = ev.bySobject;
           r.render();
+          liveCards({ phase: 'generate', byStep: ev.byStep ?? {} });
         }
       },
     });
+    liveCards(null);
     acceptResult(result, workflow);
     if (result.cancelled) toast('Đã dừng xem trước.');
     return !result.cancelled;
@@ -581,9 +583,20 @@ async function preview({ seed, refresh = false, auto = false }) {
     runFailed(e);
     return false;
   } finally {
+    liveCards(null);
     setRunning(null);
     endProgress();
   }
+}
+
+/**
+ * Live counts on the cards (design 0012 D): `info` = state.runLive (see run-cards.js), null once
+ * the run ended. Only the chips and tags are patched.
+ */
+function liveCards(info) {
+  if (!info && !state.runLive) return;
+  state.runLive = info;
+  paintRunInfo();
 }
 
 /** Shows a finished run and remembers what produced it (downloads regenerate from this snapshot). */
@@ -666,14 +679,19 @@ async function insertRun(base) {
         else if (ev.type === 'plan') {
           r.phase = 'insert';
           r.insertStart = Date.now();
-        } else if (ev.type === 'progress' && ev.phase === 'generate') r.generated = ev.generated;
-        else if (ev.type === 'progress' && ev.phase === 'insert') {
+          liveCards({ phase: 'insert', base, insertByStep: {} });
+        } else if (ev.type === 'progress' && ev.phase === 'generate') {
+          r.generated = ev.generated;
+          liveCards({ phase: 'generate', byStep: ev.byStep ?? {} });
+        } else if (ev.type === 'progress' && ev.phase === 'insert') {
           r.phase = 'insert';
           Object.assign(r, { inserted: ev.inserted, failed: ev.failed, bySobject: ev.bySobject });
+          liveCards({ phase: 'insert', base, insertByStep: ev.byStep ?? {} });
         }
         if (ev.type !== 'start') r.render();
       },
     });
+    liveCards(null);
     acceptResult(result, workflow);
     const ins = result.insert;
     // A later Insert with the same seed would create the same data again: the confirmation says so.
@@ -709,6 +727,7 @@ async function insertRun(base) {
       runFailed(e);
     }
   } finally {
+    liveCards(null);
     window.removeEventListener('beforeunload', leaveGuard);
     setRunning(null);
     endProgress();

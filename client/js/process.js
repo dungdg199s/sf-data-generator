@@ -12,14 +12,15 @@ import { h, icoTile } from './dom.js';
 import { state, subscribe, select, nodeType, fieldType, slotKeys, stepById, setCollapsed, currentScope } from './store.js';
 import { allSteps, slotList } from '/shared/workflow-tree.js';
 import {
-  stepSummary, stepAlias, statChip, stepLabel, addPointLabel, issuesByStep, innerIssues, innerCount, emptySlotLabel,
-  estimateChip, startEstimate,
+  stepSummary, stepAlias, stepLabel, addPointLabel, issuesByStep, innerIssues, innerCount, emptySlotLabel,
+  startEstimate,
 } from './summary.js';
 import * as ops from './ops.js';
 import { openField, openSheet } from './inspector.js';
 import { openAddMenu, openStepMenu } from './menus.js';
 import { START_ID } from './layout.js';
 import { bindRefTarget, refSourceStep, sourceTitle, refTargetId } from './ref-target.js';
+import { paintCardRun, resultStale, noteText } from './run-cards.js';
 
 const MAX_FIELD_CHIPS = 12;
 
@@ -75,7 +76,7 @@ function render() {
     renderFrame = 0;
   }
   if (!active()) return;
-  staleStats = state.lastRunSteps !== null && state.lastRunSteps !== JSON.stringify(state.workflow.steps);
+  staleStats = resultStale();
   const scroll = root.scrollTop;
   const hadFocus = root.contains(document.activeElement) && !document.activeElement.closest('.popup');
   const steps = state.workflow.steps ?? [];
@@ -166,10 +167,6 @@ function renderStep(step, level, at) {
   const collapsed = container && state.collapsed.has(step.id);
   const alias = stepAlias(step);
   const summary = stepSummary(step);
-  // Design 0012 H: a Record card shows the estimate until a run (and again once the result is stale).
-  const est = !state.result || staleStats ? estimateChip(step) : null;
-  const chip = !est && state.result ? statChip(step, state.result.stats?.byStep) : null;
-  const stale = staleStats;
   const showDetails = !container && detailsOpen.has(step.id);
 
   const card = h(
@@ -194,8 +191,7 @@ function renderStep(step, level, at) {
     h('span', { class: 'type' }, icoTile(), type?.label ?? step.type),
     alias ? h('span', { class: 'alias' }, alias) : null,
     h('span', { class: 'sum', title: summary }, summary),
-    est ? h('span', { class: 'stat est', title: est.title }, est.text) : null,
-    chip ? h('span', { class: `stat${stale ? ' stale' : ''}`, title: stale ? 'Số liệu của lần xem trước gần nhất; workflow đã đổi sau đó.' : 'Số liệu của lần xem trước gần nhất.' }, chip) : null,
+    // The stat chip and the insert-error tag go here (paintCardRun in decorate).
     h('span', { class: 'badges' }),
     step.disabled ? h('span', { class: 'tag-off', title: 'Bước này đang tắt: không chạy và không được kiểm tra. Ctrl+/ để bật lại.' }, 'Đã tắt') : null,
     type?.needsOrg && !state.org && !step.disabled ? h('span', { class: 'tag-sample', title: 'Chưa chọn org: Xem trước dùng bản ghi mẫu (Id giả). Chọn org ở thanh trên để đọc dữ liệu thật.' }, 'chưa chọn org') : null,
@@ -272,6 +268,22 @@ function fieldChips(step) {
 
 // ---------- decoration (selection, issues) without rebuilding ----------
 
+/** Chip, insert-error tag and the collapsed note's insert count of one card (design 0012 D, H). */
+function paintRun(card, note = card.parentElement.querySelector(':scope > .collapsed-note')) {
+  const id = card.dataset.id;
+  const step = id === START_ID ? null : stepById(id);
+  if (!step) return;
+  paintCardRun(card, step, { stale: staleStats, parent: card, before: card.querySelector(':scope > .badges') });
+  if (note) note.textContent = noteText(note.dataset.base ?? '', step);
+}
+
+/** Progress of a run (design 0012 D): patch every card's chip and tag, nothing else. */
+export function paintRunInfo() {
+  if (!root || !active()) return;
+  staleStats = resultStale();
+  for (const card of root.querySelectorAll('.step-card')) paintRun(card);
+}
+
 function decorate() {
   if (!root) return;
   const issues = issuesByStep();
@@ -319,8 +331,9 @@ function decorate() {
       const parts = [`${note.dataset.count} bước bên trong`];
       if (inner.errors) parts.push(`${inner.errors} lỗi`);
       else if (inner.warnings) parts.push(`${inner.warnings} cảnh báo`);
-      note.textContent = parts.join(' · ');
+      note.dataset.base = parts.join(' · ');
     }
+    paintRun(card, note);
     // Field chips and slots of this step.
     const fieldIssues = [...own.errors, ...own.warnings];
     for (const chip of stepEl.querySelectorAll(':scope > .details .field-chip')) {

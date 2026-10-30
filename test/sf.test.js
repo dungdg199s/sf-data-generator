@@ -56,6 +56,31 @@ test('insertRecords inserts parents before children and cascades failures', asyn
   assert.deepEqual(res.errors.map((e) => e.ref), ['acc#2', 'con#2']);
 });
 
+test('the inserter counts byStep; children skipped because their parent failed count for their own step (0012 D)', async () => {
+  const client = {
+    async create(_target, _sobject, recs) {
+      return recs.map((r, i) => (r.Name === 'bad' ? { success: false, errors: [{ statusCode: 'X', message: 'nope' }] } : { success: true, id: `id${i}${r.Name ?? r.LastName}` }));
+    },
+  };
+  const records = [
+    { ref: 'acc#1', sobject: 'Account', nodeId: 'a', fields: { Name: 'ok' } },
+    { ref: 'acc#2', sobject: 'Account', nodeId: 'a', fields: { Name: 'bad' } },
+    { ref: 'con#1', sobject: 'Contact', nodeId: 'c', fields: { LastName: 'x', AccountId: { $ref: 'acc#1' } } },
+    { ref: 'con#2', sobject: 'Contact', nodeId: 'c', fields: { LastName: 'y', AccountId: { $ref: 'acc#2' } } },
+    { ref: 'con#3', sobject: 'Contact', nodeId: 'c2', fields: { LastName: 'z', AccountId: { $ref: 'acc#2' } } },
+    { ref: 'x#1', sobject: 'Lead', fields: { LastName: 'no step' } },
+  ];
+  const seen = [];
+  const res = await insertRecords(client, 'dev', records, { onProgress: () => {} });
+  const inserter = createInserter(client, 'dev', { onBatch: (s) => seen.push(JSON.parse(JSON.stringify(s.byStep))) });
+  for (const r of records) await inserter.push(r);
+  const sum = await inserter.end();
+  for (const s of [res, sum]) {
+    assert.deepEqual(s.byStep, { a: { inserted: 1, failed: 1 }, c: { inserted: 1, failed: 1 }, c2: { inserted: 0, failed: 1 } });
+  }
+  assert.deepEqual(seen.at(-1), sum.byStep);
+});
+
 test('mapDescribe picks sensible defaults and skips non-createable fields', () => {
   const { fields } = mapDescribe({
     name: 'Contact',

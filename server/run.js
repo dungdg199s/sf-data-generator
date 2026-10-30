@@ -150,6 +150,8 @@ export async function executeRun({
     failed: s.failed,
     total,
     bySobject: Object.fromEntries(Object.entries(bySobject).map(([so, t]) => [so, { inserted: s.bySobject[so]?.inserted ?? 0, failed: s.bySobject[so]?.failed ?? 0, total: t }])),
+    // Design 0012 D: per Record step (only steps with records sent or skipped so far).
+    byStep: Object.fromEntries(Object.entries(s.byStep ?? {}).map(([id, c]) => [id, { inserted: c.inserted, failed: c.failed }])),
   });
   const inserter = createInserter(sfClient, target, {
     ...insertOptions,
@@ -218,7 +220,7 @@ export async function executeRun({
     result.cancelled = true;
     if (target) {
       const t = result.stats.total;
-      result.insert = { inserted: 0, failed: 0, errorsTotal: 0, errors: [], errorGroups: [], errorGroupsOther: null, ids: {}, bySobject: {}, notSent: t, cancelled: true, stopped: null, total: t };
+      result.insert = { inserted: 0, failed: 0, errorsTotal: 0, errors: [], errorGroups: [], errorGroupsOther: null, ids: {}, bySobject: {}, byStep: {}, notSent: t, cancelled: true, stopped: null, total: t };
     }
     return done(result);
   }

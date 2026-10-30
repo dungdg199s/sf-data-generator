@@ -44,6 +44,7 @@
 //      I — hovering / focusing a variable or Lookup chip outlines the source card (.is-ref-target).
 //      C — "Bọc trong Lặp qua từng bản ghi" on con: Lặp each over accs, [Đổi] re-points the Lookup
 //      H — estimate chips before a run (≈ on con, total and limit on Start, over-limit tag)
+//      D — a mocked insert (route NDJSON with byStep): live "insert n/N" chip and "lỗi 3" tag, the tag opens the group
 // The flows run in parallel, one browser context each (independent storage): see SKILL.md.
 // Usage: node .claude/skills/smoke-test/smoke.cjs [screenshotDir]
 // Needs Playwright with a Chromium build available (require('playwright')).
@@ -1156,6 +1157,51 @@ async function flowProductivity() {
   await page.fill('#inspector input[data-key="maxRecords"]', '1000');
   const over = await page.waitForSelector('.start-card .tag-est-over', { timeout: 3000 }).catch(() => null);
   check(over && /quá giới hạn 1\.000 mỗi lần chạy/.test(await over.getAttribute('title')), 'no "Ước tính vượt giới hạn" tag on the Start card');
+
+  // D: an insert into the mocked org `dev`, answered by the route itself (never the server nor an org): its NDJSON
+  // has insert progress with byStep. A MutationObserver records the texts the live chip and tag took on the cards.
+  await page.route('**/api/run', (r) => {
+    const body = r.request().postDataJSON();
+    if (!body?.target) return r.continue(); // the preview before the confirmation: the real server, no Query
+    const byStep = { acc: { inserted: 5, failed: 0 }, con: { inserted: 4, failed: 3 } };
+    const group = { sobject: 'Contact', nodeId: 'con', field: 'fields.LastName', message: 'REQUIRED_FIELD_MISSING: x', count: 3, refs: ['con#1', 'con#2', 'con#3'] };
+    const result = {
+      runId: 'rmock0012', seed: body.seed, now: body.now, warnings: [], records: [], samples: {},
+      stats: { total: 12, bySobject: { Account: 5, Contact: 7 }, byStep: { loopAcc: { runs: 1, records: 12, iterations: 5 }, acc: { runs: 5, records: 5 }, loopCon: { runs: 5, records: 7, iterations: 7 }, con: { runs: 7, records: 7 } }, durationMs: 1, previewRows: 200, truncated: false },
+      insert: {
+        inserted: 9, failed: 3, errorsTotal: 3, total: 12, notSent: 0, cancelled: false, stopped: null, ids: {},
+        bySobject: { Account: { inserted: 5, failed: 0 }, Contact: { inserted: 4, failed: 3 } }, byStep,
+        errors: group.refs.map((ref) => ({ ref, sobject: 'Contact', nodeId: 'con', field: 'fields.LastName', message: group.message })), errorGroups: [group], errorGroupsOther: null,
+      },
+    };
+    const events = [
+      { type: 'start', runId: 'rmock0012', seed: body.seed, now: body.now, warnings: [] },
+      { type: 'plan', total: 12, bySobject: { Account: 5, Contact: 7 }, apiCalls: 2 },
+      { type: 'progress', phase: 'insert', inserted: 9, failed: 3, total: 12, bySobject: { Account: { inserted: 5, failed: 0, total: 5 }, Contact: { inserted: 4, failed: 3, total: 7 } }, byStep },
+      { type: 'done', result },
+    ];
+    return r.fulfill({ status: 200, contentType: 'application/x-ndjson', body: events.map((e) => `${JSON.stringify(e)}\n`).join('') });
+  });
+  await page.click('#sample-items .palette-item:has-text("Account + Contact")');
+  await page.waitForSelector('.step-card[data-id="con"] .stat.est');
+  await page.evaluate(() => {
+    window.smokeLive = [];
+    new MutationObserver((ms) => {
+      // m.target: a replaced text node has no parent any more when the callback runs.
+      for (const m of ms) for (const n of m.addedNodes) if (n.nodeType === 3 && m.target.matches?.('.stat, .tag-insert-err')) window.smokeLive.push(`${m.target.closest('.step-card').dataset.id}:${n.data}`);
+    }).observe(document.getElementById('process'), { subtree: true, childList: true });
+  });
+  await page.click('#btn-insert');
+  await page.click('dialog[open] .actions button.danger');
+  await page.waitForFunction(() => document.getElementById('btn-stop').hidden && !document.getElementById('btn-preview').disabled && document.querySelector('.step-card[data-id="con"] .tag-insert-err'), null, { timeout: 5000 }).catch(() => {});
+  const live = await page.evaluate(() => window.smokeLive);
+  check(live.some((t) => /^con:insert 0\/\d+$/.test(t)) && live.some((t) => /^con:insert 4\/\d+$/.test(t)) && live.includes('con:lỗi 3'), `live insert chips / tag: ${live.join(' | ')}`);
+  const tag = '.step-card[data-id="con"] .tag-insert-err';
+  check(await page.getAttribute(tag, 'aria-label') === '3 bản ghi của bước này insert lỗi. Bấm để xem nhóm lỗi.', `insert-error tag: ${await page.getAttribute(tag, 'aria-label').catch(() => null)}`);
+  check(!(await page.$('.step-card[data-id="acc"] .tag-insert-err')), 'acc (no failure) has an insert-error tag');
+  await page.click(tag);
+  const row = await page.evaluate(() => ({ tab: document.querySelector('.tabs .tab-issues.active') !== null, current: document.activeElement?.matches('table.error-groups tr.current[data-node="con"]') }));
+  check(row.tab && row.current, `insert-error tag click: ${JSON.stringify(row)}`);
   await page.context().close();
 }
 

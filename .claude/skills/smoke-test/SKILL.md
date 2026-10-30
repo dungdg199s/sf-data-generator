@@ -175,6 +175,11 @@ the others; never add a fixed `waitForTimeout`.
     estimate chip `≈ 2.000 bản ghi` (title "khoảng 0–2.000"), the Start card ends with `≈ 2.000 bản ghi · ≤ 50.000`, and a limit of
     1 000 adds the `.tag-est-over` tag ("quá giới hạn 1.000 mỗi lần chạy"). Flow 15 waits for `.stat:not(.est)` after Ctrl+Enter
     (the estimate chip is there before the run); flow 14 picks "Lặp qua từng bản ghi" by exact label (not "Bọc trong Lặp qua…").
+    D: the "Account + Contact" sample inserted into the mocked org `dev`: the insert `/api/run` (with a `target`) is answered by
+    the route with NDJSON (`start`, `plan`, `progress` insert with `byStep`, `done`), never by the server or an org; the preview
+    before the confirmation goes to the server. A MutationObserver on `#process` records the texts the chips take: `con` shows
+    `insert 0/N` then `insert 4/N` and the tag `lỗi 3`; after the run the tag stays (aria-label "3 bản ghi của bước này insert lỗi.
+    Bấm để xem nhóm lỗi."), `acc` has none, and clicking it opens "Lỗi insert" with the `con` group row `.current` and focused.
 
 It also fails on any page error or a run over 12 s (typically ~5.5–6.5 s since the flows run in parallel, flow 14 included, ~7–8.5 s with flow 15 on a 4-CPU machine; ~10 s before;
 ~7–8 s with two CPU-bound processes running alongside).

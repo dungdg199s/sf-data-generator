@@ -13,6 +13,8 @@
 // (aliases a Lookup points at, preview rows); `errors` keeps the first MAX_ERRORS_REPORTED
 // records while `errorGroups` counts every failure (grouped by message pattern — Ids and quoted
 // values masked — at most MAX_ERROR_GROUPS groups, the rest summed in `errorGroupsOther`).
+// `bySobject` and `byStep` (design 0012 D: by the record's `nodeId`, the Record step) count
+// inserted / failed records; both are bounded by the workflow, not by the record count.
 //
 // Stopping: `signal` (Dừng, closed connection) is checked before each call, and the call in flight
 // is always awaited, so `inserted` is exact. Fail fast: when the first FAIL_FAST_BATCHES calls of
@@ -78,9 +80,10 @@ function describeFailure(res, record) {
  * @param window  records gathered before inserting (waves run inside a window)
  * @param keepId  (ref) → keep its Id (and failure) after its window: later records may point at it
  * @param signal  AbortSignal: stop before the next call
- * @param onBatch ({ inserted, failed, bySobject }) after every call (and skipped records)
+ * @param onBatch ({ inserted, failed, bySobject, byStep }) after every call (and skipped records)
  * → { push(record): Promise<void>, end(): Promise<summary>, stopped (getter) }
- *   summary: { inserted, failed, errorsTotal, errors, errorGroups, errorGroupsOther, ids, bySobject, notSent, cancelled, stopped }
+ *   summary: { inserted, failed, errorsTotal, errors, errorGroups, errorGroupsOther, ids, bySobject, byStep, notSent, cancelled, stopped }
+ *   byStep: { <nodeId>: { inserted, failed } } (failed includes children skipped because their parent failed)
  */
 export function createInserter(client, target, {
   window = INSERT_WINDOW, keepId = () => true, signal, onBatch, failFast = FAIL_FAST_BATCHES, maxErrors = MAX_ERRORS_REPORTED, batchSize = BATCH_SIZE,
@@ -91,6 +94,7 @@ export function createInserter(client, target, {
   const groups = new Map();
   const otherGroups = { groups: 0, count: 0, keys: new Set() }; // beyond MAX_ERROR_GROUPS
   const bySobject = {}; // sObject → { inserted, failed }
+  const byStep = {}; // record step id → { inserted, failed } (design 0012 D)
   const firstCalls = new Map(); // sObject → { calls, anySuccess } (fail fast)
   let errorsTotal = 0;
   let inserted = 0;
@@ -100,11 +104,13 @@ export function createInserter(client, target, {
   let buffer = [];
 
   const counts = (sobject) => (bySobject[sobject] ??= { inserted: 0, failed: 0 });
-  const progress = () => onBatch?.({ inserted, failed: errorsTotal, bySobject });
+  const stepCounts = (record) => (record.nodeId ? (byStep[record.nodeId] ??= { inserted: 0, failed: 0 }) : { inserted: 0, failed: 0 });
+  const progress = () => onBatch?.({ inserted, failed: errorsTotal, bySobject, byStep });
 
   function fail(record, message, extra = {}) {
     errorsTotal++;
     counts(record.sobject).failed++;
+    stepCounts(record).failed++;
     const e = { ref: record.ref, sobject: record.sobject, ...(record.nodeId ? { nodeId: record.nodeId } : {}), message, ...extra };
     if (errors.length < maxErrors) errors.push(e);
     const key = `${record.sobject}\u0000${record.nodeId ?? ''}\u0000${extra.field ?? ''}\u0000${errorPattern(message)}`;
@@ -198,6 +204,7 @@ export function createInserter(client, target, {
               inserted++;
               ok++;
               counts(sobject).inserted++;
+              stepCounts(r).inserted++;
             } else {
               windowFailed.add(r.ref);
               const f = describeFailure(res, r);
@@ -252,6 +259,7 @@ export function createInserter(client, target, {
         errorGroupsOther: otherGroups.count ? { groups: otherGroups.groups, count: otherGroups.count } : null,
         ids: Object.fromEntries(idByRef),
         bySobject,
+        byStep,
         notSent,
         cancelled,
         stopped,
