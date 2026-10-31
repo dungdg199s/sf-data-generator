@@ -139,6 +139,8 @@ phạm vi (`analyzeScope` trong `shared/scope.js`) chỉ đọc hai khóa này, 
 Option nhận biến khai báo `vars: "template"` (chèn `{{path}}`), `vars: "path"` (cả ô là một đường dẫn, như `left`) hoặc
 `vars: "number"` (0013 B, cho option `kind: "integer"`/`"number"`: giá trị là số, hoặc chuỗi đúng **một** token `{{path}}`;
 validate kiểm tra định dạng, phạm vi như template và `valueType` của biến: `number`/`any` hợp lệ, `string` cảnh báo, kiểu khác lỗi).
+Đổi alias, tên biến lặp hay tên field (`shared/workflow-tree.js`) kéo theo mọi option có `vars`, kể cả `number`, `right` của Rẽ
+nhánh và `filterValue` của Lặp `each`; biến của chính bước Lặp trong ô số lần (đọc ở ngoài thân) không đổi theo tên biến lặp mới.
 Option chọn một nguồn có `kind: "ref"` (thêm `accepts`, ví dụ `{ "pool": true }`, nếu không phải mọi bước cha đều hợp).
 Validate kiểm tra mọi option có hai khóa này; UI gắn bảng chọn biến theo `vars`.
 

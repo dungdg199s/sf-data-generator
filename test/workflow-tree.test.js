@@ -565,3 +565,62 @@ test('Ctrl+D inside a loop: the copy does not take the name of the enclosing loo
   const { steps: [copy] } = cloneSteps([at.step], { ids: collectIds(wf), aliases, catalog });
   assert.equal(copy.config.alias, 'row3');
 });
+
+// ---------- design 0013: number variables, branch right, each filterValue ----------
+
+const CAT = scopeCatalog();
+const loop13 = (id, config, body = []) => ({ id, type: 'loop', config, slots: { body } });
+const q13 = (id, alias, fields) => ({ id, type: 'query', config: { sobject: 'Account', alias, fields } });
+const num13 = (name) => ({ name, type: 'number', options: {} });
+
+test('renameAlias follows number variables, branch right and each filterValue', () => {
+  const make = () => tree([
+    q13('q', 'accs', ['Id', 'N']),
+    q13('q2', 'cons', ['Id', 'AccountId']),
+    loop13('la', { mode: 'each', from: 'accs', itemAlias: 'acc', alias: 'loop' }, [
+      loop13('lc', { count: '{{acc.N}}', alias: 'k' }),
+      loop13('lr', { mode: 'range', min: 1, max: ' {{ acc.N }} ', alias: 'r' }),
+      loop13('le', { mode: 'each', from: 'cons', itemAlias: 'con', alias: 'e', filter: 'compare', filterField: 'AccountId', filterValue: '{{acc.Id}}' }),
+      { id: 'b', type: 'branch', config: { kind: 'compare', left: 'acc.N', op: 'gt', right: '{{acc.N}} x' }, slots: { true: [], false: [] } },
+    ]),
+  ]);
+  for (const catalog of [CAT, undefined]) {
+    const wf = make();
+    const n = renameAlias(wf.steps, 'acc', 'account', { catalog });
+    const [lc, lr, le, b] = wf.steps[2].slots.body;
+    assert.deepEqual([lc.config.count, lr.config.max, le.config.filterValue, b.config.right, b.config.left], ['{{account.N}}', ' {{ account.N }} ', '{{account.Id}}', '{{account.N}} x', 'account.N'], catalog ? 'catalogue' : 'legacy');
+    assert.equal(n, 5);
+    assert.equal(lr.config.min, 1, 'a number is left alone');
+  }
+});
+
+test('renameField follows number variables and each filter values', () => {
+  const wf = tree([
+    r('a', 'acc', [num13('N'), num13('Code')]),
+    loop13('le', { mode: 'each', from: 'acc', itemAlias: 'it', alias: 'e' }, [
+      loop13('lc', { count: '{{it.N}}', alias: 'k' }),
+    ]),
+    loop13('lf', { mode: 'each', from: 'acc', itemAlias: 'it2', alias: 'f', filter: 'compare', filterField: 'N', filterValue: '{{acc.N}}' }),
+    loop13('lr', { mode: 'range', min: '{{acc.N}}', max: 9, alias: 'r' }),
+  ]);
+  const res = renameField(wf, 'a', 'N', 'Size', { catalog: CAT });
+  assert.equal(res.count, 3);
+  assert.deepEqual([wf.steps[1].slots.body[0].config.count, wf.steps[2].config.filterValue, wf.steps[3].config.min], ['{{it.Size}}', '{{acc.Size}}', '{{acc.Size}}']);
+  assert.deepEqual(res.places.map((p) => `${p.nodeId}.${p.field}`).sort(), ['lc.count', 'lf.filterValue', 'lr.min']);
+});
+
+test('setStepAlias on a loop does not rename its own count variable from an outer loop', () => {
+  // The inner loop shadows `loop` inside its body; its own count is read outside it (outer loop).
+  const wf = tree([loop13('outer', { count: 3, alias: 'loop' }, [
+    loop13('inner', { count: '{{loop.index}}', alias: 'loop' }, [r('x', 'x', [{ name: 'T', type: 'template', options: { template: '{{loop.index}}' } }])]),
+  ])]);
+  const memo = new Map();
+  assert.equal(setStepAlias(wf, 'inner', 'k', { memo, slotKeys, catalog: CAT }), true);
+  const inner = wf.steps[0].slots.body[0];
+  assert.equal(inner.config.count, '{{loop.index}}', 'the count still reads the outer loop');
+  assert.equal(inner.slots.body[0].config.fields[0].options.template, '{{k.index}}');
+  // Renaming the outer loop moves the inner count along (it is the outer loop's variable).
+  setStepAlias(wf, 'outer', 'o', { memo, slotKeys, catalog: CAT });
+  assert.equal(inner.config.count, '{{o.index}}');
+  assert.equal(inner.slots.body[0].config.fields[0].options.template, '{{k.index}}');
+});

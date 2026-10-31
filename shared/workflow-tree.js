@@ -234,7 +234,10 @@ export function nextId(id, taken) {
 /** A usable alias / loop variable name (same rule as server/workflow/schema.js). */
 export const isAliasName = (name) => typeof name === 'string' && /^[A-Za-z_][A-Za-z0-9_]*$/.test(name) && name !== 'this';
 
-/** Options holding references, without a catalogue: the built-in ones (template, ref, left). */
+/**
+ * Options holding references, without a catalogue: the built-in ones (template, ref, branch
+ * left / right, pick and each-loop from / filterValue, loop counts holding a variable).
+ */
 function legacyReferenceOptions(step) {
   const out = [];
   (step.config?.fields ?? []).forEach((f, fieldIndex) => {
@@ -243,13 +246,16 @@ function legacyReferenceOptions(step) {
       if (typeof f.options[key] === 'string') out.push({ field: `fields.${f.name}`, option: key, mode, stored: f.options[key], fieldIndex, set: (v) => { f.options[key] = v; } });
     }
   });
-  if (step.type === 'branch' && typeof step.config?.left === 'string') {
-    out.push({ field: 'left', option: 'left', mode: 'path', value: step.config.left, set: (v) => { step.config.left = v; } });
+  const keys = [];
+  if (step.type === 'branch') keys.push(['left', 'path'], ['right', 'template']);
+  if (step.type === 'pick') keys.push(['from', 'ref'], ['filterValue', 'template']);
+  if (step.type === 'loop') {
+    // Design 0013: counts may hold one {{path}}; an each loop has a filter value.
+    keys.push(['count', 'number'], ['min', 'number'], ['max', 'number']);
+    if (step.config?.mode === 'each') keys.push(['from', 'ref'], ['filterValue', 'template']);
   }
-  if (step.type === 'pick' || (step.type === 'loop' && step.config?.mode === 'each')) {
-    for (const [key, mode] of step.type === 'pick' ? [['from', 'ref'], ['filterValue', 'template']] : [['from', 'ref']]) {
-      if (typeof step.config?.[key] === 'string') out.push({ field: key, option: key, mode, value: step.config[key], set: (v) => { step.config[key] = v; } });
-    }
+  for (const [key, mode] of keys) {
+    if (typeof step.config?.[key] === 'string') out.push({ field: key, option: key, mode, value: step.config[key], set: (v) => { step.config[key] = v; } });
   }
   return out;
 }
@@ -279,7 +285,7 @@ export function renameInValue(mode, value, from, to) {
 /**
  * Rename a record alias (or a loop variable) inside `steps`: every option holding references
  * (with `catalog` = { nodeTypes, fieldTypes }: options declaring `vars` or `kind: 'ref'`;
- * without it: Lookup `ref`, `template`, branch `left`). `only` (Set of "stepId|field|option")
+ * without it: the built-in options of legacyReferenceOptions). `only` (Set of "stepId|field|option")
  * limits the rename to those options, e.g. the references that resolve to one loop.
  * Returns the number of references changed.
  */
