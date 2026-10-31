@@ -130,3 +130,8 @@ test('addSelectField: field already there is unchanged; subquery, FIELDS(ALL), b
   assert.equal(addSelectField('SELECT Id FROM Account', 'bad field'), null);
   assert.equal(addSelectField('', 'Name'), null);
 });
+
+test('sampleRows: Id and Name keep their shape even when listed as numeric (review of 0013)', () => {
+  const [row] = sampleRows({ sobject: 'Account', fields: ['Id', 'Name', 'NumberOfEmployees'], limit: 1 }, 'accs', { numeric: ['id', 'Name', 'NumberOfEmployees'] });
+  assert.deepEqual(row, { Id: 'mẫu:accs#1', Name: 'Account mẫu 1', NumberOfEmployees: 1 });
+});

@@ -683,3 +683,17 @@ test('POST /api/field-samples and /api/run refuse out-of-range options (no long 
   const issue = (await run.json()).issues[0];
   assert.deepEqual([issue.nodeId, issue.field, issue.option, issue.code], ['a', 'fields.Name', 'maxWords', 'optionRange']);
 });
+
+test('a now outside what a Date holds is a 400 for /api/run, /api/export and /api/field-samples (review of 0013)', async () => {
+  for (const now of [1e20, 8.64e15 + 1]) {
+    const run = await post('/api/run', { workflow: big(), seed: 1, now });
+    assert.equal(run.status, 400);
+    assert.equal((await run.json()).error, 'Tham số now không hợp lệ.');
+    const exp = await post('/api/export', { workflow: big(), seed: 1, now, format: 'json' });
+    assert.equal(exp.status, 400);
+    assert.equal((await exp.json()).error, 'Tham số now không hợp lệ.');
+    const fs = await post('/api/field-samples', { fields: [{ name: 'D', type: 'date', options: {} }], index: 0, seed: 1, now });
+    assert.equal(fs.status, 400);
+    assert.equal((await fs.json()).error, 'Tham số now không hợp lệ.');
+  }
+});

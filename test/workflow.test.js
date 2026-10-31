@@ -1223,3 +1223,116 @@ test('nested each loops with an eq filter over 2 000 × 2 000 rows finish under 
   assert.ok(ms < 2000, `took ${ms.toFixed(0)} ms`);
   console.log(`# nested each 2000 × 2000 with eq filter: ${ms.toFixed(0)} ms`);
 });
+
+// ---------- review of 0013 (server findings) ----------
+
+test('each shuffle with limit 1 costs O(1) per visit: 20 000 visits over a pool of 20 000 (review of 0013)', () => {
+  const w = wf([
+    record('g', 'Contact', 'gen', [{ name: 'N', type: 'number', options: { min: 0, max: 100, scale: 0 } }], { count: 20000 }),
+    loop('o', { count: 20000, alias: 'o' }, [
+      loop('l', { mode: 'each', from: 'gen', itemAlias: 'x', order: 'shuffle', limit: 1 }, [branch('b', { kind: 'chance' })]),
+    ]),
+  ], { settings: { maxRecords: 200000 } });
+  const t0 = performance.now();
+  const r = runWorkflow(w, { seed: 1, now: NOW });
+  const ms = performance.now() - t0;
+  assert.equal(r.stats.byStep.l.iterations, 20000);
+  assert.ok(ms < 3000, `took ${ms.toFixed(0)} ms`);
+  console.log(`# each shuffle limit 1, 20 000 × 20 000: ${ms.toFixed(0)} ms`);
+});
+
+test('shufflePositions is shuffleTake over positions, with the same draws (review of 0013)', () => {
+  for (let seed = 1; seed < 40; seed++) {
+    for (const [len, k] of [[0, 2], [1, 1], [7, 3], [7, 7], [7, 9], [50, 50]]) {
+      const a = createRandom(seed);
+      const b = createRandom(seed);
+      const list = Array.from({ length: len }, (_, i) => `v${i}`);
+      assert.deepEqual(a.shufflePositions(len, k).map((p) => list[p]), b.shuffleTake(list, k));
+      assert.equal(a.next(), b.next(), 'same number of draws');
+    }
+  }
+  // The reference partial Fisher–Yates on a full copy.
+  const ref = (seed, list, k) => {
+    const rng = createRandom(seed);
+    const a = [...list];
+    for (let i = 0; i < k; i++) {
+      const j = i + Math.floor(rng.next() * (a.length - i));
+      [a[i], a[j]] = [a[j], a[i]];
+    }
+    return a.slice(0, k);
+  };
+  const list = Array.from({ length: 30 }, (_, i) => i * 3);
+  for (let seed = 1; seed < 30; seed++) assert.deepEqual(createRandom(seed).shuffleTake(list, 12), ref(seed, list, 12));
+});
+
+test('filter caches of non-eq filters stay within FILTER_CACHE_POSITIONS; long scans yield ticks (review of 0013)', () => {
+  const big = (n, visits, op = 'neq', pickToo = false) => wf([
+    record('g', 'Contact', 'gen', [text('LastName', 'n{{this.$n}}')], { count: n }),
+    loop('o', { count: visits, alias: 'o' }, [
+      loop('l', { mode: 'each', from: 'gen', itemAlias: 'x', filter: 'compare', filterField: 'LastName', filterOp: op, filterValue: 'v{{o.index}}', limit: 1 }, [branch('b', { kind: 'chance' })]),
+      ...(pickToo ? [pick('p', 'pp', 'gen', { filter: 'compare', filterField: 'LastName', filterOp: op, filterValue: 'w{{o.index}}' })] : []),
+    ]),
+  ], { settings: { maxRecords: 200000 } });
+  const cap = runner.FILTER_CACHE_POSITIONS;
+  // 50 visits × 25 000 matching positions (each) + as many records (pick) = 2 500 000 > cap.
+  const run = runner.createRun(big(25000, 50, 'neq', true), { seed: 1, now: NOW });
+  const it = run.records({ ticks: true });
+  let ticks = 0;
+  const ticked = [];
+  for (const x of it) if (x === runner.TICK) ticks++; else ticked.push(x.ref);
+  assert.ok(it.filterCache.peak <= cap, `peak ${it.filterCache.peak}`);
+  assert.ok(it.filterCache.peak >= cap / 2, 'results that fit are still cached');
+  // ~150 step visits (no TICK by visits) but 2.5 M records scanned.
+  assert.ok(ticks >= 10, `ticks ${ticks}`);
+  // Records are the same with or without ticks.
+  assert.deepEqual(ticked, [...run.records()].map((x) => x.ref));
+});
+
+test('a now a Date cannot hold is rejected in Vietnamese before running (review of 0013)', () => {
+  const w = wf([record('a', 'Account', 'acc', [text('Name', 'x')])]);
+  for (const now of [1e20, 8.64e15 + 1, -8.64e15 - 1, Infinity, NaN, '2025']) {
+    assert.throws(() => runner.createRun(w, { seed: 1, now }), (e) => e.status === 400 && e.message === 'Tham số now không hợp lệ.', String(now));
+  }
+  assert.equal(runWorkflow(w, { seed: 1, now: 8.64e15 }).records.length, 1, 'the largest Date is fine');
+  assert.equal(runner.isValidNow(-8.64e15), true);
+});
+
+test('loop counts: booleans, strings that are not plain digits, the label of min/max, objects in values (review of 0013)', () => {
+  let k = 0;
+  const body = () => [record(`x${++k}`, 'Task', `x${k}`)];
+  const { errors } = validateWorkflow(wf([
+    loop('c1', { count: true, alias: 'a1' }, body()),
+    loop('c2', { mode: 'range', min: false, max: 3, alias: 'a2' }, body()),
+    loop('c3', { mode: 'range', min: 1, max: '1e3', alias: 'a3' }, body()),
+    loop('c4', { count: '0x10', alias: 'a4' }, body()),
+    loop('c5', { count: '+5', alias: 'a5' }, body()),
+    loop('c6', { count: ' 7 ', alias: 'a6' }, body()),
+    loop('c7', { mode: 'range', min: 200000, max: 300000, alias: 'a7' }, body()),
+    loop('c8', { mode: 'values', values: [{ a: 1 }, 'x'], alias: 'a8' }, body()),
+    loop('c9', { mode: 'values', values: ['Hot', 2, true], alias: 'a9' }, body()),
+    record('g', 'Account', 'gen'),
+    loop('c10', { mode: 'each', from: 'gen', itemAlias: 'it', limit: '1e2', alias: 'a10' }, body()),
+  ]));
+  const msg = (id, field) => issuesOn(errors, id, field).map((e) => e.message);
+  assert.deepEqual(msg('c1', 'count'), ['Số lần lặp phải là số nguyên từ 0 đến 100000.']);
+  assert.deepEqual(msg('c2', 'min'), ['"Ít nhất" phải là số nguyên từ 0 đến 100000.']);
+  assert.deepEqual(msg('c3', 'max'), ['"Nhiều nhất" phải là số nguyên từ 0 đến 100000.']);
+  assert.deepEqual(msg('c4', 'count'), ['Số lần lặp phải là số nguyên từ 0 đến 100000.']);
+  assert.deepEqual(msg('c5', 'count'), ['Số lần lặp phải là số nguyên từ 0 đến 100000.']);
+  assert.deepEqual(msg('c6', 'count'), [], 'digits with spaces around are a number');
+  assert.deepEqual(msg('c7', 'min'), ['"Ít nhất" phải là số nguyên từ 0 đến 100000.']);
+  assert.deepEqual(issuesOn(errors, 'c8', 'values').map((e) => [e.code, e.message]), [['valuesObject', 'Giá trị thứ 1 của danh sách không phải chữ hoặc số. Nhập mỗi dòng một giá trị (ví dụ Hot, Warm, Cold).']]);
+  assert.deepEqual(msg('c9', 'values'), []);
+  assert.deepEqual(msg('c10', 'limit'), ['"Tối đa số bản ghi" phải là số nguyên từ 0 đến 100000 (0 = tất cả).']);
+});
+
+test('{{run.seed}} under an alias "run" says the alias hides the run variable (review of 0013)', () => {
+  const use = record('h', 'Task', 'h', [text('Subject', '{{run.seed}}')]);
+  for (const steps of [[record('g', 'Contact', 'run'), use], [use, record('g', 'Contact', 'run')]]) {
+    const [e] = issuesOn(validateWorkflow(wf(steps)).errors, 'h', 'fields.Subject');
+    assert.ok(e.message.endsWith(' Alias "run" che biến Lần chạy; đổi alias để dùng {{run.seed}}.'), e.message);
+  }
+  // Another member of a step called run: no hint.
+  const [e] = issuesOn(validateWorkflow(wf([record('g', 'Contact', 'run'), record('h', 'Task', 'h', [text('Subject', '{{run.Foo}}')])])).errors, 'h', 'fields.Subject');
+  assert.ok(!e.message.includes('Lần chạy'), e.message);
+});

@@ -93,7 +93,7 @@ Bản cũ của app không đọc được file version 2.
 | `record` | – | `sobject` (API name), `alias`, `count` (mặc định 1), `fields[]` |
 | `query` ([0006](design/0006-query-pick-nodes.md)) | – | `mode`: `builder` (`sobject`, `fields[]` chuỗi tên field, `where`, `orderBy` mặc định `Id`, `limit` 1–2000 mặc định 200) hoặc `soql` (`soql`); `alias` (tên pool, bắt buộc) |
 | `pick` (0006) | – | `from` (alias của pool phía trên), `alias` (bắt buộc), `mode`: `random` \| `unique` \| `sequential` \| `weighted` ([0013](design/0013-mo-rong-bien-va-lap.md) E: `weightField` = field số của bản ghi trong pool, bắt buộc); `filter`: `none` \| `compare` (`filterField`, `filterOp`, `filterValue` nhận `{{…}}`); `onEmpty`: `skip` \| `error` |
-| `loop` | `body` | `mode`: `fixed` (`count`), `range` (`min`, `max`), `each` ([0010](design/0010-lap-theo-ban-ghi.md): `from` = alias của pool Query/Record/Chọn bản ghi phía trên, `itemAlias` = tên bản ghi đang lặp, bắt buộc; 0013 C thêm `filter`/`filterField`/`filterOp`/`filterValue` như Chọn bản ghi, `order`: `pool` \| `shuffle` (mặc định `pool`), `limit` số nguyên 0–100 000, `0` = tất cả) hoặc `values` (0013 D: `values` = mảng chuỗi, hoặc chuỗi mỗi dòng một giá trị); `alias` của biến lặp (mặc định `loop`). `count`, `min`, `max` là số **hoặc** một chuỗi đúng một biến `"{{acc.NumberOfEmployees}}"` (0013 B; khoảng trắng hai đầu được bỏ qua). Thiếu `count` = 0 lần, thiếu `max` = 1. Khóa của chế độ khác bị bỏ qua (không kiểm tra, không xóa) |
+| `loop` | `body` | `mode`: `fixed` (`count`), `range` (`min`, `max`), `each` ([0010](design/0010-lap-theo-ban-ghi.md): `from` = alias của pool Query/Record/Chọn bản ghi phía trên, `itemAlias` = tên bản ghi đang lặp, bắt buộc; 0013 C thêm `filter`/`filterField`/`filterOp`/`filterValue` như Chọn bản ghi, `order`: `pool` \| `shuffle` (mặc định `pool`), `limit` số nguyên 0–100 000, `0` = tất cả) hoặc `values` (0013 D: `values` = mảng chuỗi/số/đúng sai, hoặc chuỗi mỗi dòng một giá trị; một phần tử là object/mảng là lỗi `valuesObject` gắn `values`); `alias` của biến lặp (mặc định `loop`). `count`, `min`, `max` là số **hoặc** một chuỗi đúng một biến `"{{acc.NumberOfEmployees}}"` (0013 B; khoảng trắng hai đầu được bỏ qua); chuỗi số chỉ gồm chữ số (`"7"`, không `"1e3"`, `"0x10"`, `"+5"`), `true`/`false` là lỗi (sau review 0013; `limit` cũng vậy). Thiếu `count` = 0 lần, thiếu `max` = 1. Khóa của chế độ khác bị bỏ qua (không kiểm tra, không xóa) |
 | `branch` | `true` (Đúng), `false` (Sai) | `kind`: `chance` (`probability`) hoặc `compare` (`left`, `op`, `right`; `right` nhận `{{…}}` từ 0013 A) |
 
 Danh mục nằm ở `server/workflow/nodes.js` và được `GET /api/meta` trả về (`nodeTypes[]`): mỗi loại có `label`,
@@ -126,7 +126,7 @@ phạm vi (`analyzeScope` trong `shared/scope.js`) chỉ đọc hai khóa này, 
 
 | Khóa | Giá trị | Ý nghĩa |
 | --- | --- | --- |
-| `flow.kind` | `sequence`; `loop` (`body`: khóa slot lặp lại); `branch` (`alternatives`: các slot loại trừ nhau) | Cách các slot chạy. Loop có thêm hàm `minIterations(config, ctx)` (không gửi qua meta; trình duyệt dùng bản trong `shared/scope.js`); `ctx.poolNonEmpty(name)` (0013): pool đó luôn có bản ghi tại bước Lặp |
+| `flow.kind` | `sequence`; `loop` (`body`: khóa slot lặp lại); `branch` (`alternatives`: các slot loại trừ nhau) | Cách các slot chạy. Loop có thêm hàm `minIterations(config, ctx)` (không gửi qua meta; trình duyệt dùng bản trong `shared/scope.js`); `ctx.poolNonEmpty(name)` (0013): pool đó luôn có bản ghi tại bước Lặp. Chọn bản ghi có hàm `maySkip(config, ctx)` (`pickMaySkip`, sau review 0013): bước có thể bỏ qua phần còn lại của lượt (`onEmpty: "skip"`, trừ khi không lọc, không `unique` và pool `from` luôn có bản ghi) |
 | `exposes` | một object như các dòng dưới, hoặc **mảng** các object (0010) | Mỗi phần tử là một nguồn. Phần tử có `when` (`{ key, in }`, như `showIf`) chỉ có hiệu lực khi config khớp. Phần tử đầu có id nguồn = id bước; phần tử sau có id `<id bước>#<key>` (Lặp `each`: `<id>#item`) |
 | `exposes.kind` | `record`: `<tên>.<field>` là field của bản ghi hiện tại; `vars`: `<tên>.<key>` là biến rời | Loại nguồn biến |
 | `exposes.name` | `{ key, default?, fallback? }` | Tên trong đường dẫn: `config[key]`, rỗng thì `default`, rồi `id` nếu `fallback: "id"` (Record: `alias` hoặc `id`) |
@@ -136,7 +136,7 @@ phạm vi (`analyzeScope` trong `shared/scope.js`) chỉ đọc hai khóa này, 
 | `exposes.builtins` | `[{ key, valueType, label, level? }]`, key bắt đầu bằng `$` | Biến có sẵn, ví dụ `$n` của Record |
 | `exposes.current` | `last`, `picked`, `item`, `none` | `none`: không có bản ghi hiện tại (Query, 0006), `{{q.Field}}` là lỗi; `item`: bản ghi đang lặp của Lặp `each` (một bản ghi, không phải pool) |
 | `exposes.pool` / `origin` / `lookupParent` / `open` | | Dùng cho Lookup "Ngẫu nhiên"/`pick.from`; `generated` (chưa có Id) hay `org`; có trong ô "Bản ghi cha" không; danh sách field chưa đầy đủ (field lạ chỉ là cảnh báo) |
-| `exposes.nonEmpty` | `true` (Record, 0013) | Mỗi lần chạy qua bước thêm ≥ 1 bản ghi vào pool: Lặp `each` không lọc qua pool này ở trạng thái `always`/`last` chạy ≥ 1 lần |
+| `exposes.nonEmpty` | `true` (Record, 0013) | Mỗi lần chạy qua bước thêm ≥ 1 bản ghi vào pool: Lặp `each` không lọc qua pool này ở trạng thái `always`/`last` chạy ≥ 1 lần. Không tính khi bước Record nằm sau một bước `maySkip` trong cùng lượt của một Lặp đã xong (mọi lượt có thể dừng trước nó; trong cùng lượt, sau bước Record, pool vẫn chắc có bản ghi) |
 
 Option nhận biến khai báo `vars: "template"` (chèn `{{path}}`), `vars: "path"` (cả ô là một đường dẫn, như `left`) hoặc
 `vars: "number"` (0013 B, cho option `kind: "integer"`/`"number"`: giá trị là số, hoặc chuỗi đúng **một** token `{{path}}`;
@@ -180,10 +180,14 @@ chỉ thấy các field ở phía trên.
   `filterField` thỏa `filterOp` so với `filterValue` (như lọc của Chọn bản ghi; `{ $ref }` so theo ref; `filterValue` thay
   `{{…}}` **một lần khi vòng lặp bắt đầu**, với scope ngoài thân, nên `{{acc.Id}}` là bản ghi của vòng ngoài), giữ thứ tự pool;
   phép `eq` dùng chỉ mục theo bước (2 000 Account × 2 000 Contact chỉ quét Contact một lần). `order: "shuffle"`: xáo bằng
-  `rng.shuffleTake`, rút **đúng** k = min(`limit` hoặc số bản ghi sau lọc, số bản ghi sau lọc) số lúc vòng lặp bắt đầu (kể cả
+  `rng.shufflePositions` (Fisher–Yates từng phần trên mảng ảo, đổi chỗ giữ trong Map thưa: O(k) thời gian và bộ nhớ, cùng các số
+  rút và cùng kết quả với `rng.shuffleTake` trước review 0013), rút **đúng** k = min(`limit` hoặc số bản ghi sau lọc, số bản ghi sau lọc) số lúc vòng lặp bắt đầu (kể cả
   khi thân rỗng; 0 bản ghi thì không rút); `order: "pool"` không rút số. `limit` > 0: chỉ k bản ghi đầu. `count` = k. Lọc không
   khớp bản ghi nào ở **mọi** lần chạy qua (pool không rỗng): một cảnh báo `eachFilterEmpty` gắn `filterValue`. Còn hơn 100 000
   bản ghi sau lọc: lỗi gắn `from` (`… sau khi lọc … Đặt "Tối đa số bản ghi" hoặc thu hẹp điều kiện lọc.`).
+- Lọc khác `eq` (Lặp `each`, Chọn bản ghi; cả danh sách "còn lại" của `unique`) được nhớ theo (vế phải, cỡ pool), nhưng mọi bộ
+  nhớ lọc của một lần chạy giữ tổng cộng tối đa `FILTER_CACHE_POSITIONS` (2 000 000) vị trí/bản ghi; kết quả dài hơn thì không
+  nhớ (tính lại). Mỗi 200 000 bản ghi được quét khi lọc cũng tính một `TICK` (nhường event loop, xem hủy), không rút `rng`.
 - `branch`: luôn tính điều kiện (kể cả khi hai nhánh rỗng), chạy `slots.true` hoặc `slots.false`, rồi **đi tiếp bước kế**.
   `chance` chọn nhánh Đúng với xác suất `probability`. `compare` so sánh `left` (một đường dẫn tham chiếu; viết
   `loop.index` hay `{{loop.index}}` đều được; field Lookup `{ $ref }` so theo ref `acc#3`, từ 0013) với `right` (giá trị cố định,
@@ -211,7 +215,8 @@ chỉ thấy các field ở phía trên.
 - Lookup tới bản ghi `existing` (dòng Query, hoặc bản ghi chọn từ Query) cho ra **chuỗi Id thật**; bản ghi sinh ra vẫn là
   `{ "$ref" }`. Lookup `current` vào alias của Query là lỗi (pool không có bản ghi hiện tại).
 - Biến của lần chạy (0013 G): `run.seed`, `run.now` (`new Date(now).toISOString()`), `run.today` (10 ký tự đầu của `now`,
-  UTC). Cùng `seed` + `now` ở xem trước, insert và tải về ⇒ cùng giá trị. Tên người dùng đặt (biến lặp, alias) tên `run` thắng.
+  UTC). Cùng `seed` + `now` ở xem trước, insert và tải về ⇒ cùng giá trị. Tên người dùng đặt (biến lặp, alias) tên `run` thắng;
+  khi đó lỗi của `{{run.seed}}`/`now`/`today` có thêm `Alias "run" che biến Lần chạy; đổi alias để dùng {{run.seed}}.`
 - Bản ghi đã sinh (`<alias>` hiện tại và danh sách mọi bản ghi của alias) dùng chung cho cả lần chạy; biến lặp theo phạm vi.
   Từ [0004](design/0004-streaming-execution.md), "danh sách" của một alias Record chỉ là **số đếm** (`alias#1…alias#n`),
   trừ khi một bước đọc cả bản ghi của pool đó (option bước `kind: "ref"` có `accepts.pool`: Chọn bản ghi `from`, Lặp `each`
@@ -327,8 +332,8 @@ Lặp `each` (0010, câu chữ theo bảng "Thông báo" của doc đó): thiế
 trùng alias khác (câu sẵn có, gắn `itemAlias`), trùng tên biến lặp (`Tên bản ghi đang lặp "loop" trùng tên biến lặp…`).
 `count`/`min`/`max` không được kiểm tra khi `each`.
 
-Lặp (0013): mọi option `vars: "number"` đang hiện được kiểm tra chung (số ngoài 0–100 000: câu sẵn có `Số lần lặp phải là số
-nguyên từ 0 đến 100000.`; có `{{` mà không phải một token: `numberFormat`); `"Ít nhất" lớn hơn "Nhiều nhất"` chỉ khi cả hai là
+Lặp (0013): mọi option `vars: "number"` đang hiện được kiểm tra chung (số ngoài 0–100 000, `true`/`false`, chuỗi không chỉ gồm chữ
+số: câu sẵn có `Số lần lặp phải là số nguyên từ 0 đến 100000.` cho `count`, `"Ít nhất" …` / `"Nhiều nhất" …` cho `min`/`max`; có `{{` mà không phải một token: `numberFormat`); `"Ít nhất" lớn hơn "Nhiều nhất"` chỉ khi cả hai là
 số. Chế độ lạ: `Chế độ lặp "x" không hợp lệ.` Chỉ ở `each`: lọc dùng chung kiểm tra và câu của Chọn bản ghi (`filterField`,
 `filterOp`, `Cách lọc "x" không hợp lệ.`), `Thứ tự "x" không hợp lệ.`, `"Tối đa số bản ghi" phải là số nguyên từ 0 đến 100000
 (0 = tất cả).` Chọn bản ghi `weighted`: `Chưa nhập field trọng số, ví dụ NumberOfEmployees hoặc Amount.` /
@@ -341,7 +346,8 @@ Câu thông báo đúng như bảng "Thông báo lỗi" của [0005](design/0005
 
 Request: `{ "workflow": {…}, "seed": 42, "now": 1761552000000, "target": { "kind": "org", "org": "dev-sb" } }`.
 `now` (mili giây, tùy chọn; thiếu thì là giờ hiện tại) là "hôm nay" của field ngày tương đối (`today`, `-1y`). **Cùng
-`seed` và `now` ⇒ cùng dữ liệu.** `now` không phải số hữu hạn ⇒ 400 `Tham số now không hợp lệ.`
+`seed` và `now` ⇒ cùng dữ liệu.** `now` không phải số hữu hạn, hoặc ngoài ±8.64e15 (giới hạn của `Date`) ⇒ 400 `Tham số now
+không hợp lệ.` (cả `/api/export` và `/api/field-samples`; `createRun` cũng ném lỗi này với `status: 400`).
 
 Hai cách nhận kết quả ([0004](design/0004-streaming-execution.md)):
 
@@ -446,7 +452,7 @@ Trả `{ "values": ["Banking", "Retail", "Banking"] }` (`null` giữ là `null`)
   phía trên. Server sinh `count` bản ghi (mặc định 3, kẹp trong 1–5) chỉ gồm các field đó, theo thứ tự, `n` = 1…count, scope rỗng
   (không có bước khác, không có biến lặp), rng có seed (`seed`, mặc định `1`) và `now` truyền vào (bắt buộc). Template trỏ tới
   bước khác ra chuỗi rỗng; field phía trên không sinh được ở đây (Lookup…) bị bỏ qua.
-- Request sai dạng (`fields` rỗng / quá 500, `index` ngoài danh sách, thiếu `now`) ⇒ 400. Field `index` không tên, kiểu lạ, hoặc
+- Request sai dạng (`fields` rỗng / quá 500, `index` ngoài danh sách, thiếu `now` hoặc `now` ngoài ±8.64e15) ⇒ 400. Field `index` không tên, kiểu lạ, hoặc
   option số ngoài `min`/`max` của nó (cùng kiểm tra `optionIssues` với validate, xem [field-types.md](field-types.md)) ⇒ 422
   `{ error, issues: [{ field: "fields.<Name>", option?, message }] }`. Lỗi khi sinh (ví dụ hết giá trị duy nhất) ⇒ 422
   `{ error: "<câu của generator>", issues: [{ field, message }] }`. Lỗi khác (lỗi lập trình) ⇒ 500, có log ở server. Field phía
@@ -490,7 +496,7 @@ câu lỗi trong inspector, cả với cảnh báo có `fix`):
 | `fix.kind` | Khóa | Gắn trên | Nút |
 | --- | --- | --- | --- |
 | `addSelectField` | `stepId` (bước Query), `field` (đường dẫn field, ví dụ `Industry`, `Owner.Email`) | lỗi `unknownMember` của nguồn đọc từ org: Query, Chọn bản ghi hoặc bản ghi đang lặp có gốc là Query (`stepId` luôn là Query gốc). Không có `fix` khi SOQL tự viết không sửa được (subquery hay `FIELDS(…)` / `TYPEOF` trong SELECT, SOQL lỗi) | `Thêm Industry vào SELECT của "accs"`: builder thêm vào cuối `fields` (nếu chưa có, không phân biệt hoa thường); SOQL tự viết dùng `addSelectField` của `shared/soql.js` (chèn `, Industry` trước `FROM` của SELECT ngoài). Một bước hoàn tác |
-| `renameField` | `stepId`, `from`, `to` | cảnh báo `code: "noNameField"` (field `fields.Name` của Record trên sObject `noName`, ví dụ Task: `Task không ghi được field Name nên insert sẽ lỗi. Đổi thành Subject hoặc xóa field này.`). Không có `fix` khi bước đã có field `to` | `Đổi thành Subject`: đổi tên field, tham chiếu `{{task.Name}}` đi theo, một bước hoàn tác. Field Text còn ở option mặc định (rỗng, hoặc chỉ `mode: name` / `company`) nhận option của field đó trong preset (Subject: danh sách Call…). Không làm gì nếu field `from` không còn hoặc đã có field `to` |
+| `renameField` | `stepId`, `from`, `to` | cảnh báo `code: "noNameField"` (field `fields.Name` của Record trên sObject `noName`, ví dụ Task: `Task không ghi được field Name nên insert sẽ lỗi. Đổi thành Subject hoặc xóa field này.`). Không có `fix` khi bước đã có field `to` | `Đổi thành Subject`: đổi tên field, tham chiếu `{{task.Name}}` đi theo (cả `filterField`/`weightField` của Chọn bản ghi và Lặp `each` đọc pool của bước, sau review 0013), một bước hoàn tác. Field Text còn ở option mặc định (rỗng, hoặc chỉ `mode: name` / `company`) nhận option của field đó trong preset (Subject: danh sách Call…). Không làm gì nếu field `from` không còn hoặc đã có field `to` |
 `POST /api/validate` trả `{ errors, warnings, derived }`; phạm vi biến không gửi kèm vì trình duyệt tự tính bằng `shared/scope.js`.
 `derived[<id>]` (0006): Query `{ soql, sobject, fields }` (câu SOQL server sẽ chạy), Chọn bản ghi `{ sobject, fields, from }`.
 `nodeId` là id bước. `field` có dạng `alias`, `count`, … cho option của bước; `fields.<Name>` cho field của record;

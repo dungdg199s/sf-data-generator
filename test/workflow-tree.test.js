@@ -604,9 +604,28 @@ test('renameField follows number variables and each filter values', () => {
     loop13('lr', { mode: 'range', min: '{{acc.N}}', max: 9, alias: 'r' }),
   ]);
   const res = renameField(wf, 'a', 'N', 'Size', { catalog: CAT });
-  assert.equal(res.count, 3);
+  assert.equal(res.count, 4);
   assert.deepEqual([wf.steps[1].slots.body[0].config.count, wf.steps[2].config.filterValue, wf.steps[3].config.min], ['{{it.Size}}', '{{acc.Size}}', '{{acc.Size}}']);
-  assert.deepEqual(res.places.map((p) => `${p.nodeId}.${p.field}`).sort(), ['lc.count', 'lf.filterValue', 'lr.min']);
+  assert.equal(wf.steps[2].config.filterField, 'Size', 'the filter field of the each loop follows (review of 0013)');
+  assert.deepEqual(res.places.map((p) => `${p.nodeId}.${p.field}`).sort(), ['lc.count', 'lf.filterField', 'lf.filterValue', 'lr.min']);
+});
+
+test('renameField follows the filterField / weightField of a Chọn bản ghi and a Lặp each, also through a pick (review of 0013)', () => {
+  const wf = tree([
+    r('a', 'acc', [num13('N'), num13('Code')]),
+    r('b', 'other', [num13('N')]),
+    { id: 'p', type: 'pick', config: { from: 'acc', alias: 'one', mode: 'weighted', weightField: 'N', filter: 'compare', filterField: 'N', filterOp: 'gt', filterValue: '1' } },
+    { id: 'p2', type: 'pick', config: { from: 'one', alias: 'two', filter: 'compare', filterField: 'N', filterValue: '1' } },
+    loop13('le', { mode: 'each', from: 'other', itemAlias: 'it', filter: 'compare', filterField: 'N', filterValue: '1' }),
+    loop13('lf', { mode: 'each', from: 'acc', itemAlias: 'it2', filter: 'compare', filterField: 'Code', filterValue: '1' }),
+  ]);
+  const res = renameField(wf, 'a', 'N', 'Size', { catalog: CAT });
+  const cfg = (i) => wf.steps[i].config;
+  assert.deepEqual([cfg(2).weightField, cfg(2).filterField, cfg(3).filterField], ['Size', 'Size', 'Size']);
+  assert.equal(cfg(4).filterField, 'N', 'a loop over another step\'s pool is left alone');
+  assert.equal(cfg(5).filterField, 'Code', 'another field is left alone');
+  assert.equal(res.count, 3);
+  assert.deepEqual(res.places.map((p) => `${p.nodeId}.${p.field}`).sort(), ['p.filterField', 'p.weightField', 'p2.filterField']);
 });
 
 test('setStepAlias on a loop does not rename its own count variable from an outer loop', () => {

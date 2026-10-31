@@ -872,3 +872,31 @@ Khác với thiết kế (đợt C), và vì sao:
 - Smoke luồng 19 chờ chip cuối (`.stat:not(.est):not(.live)`) và dòng `seed n` trước khi đọc; JSDoc của luồng 15 về lại trên
   `flowCanvas`.
 
+
+### Sửa sau review đợt A/B — server (2026-10-31)
+
+- **Xáo trộn của Lặp `each`**: `rng.shufflePositions(len, k)` là Fisher–Yates từng phần trên mảng ảo, đổi chỗ giữ trong Map
+  thưa: O(k) thời gian và bộ nhớ thay vì cấp 2n phần tử mỗi lượt. Cùng số rút (`j = i + ⌊next()·(len−i)⌋`) và cùng kết quả;
+  danh sách đã lọc được đọc qua `idx`, không chép. `shuffleTake` dùng lại hàm này. Pool 10 000 × 10 000 lượt "Tối đa 1": 6,9 s →
+  85 ms; test 20 000 × 20 000 (< 3 s, đo ~130 ms). Hash vàng của `test/stream.test.js` không đổi; so với bản trước (6 000 trường
+  hợp `shuffleTake` + workflow có/không lọc, `limit` 0/1/7) giống từng byte.
+- **Bộ nhớ lọc khác `eq`** (Lặp `each`, Chọn bản ghi, danh sách "còn lại" của `unique`): tổng mọi bộ nhớ lọc của một lần chạy
+  ≤ `FILTER_CACHE_POSITIONS` (2 000 000) vị trí/bản ghi (đầy thì xóa bộ nhớ của bước đó; kết quả dài hơn thì không nhớ). Bản ghi
+  được quét khi lọc (và khi tính tổng trọng số) đếm vào nhịp `TICK` (mỗi 200 000), nên quét dài vẫn nhường event loop và hủy được.
+  Kịch bản 100 000 bản ghi × 1 000 giá trị `neq`: heap 1 022 MB → 105 MB (thời gian vẫn ~35 s: 10⁸ phép so là bản chất).
+- **`now` ngoài ±8.64e15** (giới hạn `Date`): 400 `Tham số now không hợp lệ.` ở `/api/run`, `/api/export`, `/api/field-samples`
+  (`isValidNow` trong `executor.js`); `createRun` cũng ném câu đó (`status: 400`) thay cho `RangeError` tiếng Anh.
+- `valueList(values)` của Lặp `values` tính một lần mỗi bước trong một lần chạy.
+- Biến Lần chạy bị alias / biến lặp tên `run` che: lỗi của `{{run.seed|now|today}}` có thêm `Alias "run" che biến Lần chạy; đổi
+  alias để dùng {{run.seed}}.`
+- `renameField` đổi cả `filterField` / `weightField` của Chọn bản ghi và Lặp `each` đọc pool của bước (cả qua Chọn bản ghi).
+- `sampleRows`: Id và Name giữ dạng mẫu kể cả khi được đọc như số.
+- `count`/`min`/`max`: `true`/`false` và chuỗi không chỉ gồm chữ số (`1e3`, `0x10`, `+5`) là lỗi (cả `limit`); câu của `min`/`max`
+  dùng nhãn của chính ô (`"Ít nhất" phải là số nguyên từ 0 đến 100000.`), `count` giữ câu sẵn có.
+- Phần tử object/mảng trong `values`: lỗi `valuesObject` gắn `values` (`Giá trị thứ 1 của danh sách không phải chữ hoặc số. …`)
+  thay vì chạy với `[object Object]`.
+- **`nonEmpty` và Chọn bản ghi "Bỏ qua"**: danh mục có `maySkip` (`pickMaySkip`, như `minIterations`). Bước Record nằm sau một
+  Chọn bản ghi có thể bỏ qua (`onEmpty: "skip"`, trừ khi không lọc, không `unique` và pool `from` luôn có bản ghi) trong cùng lượt
+  của một Lặp — kể cả bỏ qua từ trong Rẽ nhánh — thì sau Lặp đó pool không còn tính là chắc có bản ghi (Lặp `each` qua nó có thể
+  chạy 0 lần, `maybe`). Trong cùng lượt, sau bước Record, pool vẫn chắc có; bỏ qua trong thân một Lặp con chỉ dừng lượt của Lặp con.
+- Bỏ dòng JSDoc mồ côi trong `shared/scope.js`.

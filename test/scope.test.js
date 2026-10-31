@@ -427,3 +427,23 @@ test('numericSampleFields lists Query fields used as numbers or weights', () => 
   assert.deepEqual(out.q.sort(), ['AnnualRevenue', 'NumberOfEmployees', 'Owner.Num__c']);
   assert.deepEqual(out.q2, ['Score__c']);
 });
+
+test('a skipping Chọn bản ghi before the Record in a loop body: its pool is not certain after the loop (review of 0013)', () => {
+  const after = [loop('l2', { mode: 'each', from: 'con', itemAlias: 'it' }, [record('c2', 'Task', 'task')]), record('z', 'Note', 'z', [{ name: 'T', type: 'lookup', options: { ref: 'task' } }])];
+  const make = (pk, extra = []) => wf([record('a', 'Account', 'acc', [], { count: 2 }), loop('l1', { count: 3 }, [...extra, pk, record('c', 'Contact', 'con')]), ...after]);
+  // A filtered pick may find nothing: every iteration may stop before the Contact.
+  const filtered = pick('p', 'pa', 'acc', { filter: 'compare', filterField: 'Name', filterValue: 'x' });
+  assert.equal(stateOf(scopeOf(make(filtered)), 'z', 'c2'), 'maybe');
+  // Inside a branch of the body, the skip still ends the iteration.
+  assert.equal(stateOf(scopeOf(wf([record('a', 'Account', 'acc'), loop('l1', { count: 3 }, [branch('b', {}, [filtered], []), record('c', 'Contact', 'con')]), ...after])), 'z', 'c2'), 'maybe');
+  // "Báo lỗi" never skips; an unfiltered random pick from an always-filled pool always finds one.
+  assert.equal(stateOf(scopeOf(make({ ...filtered, config: { ...filtered.config, onEmpty: 'error' } })), 'z', 'c2'), 'last');
+  assert.equal(stateOf(scopeOf(make(pick('p', 'pa', 'acc'))), 'z', 'c2'), 'last');
+  assert.equal(stateOf(scopeOf(make(pick('p', 'pa', 'acc', { mode: 'unique' }))), 'z', 'c2'), 'maybe', 'unique may run out');
+  // A turned-off pick does not run; a skip in an inner loop's body ends only that loop's iteration.
+  assert.equal(stateOf(scopeOf(make({ ...filtered, disabled: true })), 'z', 'c2'), 'last');
+  assert.equal(stateOf(scopeOf(wf([record('a', 'Account', 'acc'), loop('l1', { count: 3 }, [loop('in', { count: 2 }, [filtered]), record('c', 'Contact', 'con')]), ...after])), 'z', 'c2'), 'last');
+  // Within the same iteration, after the Contact ran, its pool does hold a record.
+  const inside = wf([record('a', 'Account', 'acc'), loop('l1', { count: 3 }, [filtered, record('c', 'Contact', 'con'), loop('l2', { mode: 'each', from: 'con', itemAlias: 'it' }, [record('c2', 'Task', 'task')]), record('z', 'Note', 'z', [{ name: 'T', type: 'lookup', options: { ref: 'task' } }])])]);
+  assert.equal(stateOf(scopeOf(inside), 'z', 'c2'), 'last');
+});
