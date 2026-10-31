@@ -98,6 +98,7 @@ export function initCanvas() {
   // The viewport changes size (results panel, issues bar, sheet, window): a selected card that was
   // fully visible stays visible; otherwise only the elements are updated.
   let size = null;
+  watchBoxes();
   new ResizeObserver(() => {
     if (!active() || !lay) return;
     const was = size;
@@ -225,8 +226,7 @@ function selectedId() {
 /** Creates the elements near the viewport and removes the others (focused one excepted). */
 function cull() {
   if (!lay) return;
-  const W = root.clientWidth;
-  const H = root.clientHeight;
+  const { w: W, h: H } = viewportBox();
   const vx = (-pan.x - CULL_MARGIN) / zoom;
   const vy = (-pan.y - CULL_MARGIN) / zoom;
   const vw = (W + 2 * CULL_MARGIN) / zoom;
@@ -264,8 +264,7 @@ const KEEP_VISIBLE = 120; // px of the diagram that panning always leaves on scr
 /** Pan never loses the diagram: at least KEEP_VISIBLE px of its box stay in the viewport. */
 function clampPan() {
   if (!lay) return;
-  const W = root.clientWidth;
-  const H = root.clientHeight;
+  const { w: W, h: H } = viewportBox();
   const w = lay.width * zoom;
   const hh = lay.height * zoom;
   const kx = Math.min(KEEP_VISIBLE, w, W);
@@ -530,6 +529,37 @@ function decorateSlot(el) {
 }
 
 // ---------- viewport: pan, zoom, ensureVisible ----------
+
+// Sizes read on every pan / zoom frame (cull, clampPan, minimap), kept by ResizeObservers so a frame
+// does not force a layout after writing the transform. A zero width (the view was hidden) reads afresh.
+const boxes = { w: 0, h: 0, top: 0, insp: 0, mm: 0 };
+
+function measureBoxes() {
+  boxes.w = root.clientWidth;
+  boxes.h = root.clientHeight;
+  boxes.top = root.getBoundingClientRect().top;
+  boxes.insp = document.getElementById('inspector').offsetHeight;
+  boxes.mm = mm ? mm.svg.clientWidth || mm.el.clientWidth : 0;
+}
+
+function watchBoxes() {
+  const ro = new ResizeObserver(measureBoxes);
+  for (const el of [root, document.getElementById('inspector'), document.getElementById('dg-minimap'), document.querySelector('.topbar')]) ro.observe(el);
+  window.addEventListener('resize', measureBoxes);
+}
+
+/** { w, h } of the viewport, cached. */
+function viewportBox() {
+  if (!boxes.w) measureBoxes();
+  return boxes;
+}
+
+/** visibleHeight() from the cached sizes (per-frame callers). */
+function visibleHeightCached() {
+  const { h, top, insp } = viewportBox();
+  if (!document.body.classList.contains('sheet-open')) return h;
+  return Math.max(0, Math.min(h, window.innerHeight - insp - top));
+}
 
 /** Height of the viewport not covered by the bottom sheet (narrow screens). */
 function visibleHeight() {
@@ -972,10 +1002,11 @@ function minimapShown() {
   return getComputedStyle(mm.el).visibility !== 'hidden';
 }
 
-const viewWorld = () => ({ x: -pan.x / zoom, y: -pan.y / zoom, w: root.clientWidth / zoom, h: visibleHeight() / zoom });
+const viewWorld = () => ({ x: -pan.x / zoom, y: -pan.y / zoom, w: viewportBox().w / zoom, h: visibleHeightCached() / zoom });
 
 function minimapModelNow() {
-  const w = mm.svg.clientWidth || mm.el.clientWidth;
+  if (!boxes.mm) measureBoxes();
+  const w = boxes.mm;
   if (!lay || !w) return null;
   return minimapModel(lay, viewWorld(), { w }, mmHold ? { windowX: mmHold.x, windowY: mmHold.y } : {});
 }
@@ -983,7 +1014,8 @@ function minimapModelNow() {
 /** Every frame of a pan / zoom: O(1) (viewBox, the viewport rectangle, the thumb). */
 function updateMinimap() {
   if (!mm) return;
-  const overflows = lay && (lay.width * zoom > root.clientWidth || lay.height * zoom > root.clientHeight);
+  const vp = viewportBox();
+  const overflows = lay && (lay.width * zoom > vp.w || lay.height * zoom > vp.h);
   const show = Boolean(mmOn && active() && overflows);
   mm.el.classList.toggle('show', show);
   if (!show) return;
@@ -1027,7 +1059,7 @@ function buildMinimap() {
   const { window: win, scale } = mm.model;
   const range = { x0: win.x - win.w, x1: win.x + 2 * win.w };
   const errors = new Set([...issues].filter(([, v]) => v.errors?.length).map(([id]) => id));
-  const p = minimapPaths(lay, { errors, selected: selectedId(), startId: START_ID, range, grow: 1.5 / scale });
+  const p = minimapPaths(lay, { errors, selected: selectedId(), startId: START_ID, range, grow: 1.5 / scale, knownType: (t) => Boolean(nodeType(t)) });
   const used = new Set();
   const put = (key, parent, cls, type, d) => {
     used.add(key);

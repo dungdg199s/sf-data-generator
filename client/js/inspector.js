@@ -72,6 +72,7 @@ function render() {
       'aria-expanded': String(sheetFull),
       'aria-controls': 'inspector',
       title: 'Kéo hoặc chạm để đổi chiều cao',
+      onmousedown: (e) => e.preventDefault(), // a tap keeps focus where it was (the field being edited)
       onclick: () => setSheetFull(!sheetFull),
     }));
   root.replaceChildren(head, multi.length > 1 ? renderMulti() : step ? renderStep(step) : renderWorkflow());
@@ -165,9 +166,19 @@ function setSheetFull(full, { reveal: show = true } = {}) {
  */
 function wireSheetDrag() {
   let drag = null;
+  // The click that ends a drag (started on the grip) must not switch the snap again. It comes in the same
+  // task as the pointerup, so the flag only lives until the next task (a touch drag, or a mouse released
+  // outside the sheet, fires no click: the next keyboard click must not be eaten).
   let swallowClick = false;
+  const stop = () => {
+    window.removeEventListener('pointermove', move);
+    window.removeEventListener('pointerup', up);
+    window.removeEventListener('pointercancel', up);
+    window.removeEventListener('blur', cancel);
+  };
   const move = (e) => {
     if (!drag || e.pointerId !== drag.id) return;
+    if (e.pointerType === 'mouse' && e.buttons === 0) return void up(e, true); // released outside the window
     const dy = e.clientY - drag.y;
     if (!drag.moving && Math.abs(dy) <= SHEET_DRAG_START) return;
     drag.moving = true;
@@ -177,37 +188,37 @@ function wireSheetDrag() {
     drag.height = Math.max(0, Math.min(drag.max, drag.h - dy));
     root.style.height = `${drag.height}px`;
   };
-  const up = (e) => {
-    if (!drag || e.pointerId !== drag.id) return;
+  /** cancelled: back to the snap it started from (pointercancel, window blur, button released outside). */
+  const up = (e, cancelled = e?.type === 'pointercancel') => {
+    if (!drag || (e && e.pointerId !== undefined && e.pointerId !== drag.id)) return;
     const d = drag;
     drag = null;
-    window.removeEventListener('pointermove', move);
-    window.removeEventListener('pointerup', up);
-    window.removeEventListener('pointercancel', up);
+    stop();
     if (!d.moving) return; // a tap: the grip's click does the rest
     swallowClick = true;
+    setTimeout(() => { swallowClick = false; }, 0);
     root.classList.remove('dragging');
     root.style.removeProperty('height');
     const sn = snaps();
-    const to = e.type === 'pointercancel' ? (sheetFull ? 'full' : 'mid') : snapSheet({ height: d.height, velocity: dragVelocity(d.samples), mid: sn.mid, full: sn.full });
+    const to = cancelled ? (sheetFull ? 'full' : 'mid') : snapSheet({ height: d.height, velocity: dragVelocity(d.samples), mid: sn.mid, full: sn.full });
     if (to === 'closed') {
       closeSheet();
       document.querySelector('.view-wrap .step-card.selected')?.focus({ preventScroll: true });
     } else setSheetFull(to === 'full');
   };
+  const cancel = () => up(null, true);
   root.addEventListener('pointerdown', (e) => {
-    swallowClick = false;
     if (!narrow() || !root.classList.contains('open') || e.button !== 0) return;
     if (!e.target.closest('.sheet-head') || e.target.closest('.sheet-close')) return;
-    e.preventDefault(); // no text selection or native drag on the way (it would swallow the pointer events)
+    e.preventDefault(); // no text selection, native drag or focus change on the way
     drag = { id: e.pointerId, y: e.clientY, h: root.offsetHeight, height: root.offsetHeight, max: snaps().full, moving: false, samples: [{ t: e.timeStamp, y: e.clientY }] };
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up);
     window.addEventListener('pointercancel', up);
+    window.addEventListener('blur', cancel);
   });
-  // The click that ends a drag started on the grip must not switch the snap again.
   root.addEventListener('click', (e) => {
-    if (!swallowClick) return;
+    if (!swallowClick || e.detail === 0) return; // detail 0: a keyboard click (Enter / Space), never part of a drag
     swallowClick = false;
     e.stopPropagation();
     e.preventDefault();

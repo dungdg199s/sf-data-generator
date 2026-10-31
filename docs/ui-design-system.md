@@ -220,7 +220,7 @@ hộp cảnh báo / thông tin. Ô icon loại bước giữ 15 px trong ô 24 p
 **Cách dùng.** Phần tử `<span class="ico" data-ico="<tên>" aria-hidden="true">` (JS: `ico('<tên>')` trong `dom.js`); mỗi
 icon có một luật `.ico[data-ico="<tên>"] { --ico: var(--ico-<tên>); }`, **kể cả icon cũ**: thiếu luật thì `.ico` lấy `--ico`
 kế thừa từ `[data-type]` gần nhất và vẽ nhầm icon loại bước. Không đặt `--ico` bằng `style`. Nút chỉ có icon phải có
-`aria-label` bằng chữ. **Giữ là chữ:** mũi tên trong câu và tên phím (`Alt+↑`, `↑↓ chọn`), `→ acc#1`, `↓ accs` (tab Query),
+`aria-label` bằng chữ. **Giữ là chữ:** mũi tên trong câu và tên phím (`Alt+↑`, `↑↓ chọn`), `→ acc#1`,
 `≤ · …`, `{x}`, `＋` trong `<option>` (không chứa được SVG).
 
 ## 6. Thành phần

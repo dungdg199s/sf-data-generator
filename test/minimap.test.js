@@ -92,6 +92,14 @@ test('turned-off, error and selected steps go to their own groups', () => {
   assert.equal(count(p.cards.loop), 1); // the Lặp's header bar is its card
 });
 
+test('a missing or unknown step type is drawn grey (the off group)', () => {
+  const steps = [rec('a'), { id: 'z', type: 'zzz', config: {} }, { id: 'n', config: {} }];
+  const lay = layout(steps, { slotsOf });
+  const p = minimapPaths(lay, { knownType: (t) => t === 'record' || t === 'start' });
+  assert.equal((p.off.match(/M/g) ?? []).length, 2);
+  assert.deepEqual(Object.keys(p.cards).sort(), ['record', 'start']);
+});
+
 test('selecting the Start card puts it in the selected group; a range keeps only nearby blocks', () => {
   const lay = layout(bigWorkflow(1000), { slotsOf });
   const p = minimapPaths(lay, { selected: START_ID });

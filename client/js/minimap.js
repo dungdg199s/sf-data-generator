@@ -76,11 +76,11 @@ const rectPath = (r, grow = 0) => {
 
 /**
  * Path data per group, world units. opts: errors (Set of step ids with an error), selected (step id
- * or START_ID), startId, range: { x0, x1 } (only blocks crossing it, so a long diagram builds only
+ * or START_ID), startId, knownType(type) (false: drawn grey like a turned-off step), range: { x0, x1 } (only blocks crossing it, so a long diagram builds only
  * what is near the window), grow: world units an error ring sticks out of its card.
  * → { frames: { type: d }, cards: { type: d }, off, err, sel } (empty strings / missing keys: nothing).
  */
-export function minimapPaths(lay, { errors = new Set(), selected = null, startId = '__start', range = null, grow = 0 } = {}) {
+export function minimapPaths(lay, { errors = new Set(), selected = null, startId = '__start', range = null, grow = 0, knownType = () => true } = {}) {
   const frames = {};
   const cards = {};
   let off = '';
@@ -102,11 +102,13 @@ export function minimapPaths(lay, { errors = new Set(), selected = null, startId
       if (inRange(n)) off += rectPath(n);
       continue;
     }
-    const type = n.step?.type ?? 'unknown';
+    const type = n.step?.type;
+    // A missing or unknown type (older file, newer server) has no colour of its own: grey, like a turned-off step.
+    const off = Boolean(n.step?.disabled) || !type || !knownType(type);
     if (n.kind === 'frame') {
-      if (inRange(n)) add(frames, type, rectPath(n));
-      card(n.id, type, n.head, Boolean(n.step?.disabled));
-    } else card(n.id, type, n, Boolean(n.step?.disabled));
+      if (inRange(n)) add(frames, off ? 'unknown' : type, rectPath(n));
+      card(n.id, type, n.head, off);
+    } else card(n.id, type, n, off);
   }
   return { frames, cards, off, err, sel };
 }

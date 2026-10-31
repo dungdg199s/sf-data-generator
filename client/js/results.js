@@ -167,7 +167,7 @@ function wireResize() {
   });
   const end = () => {
     if (!drag) return;
-    const { want, frame, after } = drag;
+    const { want, h: start, frame, after } = drag;
     cancelAnimationFrame(frame);
     drag = null;
     handle.classList.remove('dragging');
@@ -178,6 +178,7 @@ function wireResize() {
       toggle.focus({ preventScroll: true });
       return;
     }
+    if (want === start) return; // a click (or a double click's first half): nothing to remember
     setHeight(want, { save: true });
     after();
   };
@@ -365,7 +366,7 @@ function render() {
     sobjects.map((s) => h('button', { class: s === activeTab ? 'active' : '', onclick: () => { activeTab = s; render(); } }, `${s} (${fmt(r.stats.bySobject[s])})`)),
     (r.queries ?? []).map((q) => {
       const key = `${QUERY_TAB}${q.nodeId}`;
-      return h('button', { class: `tab-query${key === activeTab ? ' active' : ''}`, 'data-query': q.nodeId, 'data-type': 'query', title: 'Bản ghi đọc từ org (chỉ để xem, không insert)', onclick: () => { activeTab = key; render(); } }, `↓ ${q.alias} · ${q.sobject} (${q.count})`);
+      return h('button', { class: `tab-query${key === activeTab ? ' active' : ''}`, 'data-query': q.nodeId, 'data-type': 'query', title: 'Bản ghi đọc từ org (chỉ để xem, không insert)', onclick: () => { activeTab = key; render(); } }, `${q.alias} · ${q.sobject} (${q.count})`); // the Query icon is drawn by ::before
     }),
     errorsTotal ? h('button', { class: `tab-issues${activeTab === ERRORS_TAB ? ' active' : ''}`, onclick: () => { activeTab = ERRORS_TAB; render(); } }, `Lỗi insert (${fmt(errorsTotal)})`) : null,
   );
