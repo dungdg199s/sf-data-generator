@@ -19,7 +19,7 @@ flows
 
 **Speed (since design 0009).** The flows are grouped into seven independent functions that run **in parallel**, each in
 its own browser context (so storage, routes and dialogs never leak between them): `flowEditing` (1–5), `flowPicker`
-(5b), `flowFiles` (5c–10), `flowDark` (12), `flowLayoutWide` and `flowLayoutNarrow` (11, 13), `flowEach` (14), `flowCanvas` (15), `flowProductivity` (16), `flowLibrary` (17). The browser launches
+(5b), `flowFiles` (5c–10), `flowDark` (12), `flowLayoutWide` and `flowLayoutNarrow` (11, 13), `flowEach` (14), `flowCanvas` (15), `flowProductivity` (16), `flowLibrary` (17), `flowMinimap` (18). The browser launches
 while the server starts; a fresh context starts with empty storage, so no `localStorage.clear()` + reload; storage a flow
 needs before its first load is written by `addInitScript` (once, guarded by a marker key, so reloads keep it); layout
 checks resize one page (`setViewportSize`) instead of opening a context per width; waits for the sheet or toast
@@ -32,7 +32,9 @@ storage and reloading (one app boot less; flow 5b).
 
 1. **Wide (1440 px), light scheme.** Loads the "Account + Contact" sample. Every step, the Start card
    and every palette item carries `data-type` and an icon tile (`.ico-tile .ico`) and no inline `--c`;
-   `client/js/store.js` no longer contains `NODE_COLORS` (design doc 0008).
+   `client/js/store.js` no longer contains `NODE_COLORS` (design doc 0008). Icons (design 0014 §1): with `acc` selected
+   (inspector head and field cards drawn), every visible `button` without text has an `aria-label`, every `.ico` has a
+   `data-ico` unless it is inside an `.ico-tile`, and every icon directly in a non-link button is 16 px wide.
 2. **Editing.** The "+" inside the inner loop body opens the menu (every row has `data-type` and an icon)
    and adds a Record after `con`, which becomes selected; Alt+↑ moves it above `con`; Delete removes it
    and Ctrl+Z restores it in place.
@@ -64,7 +66,9 @@ storage and reloading (one app boot less; flow 5b).
    `aria-controls` only while it is open. Typing `Lead` into "Trỏ tới sObject" of `AccountId` refreshes "Bản ghi cha".
    Then a seeded workflow checks branch "Giá trị" (path mode): switching a root branch to "So sánh giá trị" fills
    `acc.Name` (not the invalid `loop.index`); tabbing into and out of an empty "Giá trị" neither opens the picker nor
-   inserts; clicking it opens the list and Tab without typing inserts nothing; ↓ then Tab inserts.
+   inserts; clicking it opens the list and Tab without typing inserts nothing; ↓ then Tab inserts. Design 0014 §6: the template
+   field and the path field have `aria-keyshortcuts` with `Alt+ArrowDown`, and Alt+ArrowDown opens the picker in both (in the
+   template field with the search focused; Esc closes it).
 5c. **Query → Chọn bản ghi → Record without an org (design doc 0006).** The "Contact cho Account có sẵn" sample
    shows "chưa chọn org" on the Query card; Ctrl+Enter generates 10 Contacts from 5 sample rows, with a "↓ accs ·
    Account (5)" tab, "accs: 5 bản ghi mẫu" in the summary and a warning on the Query card. With the Query selected,
@@ -99,7 +103,7 @@ storage and reloading (one app boot less; flow 5b).
     reads "Insert N bản ghi"; "Hủy" closes it. Any `/api/run` request with a `target` is aborted
     and fails the run, so the smoke test never writes to an org. Then, with a canned preview of the Query sample that
     read the (mocked) org, the confirmation lists "Đọc từ org, không ghi: Account 2 (accs, đọc lúc …)" and says the
-    rows are re-read only after 10 minutes or with "⟳ Đọc lại" (no over-promise, no "null"). The canned preview is
+    rows are re-read only after 10 minutes or with "bấm Đọc lại rồi Insert" (no over-promise, no "null"; the ⟳ glyph is an icon since 0014). The canned preview is
     an NDJSON stream (`start`, `done`) like the real `/api/run`. Then inserts are answered by the route mock itself (they
     never reach the server or an org): after an insert, a second Insert previews afresh (seed empty); with seed 7 the
     second confirmation warns "Seed 7 đã dùng cho lần insert trước…"; the "Lỗi insert" tab has role=button group rows
@@ -132,8 +136,21 @@ storage and reloading (one app boot less; flow 5b).
       cả" is in the ⋯ menu. With the issues workflow (opened through `#file-input`, then a reload: the tab reopens its library
       entry), tapping an issue row (390 × 844: `task`; 844 × 390: `opp`) leaves the
       card fully between the palette and the sheet.
-    - **13e results header**: ≤ 50 px after Xem trước at 390 px with `aria-expanded="true"`; "⤓ Tải" opens "Tải JSON" and
-      "Tải CSV (tab hiện tại)"; at 1440 px the two buttons show and "⤓ Tải" does not.
+      Design 0014 §3 (two snaps), with `con` selected at 390 × 844: Enter on `.sheet-grip` puts the sheet's top at the top
+      bar's bottom (± 1 px) with `aria-expanded="true"`, a toast (F8) ends above it; Enter again goes back to the middle snap
+      with `con` above it; a mouse drag on `.sheet-head` up 200 px gives the tall snap; back at the middle snap (Enter), down 400 px
+      closes it (inert, focus on `con`; from the middle snap so the result does not depend on the drag's speed); tapping `con` reopens it at the middle snap; at 844 × 390 the tall snap is 301 px. Design 0014 §7: at the end, the
+      "Contact cho Account có sẵn" sample (⋯ → Mẫu) previewed without an org: no `.step-card` has `scrollWidth >
+      clientWidth` and every ⋯ is inside the screen.
+    - **13e results header**: ≤ 50 px after Xem trước at 390 px with `aria-expanded="true"`; "Tải" opens "Tải JSON" and
+      "Tải CSV (tab hiện tại)"; at 1440 px the two buttons show and "Tải" does not. Design 0014 §4: at 390 px
+      `#results-summary` and `.palette` get `data-overflow="end"`, a vertical mouse wheel over the summary scrolls it sideways,
+      scrolled to the end it is `"start"`; at 1440 px `.palette` has no `data-overflow`.
+    - **Results panel height (design 0014 §2)**, at the end of `flowLayoutWide` (1440 × 900, `con` selected, panel opened):
+      Shift+Tab from `Kết quả` reaches the `role=separator` handle; ↑ × 3 adds 48 px (and `aria-valuetext` reads `Cao n px
+      (p % màn hình)`); Home gives 160 px; End leaves the main area 240 px high, the issues bar ≤ 25 % of the middle column and
+      `con` in view; from the minimum a mouse drag up 100 px gives 260 px, still 260 px after a reload; Enter collapses the panel
+      and focuses `Kết quả`.
 
 14. **Lặp "Mỗi bản ghi trong pool" (design 0010), `flowEach`, own context.** The "Contact cho mỗi Account có sẵn"
     sample: the loop card shows `acc` and "Mỗi bản ghi trong accs → acc · {{loop.index}}"; Ctrl+Enter (no org, 5 sample
@@ -162,6 +179,15 @@ storage and reloading (one app boot less; flow 5b).
     (`smoke-390-canvas.png`). At 844 × 390 with the sheet open, End selects `con`: its top is visible above the sheet,
     not under the zoom bar, its ⋯ is 32 px; ⋯ → "Quy trình" there leaves `sfdg.view` = `canvas` (landscape phone = phone).
     `SMOKE_ONLY=flowCanvas` (comma list) runs only the named flows.
+
+18. **Sơ đồ minimap (design 0014 §5), `flowMinimap`, own context (parallel).** A 1 000-step workflow (250 Lặp, each with a
+    Record and a Rẽ nhánh holding a Record) and `sfdg.view` = `canvas` are written by `addInitScript` before the first load.
+    The minimap shows with 1–16 `<path>`; a click at 75 % of its overview track makes the cards around 75 % of the diagram's
+    width; a step card is panned level with the minimap, then End selects the last step: its card stays level, inside the
+    viewport and not under the minimap (fails if `showRect` ignores it). Screenshots `smoke-1440-minimap.png` and
+    `smoke-1440-minimap-dark.png`. `#btn-minimap` hides it (`aria-pressed="false"`), still hidden after a reload
+    (`sfdg.minimap` = `0`), and shows it again; at 800 px with the sheet open it is `visibility: hidden`; at 390 px the button
+    and the map are not displayed; a one-step workflow opened through `#file-input` has no minimap.
 
 16. **Editor productivity (design 0012), `flowProductivity`, own context (one page: G, then F1, I, C, H, D, E in that order).** G: a saved workflow (`addInitScript`) with a Task
     Record that has a `Name` field and a Contact whose template reads `{{task.Name}}`: the Task card has the warning badge, its
@@ -213,10 +239,12 @@ CPU-bound, so the cap scales with the CPUs; it is there to catch fixed waits and
 `flows: <name> <ms>, …` (longest first) and `duration=… (budget …)`, to see which flow is the critical path. History: the cap was
 12 s until the 0012 review; with flow 16 complete a 4-CPU sandbox measured 11.3–11.9 s (10.5–12.3 s for the commit before
 0012 C/I/H/D/E), ~9.5–10 s once reduced motion and the flow 5b file-open went in. A second context for flow 16 made it slower,
-not faster.
+not faster. Design 0014 (flow 18 in parallel, checks in flows 1, 5b, 11, 13): 11.1–11.6 s for the same machine that ran
+the commit before it in 9.5–10.0 s.
 Screenshots (only when a directory is given): `smoke-1440.png`, `smoke-390.png`, `smoke-390-sheet.png`,
 `smoke-390-dark.png`, `smoke-390-topbar.png`, `smoke-1280-issues.png`, `smoke-1440-dark.png`, `smoke-1440-dark-insert.png`,
-`smoke-1440-canvas.png`, `smoke-1440-canvas-dark.png`, `smoke-390-canvas.png`.
+`smoke-1440-canvas.png`, `smoke-1440-canvas-dark.png`, `smoke-390-canvas.png`, `smoke-1440-minimap.png`,
+`smoke-1440-minimap-dark.png`.
 Requires Playwright with Chromium (`require('playwright')`); exit code 2 means it is not installed.
 
 Extend the script when you add a UI flow worth guarding (keep it fast: see "Speed" above).

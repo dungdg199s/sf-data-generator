@@ -24,7 +24,7 @@ viết và cập nhật các file này theo skill `design-doc`; người viết 
 | [0011](0011-thao-tac-du-lieu-org.md) | Thao tác dữ liệu org: Bulk API 2.0, lịch sử chạy, xóa dữ liệu đã insert | Đã duyệt |
 | [0012](0012-nang-suat-soan-thao.md) | Năng suất soạn thảo: thư viện workflow, chọn nhiều bước, copy/paste, sửa nhanh | Đã làm |
 | [0013](0013-mo-rong-bien-va-lap.md) | Mở rộng biến và lặp | Đã duyệt |
-| [0014](0014-hoan-thien-giao-dien.md) | Hoàn thiện giao diện: icon SVG, đổi cao panel kết quả, sheet hai nấc, dấu hiệu cuộn ngang, minimap, phím chọn biến | Đã duyệt |
+| [0014](0014-hoan-thien-giao-dien.md) | Hoàn thiện giao diện: icon SVG, đổi cao panel kết quả, sheet hai nấc, dấu hiệu cuộn ngang, minimap, phím chọn biến | Đã làm |
 
 ## Nguyên tắc tiện dụng
 

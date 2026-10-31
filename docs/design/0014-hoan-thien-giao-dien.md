@@ -1,6 +1,6 @@
 # 0014 — Hoàn thiện giao diện: icon SVG, đổi cao panel kết quả, sheet hai nấc, dấu hiệu cuộn ngang, minimap, phím chọn biến trên macOS
 
-- **Trạng thái:** Đã duyệt (2026-10-28; người dùng giao chốt theo phương án đề xuất, xem [Đã chốt](#đã-chốt))
+- **Trạng thái:** Đã làm (2026-10-31; duyệt 2026-10-28, người dùng giao chốt theo phương án đề xuất, xem [Đã chốt](#đã-chốt))
 - **Ngày:** 2026-10-28
 - **Liên quan:** [0008](0008-ui-design-system.md) (token, icon mask, trạng thái; để lại việc đổi ký tự thành SVG),
   [0009](0009-bo-cuc-man-hinh.md) (thanh lỗi, bottom sheet, đầu panel kết quả; "Câu hỏi mở" chuyển sang doc này),
@@ -570,4 +570,66 @@ Người dùng giao chọn theo phương án đề xuất; planner chốt như s
 
 ## Đã làm
 
-(Chưa làm.)
+Làm đủ 8 bước của [Kế hoạch thực hiện](#kế-hoạch-thực-hiện), mỗi bước một commit (2026-10-31), `npm test` xanh sau mỗi
+commit, hash vàng của `test/stream.test.js` không đổi (không đụng server / executor):
+
+| # | Commit | Nội dung |
+| --- | --- | --- |
+| 1 | `ee0e3b1` | `keys.js` (`isMac`, `pickerKeys`, `isPickerOpenKey`, `PICKER_ARIA_KEYS`); Alt+↓ mở bảng chọn biến ở ô Mẫu và ô đường dẫn; `title` của `{x}`, `aria-keyshortcuts`, dòng "Phím tắt" theo nền tảng. `test/keys.test.js`; smoke 5b |
+| 2 | `a373788` | 25 icon `--ico-*`, luật `.ico[data-ico]` cho cả 38 icon, `--icon-xs/sm/md`, `ico()`; đổi mọi ký tự-icon (cả của 0012: `▾` thư viện, `⋯` của thanh chọn và mục thư viện, `Bọc ▾`, `＋ Workflow mới`, `▲ Chưa lưu`); `aria-label` cho 7 nút; test (a)(b)(c) trong `css-tokens.test.js`; smoke luồng 1 |
+| 3 | `e04f97c` | Thẻ Quy trình không tràn ở ≤ 720 px; smoke 13d |
+| 4 | `ab8162e` | `watchOverflow()`, token mask, `scroll-padding-inline`, con lăn; smoke 13e |
+| 5 | `2ca65a4` | `sizing.js` (phần panel), tay nắm `role=separator`, `sfdg.resultsH`, `--topbar-h`; `test/sizing.test.js`; smoke `flowLayoutWide` |
+| 6 | `3187d33` | Sheet hai nấc (`snapSheet`, `sheetSnaps`, `dragVelocity`), `.sheet-grip`, `--sheet-h-full`, `--sheet-now`; smoke `flowLayoutNarrow` |
+| 7 | `f745e29` | `minimap.js`, minimap trong `canvas.js`, `#btn-minimap` + `sfdg.minimap`, `overlayRects()`; `--color-minimap-off`; `test/minimap.test.js`; smoke `flowMinimap` (mới, song song) |
+| 6b | `90b3e52` | Sau bước 6: `--sheet-now` chỉ ghi khi đổi; smoke đóng sheet bằng kéo từ nấc vừa (xem mục 7, 9 dưới) |
+| 8 | (commit này) | Tài liệu: `ui-design-system.md` (bỏ "dự kiến", bảng icon §5 mỗi icon một tên đầy đủ), `architecture.md`, skill `smoke-test`, README, mục này |
+
+**Khác với thiết kế (và lý do):**
+
+1. `isMac` so khớp **không phân biệt hoa thường** (`/mac|iphone|ipad/i`): `navigator.userAgentData.platform` trả `"macOS"`
+   nên `/Mac|iPhone|iPad/` của thiết kế bỏ sót Chrome trên Mac (test bắt được).
+2. Thêm icon thứ 25 **`folder`** cho "Mở file JSON…" của popup Thư viện (0012 dùng ký tự `⇪`, bảng của doc chưa có); `＋`
+   của "Workflow mới" thành `plus`. Hàng popup nhận thuộc tính `icon` (`popup.js` vẽ `ico(it.icon)`). `▲` của `Chưa lưu` /
+   `Tab khác đã sửa` và của tag `quá giới hạn` (`.tag-est-over`) cũng đổi sang icon `warning` dù `▲` không nằm trong danh
+   sách của test (c), vì cũng là ký tự dùng làm icon. Nút "Tùy chọn" của field có thêm `aria-expanded`.
+3. Smoke luồng 1: "mọi `button > .ico` rộng 16 px" chỉ xét nút **không phải** `.link` (link "Đọc lại", "giữ seed" cạnh chữ
+   13 px dùng `--icon-sm` 14 px theo đúng quy tắc cỡ của §1) và nút đang hiện; kiểm tra `aria-label` bỏ qua nút nằm trong
+   `[hidden]` (`#issues-first` rỗng khi thanh lỗi ẩn).
+4. Test (c) đọc chuỗi bằng một bộ quét literal nhỏ (`jsLiterals` trong `css-tokens.test.js`: chuỗi, template, regex; bỏ chú
+   thích) thay vì regex trên cả file, để chú thích được nhắc ký tự cũ. Có test cho chính bộ quét.
+5. Chip số liệu: `title` giờ **bắt đầu bằng chữ của chip** (`14 bản ghi. Số liệu của lần xem trước gần nhất.`), vì ở điện
+   thoại chip có thể bị cắt `…` mà `title` cũ chỉ là câu giải thích. Luật co của §7 chỉ áp cho Quy trình (`.process`); thẻ Sơ
+   đồ có kích thước cố định và luật riêng.
+6. Panel kết quả: chưa có chiều cao đã lưu thì vẫn dùng `38vh` của CSS (không đổi sang px); `#results` có thêm lớp
+   `.resizable` để hàng chạm 24 px bỏ padding trên của `.results-head` (không dùng `:has()`). Tay nắm có `title` ghi phím.
+   Giới hạn 160 / 240 px nằm trong `sizing.js` (hằng số), cùng giá trị với token `--results-min-h` / `--layout-min-h`.
+7. Sheet: kéo hàng đầu sheet **không** dùng `setPointerCapture` (nghe `pointermove` / `pointerup` trên `window`, để chạm tay nắm
+   vẫn là `click` của nút) và gọi `preventDefault()` ở `pointerdown`: không có nó, Chromium bắt đầu chọn chữ / kéo thả gốc ở
+   lần kéo thứ hai và nuốt mất các sự kiện con trỏ (smoke bắt được). Hai nấc tính bằng JS (`sheetSnaps`, từ
+   `innerHeight` và chiều cao thanh trên, cùng công thức với `--sheet-h` / `--sheet-h-full`); `--sheet-overlap` đo theo nấc vừa
+   (không theo `offsetHeight` vì chiều cao đang chuyển động). Vuốt nhanh tính theo chiều cao lúc thả: trên nấc vừa thì sang nấc
+   kế theo hướng, dưới nấc vừa vuốt xuống thì đóng. `--sheet-now` chỉ ghi khi giá trị đổi (ghi custom property trên `body` ở
+   mỗi lần vẽ inspector làm cả trang tính lại style).
+8. Minimap: khung nhìn và quầng của nó là hai `<rect>` (đổi 4 thuộc tính mỗi khung hình), nên "≤ 16 `<path>`" chỉ đếm các nhóm
+   (khung và thẻ theo loại, tắt, lỗi, đang chọn). Bước lỗi cấu trúc (`invalid`) vẽ như bước tắt. Hiện / ẩn theo lớp `.show`
+   (JS: bật, đang ở Sơ đồ, sơ đồ lớn hơn khung nhìn) cộng CSS (điện thoại: `display: none`; sheet mở: `visibility: hidden`), nên
+   `showRect` đọc `visibility` để biết có phải tránh nó không. Dựng đường đo được 0,13 ms (1 000 bước) / 0,22 ms (8 000 bước),
+   `minimapModel` < 0,002 ms (Node, `minimapPaths` với cửa sổ ± một cửa sổ).
+9. Smoke 13d (thẻ không tràn) chạy ở cuối `flowLayoutNarrow`: luồng này có org giả được chọn, nên trước đó chọn "— không kết
+   nối —" rồi mở mẫu qua ⋯ → Mẫu. Ảnh minimap tên `smoke-1440-minimap.png` / `smoke-1440-minimap-dark.png`, chụp ngay sau khi
+   bấm 75 % rãnh. Kiểm tra "không che thẻ" dùng End (bước cuối, pan nhỏ nhất ở mép phải) sau khi đưa hàng thẻ ngang tầm
+   minimap; đã thử bỏ minimap khỏi `overlayRects()` thì kiểm tra này hỏng. "Kéo xuống 400 px ⇒ đóng" chạy **từ nấc vừa**
+   (506 − 400 = 106 px, dưới ½ nấc vừa nên đóng ở mọi tốc độ): từ nấc cao (755 − 400 = 355 px) thì kết quả tùy tốc độ thả, đúng
+   thiết kế (chậm ⇒ nấc gần nhất là nấc vừa), và một lần chạy trên máy đang tải đã hỏng vì thế.
+10. Cặp tương phản: thêm vào `PAIRS` của `css-tokens.test.js` các cặp mới của §11 (`minimap-off`, `accent` trên
+    `surface-raised` / `surface-hover`, `danger` trên `surface-raised`, …); các cặp còn lại của §11 đã có sẵn với ngưỡng cao hơn.
+
+**Thời gian smoke** (máy 4 CPU, ngân sách 15 s; mục tiêu "≤ 12 s / chậm hơn ≤ 1 s" của doc được thay bằng ngân sách theo
+chỉ đạo khi giao việc): trước 0014 (commit `f4a4ae6`, cùng máy, cùng lúc đo) 9,5 / 10,0 s. Sau 0014, 3 lần liên tiếp cuối:
+**11,1 / 11,6 / 11,6 s**, cả ba `SMOKE OK` (các lần chạy khác trong ngày: 11,0–12,3 s). Phần tăng ~1,5–2 s: ~1,2 s là luồng thứ 11 chạy song song (`flowMinimap`, nạp 1 000 bước hai lần; CPU là
+nút thắt), phần còn lại là các kiểm tra mới của luồng 1, 5b, 11, 13; smoke cũ chạy trên mã mới mất 10,5–10,7 s (icon mask
+nhiều hơn). Trong khoảng 30 lần chạy khi làm có **một** lần `flowEditing` mất 34 s (một thao tác chờ hết 30 s rồi vẫn qua,
+không lỗi nào khác); chạy lại hơn 25 lần (có lần ghi mốc
+thời gian từng dòng của `flowEditing`) không tái hiện được, nên chưa rõ nguyên nhân; nếu gặp lại, xem thao tác nào của
+`flowEditing` chờ đủ 30 s (thời hạn mặc định của Playwright).
