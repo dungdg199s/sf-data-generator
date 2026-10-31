@@ -61,7 +61,7 @@ export function renderOptions(defs, values, onChange, ctx = {}) {
     const helper = def.suggest && ctx.suggest ? suggestHelper(def, control, id, ctx.suggest, current) : null;
     let field = helper ? h('div', { class: 'suggest-wrap' }, control, helper) : control;
     let strip = null;
-    if (def.vars && ctx.vars && (def.kind === 'string' || def.kind === undefined)) {
+    if (def.vars && ctx.vars && (def.kind === 'string' || def.kind === undefined || numberVars(def, ctx))) {
       // Getters, not a spread: the field can be renamed while this form stays on screen.
       const vctx = ctx.vars;
       ({ wrap: field, strip } = attachVarPicker(control, {
@@ -88,6 +88,20 @@ export function renderOptions(defs, values, onChange, ctx = {}) {
 
 let insertSeq = 0;
 
+/** A number option that also takes one variable (`vars: 'number'`, design 0013 B) and has the picker here. */
+const numberVars = (def, ctx) => def.vars === 'number' && (def.kind === 'integer' || def.kind === 'number') && Boolean(ctx.vars);
+
+/**
+ * Value of a number box that takes a variable: '' → undefined (the default), a number → that
+ * number, anything else (`{{acc.X}}`, or text validation reports) → the text as typed.
+ */
+export function numberBoxValue(text) {
+  const s = String(text ?? '').trim();
+  if (s === '') return undefined;
+  if (/^-?(\d+(\.\d*)?|\.\d+)$/.test(s)) return Number(s);
+  return text;
+}
+
 function renderControl(def, value, set, id, ctx, current) {
   const v = value ?? def.default;
   switch (def.kind) {
@@ -95,6 +109,17 @@ function renderControl(def, value, set, id, ctx, current) {
       return h('input', { id, type: 'checkbox', checked: Boolean(v), onchange: (e) => set(e.target.checked) });
     case 'integer':
     case 'number':
+      // A text box (type=number cannot hold {{…}}), numeric keyboard on phones, with the picker.
+      if (numberVars(def, ctx)) {
+        return h('input', {
+          id,
+          type: 'text',
+          inputmode: def.kind === 'integer' ? 'numeric' : 'decimal',
+          autocomplete: 'off',
+          value: v ?? '',
+          oninput: (e) => set(numberBoxValue(e.target.value), e.target._varInsert ? { coalesceKey: `insert:${++insertSeq}` } : undefined),
+        });
+      }
       return h('input', {
         id,
         type: 'number',
@@ -115,14 +140,16 @@ function renderControl(def, value, set, id, ctx, current) {
       return h('textarea', {
         id,
         rows: 3,
+        placeholder: def.placeholder,
         value: Array.isArray(v) ? v.join('\n') : v ?? '',
         oninput: (e) => {
-          const items = e.target.value.split(/\n|,/).map((s) => s.trim()).filter(Boolean);
+          // `split: 'lines'`: one value per line, commas kept (Lặp "Mỗi giá trị trong danh sách", 0013).
+          const items = e.target.value.split(def.split === 'lines' ? /\r?\n/ : /\n|,/).map((s) => s.trim()).filter(Boolean);
           set(def.kind === 'numberList' ? items.map(Number) : items);
         },
       });
     case 'text':
-      return h('textarea', { id, rows: def.rows ?? 3, class: def.monospace ? 'mono' : undefined, spellcheck: def.monospace ? 'false' : undefined, value: v ?? '', oninput: (e) => set(e.target.value) });
+      return h('textarea', { id, rows: def.rows ?? 3, placeholder: def.placeholder, class: def.monospace ? 'mono' : undefined, spellcheck: def.monospace ? 'false' : undefined, value: v ?? '', oninput: (e) => set(e.target.value) });
     case 'ref': {
       const aliases = (ctx.refChoices ? ctx.refChoices(def, current) : ctx.aliases) ?? [];
       const usable = aliases.filter((a) => a.usable !== false);

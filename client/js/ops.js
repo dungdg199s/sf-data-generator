@@ -151,6 +151,38 @@ export function fillEach(wf, step) {
   return filled;
 }
 
+/**
+ * "Lọc" just became "Chỉ bản ghi thỏa điều kiện" on a Lặp `each` or a Chọn bản ghi (design 0013):
+ * with Field and "So với" still empty and a pool read from the org (`from`, its fields known), the
+ * nearest usable record read from the org (the record looped over, or picked) whose sObject S
+ * gives the pool a field `${S}Id` (Salesforce naming: AccountId, ContactId; any case) makes the
+ * parent–child condition `<S>Id = {{<record>.Id}}`. Generated records have no Id yet, so they are
+ * never suggested. Mutates `step` (inside the caller's updateWorkflow: the same undo step).
+ * → { field, value, parent } or null when nothing was filled.
+ */
+export function fillParentFilter(wf, step) {
+  const c = (step.config ??= {});
+  if ((c.filterField ?? '') !== '' || (c.filterValue ?? '') !== '') return null;
+  const scope = analyzeScope(wf, state.meta);
+  const here = scope.at[step.id];
+  if (!here || !c.from) return null;
+  const visible = here.visible.map((v) => scope.sources[v.source]).filter(Boolean);
+  const pool = visible.find((s) => s.pool && s.name === c.from);
+  if (!pool || pool.origin !== 'org') return null;
+  const fields = new Map(pool.members.filter((m) => !m.builtin).map((m) => [m.key.toLowerCase(), m.key]));
+  for (const s of visible) {
+    if (s.origin !== 'org' || (s.current !== 'item' && s.current !== 'picked') || !s.sobject || !s.name) continue;
+    if (!s.open && !s.members.some((m) => m.key === 'Id')) continue;
+    const field = fields.get(`${s.sobject}id`.toLowerCase());
+    if (!field) continue;
+    c.filterField = field;
+    c.filterOp = 'eq';
+    c.filterValue = `{{${s.name}.Id}}`;
+    return { field, value: c.filterValue, parent: s.name };
+  }
+  return null;
+}
+
 /** Insert a new step (default target: the "first free slot" rule) and select it. */
 export function addStep(type, target = defaultTarget()) {
   const step = newStep(type, target);

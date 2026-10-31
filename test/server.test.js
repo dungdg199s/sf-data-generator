@@ -90,6 +90,8 @@ test('GET /api/meta: loop has values, filter, order and limit with chained showI
   const opt = (t, k) => type(t).options.find((o) => o.key === k);
   // Values loop (0013 D): a list with a placeholder; `value` member only in values mode.
   assert.deepEqual([opt('loop', 'values').kind, opt('loop', 'values').showIf, opt('loop', 'values').placeholder], ['list', { key: 'mode', in: ['values'] }, 'Hot\nWarm\nCold']);
+  // One value per line in the form (a value may hold a comma), like valueList on the server.
+  assert.equal(opt('loop', 'values').split, 'lines');
   assert.deepEqual(type('loop').exposes[0].members.find((m) => m.key === 'value').when, { key: 'mode', in: ['values'] });
   // Each filter (0013 C): `filter` shows in each mode, its fields when it is `compare` (transitive).
   assert.deepEqual(opt('loop', 'filter').showIf, { key: 'mode', in: ['each'] });

@@ -6,10 +6,14 @@ import { state, nodeType, queryResultOf, stepById, slotKeys, currentEstimate } f
 import { walkSteps } from '/shared/workflow-tree.js';
 import { START_ID } from './layout.js';
 import { selectFields, soqlSobject } from '/shared/soql.js';
-import { exposesOf } from '/shared/scope.js';
+import { exposesOf, valueList } from '/shared/scope.js';
 
 const opLabel = (type, key, value) => nodeType(type)?.options.find((o) => o.key === key)?.choices?.find((x) => x.value === value)?.label ?? value;
 const PICK_MODE = { random: 'ngẫu nhiên', unique: 'không lặp', sequential: 'lần lượt' };
+/** " · lọc AccountId = {{acc.Id}}" of a Chọn bản ghi or Lặp `each` with a filter, else ''. */
+const filterText = (type, c) => ((c.filter ?? 'none') === 'compare'
+  ? ` · lọc ${c.filterField || '?'} ${opLabel(type, 'filterOp', c.filterOp ?? 'eq')} ${c.filterValue ?? ''}`.trimEnd()
+  : '');
 
 export function stepSummary(step) {
   const c = step.config ?? {};
@@ -17,13 +21,26 @@ export function stepSummary(step) {
     case 'record':
       return `${c.sobject || '?'} × ${c.count ?? 1} · ${(c.fields ?? []).length} field`;
     case 'loop': {
-      // Each record of a pool (0010): "Mỗi bản ghi trong accs → acc · {{loop.index}}".
+      const v = `{{${c.alias || 'loop'}.index}}`;
+      // Each record of a pool (0010): "Mỗi bản ghi trong accs → acc · {{loop.index}}"; with the
+      // parts of design 0013 that are on: "· lọc AccountId = {{acc.Id}} · xáo trộn · tối đa 3".
       if (c.mode === 'each') {
-        return c.from ? `Mỗi bản ghi trong ${c.from} → ${c.itemAlias || '?'} · {{${c.alias || 'loop'}.index}}` : 'Mỗi bản ghi trong ? · chọn pool';
+        if (!c.from) return 'Mỗi bản ghi trong ? · chọn pool';
+        const limit = Number(c.limit ?? 0);
+        const extra = `${filterText('loop', c)}${c.order === 'shuffle' ? ' · xáo trộn' : ''}${limit > 0 ? ` · tối đa ${limit}` : ''}`;
+        return `Mỗi bản ghi trong ${c.from} → ${c.itemAlias || '?'}${extra} · ${v}`;
       }
-      // Same fallbacks as the executor (server/workflow/executor.js) for a missing value.
+      // Each value of a list (0013 D): "3 giá trị: Hot, Warm, Cold · {{loop.value}}", "+2" past 3.
+      if (c.mode === 'values') {
+        const list = valueList(c.values);
+        if (!list.length) return 'Danh sách trống · nhập giá trị';
+        const more = list.length > 3 ? `, +${list.length - 3}` : '';
+        return `${list.length} giá trị: ${list.slice(0, 3).join(', ')}${more} · {{${c.alias || 'loop'}.value}}`;
+      }
+      // Same fallbacks as the executor (server/workflow/executor.js) for a missing value; a
+      // count from a variable is shown as written ({{acc.NumberOfEmployees__c}} lần).
       const times = (c.mode ?? 'fixed') === 'range' ? `${c.min ?? 1}–${c.max ?? 1} lần` : `${c.count ?? 0} lần`;
-      return `${times} · {{${c.alias || 'loop'}.index}}`;
+      return `${times} · ${v}`;
     }
     case 'query': {
       // Builder: "Account · 2 field · ≤200"; SOQL: the start of the statement. Last run: "· đọc 200" / "· mẫu 5".
@@ -35,9 +52,9 @@ export function stepSummary(step) {
       return q ? `${text} · ${q.source === 'sample' ? 'mẫu' : 'đọc'} ${q.count}` : text;
     }
     case 'pick': {
-      const base = `${PICK_MODE[c.mode ?? 'random'] ?? c.mode} từ ${c.from || '?'}`;
-      if ((c.filter ?? 'none') !== 'compare') return base;
-      return `${base} · lọc ${c.filterField || '?'} ${opLabel('pick', 'filterOp', c.filterOp ?? 'eq')} ${c.filterValue ?? ''}`.trim();
+      // Weighted (0013 E): "theo trọng số NumberOfEmployees từ accs".
+      const how = c.mode === 'weighted' ? `theo trọng số ${c.weightField || '?'}` : PICK_MODE[c.mode ?? 'random'] ?? c.mode;
+      return `${how} từ ${c.from || '?'}${filterText('pick', c)}`;
     }
     case 'branch': {
       if ((c.kind ?? 'chance') === 'chance') return `${Math.round((c.probability ?? 0.5) * 100)}% đi nhánh Đúng`;

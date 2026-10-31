@@ -359,6 +359,8 @@ export const NODE_TYPES = [
       },
       {
         key: 'values', label: 'Danh sách giá trị', kind: 'list', default: [], showIf: VALUES, placeholder: 'Hot\nWarm\nCold',
+        // One value per line: a value may hold a comma (a company name), as valueList reads a string.
+        split: 'lines',
         help: 'Mỗi dòng một giá trị. Bên trong dùng {{loop.value}}; với field Picklist chọn kiểu "Lấy từ biến (giữ kiểu)" rồi loop.value.',
       },
       { key: 'from', label: 'Lặp qua pool', kind: 'ref', default: '', showIf: EACH, accepts: { pool: true }, placeholder: '— chọn pool —', empty: '— chưa có pool nào phía trên —', help: 'Alias của bước Query, Record hoặc Chọn bản ghi ở phía trên. Thân vòng lặp chạy một lần cho mỗi bản ghi, theo thứ tự của pool. Pool Record gồm mọi bản ghi của alias đã sinh từ đầu lần chạy.' },
