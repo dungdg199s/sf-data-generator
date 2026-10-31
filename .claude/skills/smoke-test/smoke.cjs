@@ -62,7 +62,7 @@
 //      "Lần chạy" last) and fills {{accs.$count}} (chip, card "{{accs.$count}} lần", ≈ estimate); a preview without an
 //      org loops 5 times; Alt+↓ in the number box shows run.seed = the preview's seed; "Lọc" on a nested each fills
 //      AccountId = {{acc.Id}} with a toast, "fixed" hides every filter box, one ↶ takes back filter + fill; Xáo trộn +
-//      Tối đa 2 ⇒ "10 lần lặp"; an empty values list is outlined with valuesEmpty, Hot/Warm/Cold fill the card; Rẽ
+//      Tối đa 2 ⇒ "10 lần lặp"; an empty values list is outlined with valuesEmpty, a comma stays inside a value, Hot/Warm/Cold fill the card; Rẽ
 //      nhánh "So với" {x} inserts {{opp.Amount}}
 //  0014 also adds: SVG icons and aria-labels (1), Alt+↓ opens the picker (5b), Quy trình cards never overflow at 390 px,
 //      fades of sideways rows (13d, 13e), the results panel's height handle (13, wide), the sheet's two snaps (11, 13d).
@@ -1902,6 +1902,9 @@ async function flowVarsLoops() {
   });
   check(values.invalid && values.placeholder === 'Hot\nWarm\nCold' && values.error.includes('Nhập ít nhất một giá trị, mỗi dòng một giá trị'), `empty values list: ${JSON.stringify(values)}`);
   check(await sumIs('lv', 'Danh sách trống · nhập giá trị'), `empty values card: ${await sum('lv')}`);
+  // One value per line (split: 'lines'): a comma stays inside its value.
+  await page.fill('#inspector textarea[data-key="values"]', 'Công ty A, chi nhánh B\nHot');
+  check(JSON.stringify((await saved('lv')).values) === '["Công ty A, chi nhánh B","Hot"]', `values split: ${JSON.stringify((await saved('lv')).values)}`);
   await page.fill('#inspector textarea[data-key="values"]', 'Hot\nWarm\nCold');
   check(await sumIs('lv', '3 giá trị: Hot, Warm, Cold · {{v.value}}'), `values card: ${await sum('lv')}`);
 
