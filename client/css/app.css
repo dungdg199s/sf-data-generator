@@ -1144,7 +1144,9 @@ dialog .list .rel-check { font-size: var(--text-xs); color: var(--color-text-mut
 .multi-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); margin: var(--space-2) 0; }
 /* Narrow select mode: the bar takes the bottom sheet's place; no drag handle (a tap toggles a card). */
 .select-bar {
-  position: fixed; left: 0; right: 0; bottom: 0; height: 56px; z-index: var(--z-sheet);
+  /* 56 px above the home indicator of phones without a bottom bezel. */
+  position: fixed; left: 0; right: 0; bottom: 0; height: calc(56px + env(safe-area-inset-bottom)); z-index: var(--z-sheet);
+  padding-bottom: env(safe-area-inset-bottom);
   display: flex; align-items: center; gap: var(--space-2); padding: 0 var(--space-3);
   background: var(--color-surface); border-top: 1px solid var(--color-border); box-shadow: var(--shadow-3);
 }

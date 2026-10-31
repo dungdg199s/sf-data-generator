@@ -324,6 +324,15 @@ function updateInsertButton() {
 
 function wireShortcuts() {
   window.addEventListener('keydown', (e) => {
+    if (!e.defaultPrevented && (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'o') {
+      // Ctrl+O: the library popup from anywhere — an input, an open popup (toggles) — never the
+      // browser's file dialog. Not while a dialog is open (the popup would be behind it).
+      e.preventDefault();
+      if (document.querySelector('dialog[open]')) return;
+      if (popupAnchor() === $('btn-library')) closePopup(true);
+      else openLibraryMenu();
+      return;
+    }
     if (e.defaultPrevented || document.querySelector('dialog[open]') || e.target.closest('.popup')) return;
     const typing = e.target.closest('input, textarea, select, [contenteditable]');
     const mod = e.ctrlKey || e.metaKey;
@@ -340,11 +349,6 @@ function wireShortcuts() {
     } else if (mod && key === 's') {
       e.preventDefault();
       saveFile();
-    } else if (mod && key === 'o' && !e.shiftKey && !e.altKey) {
-      // Ctrl+O: the library popup, also from an input (not the browser's file dialog).
-      e.preventDefault();
-      if (popupAnchor() === $('btn-library')) closePopup(true);
-      else openLibraryMenu();
     } else if (typing) {
       // Inputs keep their native keys; Esc in the inspector goes back to the selected card.
       if (e.key === 'Escape' && e.target.closest('#inspector')) {

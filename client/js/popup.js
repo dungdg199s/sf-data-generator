@@ -135,7 +135,7 @@ export function openPopup(anchor, { title, items, search = false, searchLabel = 
       // Leaving the menu: back to its button (not to either end of the page).
       e.preventDefault();
       closePopup(true);
-    } else if (!inInput && e.key.length === 1 && /\S/.test(e.key)) {
+    } else if (!inInput && !e.ctrlKey && !e.metaKey && !e.altKey && e.key.length === 1 && /\S/.test(e.key)) {
       const k = e.key.toLowerCase();
       const buttons = focusables.filter((x) => x.matches('button'));
       const at = buttons.indexOf(document.activeElement);
@@ -143,7 +143,8 @@ export function openPopup(anchor, { title, items, search = false, searchLabel = 
       order.find((b) => b.textContent.replace(/^✓/, '').trim().toLowerCase().startsWith(k))?.focus();
     }
   });
-  document.body.append(el);
+  // Inside an open modal dialog (its ⋯ buttons): the popup must be in the same top layer to be clickable.
+  (anchor.closest?.('dialog[open]') ?? document.body).append(el);
   const r = anchor.getBoundingClientRect();
   const w = el.offsetWidth;
   const hgt = el.offsetHeight;

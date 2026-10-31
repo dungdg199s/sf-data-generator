@@ -181,9 +181,10 @@ test('coloured buttons keep their own fill when pressed (button:active would tur
 });
 
 test('spacing (padding, margin, gap, outline-offset) uses the 4 px scale tokens', () => {
-  // Exempt, on purpose: the .sr-only idiom `margin: -1px`.
+  // Exempt, on purpose: the .sr-only idiom `margin: -1px`; the device's safe area (`env(safe-area-inset-*)`,
+  // the select bar of 0012 B above a phone's home indicator) is not a spacing choice.
   const EXEMPT = new Set(['margin: -1px']);
-  const PART = /^(?:0|auto|var\(--(?:space-[\d-]+|focus-offset(?:-card)?|canvas-tail)\)|calc\(-1 \* var\(--space-[\d-]+\)\))$/;
+  const PART = /^(?:0|auto|var\(--(?:space-[\d-]+|focus-offset(?:-card)?|canvas-tail)\)|calc\(-1 \* var\(--space-[\d-]+\)\)|env\(safe-area-inset-(?:top|right|bottom|left)\))$/;
   for (const { prop, value } of declarations(COMPONENTS)) {
     if (!/^(?:(?:padding|margin)(?:-(?:top|right|bottom|left|inline|block)(?:-(?:start|end))?)?|gap|row-gap|column-gap|outline-offset)$/.test(prop)) continue;
     const where = `${prop}: ${value}`;

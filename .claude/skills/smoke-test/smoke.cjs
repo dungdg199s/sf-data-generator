@@ -1349,7 +1349,14 @@ async function librarySteps(page) {
   check(await entries() === 'Account + Contact | Lead theo xác suất', `Xóa: ${await entries()}`);
   await page.click('dialog[open] .lib-undo button:has-text("Hoàn tác")');
   check(await entries() === 'Account + Contact | Lead theo xác suất | Workflow mới', `Hoàn tác of a delete: ${await entries()}`);
+  // ≤ 720 px: Nhân bản / Tải JSON / Xóa are in the row's ⋯, a popup inside the (modal) dialog.
+  await page.setViewportSize({ width: 390, height: 800 });
+  const names390 = await page.$$eval('dialog[open] .lib-row .lib-name', (n) => n.map((x) => x.value));
+  await page.click(`dialog[open] .lib-row >> nth=${names390.indexOf('Workflow mới')} >> .lib-more`);
+  await page.click('dialog[open] .popup .popup-item:has-text("Xóa")', { timeout: 3000 });
+  check(await entries() === 'Account + Contact | Lead theo xác suất', `390 px, ⋯ → Xóa in the dialog: ${await entries()}`);
   await page.click('dialog[open] button:has-text("Đóng")');
+  await page.setViewportSize({ width: 1440, height: 900 });
 }
 
 /** 17 B: the "Account + Contact" sample (loopAcc { acc, loopCon { con } }). */
