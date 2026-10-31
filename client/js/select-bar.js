@@ -82,6 +82,10 @@ function update() {
   const text = `${n} đã chọn`;
   if (parts.count.textContent !== text) parts.count.textContent = text;
   for (const b of [parts.wrap, parts.del, parts.more]) b.disabled = !n;
-  // A disabled button cannot keep the tab stop.
-  if (!bar.querySelector('button[tabindex="0"]:not(:disabled)')) focusButton(parts.done, false);
+  // A disabled button cannot keep the tab stop, nor focus: when focus was on it (it falls to
+  // <body>), it goes to Xong so the keyboard stays in the bar.
+  if (!bar.querySelector('button[tabindex="0"]:not(:disabled)')) {
+    const move = bar.contains(document.activeElement) || document.activeElement === document.body;
+    focusButton(parts.done, move);
+  }
 }

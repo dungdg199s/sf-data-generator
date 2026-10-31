@@ -864,7 +864,7 @@ function renderFields(node) {
     'div',
     { class: 'fields-section' },
     requiredHint(node),
-    h('h3', {}, `Fields (${fields.length})`),
+    h('h3', { class: 'fields-heading', tabindex: '-1' }, `Fields (${fields.length})`),
     h('p', { class: 'hint' }, 'Thứ tự field là thứ tự sinh: {{this.Field}} và Email "theo tên" chỉ thấy field phía trên.'),
     list,
     h(
@@ -1123,9 +1123,11 @@ function addDescribedFields(node, described, picks, aliases) {
 const describeCache = new Map(); // `${org}|${sobject}` → Promise<describe | null>, for this session
 const requiredDismissed = new Set(); // Record step ids whose hint was closed with "Bỏ qua" (not saved)
 
-/** ⟳ (reload the org list): describes are read again. */
+/** ⟳ (reload the org list): describes and sObject lists (suggestions, Import) are read again. */
 export function clearDescribeCache() {
   describeCache.clear();
+  sobjectLists.clear();
+  sobjectCache = { org: null, list: [] };
 }
 
 /** The describe of `step`'s sObject in the selected org (cached), or null: no org, unknown sObject, error. */
@@ -1135,18 +1137,24 @@ function describeOf(step) {
   if (!org || !API_NAME.test(sobject)) return null;
   const key = `${org}|${sobject}`;
   if (!describeCache.has(key)) {
-    describeCache.set(key, (async () => {
+    const p = (async () => {
       const known = await suggestContext(step).sobjects('create');
       if (!known.some((x) => x.name === sobject)) return null;
       return api.describe(org, sobject);
-    })().catch(() => null)); // describe problems are reported at the sObject field, not here
+    })().catch(() => {
+      // Describe problems are reported at the sObject field, not here; a failure is not kept, so
+      // the next look (or ⟳) asks again.
+      if (describeCache.get(key) === p) describeCache.delete(key);
+      return null;
+    });
+    describeCache.set(key, p);
   }
   return describeCache.get(key);
 }
 
 /** The hint box above "Fields" of a Record step, filled once the describe is there. */
 function requiredHint(node) {
-  const box = h('div', { class: 'hint-box required-hint', role: 'status', hidden: true });
+  const box = h('div', { class: 'hint-box required-hint', hidden: true });
   box.dataset.step = node.id;
   fillRequiredHint(box);
   return box;
@@ -1157,11 +1165,16 @@ function refreshRequiredHint() {
   if (box) fillRequiredHint(box);
 }
 
+let hintSeq = 0; // only the latest describe of a hint box writes into it
+
 async function fillRequiredHint(box) {
   const id = box.dataset.step;
   const org = state.org;
+  const seq = ++hintSeq;
+  box.dataset.seq = String(seq);
   const described = requiredDismissed.has(id) ? null : await describeOf(stepById(id));
   if (!box.isConnected) return; // the inspector moved on meanwhile
+  if (box.dataset.seq !== String(seq)) return; // a later fill (another sObject, org, field) owns the box
   const step = stepById(id);
   const missing = described && step && state.org === org && step.config?.sobject === described.sobject && !requiredDismissed.has(id)
     ? missingRequired(step.config.fields, described)
@@ -1182,12 +1195,21 @@ async function fillRequiredHint(box) {
     const still = live ? missingRequired(live.config.fields, described) : [];
     if (!still.length) return;
     const aliases = parentChoices(live);
+    const first = live.config.fields?.length ?? 0;
     // Like Import: a required Lookup gets its parent by Import's rule (a Query of existing records when nothing fits).
-    const added = addDescribedFields(live, described, still.map((f) => ({ f, choice: lookup(f) ? preselectParent(f, aliases) : '', lookup: lookup(f) })), aliases);
-    toast(`Đã thêm ${still.length} field: ${still.map((f) => f.name).join(', ')}.${added.length ? ` Thêm cả bước Query ${queriesText(added)}.` : ''}`, added.length ? 6000 : 4000);
+    const picks = still.map((f) => ({ f, choice: lookup(f) ? preselectParent(f, aliases) : '', lookup: lookup(f) }));
+    const added = addDescribedFields(live, described, picks, aliases);
+    // Several parents fit (or none could be guessed): the Lookup is added without one.
+    const noParent = picks.filter((p) => p.lookup && !p.choice).map((p) => p.f.name);
+    toast(
+      `Đã thêm ${still.length} field: ${still.map((f) => f.name).join(', ')}.${added.length ? ` Thêm cả bước Query ${queriesText(added)}.` : ''}${noParent.length ? ` Còn phải chọn bản ghi cha cho ${noParent.join(', ')} (mở field đó, mục "Bản ghi cha / pool").` : ''}`,
+      added.length || noParent.length ? 8000 : 4000,
+    );
+    // The inspector was drawn again (synchronously): continue at the first new field.
+    root?.querySelectorAll('.field-card')[first]?.querySelector('input')?.focus();
   };
   box.replaceChildren(
-    h('span', { class: 'hint-text' }, text),
+    h('span', { class: 'hint-text', role: 'status' }, text),
     h('span', { class: 'hint-actions' },
       h('button', { class: 'primary', onclick: add }, `Thêm ${missing.length} field`),
       h('button', { title: 'Mở hộp Import: các field bắt buộc còn thiếu đứng đầu và đã được tích', onclick: () => openImport(stepById(id)) }, 'Chọn…'),
@@ -1195,16 +1217,20 @@ async function fillRequiredHint(box) {
         title: 'Ẩn gợi ý này cho bước này tới khi tải lại trang',
         onclick: () => {
           requiredDismissed.add(id);
+          // The button goes away with the hint: focus the Fields heading right below it.
+          const heading = box.parentElement?.querySelector('.fields-heading');
           box.hidden = true;
           box.replaceChildren();
           delete box.dataset.text;
+          heading?.focus();
         },
       }, 'Bỏ qua')),
   );
 }
 
 function renderImportList(node, described, box, modal) {
-  const existing = new Set((node.config.fields ?? []).map((f) => f.name.toLowerCase()));
+  // Same comparison as missingRequired (client/js/required-fields.js).
+  const existing = new Set((node.config.fields ?? []).map((f) => String(f?.name ?? '').trim().toLowerCase()).filter(Boolean));
   const aliases = parentChoices(node);
   const rows = described.fields.map((f) => {
     const has = existing.has(f.name.toLowerCase());
@@ -1247,15 +1273,21 @@ function renderImportList(node, described, box, modal) {
     class: 'dialog-filter',
     oninput: (e) => {
       const q = e.target.value.toLowerCase();
-      for (const r of rows) r.el.hidden = q && !`${r.f.name} ${r.f.label}`.toLowerCase().includes(q);
+      for (const r of rows) r.el.hidden = Boolean(q) && !`${r.f.name} ${r.f.label}`.toLowerCase().includes(q);
+      // A heading whose rows are all filtered out goes too.
+      for (const g of groups) g.head.hidden = g.rows.every((r) => r.el.hidden);
     },
   });
   // Required fields the step lacks come first, under their own heading (0012 F2), checked.
   const missing = rows.filter((r) => r.f.required && !r.cb.disabled);
   const others = rows.filter((r) => !missing.includes(r));
-  const listItems = missing.length
-    ? [h('div', { class: 'list-group' }, `Bắt buộc, chưa có (${missing.length})`), ...missing.map((r) => r.el), h('div', { class: 'list-group' }, 'Các field khác'), ...others.map((r) => r.el)]
-    : rows.map((r) => r.el);
+  const groups = missing.length
+    ? [
+      { head: h('div', { class: 'list-group' }, `Bắt buộc, chưa có (${missing.length})`), rows: missing },
+      { head: h('div', { class: 'list-group' }, 'Các field khác'), rows: others },
+    ]
+    : [];
+  const listItems = groups.length ? groups.flatMap((g) => [g.head, ...g.rows.map((r) => r.el)]) : rows.map((r) => r.el);
   box.replaceChildren(
     h('p', { class: 'hint' }, 'Field bắt buộc đã được chọn sẵn. Field Lookup tự chọn bản ghi cha nếu chỉ có một bước khớp sObject; chọn "＋ … có sẵn trong org" để dùng bản ghi có sẵn.'),
     filter,

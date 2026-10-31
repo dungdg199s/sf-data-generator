@@ -58,7 +58,7 @@ Mỗi bước Record có hẹn giờ describe riêng; focus đang ở trong danh
 ### Field bắt buộc còn thiếu (0012 F2)
 
 Khi một bước Record được chọn, đã chọn org và sObject có trong danh sách sObject tạo được của org, inspector đọc describe trên
-(cache theo `org|sObject` trong phiên; ⟳ danh sách org xóa cache) và so field `required` với field bước đã có (không phân biệt hoa
+(cache theo `org|sObject` trong phiên, describe lỗi không được cache; ⟳ danh sách org xóa cache describe và danh sách sObject) và so field `required` với field bước đã có (không phân biệt hoa
 thường). Thiếu ⇒ khung trên tiêu đề "Fields":
 
 ```
@@ -67,10 +67,11 @@ Thiếu 2 field bắt buộc của Opportunity trong dev-sb: StageName, CloseDat
 
 - **Thêm n field**: thêm đúng các field đó như "Import từ org…" (cùng hàm `addDescribedFields`: kiểu và option theo describe,
   Lookup bắt buộc tự chọn bản ghi cha theo luật của Import, kể cả thêm bước Query "＋ … có sẵn trong org" khi không có bước nào khớp),
-  một bước hoàn tác, toast `Đã thêm 2 field: StageName, CloseDate.`
+  một bước hoàn tác, toast `Đã thêm 2 field: StageName, CloseDate.` (Lookup bắt buộc chưa tự chọn được bản ghi cha thì toast nói
+  thêm `Còn phải chọn bản ghi cha cho …`); focus vào ô tên của field mới đầu tiên.
 - **Chọn…**: mở hộp Import; field bắt buộc còn thiếu đứng đầu dưới nhóm `Bắt buộc, chưa có (2)` và đã được tích (hộp Import luôn
   nhóm như vậy khi có field bắt buộc còn thiếu).
-- **Bỏ qua**: ẩn khung cho bước đó tới khi tải lại trang (không lưu).
+- **Bỏ qua**: ẩn khung cho bước đó tới khi tải lại trang (không lưu); focus chuyển tới tiêu đề "Fields".
 - Describe lỗi, sObject không có trong org, chưa chọn org: không hiện gì (lỗi describe đã có chỗ báo ở ô sObject). Không vào thanh
   lỗi: validate ở server chạy không cần org. Gõ tên field còn thiếu vào danh sách thì khung tự cập nhật.
 

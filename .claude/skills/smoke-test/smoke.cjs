@@ -52,8 +52,10 @@
 //      Workflow library (0012 A): ▾ → "＋ Workflow mới" makes a second entry, a step copied in the first pastes
 //      there with its alias kept, Ctrl+O switches back (same content, Ctrl+Z does nothing), a Mẫu on a workflow
 //      with steps is a third entry (the first untouched), "Quản lý thư viện…" deletes one and "Hoàn tác" brings it back,
-//      at 390 px the row's ⋯ (a popup inside the modal dialog) deletes one. F2 (mocked org): "Thiếu 1 field bắt buộc của
-//      Contact trong dev: Region__c." on con, Chọn… groups it first in Import, Thêm 1 field adds it (↶ undoes), Bỏ qua hides it
+//      with autosave paused (a storage event) Mở → "Vẫn đổi" switches, at 390 px the row's ⋯ (a popup inside the modal
+//      dialog) deletes one. F2 (mocked org): "Thiếu 1 field bắt buộc của Contact trong dev: Region__c." on con, Chọn…
+//      groups it first in Import (the filter hides an emptied heading), Thêm 1 field adds it and focuses its name (↶
+//      undoes), Bỏ qua hides it
 //  18. Sơ đồ minimap (0014 §5, flowMinimap): 1 000 steps, ≤ 16 paths, 75 % of the track, End keeps the card out from
 //      under it, the button hides it (remembered), hidden with the sheet at 800 px, no button at 390 px, none for one step.
 //  0014 also adds: SVG icons and aria-labels (1), Alt+↓ opens the picker (5b), Quy trình cards never overflow at 390 px,
@@ -1521,12 +1523,18 @@ async function requiredSteps(page) {
     return { head: first.textContent, row: row.textContent, checked: row.querySelector('input').checked };
   });
   check(dlg.head === 'Bắt buộc, chưa có (1)' && /Region__c/.test(dlg.row) && dlg.checked, `Import grouping: ${JSON.stringify(dlg)}`);
+  // The filter hides a heading whose rows are all filtered out.
+  await page.fill('dialog[open] .dialog-filter', 'email');
+  const heads = await page.$$eval('dialog[open] .list .list-group', (n) => n.map((x) => (x.hidden ? '-' : x.textContent)).join('|'));
+  check(heads === '-|Các field khác', `Import filter "email": headings ${heads}`);
   await page.click('dialog[open] .actions button:has-text("Hủy")');
   // Thêm 1 field: one undo step, the hint goes; Ctrl+Z brings both back.
   await page.click(`${hint} button:has-text("Thêm 1 field")`);
   check(await toastIs(page, /^Đã thêm 1 field: Region__c\.$/), `Thêm 1 field toast: ${await page.textContent('#toast')}`);
   const fieldsOf = async () => (await savedWorkflow(page)).steps[0].slots.body[1].slots.body[0].config.fields.map((f) => `${f.name}:${f.type}`);
   check((await fieldsOf()).at(-1) === 'Region__c:picklist', `fields after Thêm: ${await fieldsOf()}`);
+  const focused = await page.evaluate(() => (document.activeElement?.closest('.field-card') ? document.activeElement.value : document.activeElement?.tagName));
+  check(focused === 'Region__c', `focus after Thêm 1 field: ${focused}`);
   check(await page.waitForSelector('#inspector .required-hint', { state: 'hidden', timeout: 3000 }).then(() => true, () => false), 'the hint stayed after adding the field');
   await page.click('#btn-undo');
   check(!(await fieldsOf()).includes('Region__c:picklist'), 'one ↶ did not remove the added field');
@@ -1577,6 +1585,21 @@ async function librarySteps(page) {
   check(await entries() === 'Account + Contact | Lead theo xác suất', `Xóa: ${await entries()}`);
   await page.click('dialog[open] .lib-undo button:has-text("Hoàn tác")');
   check(await entries() === 'Account + Contact | Lead theo xác suất | Workflow mới', `Hoàn tác of a delete: ${await entries()}`);
+  // Autosave paused (another tab changed the open entry): Mở → "Vẫn đổi" must switch (0012 review 2:
+  // the close event of the library dialog came late and answered the question with "Hủy").
+  await page.evaluate(() => {
+    const key = `sfdg.wf.${sessionStorage.getItem('sfdg.activeId')}`;
+    window.dispatchEvent(new StorageEvent('storage', { key, oldValue: null, newValue: '{"version":2,"steps":[]}', storageArea: localStorage }));
+  });
+  check(await page.waitForSelector('#btn-unsaved:not([hidden])', { timeout: 3000 }).catch(() => null), 'a storage event of the open entry did not pause autosave');
+  const namesP = await page.$$eval('dialog[open] .lib-row .lib-name', (n) => n.map((x) => x.value));
+  await page.click(`dialog[open] .lib-row >> nth=${namesP.indexOf('Account + Contact')} >> button:text-is("Mở")`);
+  await page.click('dialog[open] button:has-text("Vẫn đổi")');
+  check(await page.waitForSelector('.step-card[data-id="loopAcc"]', { timeout: 3000 }).catch(() => null), 'Quản lý → Mở → "Vẫn đổi" did not switch the workflow');
+  check(await page.isHidden('#btn-unsaved'), '"▲ Tab khác đã sửa" stayed after switching');
+  await page.click('#btn-library');
+  await page.click('.popup .popup-item:has-text("Quản lý thư viện")');
+  await page.waitForSelector('dialog[open] .lib-list');
   // ≤ 720 px: Nhân bản / Tải JSON / Xóa are in the row's ⋯, a popup inside the (modal) dialog.
   await page.setViewportSize({ width: 390, height: 800 });
   const names390 = await page.$$eval('dialog[open] .lib-row .lib-name', (n) => n.map((x) => x.value));

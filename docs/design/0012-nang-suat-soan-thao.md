@@ -1105,3 +1105,27 @@ Kế hoạch thực hiện chỉ có bước F1; F2 đã được duyệt trong 
 - Khác thiết kế (làm rõ): [Thêm n field] có thể thêm bước Query "＋ … có sẵn trong org" cho Lookup bắt buộc không có bản ghi cha
   phía trên — đúng "như Import" của thiết kế (là một cú bấm có chủ đích, khác field mặc định tự động của G vốn không thêm bước), và
   toast nói thêm bước đó.
+
+### Sửa sau review lần 2
+
+- **Hỏi "Đổi workflow khi chưa lưu?" từ "Quản lý thư viện":** bấm Mở đóng hộp rồi `confirmLeave` mở lại ngay; Chromium bắn sự kiện
+  `close` của lần đóng trước muộn hơn, nên câu hỏi tự trả lời "Hủy" và "Vẫn đổi" không làm gì. `onclose` nay bỏ qua sự kiện cũ
+  (`if (!modal.open) resolve(false)`). Smoke 17: tạm dừng tự lưu bằng một sự kiện `storage`, Quản lý → Mở → Vẫn đổi phải đổi workflow.
+- **`switchTo`** đọc mục *sau* câu hỏi (tab khác có thể đã sửa / xóa nó trong lúc hỏi), báo mục hỏng ở đó, và kiểm tra lại đang chạy
+  (`locked`) và `id === activeId`.
+- **Đổi tên khi dán / Ctrl+D không nối chuỗi qua biến lặp:** biến của mọi Lặp trong bản sao (`config.alias || 'loop'`) cũng thuộc
+  các tên gốc, nên dán `[Record item, Lặp(item2){ "{{item.Name}} #{{item2}}" }]` vào workflow có `item` ⇒ `item3`, biến `item2` giữ
+  nguyên, mẫu đúng. Ctrl+D truyền thêm biến của các Lặp bao quanh (`loopVarsAround`, nay export từ `shared/workflow-tree.js`, như
+  dán). Hai test mới trong `test/workflow-tree.test.js`.
+- **Xóa khi bộ nhớ đầy:** xóa một workflow xong thì lưu lại ngay (`if (unsaved) persist()`), vì đã có chỗ.
+- **⟳** xóa cả danh sách sObject (gợi ý và hộp Import), không chỉ describe; describe lỗi không được cache (lần sau hỏi lại).
+- **Hẹn giờ 10 s của thùng rác** (và Hoàn tác) chỉ vẽ lại hộp khi hộp đang hiện Thư viện (`.lib-list`), không vẽ đè câu hỏi khác.
+- **Hoàn tác một lần xóa cũ:** thùng rác giữ một mục; `restoreTrash(id)` chỉ trả lại khi thùng rác còn giữ đúng mục đó, không thì
+  toast nói thùng rác chỉ giữ lần xóa gần nhất (hoặc đã quá 10 s) và gợi ý Mở file JSON… (trước đó trả lại nhầm workflow xóa sau,
+  ví dụ khi tab khác vừa xóa). Test trong `test/library.test.js`.
+- **Nhỏ:** thanh chọn chuyển focus sang Xong khi nút đang focus bị tắt (focus rơi về `<body>`); safe-area của thanh chọn không còn bị
+  `padding` ghi đè (`padding: 0 var(--space-3) env(safe-area-inset-bottom)`, khoảng đệm và toast cộng thêm safe-area,
+  `viewport-fit=cover` trong meta viewport); gợi ý F2 có số thứ tự để chỉ lần describe mới nhất ghi vào khung; `role="status"`
+  chuyển từ `.hint-box` sang `.hint-text`; Thêm n field focus ô tên field mới đầu tiên, Bỏ qua focus tiêu đề "Fields"; hộp Import
+  ẩn tiêu đề nhóm khi bộ lọc ẩn hết dòng của nhóm, so tên field bằng `trim().toLowerCase()` như `missingRequired`; toast Thêm n field
+  nói `Còn phải chọn bản ghi cha cho …` khi Lookup bắt buộc chưa có cha. Smoke 17 thêm: tiêu đề nhóm bị lọc ẩn, focus sau Thêm.
