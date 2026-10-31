@@ -85,7 +85,9 @@ export function paintCardRun(card, step, { stale, parent, before = null, tabinde
     }
     if (chip.className !== want.cls) chip.className = want.cls;
     if (chip.textContent !== want.text) chip.textContent = want.text;
-    if (chip.title !== want.title) chip.title = want.title;
+    // The chip's own text leads the title: on a phone the chip can be cut with "…" (design 0014 §7).
+    const title = `${want.text}. ${want.title}`;
+    if (chip.title !== title) chip.title = title;
   }
   const failed = insertFailed(step.id);
   let tag = parent.querySelector(':scope > .tag-insert-err');

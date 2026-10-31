@@ -1184,6 +1184,14 @@ dialog .actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap
   #btn-dl-json, #btn-dl-csv { display: none; }
   .dl-menu { display: inline-flex; }
   .var-picker { max-height: min(360px, 45dvh); }
+  /* A Quy trình card is never wider than itself (design 0014 §7): "chưa chọn org" goes (the ▲ badge and the issues
+     bar say it), then the summary, the stat chip (down to 3em, full text in its title) and the alias shrink, in that
+     order (shrink weights); type label, badges, tags and buttons keep their size. */
+  .process .step-card .tag-sample { display: none; }
+  .process .step-card > .stat { flex: 0 100 auto; min-width: 3em; overflow: hidden; text-overflow: ellipsis; }
+  .process .step-card > .alias { flex: 0 1 auto; min-width: 0; max-width: 72px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .process .step-card > .type, .process .step-card > .badges, .process .step-card > .handle, .process .step-card > button,
+  .process .step-card > .tag-off, .process .step-card > .tag-insert-err { flex: none; }
 }
 
 /* ---------- Query / Chọn bản ghi (design 0006) ---------- */

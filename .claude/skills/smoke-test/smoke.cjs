@@ -1006,8 +1006,21 @@ async function flowLayoutNarrow() {
     check(b.ok, `${width}×${height}: after tapping its issue, "${id}" is not fully visible above the sheet (${JSON.stringify(b)})`);
   }
   await m.setViewportSize({ width: 390, height: 844 });
+  if (await m.$('#inspector.open')) await m.tap('#inspector .sheet-close');
+  // 13d (0014 §7): after a preview of the Query sample without an org (chip, warning badge, "chưa chọn org"),
+  // no card is wider than itself and every ⋯ stays on screen.
+  await m.selectOption('#org-select', '');
+  await m.tap('#btn-more');
+  await m.tap('.popup .popup-item:has-text("Contact cho Account có sẵn")');
+  await m.waitForSelector('.step-card[data-id="accs"] .tag-sample', { state: 'attached' });
+  await m.keyboard.press('Control+Enter');
+  await m.waitForSelector('.step-card[data-id="accs"] .stat:not(.est)', { timeout: 5000 }).catch(() => errors.push('390px: no run chip on the Query card after Xem trước'));
+  const overflow = await m.evaluate(() => [...document.querySelectorAll('.step-card')].map((c) => {
+    const menu = c.querySelector(':scope > .menu-btn')?.getBoundingClientRect();
+    return { id: c.dataset.id, over: c.scrollWidth - c.clientWidth, menuOut: menu ? menu.right > innerWidth || menu.left < 0 : false };
+  }).filter((x) => x.over > 0 || x.menuOut));
+  check(!overflow.length, `390px: cards wider than themselves or ⋯ off screen after Xem trước (${JSON.stringify(overflow)})`);
   if (outDir) {
-    await m.tap('#inspector .sheet-close');
     await m.emulateMedia({ colorScheme: 'dark' });
     await settle(m);
     await m.screenshot({ path: path.join(outDir, 'smoke-390-dark.png') });
