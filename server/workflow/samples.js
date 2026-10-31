@@ -7,6 +7,7 @@
 import { createRandom } from '../random.js';
 import { generateValue, getGenerator, optionIssues } from '../generators/index.js';
 import { plainOptions } from '../generators/common.js';
+import { isValidNow } from './executor.js';
 
 export const SAMPLE_LIMITS = { maxFields: 500, maxCount: 5, defaultCount: 3 };
 
@@ -30,7 +31,7 @@ export function fieldSamples(body) {
   }
   const index = body.index;
   if (!Number.isInteger(index) || index < 0 || index >= fields.length) throw bad(400, '"index" phải là vị trí của một field trong "fields".');
-  if (!(typeof body.now === 'number' && Number.isFinite(body.now))) throw bad(400, 'Tham số now không hợp lệ.');
+  if (!isValidNow(body.now)) throw bad(400, 'Tham số now không hợp lệ.');
   const seed = body.seed === undefined || body.seed === null || body.seed === '' ? 1 : body.seed;
   if (typeof seed !== 'number' && typeof seed !== 'string') throw bad(400, 'Seed không hợp lệ.');
   const raw = Number(body.count ?? SAMPLE_LIMITS.defaultCount);

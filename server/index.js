@@ -12,7 +12,7 @@ import { describeGenerators, VALUE_TYPES } from './generators/index.js';
 import { serializableNodeTypes, STEP_CATEGORIES, LIMITS, QUERY_PRESETS, RECORD_PRESETS, RECORD_DEFAULT_FIELDS, WORKFLOW_GLOBALS } from './workflow/nodes.js';
 import { TEMPLATE_TOKEN } from './workflow/paths.js';
 import { validateWorkflow, prepareWorkflow, insertBlockedReason, WorkflowError } from './workflow/schema.js';
-import { createRun } from './workflow/executor.js';
+import { createRun, isValidNow } from './workflow/executor.js';
 import { fieldSamples } from './workflow/samples.js';
 import { executeRun, createRunRegistry, YIELD_EVERY } from './run.js';
 import { createSfCli } from './sf/cli.js';
@@ -81,7 +81,8 @@ export function createApp({ cli = createSfCli(), client, queryCache = createQuer
 
   /** Checks shared by /api/run and /api/export, then the Query pre-fetch (0006): all before any header is sent. */
   async function prepareRun(body, { insert, pinned = null }) {
-    if (body?.now !== undefined && !(typeof body.now === 'number' && Number.isFinite(body.now))) throw httpError(400, 'Tham số now không hợp lệ.');
+    // A Date holds ±8.64e15 ms: a larger `now` would fail inside the run (review of 0013).
+    if (body?.now !== undefined && !isValidNow(body.now)) throw httpError(400, 'Tham số now không hợp lệ.');
     const { workflow, errors } = prepareWorkflow(body?.workflow);
     if (errors.length) throw new WorkflowError(errors);
     // Query steps are read first (design 0006): when inserting always from the target org

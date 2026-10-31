@@ -63,6 +63,21 @@ import { poolUsage, numberVarPath, isVar, valueList } from '../../shared/scope.j
 /** Returned by runSteps when a Chọn bản ghi step skipped the rest of the current run. */
 const SKIP = Symbol('skip');
 const PICK_FILTER_CACHE = 1000;
+/**
+ * Most positions / records the filter caches of one run hold together (Chọn bản ghi and Lặp
+ * `each` filters with an operator other than `eq`, review of 0013): without it a loop over 1 000
+ * filter values of a 100 000-record pool kept 10⁸ positions (1 GB). A longer result is not cached.
+ */
+export const FILTER_CACHE_POSITIONS = 2_000_000;
+/** A TICK after this many pool records were scanned by filters (long scans with few step visits). */
+const SCAN_TICK_EVERY = 200_000;
+/** Largest |now| a Date holds (ms from 1970, ±100 000 000 days). */
+const MAX_TIME_MS = 8.64e15;
+
+/** Is `now` a usable run time: a finite number of ms a Date can hold (else toISOString throws)? */
+export function isValidNow(now) {
+  return typeof now === 'number' && Number.isFinite(now) && Math.abs(now) <= MAX_TIME_MS;
+}
 const vi = (n) => n.toLocaleString('vi-VN');
 
 /** Left side of a filter: the field of a pool record, a Lookup `{ $ref }` as its ref. */
@@ -104,6 +119,8 @@ export function createRun(input, opts = {}) {
 
   const seed = opts.seed ?? workflow.seed ?? Math.floor(Math.random() * 2 ** 31);
   const now = opts.now ?? Date.now();
+  // (server/index.js answers 400 before this; a direct caller gets the same sentence.)
+  if (!isValidNow(now)) throw Object.assign(new Error('Tham số now không hợp lệ.'), { status: 400 });
   const maxRecords = Math.min(opts.maxRecords ?? workflow.settings?.maxRecords ?? LIMITS.maxRecordsDefault, LIMITS.maxRecordsHard);
   const queryResults = opts.queryResults ?? {};
   const { readers, referenced } = poolUsage(workflow, scopeCatalog());
@@ -155,10 +172,13 @@ function generate(workflow, { seed, now, maxRecords, queryResults, keptPools, ti
   // Step id → fields of its first record (Record) or first pick (Chọn bản ghi): variable picker
   // samples, also readable while the run goes (a cancelled preview still returns them).
   const samples = {};
+  // Positions / records held by the filter caches (peak: the most at any time; tests check the cap).
+  const filterCache = { held: 0, peak: 0 };
   const it = run();
   it.live = live;
   it.pools = rootScope.all; // record pools of this run (tests check which ones are count-only)
   it.samples = samples;
+  it.filterCache = filterCache;
   return it;
 
   function* run() {
@@ -179,6 +199,34 @@ function generate(workflow, { seed, now, maxRecords, queryResults, keptPools, ti
     const weightZero = new Map();
     const eachStates = new Map(); // Lặp `each` step id → { pool, scanned, index, cache } (filter)
     const weightSums = new WeakMap(); // candidate list → { n, sums } (prefix sums of the weights)
+    const cachedSize = new WeakMap(); // cached list → its length when cached (remaining lists shrink)
+    const valueLists = new Map(); // Lặp "Mỗi giá trị" step id → its values (the config does not change)
+    let scanned = 0; // pool records scanned by filters since the last scan TICK
+
+    /**
+     * Keeps `list` in filter cache `cache` under `key` within FILTER_CACHE_POSITIONS for the whole
+     * run: a full cache (by entries or by positions) is emptied first; a list that still does not
+     * fit is not cached (recomputed on the next visit).
+     */
+    function cachePut(cache, key, list) {
+      if (list.length > FILTER_CACHE_POSITIONS) return;
+      if (cache.size >= PICK_FILTER_CACHE || filterCache.held + list.length > FILTER_CACHE_POSITIONS) {
+        for (const v of cache.values()) filterCache.held -= cachedSize.get(v) ?? 0;
+        cache.clear();
+      }
+      if (filterCache.held + list.length > FILTER_CACHE_POSITIONS) return; // other steps hold the room
+      cache.set(key, list);
+      cachedSize.set(list, list.length);
+      filterCache.held += list.length;
+      if (filterCache.held > filterCache.peak) filterCache.peak = filterCache.held;
+    }
+
+    /** Long filter scans count toward the TICK cadence too. → true when the caller should yield TICK. */
+    function scanDue() {
+      if (scanned < SCAN_TICK_EVERY) return false;
+      scanned = 0;
+      return ticks;
+    }
 
     function fail(step, message, field) {
       throw new WorkflowError([{ message, nodeId: step.id, ...(field ? { field } : {}) }]);
@@ -262,8 +310,8 @@ function generate(workflow, { seed, now, maxRecords, queryResults, keptPools, ti
             const v = getPath(r.fields, c.filterField, { ignoreCase: Boolean(r.existing) });
             return compareValues(v && typeof v === 'object' && v.$ref ? v.$ref : v, op, key);
           });
-          if (st.cache.size >= PICK_FILTER_CACHE) st.cache.clear();
-          st.cache.set(cacheKey, cands);
+          scanned += pool.length;
+          cachePut(st.cache, cacheKey, cands);
         }
       }
       if (!cands.length) return null;
@@ -279,8 +327,8 @@ function generate(workflow, { seed, now, maxRecords, queryResults, keptPools, ti
         let rest = st.remaining.get(rk);
         if (!rest) {
           rest = cands.filter((r) => !st.used.has(r));
-          if (st.remaining.size >= PICK_FILTER_CACHE) st.remaining.clear();
-          st.remaining.set(rk, rest);
+          scanned += cands.length;
+          cachePut(st.remaining, rk, rest);
         }
         while (rest.length) {
           const rec = rng.pick(rest);
@@ -307,6 +355,7 @@ function generate(workflow, { seed, now, maxRecords, queryResults, keptPools, ti
       const r = rng.next();
       let w = weightSums.get(cands);
       if (!w) weightSums.set(cands, (w = { n: 0, sums: [] }));
+      scanned += cands.length - w.n;
       for (let total = w.n ? w.sums[w.n - 1] : 0; w.n < cands.length; w.n++) {
         const x = toNumber(filterLeft(cands[w.n], c.weightField));
         total += x !== null && x > 0 && Number.isFinite(x) ? x : 0;
@@ -356,7 +405,8 @@ function generate(workflow, { seed, now, maxRecords, queryResults, keptPools, ti
 
     /** Lặp "Mỗi giá trị trong danh sách" (design 0013 D): no rng. */
     function* runValues(step, c, stat, scope) {
-      const values = valueList(c.values);
+      let values = valueLists.get(step.id);
+      if (!values) valueLists.set(step.id, (values = valueList(c.values)));
       stat.iterations = (stat.iterations ?? 0) + values.length;
       const body = step.slots?.body ?? [];
       if (!body.length) return;
@@ -378,6 +428,7 @@ function generate(workflow, { seed, now, maxRecords, queryResults, keptPools, ti
       if (!st || st.pool !== pool) eachStates.set(step.id, (st = { pool, scanned: 0, index: new Map(), cache: new Map() }));
       const op = c.filterOp ?? 'eq';
       if (op === 'eq') {
+        scanned += Math.max(0, n - st.scanned);
         for (; st.scanned < n; st.scanned++) {
           const key = eqKey(filterLeft(pool[st.scanned], c.filterField));
           let list = st.index.get(key);
@@ -404,8 +455,8 @@ function generate(workflow, { seed, now, maxRecords, queryResults, keptPools, ti
       if (!out) {
         out = [];
         for (let i = 0; i < n; i++) if (compareValues(filterLeft(pool[i], c.filterField), op, right)) out.push(i);
-        if (st.cache.size >= PICK_FILTER_CACHE) st.cache.clear();
-        st.cache.set(cacheKey, out);
+        scanned += n;
+        cachePut(st.cache, cacheKey, out);
       }
       return out;
     }
@@ -427,6 +478,7 @@ function generate(workflow, { seed, now, maxRecords, queryResults, keptPools, ti
         // Rendered once, in the scope around the loop (`{{acc.Id}}` of an outer loop).
         const right = renderTemplate(c.filterValue ?? '', scope, undefined);
         idx = eachIndices(step, c, pool, n, right);
+        if (scanDue()) yield TICK;
         let f = eachFilterStats.get(step.id);
         if (!f) eachFilterStats.set(step.id, (f = { visits: 0, matched: 0 }));
         f.visits++;
@@ -440,8 +492,13 @@ function generate(workflow, { seed, now, maxRecords, queryResults, keptPools, ti
           ? `Pool "${c.from}" còn ${vi(m)} bản ghi sau khi lọc, quá giới hạn ${vi(LIMITS.maxCountPerNode)} lần lặp của một bước Lặp. Đặt "Tối đa số bản ghi" hoặc thu hẹp điều kiện lọc.`
           : `Pool "${c.from}" có ${vi(n)} bản ghi, quá giới hạn ${vi(LIMITS.maxCountPerNode)} lần lặp của một bước Lặp. Thu hẹp pool (WHERE/LIMIT của Query) hoặc giảm số bản ghi.`, 'from');
       }
-      // Exactly m numbers, drawn as the loop starts (none for pool order).
-      if ((c.order ?? 'pool') === 'shuffle' && m) idx = rng.shuffleTake(idx ?? Array.from({ length: n }, (_, i) => i), m);
+      // Exactly m numbers, drawn as the loop starts (none for pool order): positions in the list
+      // of m0 candidates (O(m), no copy of the pool or of the filtered list).
+      if ((c.order ?? 'pool') === 'shuffle' && m) {
+        const at = rng.shufflePositions(m0, m);
+        if (idx) for (let i = 0; i < m; i++) at[i] = idx[at[i]];
+        idx = at;
+      }
       stat.iterations = (stat.iterations ?? 0) + m;
       if (!n) emptyEach.add(step.id);
       const body = step.slots?.body ?? [];
@@ -526,6 +583,7 @@ function generate(workflow, { seed, now, maxRecords, queryResults, keptPools, ti
           }
           case 'pick': {
             const rec = pickOne(step, scope);
+            if (scanDue()) yield TICK;
             if (!rec) {
               if ((c.onEmpty ?? 'skip') === 'error') {
                 fail(step, `Bước Chọn bản ghi "${c.alias}": không còn bản ghi nào trong "${c.from}" thỏa điều kiện (lần thứ ${stat.runs}). Tăng LIMIT của Query, đổi điều kiện lọc, hoặc chọn cách chọn "Ngẫu nhiên (có thể lặp lại)".`);
