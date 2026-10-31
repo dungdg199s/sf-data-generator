@@ -18,6 +18,7 @@ Step types are part of the saved workflow format (`version: 2`, a tree of steps;
    - below `/* ===== end tokens ===== */` add one `[data-type="<type>"]` rule setting `--c`, `--c-subtle`, `--c-strong`, `--c-text` and `--ico`. The JS only sets `data-type="<step.type>"` and inserts `icoTile()` (`client/js/dom.js`), which process view, palette, "+" menu and inspector already do;
    - update the tables in `docs/ui-design-system.md` (§2 primitives — `test/css-tokens.test.js` compares it with the CSS —, §3.4, §5, §8.1);
    - add a summary in `stepSummary` and a chip in `statChip` (`client/js/summary.js`). The process view draws frames and columns from `slots` automatically.
+   - options need no client code (`client/js/forms.js` renders them from meta): an `integer`/`number` option with `vars: 'number'` gets the numeric text box with `{x}` (design 0013), a `list` option may set `placeholder` and `split: 'lines'` (one value per line, commas kept), and `showIf` chains through hidden options.
 6. **Docs** — update the step table and semantics in `docs/workflow-schema.md`.
 7. **Tests** — executor semantics and validation errors in `test/workflow.test.js`; scope (what the step exposes, where it is visible) in `test/scope.test.js`; `/api/meta` step list assertion in `test/server.test.js`. `test/css-tokens.test.js` fails until the new type has its tokens, icon and `[data-type]` rule in both themes and its colour pairs pass WCAG AA.
 8. Run `npm test` and the `smoke-test` skill (add the step from the palette or a "+" point, configure it, preview).

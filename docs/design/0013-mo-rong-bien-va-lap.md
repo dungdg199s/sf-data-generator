@@ -1,6 +1,6 @@
 # 0013 — Mở rộng biến và vòng lặp
 
-- **Trạng thái:** Đang làm (xong đợt A, B) — đã duyệt 2026-10-28 (người dùng giao chọn theo đề xuất cho mọi quyết định, xem [Đã chốt](#đã-chốt-2026-10-28))
+- **Trạng thái:** Đã làm (đợt A, B, C) — đã duyệt 2026-10-28 (người dùng giao chọn theo đề xuất cho mọi quyết định, xem [Đã chốt](#đã-chốt-2026-10-28))
 - **Ngày:** 2026-10-28
 - **Liên quan:** [0004](0004-streaming-execution.md) (executor dạng luồng, pool chỉ đếm, hash vàng),
   [0005](0005-variable-picker.md) (`analyzeScope`, `vars`, `valueType`; Câu hỏi mở 3 và 4; "Ý tưởng để sau"),
@@ -765,7 +765,7 @@ Không có câu hỏi chặn việc làm (mọi quyết định đã chốt ở 
 
 ## Đã làm
 
-### Đợt A và B (2026-10-31; đợt C — giao diện — chưa làm)
+### Đợt A và B (2026-10-31)
 
 Commit (nhánh `ccr-b0ea523c-v4j2nr`): `d834a1c` (bước 1–4: hợp đồng, phân tích, validate **và** executor trong một commit, vì
 danh mục đã quảng bá `values`/`weighted` thì executor phải chạy được chúng ngay; mọi tầng đổi cùng lúc), `72895a7` (bước 5),
@@ -814,3 +814,47 @@ Khác với thiết kế, và vì sao:
 11. **Lỗi `limit`** cũng từ chối giá trị Đúng/Sai (`true` → `Number(true) = 1` sẽ lọt qua kiểm tra số).
 12. Thông báo `numberFormat`/`notNumber`/`ownLoop` dùng nhãn option lấy từ danh mục (`"Ít nhất"`, `"So với"`…), như bảng Thông
     báo; câu `unknownMember` của `loop.value` dựng từ `when` trong danh mục (nhãn option + nhãn lựa chọn), không hard-code.
+
+### Đợt C — giao diện (2026-10-31)
+
+Commit: bước 7 (giao diện + smoke luồng 19) và bước 8 (tài liệu), nhánh `ccr-b0ea523c-v4j2nr`. `npm test` xanh sau mỗi commit
+(396 test; thêm kiểm tra `split` vào test meta sẵn có), hash vàng không đổi (không đụng executor / `golden-hashes.json`).
+Mục 1 của "Khác với thiết kế" ở trên (thẻ `0 lần`, `weighted từ …`, ô số trống) đã hết.
+
+- `client/js/forms.js`: ô `vars: 'number'` là ô chữ `inputmode="numeric"` có `{x}` và dải chip (`numberBoxValue`: `12` → số
+  12, trống → thiếu khóa, còn lại → chuỗi như đã gõ để validate báo `numberFormat`); `placeholder` cho `list`/`text`.
+- `client/js/var-picker.js`: chế độ `number` (mở bằng `{x}`, Alt+↓ / Ctrl+Space, gõ `{{`; chèn thay cả ô bằng `{{path}}`);
+  `applySuggestion` để nguyên giá trị số. Chip biến `run.*` màu trung tính (`start`).
+- `client/js/variables.js`: `groupsFor(…, { mode })` lọc `valueType` `number`/`any` ở chế độ `number` (bỏ nhóm rỗng), dòng
+  `Chỉ hiện biến kiểu Số và field đọc từ org (chưa biết kiểu).`, nhóm **Lần chạy** cuối danh sách, mẫu là seed / now / today
+  của lần xem trước (chưa xem trước: seed `—`, now/today là ví dụ của danh mục).
+- `client/js/inspector.js`: `suggestionText` có `{{ }}` cho `number`; đổi "Lọc" sang `compare` ở Lặp `each` / Chọn bản ghi gọi
+  `fillParentFilter` (`client/js/ops.js`) trong cùng `updateWorkflow` (một ↶ bỏ cả hai), rồi vẽ lại inspector và toast đúng
+  câu của thiết kế.
+- `client/js/summary.js`: các câu của bảng "Thẻ" (Lặp `values`, `each` có lọc / xáo trộn / tối đa, Chọn bản ghi `weighted`).
+- Kiểm tra theo yêu cầu: hàng `Ví dụ:` (0012 E) — field đọc `{{run.seed}}` được coi là phụ thuộc (tham chiếu không phải
+  `this`), nên hiện giá trị của lần xem trước, đúng seed thật; chip ước tính (0012 H) của Record trong Lặp có số lần là biến hiện
+  `≈` (smoke); Alt+↓ (0014) mở bảng chọn trong ô số (smoke).
+- Smoke: luồng 19 `flowVarsLoops` (song song, không `waitForTimeout(`). Ba lần chạy đủ bộ liên tiếp: `SMOKE OK` 13,3 s,
+  14,1 s, 13,9 s (ngân sách 20 s, 4 CPU; commit trước đó 13,4 s trên cùng máy); luồng 19 tự nó ≈ 9,6–10 s, không phải đường găng.
+- Tài liệu: `workflow-schema.md` (`split: "lines"`, ô số trong form), `architecture.md` (forms / var-picker / variables / ops /
+  summary), `ui-design-system.md` (chip `run.*` trung tính), skill `smoke-test` (luồng 19, thời gian), skill `add-node-type`.
+  `CLAUDE.md` đã được cập nhật ở đợt A/B, không cần đổi thêm.
+
+Khác với thiết kế (đợt C), và vì sao:
+
+13. **`split: 'lines'`** (khóa option mới, khai báo trên `values` của Lặp trong `server/workflow/nodes.js`, test meta + smoke):
+    form tách ô danh sách theo `/\n|,/`, nên `Công ty A, chi nhánh B` thành hai giá trị, trái với `valueList` của server (mục 2).
+    Option `list` khác giữ cách tách cũ.
+14. **Không có danh sách giá trị mặc định** (`initial`) cho Lặp `values`: giữ quyết định của Checklist 1 (không có danh sách nào
+    đúng nghĩa; `initial` còn ghi `values` ẩn vào mọi bước Lặp mới). Đổi sang "Mỗi giá trị trong danh sách" vẫn là lỗi ngay ở
+    đúng ô, có placeholder `Hot / Warm / Cold` và câu `valuesEmpty`.
+15. **Ô số nhận biến cũng mở bảng chọn khi gõ `{{`** (như ô template), ngoài `{x}` / Alt+↓; ↓ một mình không mở (khác ô `path`),
+    để không lấy phím của người gõ số.
+16. **Mẫu của `run.now` / `run.today`** cũng lấy từ lần xem trước (không chỉ `run.seed`), cùng nguồn `now` với dữ liệu đã sinh;
+    chưa xem trước thì dùng ví dụ tĩnh của danh mục, riêng seed hiện `—` (seed đổi mỗi lần chạy nếu không giữ).
+17. **`fillParentFilter`** bỏ qua nguồn không có member `Id` (Query SOQL tự viết không chọn Id) trừ khi danh sách field mở
+    (`FIELDS(...)`): `{{acc.Id}}` khi đó sẽ là lỗi ngay.
+18. **Smoke đánh số 19**, không phải 15 như kế hoạch: số 15 đã là luồng Sơ đồ. Nhánh Rẽ nhánh trong smoke so `opp.Amount` với
+    `{{opp.Amount}}` (một Record `opp` có Currency) cho đủ "chèn `{{opp.Amount}}`"; "`{{run.seed}}` có mẫu" được kiểm qua bảng
+    chọn của ô số (`run.seed` là Số), mẫu bằng seed của `#results-summary`.

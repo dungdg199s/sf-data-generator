@@ -120,7 +120,8 @@ Bắt đầu là trung tính vì nó không phải loại bước người dùng
 server mới hơn) không có luật `[data-type]` nên rơi về `--c: var(--color-border-strong)`, icon ⓘ.
 
 **Chip biến (0005)** dùng màu theo **nguồn** của biến: `this.*` → màu của chính bước đang sửa (Record), `<alias>.*` → màu
-loại của bước có alias đó (Record, Query, Chọn bản ghi), biến lặp → `loop`, `$n` → `start` (trung tính).
+loại của bước có alias đó (Record, Query, Chọn bản ghi), biến lặp → `loop`, `$n` và biến lần chạy `run.*` (0013) → `start`
+(trung tính; nhóm "Lần chạy" của bảng chọn cũng vậy).
 
 ## 4. Thang đo
 

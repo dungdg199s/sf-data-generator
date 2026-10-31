@@ -102,6 +102,8 @@ Danh mục nằm ở `server/workflow/nodes.js` và được `GET /api/meta` tr�
 (Đúng trước Sai). Option có `summary: true` được dùng cho dòng tóm tắt chung trên thẻ của loại bước không có tóm tắt riêng.
 `showIf` **bắc cầu** (0013): option hiện khi điều kiện của nó đúng **và** option nó phụ thuộc cũng đang hiện (ô lọc của Lặp ẩn ở
 `fixed` vì "Lọc" đang ẩn; `optionShown` trong `shared/scope.js`). Option `kind: "list"`/`"text"` có thể có `placeholder`.
+Option `kind: "list"` có thể có `split: "lines"`: form tách giá trị **chỉ theo dòng** (giữ dấu phẩy trong một giá trị, như
+`values` của Lặp, 0013); không có thì tách theo dòng và dấu phẩy như trước.
 `default` của option là giá trị bước dùng khi **thiếu** khóa đó (executor, inspector và thẻ đều theo nó); `initial`, nếu có,
 là giá trị của bước mới thêm từ UI (Lặp mới chạy 3 lần, `count` mặc định 0). `needsOrg: true` (Query): thẻ hiện "chưa chọn org"
 khi chưa chọn org. `/api/meta` còn có `queryPresets` (giá trị builder theo sObject: `User`, `Product2`, `Pricebook2`,
@@ -139,6 +141,9 @@ phạm vi (`analyzeScope` trong `shared/scope.js`) chỉ đọc hai khóa này, 
 Option nhận biến khai báo `vars: "template"` (chèn `{{path}}`), `vars: "path"` (cả ô là một đường dẫn, như `left`) hoặc
 `vars: "number"` (0013 B, cho option `kind: "integer"`/`"number"`: giá trị là số, hoặc chuỗi đúng **một** token `{{path}}`;
 validate kiểm tra định dạng, phạm vi như template và `valueType` của biến: `number`/`any` hợp lệ, `string` cảnh báo, kiểu khác lỗi).
+Trong form, ô `vars: "number"` là ô chữ `inputmode="numeric"` có `{x}`: gõ số lưu **số**, xóa trống lưu thiếu khóa (mặc định), còn lại
+lưu chuỗi như đã gõ (validate báo `numberFormat`); bảng chọn **thay cả ô** bằng `{{path}}` và chỉ liệt kê biến `valueType` `number`
+hoặc `any`.
 Đổi alias, tên biến lặp hay tên field (`shared/workflow-tree.js`) kéo theo mọi option có `vars`, kể cả `number`, `right` của Rẽ
 nhánh và `filterValue` của Lặp `each`; biến của chính bước Lặp trong ô số lần (đọc ở ngoài thân) không đổi theo tên biến lặp mới.
 Option chọn một nguồn có `kind: "ref"` (thêm `accepts`, ví dụ `{ "pool": true }`, nếu không phải mọi bước cha đều hợp).

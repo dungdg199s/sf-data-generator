@@ -19,7 +19,7 @@ flows
 
 **Speed (since design 0009).** The flows are grouped into seven independent functions that run **in parallel**, each in
 its own browser context (so storage, routes and dialogs never leak between them): `flowEditing` (1–5), `flowPicker`
-(5b), `flowFiles` (5c–10), `flowDark` (12), `flowLayoutWide` and `flowLayoutNarrow` (11, 13), `flowEach` (14), `flowCanvas` (15), `flowProductivity` (16), `flowLibrary` (17), `flowMinimap` (18). The browser launches
+(5b), `flowFiles` (5c–10), `flowDark` (12), `flowLayoutWide` and `flowLayoutNarrow` (11, 13), `flowEach` (14), `flowCanvas` (15), `flowProductivity` (16), `flowLibrary` (17), `flowMinimap` (18), `flowVarsLoops` (19). The browser launches
 while the server starts; a fresh context starts with empty storage, so no `localStorage.clear()` + reload; storage a flow
 needs before its first load is written by `addInitScript` (once, guarded by a marker key, so reloads keep it); layout
 checks resize one page (`setViewportSize`) instead of opening a context per width; waits for the sheet or toast
@@ -189,6 +189,23 @@ storage and reloading (one app boot less; flow 5b).
     (`sfdg.minimap` = `0`), and shows it again; at 800 px with the sheet open it is `visibility: hidden`; at 390 px the button
     and the map are not displayed; a one-step workflow opened through `#file-input` has no minimap.
 
+19. **Variables and loops (design 0013 đợt C), `flowVarsLoops`, own context (parallel).** A saved workflow (`addInitScript`):
+    Query `accs` and `cons`, Record `opp` (Currency `Amount`), Lặp `lf` (3 × Lead `lead`), Lặp each `accs` → `acc` holding Lặp
+    each `cons` → `con` (`lc`), Rẽ nhánh `br` (`opp.Amount` > ``), Lặp `lv`. "Số lần lặp" of `lf` is a text box
+    (`inputmode="numeric"`) holding `3`; its `{x}` lists `accs.$count`, `opp.Amount`, `run.seed` but not `opp.Name` nor `run.now`,
+    the "Lần chạy" group (`run · Lần chạy`) last and the line "Chỉ hiện biến kiểu Số và field đọc từ org (chưa biết kiểu).";
+    `accs.$count` makes the box `{{accs.$count}}` with a chip, the saved `count` that string and the card `{{accs.$count}} lần ·
+    {{k.index}}`; `lead` has an `≈` estimate chip. Ctrl+Enter (no org, 5 sample rows): `lf` chip `5 lần lặp`, `lead` `5 bản ghi`;
+    Alt+↓ in the count box opens the picker and `run.seed`'s sample is the seed of `#results-summary`. On `lc`, "Lọc" →
+    "Chỉ bản ghi thỏa điều kiện" fills `AccountId` / `{{acc.Id}}` with the toast "Đã điền điều kiện AccountId = {{acc.Id}} (bản
+    ghi con của "acc"). Sửa nếu cần."; "Lặp theo" → fixed hides `filter`…`limit`; two ↶ (mode, then filter) leave no filter
+    and no filled field. Xáo trộn + Tối đa 2: card `Mỗi bản ghi trong cons → con · xáo trộn · tối đa 2 · {{loop2.index}}`, a
+    preview gives `10 lần lặp`. `lv` → "Mỗi giá trị trong danh sách": the textarea is `.invalid`, has the placeholder
+    `Hot\nWarm\nCold` and the valuesEmpty line, the card reads `Danh sách trống · nhập giá trị`; `Công ty A, chi nhánh B⏎Hot`
+    saves two values (`split: 'lines'`); `Hot⏎Warm⏎Cold` gives `3 giá trị: Hot, Warm, Cold · {{v.value}}`. `br`'s "So với" `{x}`,
+    typing `Amount`, Enter ⇒ `{{opp.Amount}}`, card `opp.Amount > {{opp.Amount}}`. Card texts are waited for (≤ 2 s), not read
+    right after the edit. (Numbered 19: 15 is the Sơ đồ flow; the design called it "luồng 15".)
+
 16. **Editor productivity (design 0012), `flowProductivity`, own context (one page: G, then F1, I, C, H, D, E in that order).** G: a saved workflow (`addInitScript`) with a Task
     Record that has a `Name` field and a Contact whose template reads `{{task.Name}}`: the Task card has the warning badge, its
     Name field shows "Task không ghi được field Name nên insert sẽ lỗi. Đổi thành Subject…" with the button "Đổi thành Subject"; the
@@ -241,7 +258,8 @@ CPU-bound, so the cap scales with the CPUs; it is there to catch fixed waits and
 12.4–14.3 s with no fixed waits, and 0013/0011 add flows; the `waitForTimeout(` ban is the real guard); with flow 16 complete a 4-CPU sandbox measured 11.3–11.9 s (10.5–12.3 s for the commit before
 0012 C/I/H/D/E), ~9.5–10 s once reduced motion and the flow 5b file-open went in. A second context for flow 16 made it slower,
 not faster. Design 0014 (flow 18 in parallel, checks in flows 1, 5b, 11, 13): 11.1–11.6 s for the same machine that ran
-the commit before it in 9.5–10.0 s.
+the commit before it in 9.5–10.0 s. Design 0013 đợt C (flow 19 in parallel, ~9–10 s on its own track): 12.8–14.1 s on a
+4-CPU sandbox that ran the commit before it in 13.4 s.
 Screenshots (only when a directory is given): `smoke-1440.png`, `smoke-390.png`, `smoke-390-sheet.png`,
 `smoke-390-dark.png`, `smoke-390-topbar.png`, `smoke-1280-issues.png`, `smoke-1440-dark.png`, `smoke-1440-dark-insert.png`,
 `smoke-1440-canvas.png`, `smoke-1440-canvas-dark.png`, `smoke-390-canvas.png`, `smoke-1440-minimap.png`,
