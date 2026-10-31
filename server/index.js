@@ -381,12 +381,23 @@ async function serveStatic(pathname, res) {
   const rel = pathname === '/' ? 'index.html' : decoded.slice(shared ? '/shared/'.length : 0).replace(/^\/+/, '');
   const file = path.resolve(dir, rel);
   if (!file.startsWith(dir + path.sep)) throw httpError(403, 'Forbidden');
+  let info;
   try {
-    if (!(await stat(file)).isFile()) throw new Error();
+    info = await stat(file);
+    if (!info.isFile()) throw new Error();
   } catch {
     throw httpError(404, 'Not found');
   }
-  res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] ?? 'application/octet-stream', 'Cache-Control': 'no-cache' });
+  // no-cache + a validator: the browser always asks, an unchanged file answers 304 (no body), and the
+  // cached copy keeps its compiled-code cache, so a reload does not parse every module again.
+  const etag = `W/"${info.size.toString(16)}-${Math.floor(info.mtimeMs).toString(16)}"`;
+  const headers = { 'Content-Type': MIME[path.extname(file)] ?? 'application/octet-stream', 'Cache-Control': 'no-cache', ETag: etag };
+  if (res.req?.headers['if-none-match'] === etag) {
+    res.writeHead(304, headers);
+    res.end();
+    return;
+  }
+  res.writeHead(200, headers);
   res.end(await readFile(file));
 }
 

@@ -70,7 +70,7 @@ storage and reloading (one app boot less; flow 5b).
    field and the path field have `aria-keyshortcuts` with `Alt+ArrowDown`, and Alt+ArrowDown opens the picker in both (in the
    template field with the search focused; Esc closes it).
 5c. **Query → Chọn bản ghi → Record without an org (design doc 0006).** The "Contact cho Account có sẵn" sample
-   shows "chưa chọn org" on the Query card; Ctrl+Enter generates 10 Contacts from 5 sample rows, with a "↓ accs ·
+   shows "chưa chọn org" on the Query card; Ctrl+Enter generates 10 Contacts from 5 sample rows, with an "accs ·
    Account (5)" tab, "accs: 5 bản ghi mẫu" in the summary and a warning on the Query card. With the Query selected,
    "Chọn bản ghi" in the palette fills "Chọn từ pool" = `accs` and alias `acc…`; `{{` typed in WHERE outlines it red.
    The first `/api/validate` (of the workflow before the sample) is held until after the preview: when it lands, the

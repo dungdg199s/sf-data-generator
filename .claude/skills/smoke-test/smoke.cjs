@@ -15,7 +15,7 @@
 //      chips are coloured by source type, a misspelt field turns its chip red with an error badge on the card,
 //      "Sửa thành" fixes it, renaming the field updates the template
 //  5c. Query → Chọn bản ghi → Record without an org (0006): the "Contact cho Account có sẵn" sample previews with
-//      5 sample rows (tab "↓ accs", warning on the Query card), "Chọn bản ghi" from the palette fills from/alias,
+//      5 sample rows (tab "accs · Account", warning on the Query card), "Chọn bản ghi" from the palette fills from/alias,
 //      "{{" in WHERE outlines the field
 //   6. a v1 autosave is migrated on load (toast) and the sfdg.workflow.v1 key is left untouched
 //   7. a malformed v2 autosave falls back to the sample without being overwritten
@@ -310,13 +310,20 @@ async function flowEditing() {
   await page.click('.step-card[data-id="con"] .type');
   await page.fill('#inspector input[data-key="count"]', '60');
   await page.keyboard.press('Tab');
+  // Wait for this run's result (not the one on screen) before reading its tabs.
+  const before60 = await page.textContent('#results-summary');
   await page.keyboard.press('Control+Enter');
+  await page.waitForFunction((prev) => {
+    const s = document.getElementById('results-summary').textContent;
+    return document.getElementById('btn-stop').hidden && s !== prev && /bản ghi/.test(s);
+  }, before60);
   await page.click('.tabs button:has-text("Contact (")');
   await page.waitForSelector('.table-more');
   const conTotal = Number((await page.textContent('.tabs button:has-text("Contact (")')).replace(/\D/g, ''));
   const more = await page.textContent('.table-more');
   check(conTotal > 200 && more.includes(`Hiển thị 200/${conTotal.toLocaleString('en').replace(/,/g, ' ')} dòng đầu`), `no truncated-table hint (${more})`);
-  const [dl] = await Promise.all([page.waitForEvent('download'), page.click('#btn-dl-csv')]);
+  // The click itself must not wait for a navigation the download never makes (a 30 s stall under load).
+  const [dl] = await Promise.all([page.waitForEvent('download'), page.evaluate(() => document.getElementById('btn-dl-csv').click())]);
   const csvLines = fs.readFileSync(await dl.path(), 'utf8').trim().split(/\r\n/);
   check(csvLines.length === conTotal + 1 && /^ref,FirstName,LastName/.test(csvLines[0]), `CSV export: ${csvLines.length} lines for ${conTotal} Contacts, header ${csvLines[0]}`);
   await page.fill('#inspector input[data-key="count"]', '1');
@@ -496,7 +503,7 @@ async function flowFiles() {
   await page.waitForSelector('.step-card[data-id="accs"] .tag-sample');
   await page.keyboard.press('Control+Enter');
   const qTab = await page.waitForSelector('.tabs .tab-query[data-query="accs"]', { timeout: 3000 }).catch(() => null);
-  check(qTab && /↓ accs · Account \(5\)/.test(await qTab.textContent()), 'no "↓ accs · Account (5)" tab of sample rows');
+  check(qTab && (await qTab.textContent()) === 'accs · Account (5)', 'no "accs · Account (5)" tab of sample rows (Query icon, no ↓)');
   check(/accs: 5 bản ghi mẫu/.test(await page.textContent('#results-summary')), 'results summary does not mention the sample rows');
   check(/Contact: 10/.test(await page.textContent('#results-summary')), 'the Query sample did not generate 10 Contacts');
   check(await page.isVisible('.step-card[data-id="accs"].has-warning'), 'no warning on the Query card without an org');
@@ -746,6 +753,10 @@ async function seedStorage(page, { workflow, org }) {
 
 /** Waits until CSS transitions (sheet, toast) are over: no fixed timeouts. */
 const settle = (page) => page.waitForFunction(() => document.getAnimations().every((a) => a.playState !== 'running'));
+/** Waits (≤ 2 s) until `fn(arg)` is true in the page; a failed wait leaves the check after it to report. */
+const until = (page, fn, arg) => page.waitForFunction(fn, arg, { timeout: 2000 }).then(() => true, () => false);
+/** The selected card `id` is fully above the open sheet (the reveal runs in a frame after the sheet opens). */
+const cardAboveSheet = (id) => document.querySelector(`.step-card[data-id="${id}"]`).getBoundingClientRect().bottom <= document.getElementById('inspector').getBoundingClientRect().top + 0.5;
 
 /** Top bar measurements at the current viewport. */
 const topbarBox = (page) => page.evaluate(() => {
@@ -850,6 +861,8 @@ async function flowLayoutWide() {
   check(await page.waitForFunction(() => !document.querySelector('.palette').hasAttribute('data-overflow'), null, { timeout: 2000 }).then(() => true, () => false), '1440px: .palette has data-overflow');
   // N5: a selection on a wide screen does not pop a sheet open when the window gets narrow.
   await page.setViewportSize({ width: 800, height: 900 });
+  // A state, not the end of animations: the media query change makes the inspector inert.
+  await page.waitForFunction(() => document.getElementById('inspector').inert, null, { timeout: 2000 }).catch(() => {});
   await settle(page);
   const narrowed = await page.evaluate(() => {
     const insp = document.getElementById('inspector');
@@ -944,7 +957,7 @@ async function flowLayoutNarrow() {
   // 11 + 13d: the sheet opens with the card just above its edge.
   await m.tap('.step-card[data-id="con"] .type');
   await m.waitForSelector('#inspector.open');
-  await settle(m);
+  await until(m, cardAboveSheet, 'con');
   let s = await sheet();
   check(s.card <= s.sheet + 0.5 && s.sheet - s.canvas >= 190, `390px: sheet covers the selected card or leaves < 190px of canvas (${JSON.stringify(s)})`);
   if (outDir) await m.screenshot({ path: path.join(outDir, 'smoke-390-sheet.png') });
@@ -960,7 +973,7 @@ async function flowLayoutNarrow() {
   });
   await m.focus('#inspector .sheet-grip');
   await m.keyboard.press('Enter');
-  await settle(m);
+  await until(m, () => document.getElementById('inspector').classList.contains('full'));
   let sn = await snap();
   check(Math.abs(sn.top - sn.bar) <= 1 && sn.expanded === 'true', `Enter on the sheet grip: tall snap expected (${JSON.stringify(sn)})`);
   await m.keyboard.press('F8'); // nothing to go to: a toast, above the tall sheet
@@ -970,8 +983,8 @@ async function flowLayoutNarrow() {
   check(toastTall.toast <= toastTall.sheet + 0.5, `toast under the tall sheet (${JSON.stringify(toastTall)})`);
   await m.focus('#inspector .sheet-grip');
   await m.keyboard.press('Enter');
-  await settle(m);
-  await m.waitForFunction(() => document.querySelector('.step-card[data-id="con"]').getBoundingClientRect().bottom <= document.getElementById('inspector').getBoundingClientRect().top + 0.5, null, { timeout: 2000 }).catch(() => {});
+  await until(m, () => !document.getElementById('inspector').classList.contains('full'));
+  await until(m, cardAboveSheet, 'con');
   sn = await snap();
   check(sn.expanded === 'false' && sn.top > sn.bar + 100 && sn.card <= sn.top + 0.5, `Enter again: middle snap with con above it (${JSON.stringify(sn)})`);
   const dragHead = async (dy) => {
@@ -990,7 +1003,7 @@ async function flowLayoutNarrow() {
   // slow release would land on the middle one: the result would depend on the machine's speed).
   await m.focus('#inspector .sheet-grip');
   await m.keyboard.press('Enter');
-  await settle(m);
+  await until(m, () => !document.getElementById('inspector').classList.contains('full'));
   await dragHead(400);
   sn = await snap();
   check(!sn.open && sn.inert && sn.focus === 'con', `dragging the sheet head down 400 px: closed, inert, focus on con expected (${JSON.stringify(sn)})`);
@@ -1107,11 +1120,11 @@ async function flowLayoutNarrow() {
   check(s.sheet >= s.palette + 60 - 0.5 && s.sheet - s.canvas >= 60 - 0.5, `844×390: less than 60 px of canvas above the sheet (${JSON.stringify(s)})`);
   await m.focus('#inspector .sheet-grip');
   await m.keyboard.press('Enter');
-  await settle(m);
+  await until(m, () => document.getElementById('inspector').classList.contains('full'));
   const tall = await m.evaluate(() => document.getElementById('inspector').getBoundingClientRect().height);
   check(Math.abs(tall - 301) <= 1, `844×390: tall snap ${tall} px (301 expected)`);
   await m.keyboard.press('Enter');
-  await settle(m);
+  await until(m, () => !document.getElementById('inspector').classList.contains('full'));
   await m.tap('#btn-more');
   check(await m.$('.popup .popup-item:has-text("Thu gọn tất cả")'), '844×390: "Thu gọn tất cả" is neither on screen nor in the ⋯ menu');
   await m.keyboard.press('Escape');
@@ -1134,7 +1147,7 @@ async function flowLayoutNarrow() {
     if (await m.$('#inspector.open')) await m.tap('#inspector .sheet-close');
     await m.tap(`#issues ${row}`);
     await m.waitForSelector('#inspector.open');
-    await settle(m);
+    await until(m, cardAboveSheet, id); // the reveal runs a frame after the sheet opens
     const b = await cardBetween(id);
     check(b.ok, `${width}×${height}: after tapping its issue, "${id}" is not fully visible above the sheet (${JSON.stringify(b)})`);
   }
@@ -1899,7 +1912,7 @@ async function flowCanvas() {
   check(phone.overflow <= 0 && phone.zoomButtons.join() === '32', `390px Sơ đồ: overflow ${phone.overflow}px, zoom bar ${phone.zoomButtons} (only ⤢, 32 px)`);
   await m.tap('#canvas .step-card[data-id="__start"] .type');
   await m.waitForSelector('#inspector.open');
-  await settle(m);
+  await until(m, () => document.querySelector('#canvas .step-card.selected').getBoundingClientRect().bottom <= document.getElementById('inspector').getBoundingClientRect().top + 0.5);
   const sheet = await m.evaluate(() => ({ card: document.querySelector('#canvas .step-card.selected').getBoundingClientRect().bottom, sheet: document.getElementById('inspector').getBoundingClientRect().top, menu: document.querySelector('#canvas .step-card .menu-btn')?.offsetWidth }));
   check(sheet.card <= sheet.sheet + 0.5, `390px Sơ đồ: the selected card is under the sheet (${JSON.stringify(sheet)})`);
   if (outDir) await m.screenshot({ path: path.join(outDir, 'smoke-390-canvas.png') });

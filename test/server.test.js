@@ -171,6 +171,15 @@ test('static files are served and traversal is blocked', async () => {
   assert.equal(index.status, 200);
   const evil = await fetch(base + '/..%2fpackage.json');
   assert.ok([403, 404].includes(evil.status));
+  // Revalidation (design 0014 review): no-cache + ETag; an unchanged file answers 304 without a body.
+  const js = await fetch(base + '/js/dom.js');
+  const etag = js.headers.get('etag');
+  assert.equal(js.headers.get('cache-control'), 'no-cache');
+  assert.match(etag, /^W\/"[0-9a-f]+-[0-9a-f]+"$/);
+  const again = await fetch(base + '/js/dom.js', { headers: { 'If-None-Match': etag } });
+  assert.equal(again.status, 304);
+  assert.equal(await again.text(), '');
+  assert.equal((await fetch(base + '/js/dom.js', { headers: { 'If-None-Match': 'W/"0-0"' } })).status, 200);
 });
 
 test('shared modules are served from /shared/ and traversal out of it is blocked', async () => {
