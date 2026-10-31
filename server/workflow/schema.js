@@ -6,11 +6,11 @@
 // Version 2 (tree of steps) is the current format. Version 1 (graph) is still accepted: it is
 // migrated with shared/migrate-v1.js first, and the conversion is reported as warnings.
 
-import { NODE_TYPES, nodeTypeMap, CONDITION_OPS, LIMITS, recordPreset } from './nodes.js';
+import { NODE_TYPES, nodeTypeMap, CONDITION_OPS, LIMITS, recordPreset, WORKFLOW_GLOBALS } from './nodes.js';
 import { checkSoql, checkBuilder, isFieldPath, buildSoql, soqlSobject, selectFields, builderLimit, addSelectField } from '../../shared/soql.js';
-import { getGenerator, describeGenerators, optionIssues } from '../generators/index.js';
+import { getGenerator, describeGenerators, optionIssues, VALUE_TYPES } from '../generators/index.js';
 import { migrateV1, describeReport, reportNeedsReview } from '../../shared/migrate-v1.js';
-import { analyzeScope, referenceOptions, hasUnclosed } from '../../shared/scope.js';
+import { analyzeScope, referenceOptions, hasUnclosed, optionShown, numberVarPath, isVar, valueList } from '../../shared/scope.js';
 import { stepNames } from '../../shared/workflow-tree.js';
 
 const API_NAME = /^[A-Za-z][A-Za-z0-9_]*$/;
@@ -21,7 +21,7 @@ const REF_TYPES = new Set(['lookup', 'masterdetail']);
 let catalogCache = null;
 /** The catalogue analyzeScope reads, same shape as /api/meta. */
 export function scopeCatalog() {
-  catalogCache ??= { nodeTypes: NODE_TYPES, fieldTypes: describeGenerators() };
+  catalogCache ??= { nodeTypes: NODE_TYPES, fieldTypes: describeGenerators(), globals: WORKFLOW_GLOBALS };
   return catalogCache;
 }
 
@@ -233,18 +233,25 @@ export function prepareWorkflow(wf) {
       const mode = c.mode ?? 'fixed';
       // Whether the pool `from` is usable here is checked by analyzeScope (refs), like Chọn bản ghi.
       if (mode === 'each' && !c.from) err('Chưa chọn pool để lặp. Chọn alias của một bước Query, Record hoặc Chọn bản ghi ở phía trên.', step.id, 'from');
-      const check = (key) => {
-        const v = c[key];
-        if (v !== undefined && (!Number.isInteger(Number(v)) || v < 0 || v > LIMITS.maxCountPerNode)) {
-          err(`Số lần lặp phải là số nguyên từ 0 đến ${LIMITS.maxCountPerNode}.`, step.id, key);
+      validateNumberOptions(step, c, { err });
+      if (mode === 'range') {
+        // A variable bound is only known while running (max < min then uses min).
+        if (!isVar(c.min) && !isVar(c.max) && Number(c.min) > Number(c.max)) err('"Ít nhất" lớn hơn "Nhiều nhất".', step.id, 'min');
+      } else if (mode === 'values') {
+        const raw = c.values;
+        const n = raw === undefined || Array.isArray(raw) || typeof raw === 'string' ? valueList(raw).length : 0;
+        if (!n) err('Nhập ít nhất một giá trị, mỗi dòng một giá trị (ví dụ Hot, Warm, Cold).', step.id, 'values', { code: 'valuesEmpty' });
+        else if (n > LIMITS.maxCountPerNode) {
+          err(`Danh sách có ${n.toLocaleString('vi-VN')} giá trị, quá giới hạn ${LIMITS.maxCountPerNode.toLocaleString('vi-VN')} lần lặp của một bước Lặp. Bớt giá trị.`, step.id, 'values');
         }
-      };
-      if (mode === 'fixed') check('count');
-      else if (mode === 'range') {
-        check('min');
-        check('max');
-        if (Number(c.min) > Number(c.max)) err('"Ít nhất" lớn hơn "Nhiều nhất".', step.id, 'min');
-      } else if (mode !== 'each') err(`Chế độ lặp "${mode}" không hợp lệ.`, step.id, 'mode');
+      } else if (mode === 'each') {
+        validateFilter(step, c, { err });
+        if (!EACH_ORDERS.has(c.order ?? 'pool')) err(`Thứ tự "${c.order}" không hợp lệ.`, step.id, 'order');
+        const limit = c.limit ?? 0;
+        if (!Number.isInteger(Number(limit)) || Number(limit) < 0 || Number(limit) > LIMITS.maxCountPerNode || typeof limit === 'boolean') {
+          err(`"Tối đa số bản ghi" phải là số nguyên từ 0 đến ${LIMITS.maxCountPerNode} (0 = tất cả).`, step.id, 'limit');
+        }
+      } else if (mode !== 'fixed') err(`Chế độ lặp "${mode}" không hợp lệ.`, step.id, 'mode');
       if (!step.slots?.body?.length) warn('Vòng lặp chưa có bước nào. Bấm "+ Thêm bước vào vòng lặp".', step.id, 'slots.body');
     }
     if (step.type === 'branch') {
@@ -383,19 +390,55 @@ function validateQuery(step, c, { err, warn, inLoop }) {
   if (inLoop) warn('Query nằm trong vòng lặp vẫn chỉ đọc org một lần, trước khi sinh dữ liệu. Nên đặt Query ngay sau Bắt đầu.', step.id, undefined, { code: 'queryInLoop' });
 }
 
-const PICK_MODES = new Set(['random', 'unique', 'sequential']);
+const PICK_MODES = new Set(['random', 'unique', 'sequential', 'weighted']);
+const EACH_ORDERS = new Set(['pool', 'shuffle']);
 
 /** Chọn bản ghi (design 0006). Whether `from` is usable here is checked by analyzeScope (refs). */
 function validatePick(step, c, { err }) {
   if (!c.from) err('Chưa chọn pool. Chọn alias của bước Query hoặc Record ở phía trên.', step.id, 'from');
   if (!PICK_MODES.has(c.mode ?? 'random')) err(`Cách chọn "${c.mode}" không hợp lệ.`, step.id, 'mode');
+  if (c.mode === 'weighted') {
+    // Design 0013 E: chosen in proportion to a numeric field of the pool's records.
+    if (!String(c.weightField ?? '').trim()) err('Chưa nhập field trọng số, ví dụ NumberOfEmployees hoặc Amount.', step.id, 'weightField');
+    else if (!isFieldPath(c.weightField)) err(`Field "${c.weightField}" không hợp lệ. Dùng API name; field quan hệ viết Account.NumberOfEmployees.`, step.id, 'weightField');
+  }
+  validateFilter(step, c, { err });
+  if (!['skip', 'error'].includes(c.onEmpty ?? 'skip')) err(`Lựa chọn "${c.onEmpty}" không hợp lệ.`, step.id, 'onEmpty');
+}
+
+/** The filter of a Chọn bản ghi and of a Lặp `each` (design 0013 C): same keys, same messages. */
+function validateFilter(step, c, { err }) {
   const filter = c.filter ?? 'none';
   if (filter === 'compare') {
     if (!String(c.filterField ?? '').trim()) err('Chưa nhập field để lọc, ví dụ AccountId hoặc Account.Type.', step.id, 'filterField');
     else if (!isFieldPath(c.filterField)) err(`Field "${c.filterField}" không hợp lệ. Dùng API name; field quan hệ viết Account.Type.`, step.id, 'filterField');
     if (!CONDITION_OPS.some((o) => o.value === (c.filterOp ?? 'eq'))) err('Phép so sánh không hợp lệ.', step.id, 'filterOp');
   } else if (filter !== 'none') err(`Cách lọc "${filter}" không hợp lệ.`, step.id, 'filter');
-  if (!['skip', 'error'].includes(c.onEmpty ?? 'skip')) err(`Lựa chọn "${c.onEmpty}" không hợp lệ.`, step.id, 'onEmpty');
+}
+
+/**
+ * Every shown step option with `vars: 'number'` (design 0013 B: the counts of a Lặp): a number
+ * within the option's range, or exactly one `{{path}}` token (whether that variable can be used
+ * here, and its type, is checked by analyzeScope with the other references).
+ */
+function validateNumberOptions(step, c, { err }) {
+  const defs = nodeTypeMap.get(step.type)?.options ?? [];
+  const values = { ...Object.fromEntries(defs.map((d) => [d.key, d.default])), ...c };
+  for (const def of defs) {
+    if (def.vars !== 'number' || !optionShown(defs, def, values)) continue;
+    const v = c[def.key];
+    if (v === undefined) continue;
+    if (typeof v === 'string' && v.includes('{{')) {
+      if (numberVarPath(v) === null) {
+        err(`"${def.label}" phải là một số nguyên, hoặc đúng một biến như {{acc.NumberOfEmployees}}. Bỏ phần chữ quanh biến.`, step.id, def.key, { code: 'numberFormat' });
+      }
+      continue;
+    }
+    // (The message of before 0013, for every count of a Lặp.)
+    if (!Number.isInteger(Number(v)) || v < (def.min ?? 0) || v > (def.max ?? LIMITS.maxCountPerNode)) {
+      err(`Số lần lặp phải là số nguyên từ ${def.min ?? 0} đến ${def.max ?? LIMITS.maxCountPerNode}.`, step.id, def.key);
+    }
+  }
 }
 
 /** A Lookup imported from the org (referenceTo) whose parent step creates another sObject. */
@@ -418,7 +461,9 @@ export function referenceIssue(ref, scope, step, stepOf = () => undefined) {
   const src = ref.source !== undefined ? scope.sources[ref.source] : null;
   const fieldName = ref.field.startsWith('fields.') ? ref.field.slice('fields.'.length) : null;
   const prefix = fieldName !== null ? `Field "${fieldName}": ` : '';
-  const show = (p) => (ref.mode === 'template' ? `{{${p}}}` : p);
+  const show = (p) => (ref.mode === 'template' || ref.mode === 'number' ? `{{${p}}}` : p);
+  // Label of a step option (`"Số lần lặp"`), for the messages of design 0013.
+  const optionLabel = nodeTypeMap.get(step?.type)?.options.find((o) => o.key === ref.option)?.label ?? ref.option;
   const s = src?.name ?? ref.name;
   const what = src ? `${src.sobject ? ` (${src.sobject})` : ''}` : '';
   const suggest = ref.suggestion ? ref.suggestion.to : null;
@@ -485,9 +530,22 @@ export function referenceIssue(ref, scope, step, stepOf = () => undefined) {
       case 'unknownName':
         message = `không có biến "${ref.name}" (không phải alias của bước Record nào, cũng không phải tên biến lặp).${suggest ? ` Ý bạn là "${suggest.split('.')[0]}"?` : ''} Bấm {x} để chọn biến có sẵn.`;
         break;
+      case 'ownLoop':
+        message = `"${optionLabel}": ${show(ref.path)} là ${src?.kind === 'vars' ? 'biến' : 'bản ghi đang lặp'} của chính bước Lặp này, chỉ có bên trong thân; ô này được tính một lần trước lần lặp đầu. Dùng biến của bước phía trên.`;
+        break;
+      case 'notNumber': {
+        const typeLabel = VALUE_TYPES.find((t) => t.value === ref.valueType)?.label ?? ref.valueType;
+        message = ref.level === 'warning'
+          ? `"${optionLabel}": ${show(ref.path)} là ${typeLabel}; lần chạy nào giá trị không phải số thì vòng lặp chạy 0 lần. Nên chọn biến kiểu Số bằng {x}.`
+          : `"${optionLabel}": ${show(ref.path)} là ${typeLabel}, không phải số. Bấm {x} để chọn biến kiểu Số, ví dụ {{accs.$count}} hoặc {{loop.index}}.`;
+        break;
+      }
       case 'unknownMember':
         if (src?.kind === 'vars') {
           message = `biến lặp "${s}" chỉ có ${src.members.map((m) => m.key).join(', ')}; không có "${ref.missing ?? ref.member}".`;
+          // A member that exists in another mode only (`loop.value`, design 0013 D): say which.
+          const when = whenOf(src, ref.missing ?? ref.member);
+          if (when) message += ` ${show(ref.path)} chỉ có khi ${when}.`;
         } else if (src?.origin === 'org' || src?.nodeType === 'query') {
           // For a Chọn bản ghi or the record a Lặp `each` loops over, name the Query its rows come from.
           const q = src.root !== undefined ? scope.sources[src.root]?.name ?? s : s;
@@ -596,6 +654,20 @@ function selectFieldFix(q, field) {
   const c = q.config ?? {};
   if ((c.mode ?? 'builder') === 'soql' && addSelectField(c.soql, field) === null) return null;
   return { kind: 'addSelectField', stepId: q.id, field };
+}
+
+/**
+ * `"Lặp theo" là "Mỗi giá trị trong danh sách"` when member `key` of the variables `src` is
+ * declared with `when` in the catalogue (exists in that mode only), else null.
+ */
+function whenOf(src, key) {
+  const type = nodeTypeMap.get(src?.nodeType);
+  const entries = [type?.exposes ?? []].flat();
+  const m = entries.filter((ex) => ex.kind === 'vars').flatMap((ex) => (Array.isArray(ex.members) ? ex.members : [])).find((x) => x.key === key && x.when);
+  if (!m) return null;
+  const opt = type.options.find((o) => o.key === m.when.key);
+  const labels = m.when.in.map((v) => `"${opt?.choices?.find((c) => c.value === v)?.label ?? v}"`);
+  return `"${opt?.label ?? m.when.key}" là ${labels.join(' hoặc ')}`;
 }
 
 function maybeMessage(ref, s, isLookup, isMD) {

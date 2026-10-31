@@ -14,11 +14,19 @@
 // - record: generates `count` records, each becoming scope.current[alias]; `n` (alias#n) is
 //   passed to generators for {{this.$n}}.
 // - loop: draws N (rng.int for `range`, even when the body is empty, as v1 did), runs
-//   slots.body N times with a loop variable, then the next step. `mode: 'each'` (design 0010)
-//   draws nothing: it snapshots the pool scope.all[from] when it starts and runs the body once
-//   per record, in pool order, with that very object as scope.current[itemAlias] (not added to
-//   scope.all); an empty or missing pool runs 0 times, with one warning per step at the end.
+//   slots.body N times with a loop variable, then the next step. A count may be a number
+//   variable (design 0013 B, `"{{acc.N}}"`), read on every visit in the scope around the loop:
+//   empty / negative / not a number → 0, above maxCountPerNode → maxCountPerNode, one warning
+//   per step and option at the end. `mode: 'each'` (design 0010) snapshots the pool
+//   scope.all[from] when it starts and runs the body once per record, in pool order, with that
+//   very object as scope.current[itemAlias] (not added to scope.all); an empty or missing pool
+//   runs 0 times, with one warning per step at the end. Design 0013 C: optionally filtered
+//   (`filterValue` rendered once as the loop starts; `eq` through a per-step index), shuffled
+//   (`order: 'shuffle'`: rng.shuffleTake draws exactly k numbers) and cut to `limit`, in that
+//   order; without shuffle it draws nothing. `mode: 'values'` (0013 D) runs once per value of
+//   the list, with `{{loop.value}}`, drawing nothing.
 // - branch: always evaluates its condition, runs slots.true or slots.false, then the next step.
+//   (`right` with "{{" is rendered first, design 0013 A.)
 // - query (design 0006): never calls the org. The server reads every Query first
 //   (server/sf/query.js) and passes the rows as `opts.queryResults[stepId]`; the step binds them
 //   as the pool scope.all[alias] (rows are `existing` records with their real `id`, built once per
@@ -27,7 +35,11 @@
 //   — the very object, so a Lookup to it still gives `{ $ref }` for a generated record and the
 //   real Id for an org row. Nothing to choose: `onEmpty: 'skip'` stops the rest of the run of the
 //   innermost loop body (the next iteration starts; at the top level the run ends), with one
-//   warning at the end; `'error'` fails.
+//   warning at the end; `'error'` fails. `mode: 'weighted'` (design 0013 E) always draws one
+//   number and picks in proportion to `weightField` (all zero → uniform, with a warning).
+// - samples: the fields of the first record of every Record step and the first pick of every
+//   Chọn bản ghi (variable picker), also on `generator.samples` while it runs (0013 F).
+// - scope.run = { seed, now, today } (design 0013 G), read after every name the user gave.
 // Record pools (scope.current / scope.all) are global to the run; loop variables are lexical.
 // Memory (0004 + 0007 conflict 1): the pool of a Record alias is count-only
 // ({ kind: 'generated', length, refAt(i) } → `alias#(i+1)`), unless a step reads whole records
@@ -41,16 +53,34 @@
 
 import { createRandom } from '../random.js';
 import { generateValue } from '../generators/index.js';
-import { evaluateCondition, compareValues } from './conditions.js';
-import { getPath, renderTemplate } from './paths.js';
+import { evaluateCondition, compareValues, toNumber } from './conditions.js';
+import { getPath, renderTemplate, resolvePath } from './paths.js';
 import { prepareWorkflow, WorkflowError, scopeCatalog } from './schema.js';
-import { LIMITS } from './nodes.js';
+import { LIMITS, nodeTypeMap } from './nodes.js';
 import { soqlSobject, keyOf } from '../../shared/soql.js';
-import { poolUsage } from '../../shared/scope.js';
+import { poolUsage, numberVarPath, isVar, valueList } from '../../shared/scope.js';
 
 /** Returned by runSteps when a Chọn bản ghi step skipped the rest of the current run. */
 const SKIP = Symbol('skip');
 const PICK_FILTER_CACHE = 1000;
+const vi = (n) => n.toLocaleString('vi-VN');
+
+/** Left side of a filter: the field of a pool record, a Lookup `{ $ref }` as its ref. */
+function filterLeft(rec, field) {
+  const v = getPath(rec.fields, field, { ignoreCase: Boolean(rec.existing) });
+  return v && typeof v === 'object' && v.$ref ? v.$ref : v;
+}
+
+/**
+ * Key of a value in the `eq` index of a Lặp `each` filter: `n:<number>` for a number or numeric
+ * string, `s:<text>` otherwise. compareValues(l, 'eq', r) is true exactly when key(l) = key(r),
+ * or r is numeric and `s:${String(r)}` = key(l) (l not numeric but reading like r: `[5]`): the
+ * lookup merges both lists then (eachIndices).
+ */
+const eqKey = (v) => {
+  const n = toNumber(v);
+  return n !== null ? `n:${n}` : `s:${v === null || v === undefined ? '' : String(v)}`;
+};
 
 /** Count-only pool of a Record alias: `refAt(i)` is the ref of record i (0-based). */
 function countPool(alias) {
@@ -119,10 +149,16 @@ const TICK_EVERY = 5000;
 
 function generate(workflow, { seed, now, maxRecords, queryResults, keptPools, ticks = false }) {
   const live = { total: 0, bySobject: {}, byStep: {} };
-  const rootScope = { current: {}, all: {}, vars: {} };
+  const iso = new Date(now).toISOString();
+  // `run` (design 0013 G): the same seed + now in preview, insert and export give the same values.
+  const rootScope = { current: {}, all: {}, vars: {}, run: { seed, now: iso, today: iso.slice(0, 10) } };
+  // Step id → fields of its first record (Record) or first pick (Chọn bản ghi): variable picker
+  // samples, also readable while the run goes (a cancelled preview still returns them).
+  const samples = {};
   const it = run();
   it.live = live;
   it.pools = rootScope.all; // record pools of this run (tests check which ones are count-only)
+  it.samples = samples;
   return it;
 
   function* run() {
@@ -134,8 +170,15 @@ function generate(workflow, { seed, now, maxRecords, queryResults, keptPools, ti
 
     const queryPools = new Map(); // Query step id → pool (rows as existing records), built once per run
     const pickStates = new Map(); // Chọn bản ghi step id → { used, cursors, cache, remaining }
-    const samples = {}; // Chọn bản ghi step id → fields of its first pick (variable picker samples)
     const emptyEach = new Set(); // Lặp `each` step ids that met an empty pool (one warning each)
+    // Counters of the run warnings of design 0013, apart from byStep (whose shape the golden
+    // hashes pin): `${stepId}|${key}` → { runs, empty, clamped } for number variables, step id →
+    // { visits, matched } for each filters and → zero-weight picks.
+    const numberWarn = new Map();
+    const eachFilterStats = new Map();
+    const weightZero = new Map();
+    const eachStates = new Map(); // Lặp `each` step id → { pool, scanned, index, cache } (filter)
+    const weightSums = new WeakMap(); // candidate list → { n, sums } (prefix sums of the weights)
 
     function fail(step, message, field) {
       throw new WorkflowError([{ message, nodeId: step.id, ...(field ? { field } : {}) }]);
@@ -169,6 +212,7 @@ function generate(workflow, { seed, now, maxRecords, queryResults, keptPools, ti
         }
       }
       const rec = { ref: `${alias}#${n}`, sobject: c.sobject, alias, nodeId: step.id, fields };
+      samples[step.id] ??= fields;
       live.total++;
       bySobject[rec.sobject] = (bySobject[rec.sobject] ?? 0) + 1;
       scope.current[alias] = rec;
@@ -249,7 +293,121 @@ function generate(workflow, { seed, now, maxRecords, queryResults, keptPools, ti
         }
         return null;
       }
+      if (mode === 'weighted') return pickWeighted(step, c, cands);
       return rng.pick(cands);
+    }
+
+    /**
+     * Chọn bản ghi "theo trọng số" (design 0013 E): always one number r; the first candidate whose
+     * running total of weights passes r · total. Weights: the numeric value of `weightField`
+     * (missing, negative, not a number → 0); all zero → uniform, counted for a warning. The
+     * running totals are cached per candidate list and extended when it grows (the pool itself).
+     */
+    function pickWeighted(step, c, cands) {
+      const r = rng.next();
+      let w = weightSums.get(cands);
+      if (!w) weightSums.set(cands, (w = { n: 0, sums: [] }));
+      for (let total = w.n ? w.sums[w.n - 1] : 0; w.n < cands.length; w.n++) {
+        const x = toNumber(filterLeft(cands[w.n], c.weightField));
+        total += x !== null && x > 0 && Number.isFinite(x) ? x : 0;
+        w.sums.push(total);
+      }
+      const len = cands.length;
+      const total = w.sums[len - 1];
+      if (!(total > 0)) {
+        weightZero.set(step.id, (weightZero.get(step.id) ?? 0) + 1);
+        return cands[Math.floor(r * len)];
+      }
+      const target = r * total;
+      let lo = 0;
+      let hi = len - 1;
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (w.sums[mid] > target) hi = mid;
+        else lo = mid + 1;
+      }
+      return cands[lo];
+    }
+
+    /**
+     * Value of a `vars: 'number'` option for this visit (design 0013 B). A number (or a numeric
+     * string) goes the way it always did, so saved workflows give the same data; a `{{path}}` is
+     * read in `scope` and clamped to 0…maxCountPerNode, counting the visits for the warnings.
+     */
+    function numberOption(step, key, fallback, scope) {
+      const raw = step.config?.[key] ?? fallback;
+      const path = numberVarPath(raw);
+      if (path === null) return Number(raw);
+      const k = `${step.id}|${key}`;
+      let w = numberWarn.get(k);
+      if (!w) numberWarn.set(k, (w = { runs: 0, empty: 0, clamped: 0 }));
+      w.runs++;
+      const x = toNumber(resolvePath(path, scope, undefined));
+      if (x === null || Number.isNaN(x) || x < 0) {
+        w.empty++;
+        return 0;
+      }
+      if (x > LIMITS.maxCountPerNode) {
+        w.clamped++;
+        return LIMITS.maxCountPerNode;
+      }
+      return Math.trunc(x);
+    }
+
+    /** Lặp "Mỗi giá trị trong danh sách" (design 0013 D): no rng. */
+    function* runValues(step, c, stat, scope) {
+      const values = valueList(c.values);
+      stat.iterations = (stat.iterations ?? 0) + values.length;
+      const body = step.slots?.body ?? [];
+      if (!body.length) return;
+      const varName = c.alias || 'loop';
+      for (let i = 0; i < values.length; i++) {
+        if (countVisit(step)) yield TICK;
+        yield* runSteps(body, { ...scope, vars: { ...scope.vars, [varName]: { index: i + 1, index0: i, count: values.length, value: values[i] } } });
+      }
+    }
+
+    /**
+     * Positions (ascending, pool order) of the first `n` records of `pool` matching the filter of
+     * Lặp `each` step `step` against `right` (design 0013 C). `eq` goes through an index built
+     * once per step and extended as the pool grows (pools only grow); other operators filter
+     * linearly, cached per (right side, n). The array may be shared: do not change it.
+     */
+    function eachIndices(step, c, pool, n, right) {
+      let st = eachStates.get(step.id);
+      if (!st || st.pool !== pool) eachStates.set(step.id, (st = { pool, scanned: 0, index: new Map(), cache: new Map() }));
+      const op = c.filterOp ?? 'eq';
+      if (op === 'eq') {
+        for (; st.scanned < n; st.scanned++) {
+          const key = eqKey(filterLeft(pool[st.scanned], c.filterField));
+          let list = st.index.get(key);
+          if (!list) st.index.set(key, (list = []));
+          list.push(st.scanned);
+        }
+        const key = eqKey(right);
+        const a = st.index.get(key) ?? [];
+        // A numeric right side also equals, as text, a left value that is not a number but reads
+        // like one (`[5]`, `Infinity`): those are keyed `s:<text>`. (No string is: it would be numeric.)
+        const b = key[0] === 'n' ? st.index.get(`s:${String(right ?? '')}`) : null;
+        const cut = (list) => {
+          // Positions beyond the snapshot `n` (the pool grew since another visit) are dropped.
+          if (!list.length || list[list.length - 1] < n) return list;
+          let k = list.length;
+          while (k > 0 && list[k - 1] >= n) k--;
+          return list.slice(0, k);
+        };
+        if (!b?.length) return cut(a);
+        return cut([...a, ...b].sort((x, y) => x - y));
+      }
+      const cacheKey = `${right}\u0000${n}`;
+      let out = st.cache.get(cacheKey);
+      if (!out) {
+        out = [];
+        for (let i = 0; i < n; i++) if (compareValues(filterLeft(pool[i], c.filterField), op, right)) out.push(i);
+        if (st.cache.size >= PICK_FILTER_CACHE) st.cache.clear();
+        st.cache.set(cacheKey, out);
+      }
+      return out;
     }
 
     /**
@@ -262,19 +420,38 @@ function generate(workflow, { seed, now, maxRecords, queryResults, keptPools, ti
       if (pool && !Array.isArray(pool)) fail(step, `Pool "${c.from}" không giữ bản ghi để lặp (lỗi nội bộ). Báo lại kèm file workflow.`, 'from');
       // Pools only grow (records are appended), so the snapshot is the length: no copy.
       const n = pool ? pool.length : 0;
-      if (n > LIMITS.maxCountPerNode) {
-        fail(step, `Pool "${c.from}" có ${n.toLocaleString('vi-VN')} bản ghi, quá giới hạn ${LIMITS.maxCountPerNode.toLocaleString('vi-VN')} lần lặp của một bước Lặp. Thu hẹp pool (WHERE/LIMIT của Query) hoặc giảm số bản ghi.`, 'from');
+      // Filter → shuffle → limit (design 0013 C). `idx` null: positions 0…n-1, not allocated.
+      let idx = null;
+      const filtered = (c.filter ?? 'none') === 'compare';
+      if (filtered && n) {
+        // Rendered once, in the scope around the loop (`{{acc.Id}}` of an outer loop).
+        const right = renderTemplate(c.filterValue ?? '', scope, undefined);
+        idx = eachIndices(step, c, pool, n, right);
+        let f = eachFilterStats.get(step.id);
+        if (!f) eachFilterStats.set(step.id, (f = { visits: 0, matched: 0 }));
+        f.visits++;
+        if (idx.length) f.matched++;
       }
-      stat.iterations = (stat.iterations ?? 0) + n;
+      const m0 = idx ? idx.length : n;
+      const limit = Math.trunc(Number(c.limit ?? 0)) || 0;
+      const m = limit > 0 ? Math.min(limit, m0) : m0;
+      if (m > LIMITS.maxCountPerNode) {
+        fail(step, filtered
+          ? `Pool "${c.from}" còn ${vi(m)} bản ghi sau khi lọc, quá giới hạn ${vi(LIMITS.maxCountPerNode)} lần lặp của một bước Lặp. Đặt "Tối đa số bản ghi" hoặc thu hẹp điều kiện lọc.`
+          : `Pool "${c.from}" có ${vi(n)} bản ghi, quá giới hạn ${vi(LIMITS.maxCountPerNode)} lần lặp của một bước Lặp. Thu hẹp pool (WHERE/LIMIT của Query) hoặc giảm số bản ghi.`, 'from');
+      }
+      // Exactly m numbers, drawn as the loop starts (none for pool order).
+      if ((c.order ?? 'pool') === 'shuffle' && m) idx = rng.shuffleTake(idx ?? Array.from({ length: n }, (_, i) => i), m);
+      stat.iterations = (stat.iterations ?? 0) + m;
       if (!n) emptyEach.add(step.id);
       const body = step.slots?.body ?? [];
       if (!body.length) return;
       const varName = c.alias || 'loop';
-      for (let i = 0; i < n; i++) {
+      for (let i = 0; i < m; i++) {
         if (countVisit(step)) yield TICK;
-        scope.current[c.itemAlias] = pool[i];
+        scope.current[c.itemAlias] = pool[idx ? idx[i] : i];
         // A skip inside the body ends this iteration only.
-        yield* runSteps(body, { ...scope, vars: { ...scope.vars, [varName]: { index: i + 1, index0: i, count: n } } });
+        yield* runSteps(body, { ...scope, vars: { ...scope.vars, [varName]: { index: i + 1, index0: i, count: m } } });
       }
     }
 
@@ -309,7 +486,18 @@ function generate(workflow, { seed, now, maxRecords, queryResults, keptPools, ti
               yield* runEach(step, c, stat, scope);
               break;
             }
-            const times = (c.mode ?? 'fixed') === 'range' ? rng.int(Number(c.min ?? 1), Number(c.max ?? 1)) : Number(c.count ?? 0);
+            if (c.mode === 'values') {
+              yield* runValues(step, c, stat, scope);
+              break;
+            }
+            let times;
+            if ((c.mode ?? 'fixed') === 'range') {
+              const lo = numberOption(step, 'min', 1, scope);
+              let hi = numberOption(step, 'max', 1, scope);
+              // Only with a variable: a saved `min` > `max` still draws rng.int(min, max) as before.
+              if (isVar(c.min) || isVar(c.max)) hi = Math.max(lo, hi);
+              times = rng.int(lo, hi); // always exactly one number, even with an empty body
+            } else times = numberOption(step, 'count', 0, scope);
             const body = step.slots?.body ?? [];
             const varName = c.alias || 'loop';
             stat.iterations = (stat.iterations ?? 0) + times;
@@ -364,22 +552,62 @@ function generate(workflow, { seed, now, maxRecords, queryResults, keptPools, ti
     yield* runSteps(workflow.steps, rootScope);
 
     const runWarnings = [];
+    const optionLabel = (step, key) => nodeTypeMap.get(step.type)?.options.find((o) => o.key === key)?.label ?? key;
     const visit = (list) => {
       for (const step of list ?? []) {
         const s = byStep[step.id];
+        const name = step.config?.itemAlias || step.config?.alias || 'loop';
         if (emptyEach.has(step.id)) {
           runWarnings.push({
-            message: `Bước Lặp "${step.config?.itemAlias || step.config?.alias || 'loop'}": pool "${step.config?.from}" không có bản ghi nào nên các bước bên trong không chạy. Kiểm tra bước "${step.config?.from}" (WHERE của Query hoặc số bản ghi).`,
+            message: `Bước Lặp "${name}": pool "${step.config?.from}" không có bản ghi nào nên các bước bên trong không chạy. Kiểm tra bước "${step.config?.from}" (WHERE của Query hoặc số bản ghi).`,
             nodeId: step.id,
             field: 'from',
             code: 'eachEmpty',
           });
+        }
+        const f = eachFilterStats.get(step.id);
+        if (f?.visits && !f.matched) {
+          runWarnings.push({
+            message: `Bước Lặp "${name}": không bản ghi nào của pool "${step.config?.from}" thỏa điều kiện lọc ở cả ${vi(f.visits)} lần chạy qua, nên các bước bên trong không chạy. Kiểm tra field lọc (có trong "Field cần lấy" của Query chưa?) và giá trị so sánh.`,
+            nodeId: step.id,
+            field: 'filterValue',
+            code: 'eachFilterEmpty',
+          });
+        }
+        for (const key of ['count', 'min', 'max']) {
+          const w = numberWarn.get(`${step.id}|${key}`);
+          if (!w) continue;
+          const head = `Bước Lặp "${step.config?.alias || 'loop'}": "${optionLabel(step, key)}" = {{${numberVarPath(step.config?.[key])}}}`;
+          if (w.empty) {
+            runWarnings.push({
+              message: `${head} trống, âm hoặc không phải số ở ${vi(w.empty)}/${vi(w.runs)} lần chạy qua, nên các lần đó ${key === 'count' ? 'lặp 0 lần' : 'dùng 0'}. Kiểm tra field trong org hoặc chọn biến khác.`,
+              nodeId: step.id,
+              field: key,
+              code: 'numberVarEmpty',
+            });
+          }
+          if (w.clamped) {
+            runWarnings.push({
+              message: `${head} lớn hơn ${vi(LIMITS.maxCountPerNode)} ở ${vi(w.clamped)}/${vi(w.runs)} lần chạy qua, nên đã dùng ${vi(LIMITS.maxCountPerNode)}.`,
+              nodeId: step.id,
+              field: key,
+              code: 'numberVarClamped',
+            });
+          }
         }
         if (step.type === 'pick' && s?.skipped) {
           runWarnings.push({
             message: `Bước Chọn bản ghi "${step.config?.alias}": ${s.skipped}/${s.runs} lần không có bản ghi phù hợp nên đã bỏ qua các bước phía sau. Đổi điều kiện lọc, tăng LIMIT của Query, hoặc chọn "Báo lỗi và dừng" nếu đây là lỗi.`,
             nodeId: step.id,
             code: 'pickSkipped',
+          });
+        }
+        if (weightZero.has(step.id)) {
+          runWarnings.push({
+            message: `Bước Chọn bản ghi "${step.config?.alias}": ${vi(weightZero.get(step.id))}/${vi(s?.runs ?? 0)} lần mọi bản ghi có trọng số 0 (field "${step.config?.weightField}" trống hoặc không phải số) nên đã chọn đều. Kiểm tra field trọng số hoặc thêm nó vào "Field cần lấy" của Query.`,
+            nodeId: step.id,
+            field: 'weightField',
+            code: 'pickWeightZero',
           });
         }
         for (const children of Object.values(step.slots ?? {})) visit(children);

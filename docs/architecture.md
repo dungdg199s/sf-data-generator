@@ -71,7 +71,7 @@ thư mục này ở `/shared/…` với cùng cách chặn path traversal như `
 | `shared/soql.js` | SOQL của bước Query ([0006](design/0006-query-pick-nodes.md)): dựng câu từ builder, đọc danh sách field / sObject của SOQL tự viết, kiểm tra chỉ đọc (`checkSoql`, `checkBuilder`), dòng mẫu khi chưa chọn org |
 | `shared/each-wrap.js` | "Bọc trong Lặp qua từng bản ghi" ([0012](design/0012-nang-suat-soan-thao.md) C): `eachWrapPlan` (pool cho Lặp `each` mới, Lookup nên nối lại), `applyEachRewire` (nút [Đổi], chỉ khi Lặp còn nguyên và Lookup còn trong nó) |
 | `shared/estimate.js` | `estimateSteps(wf, catalog, { queryCounts })` ([0012](design/0012-nang-suat-soan-thao.md) H): ước tính số bản ghi mỗi bước sinh ra trước khi chạy (`{ records, min, max, exact }`, khung: tổng bên trong, Lặp thêm `iterations`) và tổng; đọc ý nghĩa `count`/`min`/`max`/`mode` của Lặp, `kind`/`probability` của Rẽ nhánh, số dòng tối đa của Query theo `maxFetchFor` (hoặc số dòng lần đọc gần nhất); một lượt O(số bước), bước tắt bỏ qua |
-| `shared/scope.js` | `analyzeScope(wf, catalog)` ([0005](design/0005-variable-picker.md)): nguồn biến, biến dùng được ở từng bước (`always`/`last`/`maybe`) và lý do bị ẩn (`after`/`otherBranch`/`outsideLoop`/`shadowed`/`disabled`), mọi tham chiếu đã phân giải; `refChoices` cho ô "Bản ghi cha"; regex token `{{…}}` (`TEMPLATE_TOKEN_SOURCE`); `poolUsage` ([0004](design/0004-streaming-execution.md)): pool nào phải giữ bản ghi đầy đủ, alias nào cần giữ Id khi insert |
+| `shared/scope.js` | `analyzeScope(wf, catalog)` ([0005](design/0005-variable-picker.md)): nguồn biến, biến dùng được ở từng bước (`always`/`last`/`maybe`) và lý do bị ẩn (`after`/`otherBranch`/`outsideLoop`/`shadowed`/`disabled`), mọi tham chiếu đã phân giải (kèm `valueType`); `refChoices` cho ô "Bản ghi cha"; regex token `{{…}}` (`TEMPLATE_TOKEN_SOURCE`); `poolUsage` ([0004](design/0004-streaming-execution.md)): pool nào phải giữ bản ghi đầy đủ, alias nào cần giữ Id khi insert. Từ [0013](design/0013-mo-rong-bien-va-lap.md): `optionShown` (`showIf` bắc cầu), `numberVarPath`/`isVar` (option `vars: 'number'`), `valueList` (Lặp `values`), nguồn `$run` từ `catalog.globals`, `numericSampleFields` (field Query dùng như số, cho dòng mẫu) |
 
 Thứ tự slot được truyền vào qua tham số `slotKeys(type)`: server lấy từ `nodeTypeMap`, client lấy từ `state.meta`.
 `analyzeScope` nhận cả danh mục `{ nodeTypes, fieldTypes }` (server: `scopeCatalog()` trong `schema.js`; client:
@@ -101,7 +101,11 @@ Thứ tự slot được truyền vào qua tham số `slotKeys(type)`: server l�
   [0010](design/0010-lap-theo-ban-ghi.md)) mới giữ bản ghi đầy đủ — `poolUsage` tính từ danh mục, không hard-code loại bước.
   Lookup tới bản ghi đang lặp giữ Id của pool phía sau nó khi insert (`referencedAliases` đi theo `fromSource`).
 - **Lặp `each` không dùng `rng`** (0010): chụp pool lúc bắt đầu và lặp theo thứ tự pool, nên chèn hay bỏ một Lặp `each` không
-  làm lệch số ngẫu nhiên của các bước khác; xem trước và insert cùng seed ra cùng số lần lặp (dòng Query có dấu vân tay). Phần bộ nhớ còn tăng theo số bản ghi: tập giá trị `unique`
+  làm lệch số ngẫu nhiên của các bước khác; xem trước và insert cùng seed ra cùng số lần lặp (dòng Query có dấu vân tay).
+  Ngoại lệ có chủ đích ([0013](design/0013-mo-rong-bien-va-lap.md) C): `order: 'shuffle'` rút **đúng** k số (`rng.shuffleTake`)
+  lúc vòng lặp bắt đầu. Lọc của Lặp `each` (phép `eq`) dùng chỉ mục theo bước, nối thêm khi pool dài ra, nên Lặp lồng
+  "mỗi Account → Contact của nó" là O(số Contact) chứ không O(Account × Contact). Lặp `values`, đọc biến số (`count`
+  `"{{acc.N}}"`) và Rẽ nhánh so với biến không rút số nào; Chọn bản ghi `weighted` rút đúng một số như `rng.pick`. Phần bộ nhớ còn tăng theo số bản ghi: tập giá trị `unique`
   (khoảng 165 B/giá trị) và Id của alias có Lookup trỏ tới khi insert (khoảng 100 B/bản ghi).
 - **Lookup dùng placeholder `{ "$ref": "alias#n" }`.** Executor không biết Id thật; `sf/insert.js` chèn
   theo từng "đợt" (wave) để bản ghi cha luôn có Id trước bản ghi con.

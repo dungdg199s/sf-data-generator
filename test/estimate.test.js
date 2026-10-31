@@ -101,3 +101,36 @@ test('missing options take the catalogue defaults; empty workflow is zero', () =
   assert.deepEqual(est(wf([])).total, { records: 0, min: 0, max: 0, exact: true });
   assert.deepEqual(est(null).total, { records: 0, min: 0, max: 0, exact: true });
 });
+
+// ---------- design 0013 ----------
+
+test('0013: number-variable counts are not exact; $count of a known pool expects its size', () => {
+  const w = wf([
+    query('q', 'accs'),
+    loop('l', { count: '{{accs.$count}}' }, [record('r', 'Contact', 'con')]),
+    record('a', 'Account', 'acc', [{ name: 'N', type: 'number', options: {} }]),
+    loop('m', { count: '{{acc.N}}', alias: 'm' }, [record('s', 'Lead', 'ld')]),
+    loop('n', { mode: 'range', min: 2, max: '{{acc.N}}', alias: 'n' }, [record('t', 'Task', 'tk')]),
+  ]);
+  const { byStep } = est(w, { queryCounts: { q: 7 } });
+  assert.deepEqual(byStep.r, { records: 7, min: 7, max: 7, exact: false });
+  assert.deepEqual(byStep.s, { records: 1, min: 0, max: LIMITS.maxCountPerNode, exact: false });
+  assert.deepEqual([byStep.t.min, byStep.t.exact], [2, false]);
+});
+
+test('0013: a values loop runs once per value; an each filter and limit are estimated', () => {
+  const { byStep } = est(wf([loop('l', { mode: 'values', values: ['Hot', 'Warm', ' ', 'Cold'] }, [record('r', 'Lead', 'ld')])]));
+  assert.deepEqual(byStep.r, { records: 3, min: 3, max: 3, exact: true });
+  const w = wf([
+    query('q1', 'accs'),
+    query('q2', 'cons', { sobject: 'Contact' }),
+    loop('la', { mode: 'each', from: 'accs', itemAlias: 'acc' }, [
+      loop('lc', { mode: 'each', from: 'cons', itemAlias: 'con', alias: 'k', filter: 'compare', filterField: 'AccountId', filterValue: '{{acc.Id}}' }, [record('t', 'Task', 'task')]),
+      loop('ll', { mode: 'each', from: 'cons', itemAlias: 'c2', alias: 'j', order: 'shuffle', limit: 3 }, [record('u', 'Task', 'task2')]),
+    ]),
+  ]);
+  const e = est(w, { queryCounts: { q1: 20, q2: 100 } }).byStep;
+  assert.equal(e.t.records, 100, 'an eq filter splits the pool between the visits');
+  assert.equal(e.t.exact, false);
+  assert.deepEqual(e.u, { records: 60, min: 60, max: 60, exact: true });
+});

@@ -3,6 +3,7 @@
 
 import { h } from './dom.js';
 import { attachVarPicker } from './var-picker.js';
+import { optionShown } from '/shared/scope.js';
 
 let uid = 0;
 
@@ -42,7 +43,8 @@ export function renderOptions(defs, values, onChange, ctx = {}) {
     }
   };
   const refreshVisibility = () => {
-    for (const { def, row } of rows) row.hidden = def.showIf ? !def.showIf.in.includes(current[def.showIf.key]) : false;
+    // `showIf` is transitive (design 0013): hidden when the option it depends on is hidden.
+    for (const { def, row } of rows) row.hidden = !optionShown(defs, def, current);
   };
 
   for (const def of defs) {

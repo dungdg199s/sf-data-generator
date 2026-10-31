@@ -9,7 +9,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { describeGenerators, VALUE_TYPES } from './generators/index.js';
-import { serializableNodeTypes, STEP_CATEGORIES, LIMITS, QUERY_PRESETS, RECORD_PRESETS, RECORD_DEFAULT_FIELDS } from './workflow/nodes.js';
+import { serializableNodeTypes, STEP_CATEGORIES, LIMITS, QUERY_PRESETS, RECORD_PRESETS, RECORD_DEFAULT_FIELDS, WORKFLOW_GLOBALS } from './workflow/nodes.js';
 import { TEMPLATE_TOKEN } from './workflow/paths.js';
 import { validateWorkflow, prepareWorkflow, insertBlockedReason, WorkflowError } from './workflow/schema.js';
 import { createRun } from './workflow/executor.js';
@@ -125,6 +125,7 @@ export function createApp({ cli = createSfCli(), client, queryCache = createQuer
         queryPresets: QUERY_PRESETS,
         recordPresets: RECORD_PRESETS,
         recordDefaultFields: RECORD_DEFAULT_FIELDS,
+        globals: WORKFLOW_GLOBALS,
         syntax: { templateToken: TEMPLATE_TOKEN, valueTypes: VALUE_TYPES },
       }),
     ],

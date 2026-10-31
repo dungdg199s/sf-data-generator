@@ -53,6 +53,24 @@ export function createRandom(seed = Date.now()) {
       }
       return idx.slice(0, Math.min(k, list.length)).sort((a, b) => a - b).map((i) => list[i]);
     },
+    /**
+     * The first `k` items of a seeded shuffle of `list` (design 0013 C, Lặp `each` "Xáo trộn"):
+     * a partial Fisher–Yates on a copy that draws exactly min(k, length) numbers. `list` is not
+     * changed.
+     */
+    shuffleTake(list, k) {
+      const a = Array.from(list);
+      const len = a.length;
+      const n = Math.min(Math.max(0, Math.trunc(Number(k)) || 0), len);
+      for (let i = 0; i < n; i++) {
+        const j = i + Math.floor(next() * (len - i));
+        const t = a[i];
+        a[i] = a[j];
+        a[j] = t;
+      }
+      a.length = n;
+      return a;
+    },
     digits(n) {
       let s = '';
       for (let i = 0; i < n; i++) s += Math.floor(next() * 10);
