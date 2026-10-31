@@ -151,7 +151,8 @@ Bước Query ([0006](design/0006-query-pick-nodes.md)) đọc bản ghi có s�
 - **Tên field không phân biệt hoa thường** (như Salesforce): các dòng được đổi khóa theo cách viết trong SELECT
   (`SELECT id, name` → `{ id, name }`), và tham chiếu tới bản ghi đọc từ org (`{{acc.Name}}`, ô lọc của Chọn bản ghi) bỏ qua
   hoa thường.
-- **Org nào.** Xem trước: org đang chọn ở thanh trên (`org` trong request), không chọn thì 5 dòng mẫu (không gọi Salesforce).
+- **Org nào.** Xem trước: org đang chọn ở thanh trên (`org` trong request), không chọn thì 5 dòng mẫu (không gọi Salesforce;
+  field dùng làm số lần lặp hay trọng số có giá trị `1…5`, [0013](design/0013-mo-rong-bien-va-lap.md) F).
   Insert: luôn đọc `target.org`, không bao giờ dùng dòng mẫu. Các query chạy tuần tự theo thứ tự đọc, bỏ bước đang tắt.
 - **Cache.** Trong bộ nhớ, khóa `(org, SOQL, maxFetch)` với org là **instance URL + username** lấy từ sf CLI (hai alias của
   cùng org dùng chung, alias trỏ sang org khác thì không dùng lại), TTL 10 phút (`queryCacheTtlMs`), tối đa 50 mục. Xem trước rồi insert

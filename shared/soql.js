@@ -308,8 +308,12 @@ export function normalizeRow(row) {
 /**
  * Deterministic sample rows when no org is selected (no rng): Id `mẫu:accs#1`, Name
  * `Account mẫu 1`, other fields `<field> mẫu 1`; relationship fields become nested objects.
+ * A field listed in `numeric` (design 0013 F, any case) is the row number 1, 2, 3…
  */
-export function sampleRows(config, alias) {
+export function sampleRows(config, alias, { numeric = [] } = {}) {
+  // Fields read as numbers (design 0013 F: a loop count, a pick weight) get the row number, so a
+  // preview without an org still loops and weighs (`numericSampleFields` in shared/scope.js).
+  const isNumeric = new Set((numeric ?? []).map((f) => String(f).toLowerCase()));
   const max = maxFetchFor(config, SAMPLE_ROWS);
   const n = Math.max(0, Math.min(SAMPLE_ROWS, Number.isFinite(max) ? max : SAMPLE_ROWS));
   const sobject = soqlSobject(config) || 'Record';
@@ -327,7 +331,8 @@ export function sampleRows(config, alias) {
       });
       const leaf = parts[parts.length - 1];
       let value = `${f} mẫu ${i}`;
-      if (parts.length === 1 && leaf.toLowerCase() === 'id') value = `mẫu:${alias || 'q'}#${i}`;
+      if (isNumeric.has(f.toLowerCase())) value = i;
+      else if (parts.length === 1 && leaf.toLowerCase() === 'id') value = `mẫu:${alias || 'q'}#${i}`;
       else if (parts.length === 1 && leaf.toLowerCase() === 'name') value = `${sobject} mẫu ${i}`;
       level[leaf] = value;
     }

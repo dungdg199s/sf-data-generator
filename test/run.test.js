@@ -256,3 +256,71 @@ test('loop iterations count as step visits: a body of turned-off steps hits maxS
   const each = wf([record('acc', 'Account', 'acc', [], { count: 2000 }), loop('o', { count: 1000 }, [loop('e', { mode: 'each', from: 'acc', itemAlias: 'a' }, [off])])]);
   assert.throws(() => runWorkflow(each, { seed: 1, now: NOW }), (e) => /quá 2000000 bước/.test(e.message));
 });
+
+// ---------- design 0013 ----------
+
+import { prefetchQueries } from '../server/sf/query.js';
+import { sampleRows } from '../shared/soql.js';
+
+test('sample Query rows give numbers for fields used as numbers', async () => {
+  const w = wf([
+    { id: 'q', type: 'query', config: { sobject: 'Account', alias: 'accs', fields: ['Id', 'Name', 'NumberOfEmployees', 'AnnualRevenue', 'Owner.Score__c'] } },
+    { id: 'q2', type: 'query', config: { sobject: 'Contact', alias: 'cons', fields: ['Id', 'LastName', 'Weight__c'] } },
+    loop('la', { mode: 'each', from: 'accs', itemAlias: 'acc' }, [
+      loop('lc', { count: '{{acc.numberofemployees}}', alias: 'k' }, [record('c', 'Contact', 'con', [{ name: 'Title', type: 'template', options: { template: '{{acc.Name}} {{k.index}}' } }])]),
+      loop('lr', { mode: 'range', min: 0, max: '{{acc.Owner.Score__c}}', alias: 'r' }, []),
+    ]),
+    { id: 'p', type: 'pick', config: { from: 'cons', alias: 'pc', mode: 'weighted', weightField: 'Weight__c' } },
+  ]);
+  const { results } = await prefetchQueries({ client: null, org: null, workflow: w });
+  const [first, second] = results.q.records;
+  assert.deepEqual([first.NumberOfEmployees, second.NumberOfEmployees, first.Owner.Score__c, first.AnnualRevenue, first.Name], [1, 2, 1, 'AnnualRevenue mẫu 1', 'Account mẫu 1']);
+  assert.deepEqual(results.q2.records.map((r) => r.Weight__c), [1, 2, 3, 4, 5]);
+  // Without numeric fields the rows are as before (0006).
+  assert.deepEqual(sampleRows(w.steps[0].config, 'accs'), sampleRows(w.steps[0].config, 'accs', { numeric: [] }));
+  assert.equal(sampleRows(w.steps[0].config, 'accs')[0].NumberOfEmployees, 'NumberOfEmployees mẫu 1');
+  // So the preview without an org loops 1 + 2 + 3 + 4 + 5 times.
+  const r = runWorkflow(w, { seed: 1, now: NOW, queryResults: results });
+  assert.equal(r.stats.byStep.c.records, 15);
+  assert.deepEqual(r.warnings.filter((x) => x.code === 'numberVarEmpty' || x.code === 'pickWeightZero'), []);
+});
+
+test('preview and insert give the same data with number variables, shuffle and weighted pick on Query rows', async () => {
+  const qr = { q: { sobject: 'Account', records: Array.from({ length: 8 }, (_, i) => ({ Id: `001${String(i).padStart(15, '0')}`, Name: `Org ${i}`, N: i % 4 })) } };
+  const w = wf([
+    { id: 'q', type: 'query', config: { sobject: 'Account', alias: 'accs', fields: ['Id', 'Name', 'N'] } },
+    loop('la', { mode: 'each', from: 'accs', itemAlias: 'acc', order: 'shuffle', limit: 5 }, [
+      loop('lc', { count: '{{acc.N}}', alias: 'k' }, [record('c', 'Contact', 'con', [{ name: 'LastName', type: 'text', options: { mode: 'lastName' } }, { name: 'AccountId', type: 'lookup', options: { ref: 'acc' } }, { name: 'Description', type: 'template', options: { template: '{{run.seed}} {{k.index}}' } }])]),
+    ]),
+    loop('lw', { count: 6 }, [
+      { id: 'p', type: 'pick', config: { from: 'accs', alias: 'big', mode: 'weighted', weightField: 'N' } },
+      record('o', 'Opportunity', 'opp', [{ name: 'AccountId', type: 'lookup', options: { ref: 'big' } }, { name: 'Amount', type: 'currency', options: {} }]),
+    ]),
+  ]);
+  const client = fakeClient();
+  const preview = await drive({ run: createRun(w, { seed: 12, now: NOW, queryResults: qr }) });
+  const insert = await drive({ run: createRun(w, { seed: 12, now: NOW, queryResults: qr }), target: 'dev', sfClient: client });
+  assert.equal(insert.end.type, 'done');
+  const sent = client.calls.flatMap((c) => c.recs);
+  // Same records in the same order (inserted grouped by sObject, so compare per sObject).
+  for (const so of ['Contact', 'Opportunity']) {
+    const call = client.calls.filter((c) => c.sobject === so).flatMap((c) => c.recs);
+    assert.deepEqual(call, preview.end.result.records.filter((r) => r.sobject === so).map((r) => r.fields), so);
+  }
+  assert.ok(sent.length > 6);
+  assert.ok(sent.filter((x) => x.Description).every((x) => x.Description.startsWith('12 ')));
+});
+
+test('a cancelled preview still returns the samples it has', async () => {
+  const controller = new AbortController();
+  const w = wf([
+    record('a', 'Account', 'acc', [{ name: 'Name', type: 'text', options: { mode: 'company' } }]),
+    loop('l', { count: 100000 }, [loop('m', { count: 7 }, [{ id: 'b', type: 'branch', config: { kind: 'chance', probability: 0.5 }, slots: { true: [], false: [] } }])]),
+    record('z', 'Lead', 'ld', [{ name: 'LastName', type: 'text', options: { mode: 'lastName' } }]),
+  ]);
+  setTimeout(() => controller.abort(), 20);
+  const end = await executeRun({ run: createRun(w, { seed: 1, now: NOW }), signal: controller.signal, emit: () => {} });
+  assert.equal(end.result.cancelled, true);
+  assert.deepEqual(Object.keys(end.result.samples), ['a']);
+  assert.equal(end.result.samples.a.Name, end.result.records[0].fields.Name);
+});

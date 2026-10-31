@@ -1,7 +1,9 @@
 // Reads the rows of every Query step before the (pure, synchronous) executor runs — design
 // 0006 "pre-fetch". Queries run one after the other, in reading order, through the jsforce
 // connection of server/sf/client.js (`client.query`, REST `/query` only); nothing is ever
-// written. Without an org each Query gets deterministic sample rows (shared/soql.js).
+// written. Without an org each Query gets deterministic sample rows (shared/soql.js); the fields
+// the workflow reads as numbers (loop counts, pick weights: shared/scope.js numericSampleFields,
+// design 0013 F) are numbers in them.
 //
 // Rows are cached per (org identity, SOQL, maxFetch) for LIMITS.queryCacheTtlMs — the identity is
 // instance URL + username when the client can tell (`client.identity`), so two aliases of one org
@@ -12,7 +14,8 @@
 
 import { createHash } from 'node:crypto';
 import { LIMITS } from '../workflow/nodes.js';
-import { WorkflowError } from '../workflow/schema.js';
+import { WorkflowError, scopeCatalog } from '../workflow/schema.js';
+import { numericSampleFields } from '../../shared/scope.js';
 import { buildSoql, soqlSobject, maxFetchFor, normalizeRow, rekeyRow, sampleRows, selectFields, checkSoql, checkBuilder } from '../../shared/soql.js';
 
 const CACHE_MAX_ENTRIES = 50;
@@ -94,6 +97,7 @@ export async function prefetchQueries({
   const changed = [];
   const started = clock().getTime();
   let identity = null; // cache key of the org, looked up once
+  let numeric = null; // Query step id → fields read as numbers (sample rows only)
   for (const step of queryStepsOf(workflow)) {
     const c = step.config ?? {};
     const alias = c.alias;
@@ -106,7 +110,8 @@ export async function prefetchQueries({
     if (unsafe) throw new WorkflowError([{ message: unsafe.message, nodeId: step.id, field: unsafe.field ?? 'soql', code: unsafe.code }]);
     let entry;
     if (!org) {
-      const records = sampleRows(c, alias);
+      numeric ??= numericSampleFields(workflow, scopeCatalog());
+      const records = sampleRows(c, alias, { numeric: numeric[step.id] });
       entry = { records, totalSize: records.length, done: true, source: 'sample', fetchedAt: null, org: null, fingerprint: fingerprint(records) };
       warnings.push({ message: `Chưa chọn org nên bước Query "${alias}" dùng ${records.length} bản ghi mẫu (Id giả). Chọn org ở thanh trên để đọc dữ liệu thật.`, nodeId: step.id, code: 'querySample' });
     } else {

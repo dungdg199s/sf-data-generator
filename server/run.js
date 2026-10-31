@@ -214,7 +214,8 @@ export async function executeRun({
       warnings: [...run.warnings, ...extraWarnings],
       stats: { total: live.total, bySobject: { ...live.bySobject }, byStep: live.byStep, durationMs: clock() - started, previewRows, truncated: true },
       records: kept,
-      samples: {},
+      // The samples met so far (design 0013 F): a cancelled preview still feeds the variable picker.
+      samples: it.samples ?? {},
       ...(queries ? { queries } : {}),
     };
     result.cancelled = true;

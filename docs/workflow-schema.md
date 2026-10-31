@@ -188,7 +188,10 @@ chỉ thấy các field ở phía trên.
   Mỗi lần chạy qua, bước gán pool `<alias>` = các dòng (bản ghi `existing` có `id` thật, `ref` = `accs#1`…), **không** có bản
   ghi hiện tại, không sinh bản ghi, không dùng `rng`. Query nằm trong Lặp vẫn chỉ đọc org một lần (có cảnh báo).
   Chưa chọn org khi xem trước: `min(LIMIT, 5)` dòng mẫu tất định (`Id` = `mẫu:accs#1`, `Name` = `Account mẫu 1`, field khác
-  `<field> mẫu 1`, `Owner.Name` thành object lồng) kèm cảnh báo.
+  `<field> mẫu 1`, `Owner.Name` thành object lồng) kèm cảnh báo. Field mà workflow dùng như số (trong ô `vars: "number"`
+  qua Query, Chọn bản ghi từ nó hay bản ghi đang lặp của nó, hoặc `weightField` của Chọn bản ghi `weighted`; `numericSampleFields`
+  của `shared/scope.js`, [0013](design/0013-mo-rong-bien-va-lap.md) F) có giá trị là **số thứ tự dòng** `1, 2, 3…`, nên xem trước
+  không org vẫn lặp và chọn theo trọng số.
 - `pick`: ứng viên = pool `from` lúc đó (Query: các dòng; Record: mọi bản ghi đã sinh tới lúc đó; Chọn bản ghi: mọi bản ghi
   đã chọn). Lọc `compare`: vế trái là `filterField` của ứng viên (đường dẫn có dấu chấm), vế phải là `filterValue` thay
   `{{…}}` như template; so sánh như Rẽ nhánh. `random` = `rng.pick`; `unique` = không lặp lại trong lần chạy; `sequential`
@@ -462,7 +465,7 @@ workflow, `{ $ref }` ghi thành ref. `json`: mảng bản ghi, mỗi bản ghi m
 - `queries` (0006): mỗi bước Query đã đọc `{ nodeId, alias, sobject, soql, org, source: "org" | "cache" | "sample",
   fetchedAt, count, totalSize, truncated, fingerprint, fields, records }`. Các dòng này **không** nằm trong `records`/`stats`
   và không bao giờ được insert. `samples`: field của bản ghi đầu tiên của **mọi bước Record** (0013 F) và bản ghi đầu tiên mỗi
-  bước Chọn bản ghi đã chọn (giá trị mẫu cho bảng chọn biến), theo id bước.
+  bước Chọn bản ghi đã chọn (giá trị mẫu cho bảng chọn biến), theo id bước; lần xem trước bị Dừng vẫn trả các mẫu đã có.
   `stats.byStep` của Query có `rows`, của Chọn bản ghi có `picked` và `skipped`.
 
 Request `/api/run` có thêm: `org` (org để Query đọc khi **xem trước**; bị bỏ qua khi có `target` vì lúc insert Query luôn đọc
