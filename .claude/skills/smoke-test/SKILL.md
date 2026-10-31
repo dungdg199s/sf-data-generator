@@ -201,7 +201,11 @@ storage and reloading (one app boot less; flow 5b).
     ▾ opens "Thư viện" (`aria-expanded`), "＋ Workflow mới" adds a second entry; Ctrl+V there pastes the `acc` copied before
     with its alias kept ("Đã dán 1 bước."); Ctrl+O → the first entry shows it exactly as saved and Ctrl+Z changes nothing; the
     "Lead theo xác suất" Mẫu opens as a third entry and the first entry's stored JSON is unchanged; "Quản lý thư viện…" → Xóa
-    removes "Workflow mới" and the dialog's own "Hoàn tác" brings it back.
+    removes "Workflow mới" and the dialog's own "Hoàn tác" brings it back; at 390 px the row's ⋯ (a popup inside the modal
+    dialog, 0012 review) deletes it. F2: `/api/orgs` and the `dev` org's `sobjects` / describes are answered by the route (never
+    the sf CLI); with "Account + Contact" and org `dev`, `con` shows "Thiếu 1 field bắt buộc của Contact trong dev: Region__c.",
+    "Chọn…" opens Import with "Bắt buộc, chưa có (1)" first and Region__c checked, "Thêm 1 field" adds `Region__c` (picklist,
+    toast) and hides the hint, ↶ brings both back, "Bỏ qua" keeps it hidden when `con` is selected again.
 
 It also fails on any page error or a run over the **time budget**: `SMOKE_BUDGET_MS` when set, else
 `15 000 × max(1, 4 / os.availableParallelism())` ms (15 s on 4 or more CPUs, 30 s on 2). The flows run in parallel and are

@@ -55,6 +55,25 @@ Nếu máy chưa cài `sf` thì `/api/orgs` trả 503 kèm thông báo; UI vẫn
 Chỉ thay khi danh sách vẫn là danh sách vừa tự điền; không có bước hoàn tác riêng (Ctrl+Z bỏ việc đổi sObject cũng trả lại field).
 Mỗi bước Record có hẹn giờ describe riêng; focus đang ở trong danh sách field thì được đặt lại đúng chỗ sau khi vẽ lại.
 
+### Field bắt buộc còn thiếu (0012 F2)
+
+Khi một bước Record được chọn, đã chọn org và sObject có trong danh sách sObject tạo được của org, inspector đọc describe trên
+(cache theo `org|sObject` trong phiên; ⟳ danh sách org xóa cache) và so field `required` với field bước đã có (không phân biệt hoa
+thường). Thiếu ⇒ khung trên tiêu đề "Fields":
+
+```
+Thiếu 2 field bắt buộc của Opportunity trong dev-sb: StageName, CloseDate.   [Thêm 2 field] [Chọn…] [Bỏ qua]
+```
+
+- **Thêm n field**: thêm đúng các field đó như "Import từ org…" (cùng hàm `addDescribedFields`: kiểu và option theo describe,
+  Lookup bắt buộc tự chọn bản ghi cha theo luật của Import, kể cả thêm bước Query "＋ … có sẵn trong org" khi không có bước nào khớp),
+  một bước hoàn tác, toast `Đã thêm 2 field: StageName, CloseDate.`
+- **Chọn…**: mở hộp Import; field bắt buộc còn thiếu đứng đầu dưới nhóm `Bắt buộc, chưa có (2)` và đã được tích (hộp Import luôn
+  nhóm như vậy khi có field bắt buộc còn thiếu).
+- **Bỏ qua**: ẩn khung cho bước đó tới khi tải lại trang (không lưu).
+- Describe lỗi, sObject không có trong org, chưa chọn org: không hiện gì (lỗi describe đã có chỗ báo ở ô sObject). Không vào thanh
+  lỗi: validate ở server chạy không cần org. Gõ tên field còn thiếu vào danh sách thì khung tự cập nhật.
+
 ## Insert
 
 `server/sf/insert.js` gọi `conn.sobject(type).create(records, { allOrNone: false })` của jsforce (sObject Collections `POST /composite/sobjects`), mỗi lần tối đa 200 bản ghi.

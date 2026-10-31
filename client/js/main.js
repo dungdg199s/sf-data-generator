@@ -12,7 +12,7 @@ import { malformedSteps, allSteps } from '/shared/workflow-tree.js';
 import { initViews, focusSelected, openAddMenuAtDefault, paletteDragStart, paletteDragEnd, toggleView, setView, VIEWS, paintRunInfo } from './views.js';
 import { openStepMenu } from './menus.js';
 import * as ops from './ops.js';
-import { initInspector, openField, openSheet, closeSheet } from './inspector.js';
+import { initInspector, openField, openSheet, closeSheet, clearDescribeCache } from './inspector.js';
 import { initResults, showRunning, showProgress, endProgress, sobjectChips } from './results.js';
 import { initIssues, renderIssues, expandIssues, goToNextIssue } from './issues.js';
 import { openPopup, closePopup, popupAnchor } from './popup.js';
@@ -194,7 +194,10 @@ function wireToolbar() {
   $('btn-redo').onclick = () => redo() || toast('Không còn gì để làm lại.');
   $('btn-preview').onclick = () => run(false);
   $('btn-insert').onclick = () => run(true);
-  $('btn-orgs').onclick = () => loadOrgs(true);
+  $('btn-orgs').onclick = () => {
+    clearDescribeCache(); // ⟳: describes (the "Thiếu field bắt buộc" hint, 0012 F2) are read again
+    loadOrgs(true);
+  };
   $('org-select').onchange = (e) => {
     state.org = e.target.value;
     try { localStorage.setItem(ORG_KEY, state.org); } catch { /* optional */ }

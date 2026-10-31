@@ -23,6 +23,7 @@ import { samplesRow } from './field-samples.js';
 import { selectedIds, selectionInfo, inSelectMode } from './selection.js';
 import { wrapItems, editItems, offDeleteItems } from './menus.js';
 import { stepLabel } from './summary.js';
+import { missingRequired, requiredHintText } from './required-fields.js';
 
 let root;
 const expanded = new Set(); // `${stepId}:${fieldIndex}` with options panel open
@@ -37,7 +38,8 @@ export function initInspector() {
   subscribe(({ source, kind }) => {
     if (kind === 'issues') return markIssues();
     if (kind === 'view' || kind === 'result') return undefined;
-    if (source === 'inspector') return undefined;
+    // Typing a field name can complete the required fields (0012 F2): the hint follows in place.
+    if (source === 'inspector') return refreshRequiredHint();
     render();
   });
   // The first render is done by main.js (emit 'all'), which can recover from a broken autosave.
@@ -756,6 +758,7 @@ function renderFields(node) {
   return h(
     'div',
     { class: 'fields-section' },
+    requiredHint(node),
     h('h3', {}, `Fields (${fields.length})`),
     h('p', { class: 'hint' }, 'Thứ tự field là thứ tự sinh: {{this.Field}} và Email "theo tên" chỉ thấy field phía trên.'),
     list,
@@ -967,6 +970,134 @@ function preselectParent(f, aliases) {
   return '';
 }
 
+const queriesText = (added) => added.map((q) => `"${q.alias}" (${q.sobject} có sẵn trong org)`).join(', ');
+
+/**
+ * Add fields from describe to Record `node`, as "Import từ org…" does (one undo step): `picks` =
+ * [{ f, choice, lookup }] — `choice` the parent of a Lookup (an alias, '' or NEW_QUERY + sObject:
+ * a Query step of that sObject's existing records is added first in the workflow, one per sObject).
+ * → the Query steps added, [{ alias, sobject }].
+ */
+function addDescribedFields(node, described, picks, aliases) {
+  const added = [];
+  updateWorkflow((wf) => {
+    node.config.sobject = described.sobject;
+    if (!node.config.alias) node.config.alias = suggestAlias(described.sobject, node.id);
+    node.config.fields ??= [];
+    const newQueries = new Map(); // sObject → alias (one Query per sObject)
+    for (const { f, choice, lookup } of picks) {
+      const options = { ...f.options };
+      if (choice.startsWith(NEW_QUERY)) {
+        const sobject = choice.slice(NEW_QUERY.length);
+        if (!newQueries.has(sobject)) {
+          // Same undo step as the fields; first in the workflow so it runs before every step.
+          const q = newStep('query', { parentId: null, slot: null, index: 0 });
+          q.config.sobject = sobject;
+          Object.assign(q.config, structuredClone(state.meta?.queryPresets?.[sobject] ?? {}));
+          delete q.config.alias;
+          q.config.alias = suggestPoolAlias(sobject);
+          if (sobject === 'RecordType') q.config.where = `${q.config.where ? `${q.config.where} AND ` : ''}SobjectType = '${described.sobject}'`;
+          insertStep(wf, { parentId: null, slot: null, index: newQueries.size }, q);
+          newQueries.set(sobject, q.config.alias);
+          added.push({ alias: q.config.alias, sobject });
+        }
+        options.ref = newQueries.get(sobject);
+        options.mode = 'random';
+      } else if (lookup) {
+        options.ref = choice;
+        if (aliases.find((a) => a.alias === choice)?.nodeType === 'query') options.mode = 'random';
+      }
+      node.config.fields.push({ name: f.name, type: f.type, options });
+    }
+  }, { source: 'inspector-structure' });
+  return added;
+}
+
+// ---------- required fields still missing (design 0012 F2) ----------
+
+const describeCache = new Map(); // `${org}|${sobject}` → Promise<describe | null>, for this session
+const requiredDismissed = new Set(); // Record step ids whose hint was closed with "Bỏ qua" (not saved)
+
+/** ⟳ (reload the org list): describes are read again. */
+export function clearDescribeCache() {
+  describeCache.clear();
+}
+
+/** The describe of `step`'s sObject in the selected org (cached), or null: no org, unknown sObject, error. */
+function describeOf(step) {
+  const org = state.org;
+  const sobject = String(step?.config?.sobject ?? '');
+  if (!org || !API_NAME.test(sobject)) return null;
+  const key = `${org}|${sobject}`;
+  if (!describeCache.has(key)) {
+    describeCache.set(key, (async () => {
+      const known = await suggestContext(step).sobjects('create');
+      if (!known.some((x) => x.name === sobject)) return null;
+      return api.describe(org, sobject);
+    })().catch(() => null)); // describe problems are reported at the sObject field, not here
+  }
+  return describeCache.get(key);
+}
+
+/** The hint box above "Fields" of a Record step, filled once the describe is there. */
+function requiredHint(node) {
+  const box = h('div', { class: 'hint-box required-hint', role: 'status', hidden: true });
+  box.dataset.step = node.id;
+  fillRequiredHint(box);
+  return box;
+}
+
+function refreshRequiredHint() {
+  const box = root?.querySelector('.required-hint');
+  if (box) fillRequiredHint(box);
+}
+
+async function fillRequiredHint(box) {
+  const id = box.dataset.step;
+  const org = state.org;
+  const described = requiredDismissed.has(id) ? null : await describeOf(stepById(id));
+  if (!box.isConnected) return; // the inspector moved on meanwhile
+  const step = stepById(id);
+  const missing = described && step && state.org === org && step.config?.sobject === described.sobject && !requiredDismissed.has(id)
+    ? missingRequired(step.config.fields, described)
+    : [];
+  if (!missing.length) {
+    box.hidden = true;
+    box.replaceChildren();
+    delete box.dataset.text;
+    return;
+  }
+  const text = requiredHintText(missing, described.sobject, org);
+  if (!box.hidden && box.dataset.text === text) return; // unchanged: its buttons keep focus
+  box.dataset.text = text;
+  box.hidden = false;
+  const lookup = (f) => f.type === 'lookup' || f.type === 'masterdetail';
+  const add = () => {
+    const live = stepById(id);
+    const still = live ? missingRequired(live.config.fields, described) : [];
+    if (!still.length) return;
+    const aliases = parentChoices(live);
+    // Like Import: a required Lookup gets its parent by Import's rule (a Query of existing records when nothing fits).
+    const added = addDescribedFields(live, described, still.map((f) => ({ f, choice: lookup(f) ? preselectParent(f, aliases) : '', lookup: lookup(f) })), aliases);
+    toast(`Đã thêm ${still.length} field: ${still.map((f) => f.name).join(', ')}.${added.length ? ` Thêm cả bước Query ${queriesText(added)}.` : ''}`, added.length ? 6000 : 4000);
+  };
+  box.replaceChildren(
+    h('span', { class: 'hint-text' }, text),
+    h('span', { class: 'hint-actions' },
+      h('button', { class: 'primary', onclick: add }, `Thêm ${missing.length} field`),
+      h('button', { title: 'Mở hộp Import: các field bắt buộc còn thiếu đứng đầu và đã được tích', onclick: () => openImport(stepById(id)) }, 'Chọn…'),
+      h('button', {
+        title: 'Ẩn gợi ý này cho bước này tới khi tải lại trang',
+        onclick: () => {
+          requiredDismissed.add(id);
+          box.hidden = true;
+          box.replaceChildren();
+          delete box.dataset.text;
+        },
+      }, 'Bỏ qua')),
+  );
+}
+
 function renderImportList(node, described, box, modal) {
   const existing = new Set((node.config.fields ?? []).map((f) => f.name.toLowerCase()));
   const aliases = parentChoices(node);
@@ -1014,10 +1145,16 @@ function renderImportList(node, described, box, modal) {
       for (const r of rows) r.el.hidden = q && !`${r.f.name} ${r.f.label}`.toLowerCase().includes(q);
     },
   });
+  // Required fields the step lacks come first, under their own heading (0012 F2), checked.
+  const missing = rows.filter((r) => r.f.required && !r.cb.disabled);
+  const others = rows.filter((r) => !missing.includes(r));
+  const listItems = missing.length
+    ? [h('div', { class: 'list-group' }, `Bắt buộc, chưa có (${missing.length})`), ...missing.map((r) => r.el), h('div', { class: 'list-group' }, 'Các field khác'), ...others.map((r) => r.el)]
+    : rows.map((r) => r.el);
   box.replaceChildren(
     h('p', { class: 'hint' }, 'Field bắt buộc đã được chọn sẵn. Field Lookup tự chọn bản ghi cha nếu chỉ có một bước khớp sObject; chọn "＋ … có sẵn trong org" để dùng bản ghi có sẵn.'),
     filter,
-    h('div', { class: 'list' }, rows.map((r) => r.el)),
+    h('div', { class: 'list' }, listItems),
     h(
       'div',
       { class: 'actions' },
@@ -1026,40 +1163,9 @@ function renderImportList(node, described, box, modal) {
         class: 'primary',
         onclick: () => {
           const picked = rows.filter((r) => r.cb.checked && !r.cb.disabled);
-          const added = []; // Query steps added for "＋ … có sẵn"
-          updateWorkflow((wf) => {
-            node.config.sobject = described.sobject;
-            if (!node.config.alias) node.config.alias = suggestAlias(described.sobject, node.id);
-            const newQueries = new Map(); // sObject → alias (one Query per sObject)
-            for (const r of picked) {
-              const options = { ...r.f.options };
-              const choice = r.parentSel?.value ?? '';
-              if (choice.startsWith(NEW_QUERY)) {
-                const sobject = choice.slice(NEW_QUERY.length);
-                if (!newQueries.has(sobject)) {
-                  // Same undo step as the fields; first in the workflow so it runs before every step.
-                  const q = newStep('query', { parentId: null, slot: null, index: 0 });
-                  q.config.sobject = sobject;
-                  Object.assign(q.config, structuredClone(state.meta?.queryPresets?.[sobject] ?? {}));
-                  delete q.config.alias;
-                  q.config.alias = suggestPoolAlias(sobject);
-                  if (sobject === 'RecordType') q.config.where = `${q.config.where ? `${q.config.where} AND ` : ''}SobjectType = '${described.sobject}'`;
-                  insertStep(wf, { parentId: null, slot: null, index: newQueries.size }, q);
-                  newQueries.set(sobject, q.config.alias);
-                  added.push({ alias: q.config.alias, sobject });
-                }
-                options.ref = newQueries.get(sobject);
-                options.mode = 'random';
-              } else if (r.parentSel) {
-                options.ref = choice;
-                if (aliases.find((a) => a.alias === choice)?.nodeType === 'query') options.mode = 'random';
-              }
-              node.config.fields.push({ name: r.f.name, type: r.f.type, options });
-            }
-          }, { source: 'inspector-structure' });
+          const added = addDescribedFields(node, described, picked.map((r) => ({ f: r.f, choice: r.parentSel?.value ?? '', lookup: Boolean(r.parentSel) })), aliases);
           modal.close();
-          const qs = added.map((q) => `"${q.alias}" (${q.sobject} có sẵn trong org)`).join(', ');
-          toast(added.length ? `Đã thêm ${picked.length} field và bước Query ${qs}.` : `Đã thêm ${picked.length} field.`, added.length ? 5000 : undefined);
+          toast(added.length ? `Đã thêm ${picked.length} field và bước Query ${queriesText(added)}.` : `Đã thêm ${picked.length} field.`, added.length ? 5000 : undefined);
         },
       }, 'Thêm field đã chọn'),
     ),

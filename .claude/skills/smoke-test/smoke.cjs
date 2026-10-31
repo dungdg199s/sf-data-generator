@@ -51,7 +51,9 @@
 //      turns both off; at 390 px "⋯ → Chọn nhiều bước" shows the select bar, a tap adds a card, Xong leaves.
 //      Workflow library (0012 A): ▾ → "＋ Workflow mới" makes a second entry, a step copied in the first pastes
 //      there with its alias kept, Ctrl+O switches back (same content, Ctrl+Z does nothing), a Mẫu on a workflow
-//      with steps is a third entry (the first untouched), "Quản lý thư viện…" deletes one and "Hoàn tác" brings it back
+//      with steps is a third entry (the first untouched), "Quản lý thư viện…" deletes one and "Hoàn tác" brings it back,
+//      at 390 px the row's ⋯ (a popup inside the modal dialog) deletes one. F2 (mocked org): "Thiếu 1 field bắt buộc của
+//      Contact trong dev: Region__c." on con, Chọn… groups it first in Import, Thêm 1 field adds it (↶ undoes), Bỏ qua hides it
 // The flows run in parallel, one browser context each (independent storage): see SKILL.md.
 // Usage: node .claude/skills/smoke-test/smoke.cjs [screenshotDir]
 // Needs Playwright with a Chromium build available (require('playwright')).
@@ -1304,11 +1306,67 @@ const toastIs = (page, re) => page.waitForFunction((src) => new RegExp(src).test
 /** Flow 17: multi-select, group operations and copy / paste (design 0012 B), then the library (A). */
 async function flowLibrary() {
   const page = await newPage('library');
+  // A mocked org `dev` (never the sf CLI), selected only for part F2.
+  await page.route('**/api/orgs', (r) => r.fulfill({ json: [{ alias: 'dev', username: 'dev@acme.com', isSandbox: true, isScratch: false, connectedStatus: 'Connected' }] }));
+  await page.route('**/api/orgs/dev/**', (r) => {
+    const m = /\/sobjects(?:\/([^/?]+))?(?:\?|$)/.exec(r.request().url());
+    if (m && !m[1]) return r.fulfill({ json: Object.keys(F2_DESCRIBES).map((name) => ({ name, label: name })) });
+    if (m && F2_DESCRIBES[m[1]]) return r.fulfill({ json: F2_DESCRIBES[m[1]] });
+    return r.fulfill({ status: 404, json: { error: 'smoke: org giả lập' } });
+  });
   await page.goto(base);
   await page.waitForSelector('.step-card[data-id="con"]');
   await selectionSteps(page);
   await librarySteps(page);
+  await requiredSteps(page);
   await page.context().close();
+}
+
+/** Describes of the mocked org of 17 F2, shaped like mapDescribe's: Contact needs a Region__c the sample lacks. */
+const F2_DESCRIBES = {
+  Account: { sobject: 'Account', label: 'Account', nameField: 'Name', fields: [{ name: 'Name', type: 'text', options: {}, label: 'Name', required: true }] },
+  Contact: { sobject: 'Contact', label: 'Contact', nameField: 'Name', fields: [
+    { name: 'LastName', type: 'text', options: {}, label: 'Last Name', required: true },
+    { name: 'Region__c', type: 'picklist', options: { values: ['North', 'South'] }, label: 'Region', required: true },
+    { name: 'Email', type: 'email', options: {}, label: 'Email', required: false },
+  ] },
+};
+
+/** 17 F2: "Thiếu n field bắt buộc" on a Record from the org's describe (mocked). */
+async function requiredSteps(page) {
+  await page.click('#sample-items .palette-item:has-text("Account + Contact")');
+  await page.waitForSelector('.step-card[data-id="con"]');
+  await page.selectOption('#org-select', 'dev');
+  await page.click('.step-card[data-id="con"] .type');
+  const hint = '#inspector .required-hint:not([hidden])';
+  check(await page.waitForSelector(hint, { timeout: 3000 }).catch(() => null), 'no "Thiếu field bắt buộc" hint on con');
+  check((await page.textContent(`${hint} .hint-text`)) === 'Thiếu 1 field bắt buộc của Contact trong dev: Region__c.', `hint text: ${await page.textContent(hint)}`);
+  // Chọn…: the Import dialog lists the missing required field first, under its heading, checked.
+  await page.click(`${hint} button:has-text("Chọn…")`);
+  await page.waitForSelector('dialog[open] .list .list-group');
+  const dlg = await page.evaluate(() => {
+    const list = document.querySelector('dialog[open] .list');
+    const first = list.querySelector('.list-group');
+    const row = first.nextElementSibling;
+    return { head: first.textContent, row: row.textContent, checked: row.querySelector('input').checked };
+  });
+  check(dlg.head === 'Bắt buộc, chưa có (1)' && /Region__c/.test(dlg.row) && dlg.checked, `Import grouping: ${JSON.stringify(dlg)}`);
+  await page.click('dialog[open] .actions button:has-text("Hủy")');
+  // Thêm 1 field: one undo step, the hint goes; Ctrl+Z brings both back.
+  await page.click(`${hint} button:has-text("Thêm 1 field")`);
+  check(await toastIs(page, /^Đã thêm 1 field: Region__c\.$/), `Thêm 1 field toast: ${await page.textContent('#toast')}`);
+  const fieldsOf = async () => (await savedWorkflow(page)).steps[0].slots.body[1].slots.body[0].config.fields.map((f) => `${f.name}:${f.type}`);
+  check((await fieldsOf()).at(-1) === 'Region__c:picklist', `fields after Thêm: ${await fieldsOf()}`);
+  check(await page.waitForSelector('#inspector .required-hint', { state: 'hidden', timeout: 3000 }).then(() => true, () => false), 'the hint stayed after adding the field');
+  await page.click('#btn-undo');
+  check(!(await fieldsOf()).includes('Region__c:picklist'), 'one ↶ did not remove the added field');
+  check(await page.waitForSelector(hint, { timeout: 3000 }).catch(() => null), 'the hint did not come back after ↶');
+  // Bỏ qua: hidden for this step, also after selecting it again.
+  await page.click(`${hint} button:has-text("Bỏ qua")`);
+  await page.click('.step-card[data-id="acc"] .type');
+  await page.click('.step-card[data-id="con"] .type');
+  await page.waitForSelector('#inspector .fields-section');
+  check(await page.isHidden('#inspector .required-hint'), '"Bỏ qua" did not keep the hint hidden for con');
 }
 
 /** 17 A: the workflow library, going on from the workflow B left. */

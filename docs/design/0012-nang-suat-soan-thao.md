@@ -1,6 +1,6 @@
 # 0012 — Năng suất soạn thảo: thư viện workflow, chọn nhiều, copy/paste, sửa nhanh, số liệu trên thẻ
 
-- **Trạng thái:** Đang làm (còn F2)
+- **Trạng thái:** Đã làm
 - **Ngày:** 2026-10-28
 - **Liên quan:** [0003](0003-process-mode.md) (cây bước, phím, "Việc tiếp theo": chọn nhiều, copy/paste, ước tính số bản
   ghi, tô thẻ cha, field tên mặc định), [0004](0004-streaming-execution.md) (sự kiện tiến độ, nhóm lỗi insert),
@@ -794,8 +794,6 @@ Không có câu hỏi chặn việc làm. Để sau:
   tên option của Lặp/Rẽ nhánh.
 - Gợi ý field bắt buộc cả khi insert lỗi `REQUIRED_FIELD_MISSING` (nút trong tab Lỗi insert).
 - Thẻ ngoài khung nhìn khi rê chip (I): mũi tên chỉ hướng ở mép.
-- **F2 chưa làm**: khung "Thiếu n field bắt buộc của … trong <org>" [Thêm n field] [Chọn…] [Bỏ qua] khi chọn bước Record (phần F2 của
-  thiết kế). Kế hoạch thực hiện chỉ có bước F1, nên F2 chưa được giao; cần một bước riêng (inspector + describe đã cache).
 
 ## Đã làm
 
@@ -1058,7 +1056,7 @@ Làm từng phần theo [Kế hoạch](#kế-hoạch-thực-hiện); phần chư
 - `CLAUDE.md` (Client state: thư viện thay một autosave, lựa chọn nhiều, định dạng bộ nhớ tạm), skill `smoke-test` (luồng 6, 13c,
   13d, 17), chỉ mục `docs/design/README.md`.
 - `docs/org-connection.md` không đổi ở bước này: `nameField` và field mặc định theo describe đã ghi ở G; khung "Thiếu field bắt
-  buộc" thuộc F2, chưa làm.
+  buộc" được ghi cùng F2 (dưới).
 - Đo smoke cuối (4 CPU, ngân sách 15 s): 3 lần chạy đủ đều `SMOKE OK`, 9,9 s · 9,9 s · 10,2 s (luồng dài nhất `flowProductivity`
   ≈ 9,4–9,8 s; `flowLibrary` 5,6–7,0 s).
 
@@ -1085,3 +1083,25 @@ Làm từng phần theo [Kế hoạch](#kế-hoạch-thực-hiện); phần chư
   viện chạy `malformedSteps` và toast nói số mục version 1 / hỏng bị bỏ qua; `rename` trả lại nội dung mục khi không ghi được chỉ mục;
   câu "có bản sao trong trình duyệt" chỉ khi bản sao là của autosave này (bản `.broken` cũ hơn được giữ thì nói vậy); thùng rác bị
   xóa khi hết 10 s hoàn tác; dung lượng (`bytes`, dòng "Đã dùng") đếm ký tự, đúng cái quota ~5 triệu ký tự đếm.
+
+### F2 — Field bắt buộc còn thiếu (thêm sau, theo quyết định của điều phối)
+
+Kế hoạch thực hiện chỉ có bước F1; F2 đã được duyệt trong thiết kế nhưng thiếu trong kế hoạch, nên làm riêng sau review.
+
+- `client/js/required-fields.js` (mới, thuần): `missingRequired(fields, described)` (field `required` của describe chưa có trong
+  bước, so không phân biệt hoa thường, theo thứ tự describe), `requiredHintText`.
+- `client/js/inspector.js`: khung `.hint-box` trên tiêu đề "Fields" của bước Record khi đã chọn org và sObject có trong danh sách
+  sObject tạo được (describe cache theo `org|sObject` trong phiên, lỗi ⇒ không hiện gì; ⟳ danh sách org gọi `clearDescribeCache`).
+  [Thêm n field] dùng `addDescribedFields` — tách từ nút "Thêm field đã chọn" của Import, nên kiểu, option và luật chọn bản ghi
+  cha của Lookup bắt buộc (kể cả thêm bước Query "＋ … có sẵn trong org") giống hệt Import; một bước hoàn tác, toast `Đã thêm 2 field:
+  StageName, CloseDate.` [Chọn…] mở hộp Import, hộp nay nhóm field bắt buộc còn thiếu ở đầu dưới `Bắt buộc, chưa có (n)` (đã tích),
+  rồi `Các field khác`. [Bỏ qua] ẩn khung cho bước đó trong phiên. Gõ tên field (sửa trong inspector, không vẽ lại) thì khung tự
+  cập nhật từ describe đã cache; khung không đổi thì không vẽ lại (giữ focus trên nút). Không vào thanh lỗi.
+- `docs/org-connection.md` (mục "Field bắt buộc còn thiếu"), `docs/architecture.md`, `docs/ui-design-system.md` §6.11 (`.hint-box`).
+- Test `test/required-fields.test.js` (thứ tự describe, không phân biệt hoa thường, bỏ field không bắt buộc / mục rỗng, câu gợi
+  ý). Smoke `flowLibrary` (17) phần F2 với org giả `dev` (route `page.route`, không gọi sf CLI): `Thiếu 1 field bắt buộc của Contact
+  trong dev: Region__c.` trên `con`, Chọn… nhóm Region__c đầu hộp Import và đã tích, Thêm 1 field thêm `Region__c` (picklist) và
+  khung biến mất, ↶ trả lại cả hai, Bỏ qua giữ khung ẩn khi chọn lại bước.
+- Khác thiết kế (làm rõ): [Thêm n field] có thể thêm bước Query "＋ … có sẵn trong org" cho Lookup bắt buộc không có bản ghi cha
+  phía trên — đúng "như Import" của thiết kế (là một cú bấm có chủ đích, khác field mặc định tự động của G vốn không thêm bước), và
+  toast nói thêm bước đó.
