@@ -437,12 +437,16 @@ export function cloneSteps(steps, { ids = new Set(), aliases = new Set(), makeId
   const copy = structuredClone(steps);
   const renamed = [];
   const aliasMap = new Map();
+  // A new name is never one of the copy's own names: the renames below run one after the other,
+  // so `acc → acc2` then `acc2 → acc3` would send the references to `acc` on to `acc3` (0012 review).
+  const originals = new Set();
+  walkSteps(copy, (s) => { for (const { value } of stepNames(s, catalog)) originals.add(value); });
   walkSteps(copy, (s) => {
     const entry = { id: s.id, copyId: makeId(s.id, ids) };
     ids.add(entry.copyId);
     s.id = entry.copyId;
     for (const { key, value } of stepNames(s, catalog)) {
-      const next = keepFree && !aliases.has(value) ? value : nextName(value, aliases);
+      const next = keepFree && !aliases.has(value) ? value : nextName(value, new Set([...aliases, ...originals]));
       aliases.add(next);
       if (next !== value) aliasMap.set(value, next);
       if (key === 'alias') {
@@ -658,14 +662,15 @@ function loopVarsAround(wf, target, slotKeys) {
 export function pasteSteps(wf, target, steps, { catalog, slotKeys } = {}) {
   const list = targetList(wf, target);
   if (!list) return null;
-  const { steps: copy, renamed } = cloneSteps(steps, { ids: collectIds(wf), aliases: collectAliases(wf, catalog), catalog, keepFree: true });
+  // A pasted record must not take the name of a loop variable around the target either.
+  const around = loopVarsAround(wf, target, slotKeys);
+  const { steps: copy, renamed } = cloneSteps(steps, { ids: collectIds(wf), aliases: new Set([...collectAliases(wf, catalog), ...around]), catalog, keepFree: true });
   const changes = [];
   for (const e of renamed) {
     if (e.alias !== undefined && e.alias !== e.newAlias) changes.push({ from: e.alias, to: e.newAlias });
     for (const n of e.names ?? []) if (n.from !== n.to) changes.push({ from: n.from, to: n.to });
   }
   // Loop variables: no shadowing of an enclosing loop, no clash with a record name.
-  const around = loopVarsAround(wf, target, slotKeys);
   const temp = { version: 2, steps: copy };
   const loops = [];
   walkSteps(copy, (s) => { if (s.type === 'loop') loops.push(s); }, slotKeys);

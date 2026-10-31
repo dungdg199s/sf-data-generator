@@ -512,3 +512,32 @@ test('countSteps counts nested steps', () => {
   assert.equal(countSteps([r('a'), loop('l', [r('b'), branch('br', [r('t')], [])])]), 5);
   assert.equal(countSteps([]), 0);
 });
+
+test('pasteSteps: renames never chain (acc → acc2 while acc2 is also pasted) (0012 review)', () => {
+  const catalog = scopeCatalog();
+  const lookup = (ref) => ({ name: 'AccountId', type: 'lookup', options: { mode: 'random', ref } });
+  const copied = [r('a1', 'acc'), r('a2', 'acc2'), r('c1', 'c1', [lookup('acc')]), r('c2', 'c2', [lookup('acc2')])];
+  const wf = tree([r('x', 'acc')]);
+  const res = pasteSteps(wf, { parentId: null, slot: null, index: 1 }, copied, { catalog, slotKeys });
+  const [p1, p2, c1, c2] = res.ids.map((id) => findStep(wf, id).step);
+  assert.notEqual(p1.config.alias, p2.config.alias);
+  assert.equal(c1.config.fields[0].options.ref, p1.config.alias, 'c1 still points at the copy of acc');
+  assert.equal(c2.config.fields[0].options.ref, p2.config.alias, 'c2 still points at the copy of acc2');
+  assert.deepEqual([p1.config.alias, p2.config.alias], ['acc3', 'acc2'], 'acc2 is free here, so it is kept');
+  // Ctrl+D of the same four steps in one workflow: no chain either.
+  const same = tree(structuredClone(copied));
+  const { steps } = cloneSteps(same.steps, { ids: collectIds(same), aliases: collectAliases(same, catalog), catalog });
+  assert.deepEqual(steps.map((s) => s.config.alias), ['acc3', 'acc4', 'c3', 'c4']);
+  assert.deepEqual(steps.slice(2).map((s) => s.config.fields[0].options.ref), ['acc3', 'acc4']);
+});
+
+test('pasteSteps renames a record alias that equals a loop variable around the target', () => {
+  const catalog = scopeCatalog();
+  const tpl = (t) => ({ name: 'T', type: 'template', options: { template: t } });
+  const wf = tree([loop('outer', [], { count: 3, alias: 'row' })]);
+  const res = pasteSteps(wf, { parentId: 'outer', slot: 'body', index: 0 }, [r('a', 'row'), r('b', 'b', [tpl('{{row.Name}}')])], { catalog, slotKeys });
+  const [a, b] = res.ids.map((id) => findStep(wf, id).step);
+  assert.equal(a.config.alias, 'row2');
+  assert.equal(b.config.fields[0].options.template, '{{row2.Name}}');
+  assert.deepEqual(res.renamed, [{ from: 'row', to: 'row2' }]);
+});
