@@ -19,7 +19,7 @@ flows
 
 **Speed (since design 0009).** The flows are grouped into seven independent functions that run **in parallel**, each in
 its own browser context (so storage, routes and dialogs never leak between them): `flowEditing` (1–5), `flowPicker`
-(5b), `flowFiles` (5c–10), `flowDark` (12), `flowLayoutWide` and `flowLayoutNarrow` (11, 13), `flowEach` (14), `flowCanvas` (15), `flowProductivity` (16). The browser launches
+(5b), `flowFiles` (5c–10), `flowDark` (12), `flowLayoutWide` and `flowLayoutNarrow` (11, 13), `flowEach` (14), `flowCanvas` (15), `flowProductivity` (16), `flowLibrary` (17). The browser launches
 while the server starts; a fresh context starts with empty storage, so no `localStorage.clear()` + reload; storage a flow
 needs before its first load is written by `addInitScript` (once, guarded by a marker key, so reloads keep it); layout
 checks resize one page (`setViewportSize`) instead of opening a context per width; waits for the sheet or toast
@@ -72,8 +72,11 @@ storage and reloading (one app boot less; flow 5b).
    The first `/api/validate` (of the workflow before the sample) is held until after the preview: when it lands, the
    Query warning stays (stale responses are dropped). Editing the name and putting it back (a validation of the same
    workflow) also keeps the run's warning.
-6. **v1 autosave.** A `sfdg.workflow.v1` autosave is migrated on load (toast), `sfdg.workflow.v2` is
-   written and the v1 key is left untouched.
+6. **v1 autosave.** A `sfdg.workflow.v1` autosave is migrated on load (toast) into the first entry of the workflow
+   library (design 0012 A); `sfdg.workflow.v2` is **not** written and the v1 key is left untouched. Then a valid
+   `sfdg.workflow.v2` (storage cleared, reload) becomes the library's entry "Đang soạn" with the "đưa vào Thư viện" toast,
+   and the v2 key stays byte for byte. Since 0012 A every flow reads the autosaved workflow with `smokeSaved()` (an init
+   script: the library entry of `sessionStorage['sfdg.activeId']`), not from `sfdg.workflow.v2`.
 7. **Malformed v2 autosave.** The sample is shown with a recovery toast and a "Tải bản lưu" button; the
    broken autosave is neither overwritten nor lost (`sfdg.workflow.v2.broken` keeps a copy).
 8. **Malformed v2 file.** Opening it is refused with a toast naming the bad entry (`steps[1]`); the
@@ -116,9 +119,9 @@ storage and reloading (one app boot less; flow 5b).
     - **13b top bar**: ≤ 50 px (one row) at 1440 and 1280, ≤ 90 px at 1024, 390 and 360; no horizontal overflow; `#org-select`,
       Xem trước and Insert inside the viewport at every width; the theme select is 32 px wide, `title` "Giao diện: Theo
       hệ thống", its `option` colour is not transparent (`smoke-390-topbar.png`).
-    - **13c ⋯ menu at 390 × 844**: Mới, Mở…, Lưu, a Seed field, Account + Contact, Tối (radio, "Theo hệ thống" checked);
+    - **13c ⋯ menu at 390 × 844**: Mới, Thư viện…, Mở file JSON…, Lưu (0012 A: `Mở…` left the top bar), a Seed field, Account + Contact, Tối (radio, "Theo hệ thống" checked);
       typing 42 sets `#seed` and shows the chip "Seed 42"; the chip reopens the menu on the Seed field; Mẫu "Lead theo xác
-      suất" then "Account + Contact" replace the workflow. At 800 px the menu only has the Mẫu group. Esc in the menu opened
+      suất" then "Account + Contact" open (each a new library entry). At 800 px the menu only has the Mẫu group. Esc in the menu opened
       from the chip returns focus to the chip; Tab and Shift+Tab close the menu onto ⋯. Inside `role=menu` there is no
       text or input outside a group, a menu item or `aria-hidden` text.
     - **13d sheet at 390 × 844**: tapping `con` leaves its bottom ≤ the sheet top and ≥ 190 px of canvas above the sheet;
@@ -126,7 +129,8 @@ storage and reloading (one app boot less; flow 5b).
       sheet, `con` stays selected, the table is above the sheet's top, focus left the sheet and typing "ZZ" changes
       nothing; tapping `con` reopens it; scrolled to the bottom, "‹ Xong" is still inside the sheet; a toast (F8 with
       nothing to go to) ends above the sheet; at 844 × 390 there are ≥ 60 px of canvas above the sheet and "Thu gọn tất
-      cả" is in the ⋯ menu. With the issues workflow, tapping an issue row (390 × 844: `task`; 844 × 390: `opp`) leaves the
+      cả" is in the ⋯ menu. With the issues workflow (opened through `#file-input`, then a reload: the tab reopens its library
+      entry), tapping an issue row (390 × 844: `task`; 844 × 390: `opp`) leaves the
       card fully between the palette and the sheet.
     - **13e results header**: ≤ 50 px after Xem trước at 390 px with `aria-expanded="true"`; "⤓ Tải" opens "Tải JSON" and
       "Tải CSV (tab hiện tại)"; at 1440 px the two buttons show and "⤓ Tải" does not.
@@ -186,6 +190,18 @@ storage and reloading (one app boot less; flow 5b).
     E: ⚙ of the picklist `Industry` on `acc` shows `Ví dụ: "…" · "…" · "…"` (title mentions seed 1) from `/api/field-samples`;
     weights `0, 0, 0, 1` turn it into `Ví dụ: "Healthcare" · "Healthcare" · "Healthcare"` once the server answers (waits on the
     response, no fixed wait); `con`'s Title (reads `{{acc.Industry}}`) shows a "Lần xem trước…" line instead.
+
+17. **Multi-select, copy / paste and the workflow library (design 0012 B, A), `flowLibrary`, own context** (a new parallel
+    flow rather than more steps in flow 16, the critical path; ~7.5 s of a ~10.5 s run on 4 CPUs). B, on "Account + Contact": click `acc`, Shift+click `loopCon` ⇒
+    the inspector says "2 bước đã chọn", `#process` has `aria-multiselectable="true"`, both cards `aria-selected="true"`;
+    "Bọc trong Lặp" there wraps both (in order) in a new Lặp, one ↶ undoes it; click `acc`, Shift+↓ selects `acc, loopCon`,
+    Ctrl+C ("Đã sao chép 2 bước.") then Ctrl+V pastes them after the selection ("Đã dán 2 bước. Đổi tên alias: acc → acc2,
+    con → con2.") and selects the copies; Ctrl+/ turns both off. At 390 px: ⋯ on `acc` → "Chọn nhiều bước" shows `.select-bar`
+    (sheet closed), a tap on `con` makes it "2 đã chọn", Xong leaves (only `acc` stays selected). A: one entry at start;
+    ▾ opens "Thư viện" (`aria-expanded`), "＋ Workflow mới" adds a second entry; Ctrl+V there pastes the `acc` copied before
+    with its alias kept ("Đã dán 1 bước."); Ctrl+O → the first entry shows it exactly as saved and Ctrl+Z changes nothing; the
+    "Lead theo xác suất" Mẫu opens as a third entry and the first entry's stored JSON is unchanged; "Quản lý thư viện…" → Xóa
+    removes "Workflow mới" and the dialog's own "Hoàn tác" brings it back.
 
 It also fails on any page error or a run over the **time budget**: `SMOKE_BUDGET_MS` when set, else
 `15 000 × max(1, 4 / os.availableParallelism())` ms (15 s on 4 or more CPUs, 30 s on 2). The flows run in parallel and are

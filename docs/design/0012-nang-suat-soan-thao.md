@@ -1,6 +1,6 @@
 # 0012 — Năng suất soạn thảo: thư viện workflow, chọn nhiều, copy/paste, sửa nhanh, số liệu trên thẻ
 
-- **Trạng thái:** Đang làm (đã xong G, F1, C, I, H, D, E, B, A)
+- **Trạng thái:** Đã làm, trừ F2 (gợi ý field bắt buộc còn thiếu: không có trong Kế hoạch, chưa làm; xem cuối "Đã làm")
 - **Ngày:** 2026-10-28
 - **Liên quan:** [0003](0003-process-mode.md) (cây bước, phím, "Việc tiếp theo": chọn nhiều, copy/paste, ước tính số bản
   ghi, tô thẻ cha, field tên mặc định), [0004](0004-streaming-execution.md) (sự kiện tiến độ, nhóm lỗi insert),
@@ -794,6 +794,8 @@ Không có câu hỏi chặn việc làm. Để sau:
   tên option của Lặp/Rẽ nhánh.
 - Gợi ý field bắt buộc cả khi insert lỗi `REQUIRED_FIELD_MISSING` (nút trong tab Lỗi insert).
 - Thẻ ngoài khung nhìn khi rê chip (I): mũi tên chỉ hướng ở mép.
+- **F2 chưa làm**: khung "Thiếu n field bắt buộc của … trong <org>" [Thêm n field] [Chọn…] [Bỏ qua] khi chọn bước Record (phần F2 của
+  thiết kế). Kế hoạch thực hiện chỉ có bước F1, nên F2 chưa được giao; cần một bước riêng (inspector + describe đã cache).
 
 ## Đã làm
 
@@ -1044,3 +1046,18 @@ Làm từng phần theo [Kế hoạch](#kế-hoạch-thực-hiện); phần chư
   phía sau không bấm được. Chế độ cũ (quota khi chuyển) giữ hộp hỏi `Thay workflow hiện tại?` và Ctrl+Z như trước khi có thư viện,
   vì vẫn chỉ có một autosave. Mục hỏng là mục đang mở lúc khởi động: tab mở mục đọc được kế tiếp (hoặc tạo mục mẫu) và báo toast.
   Danh sách "Gần đây" có cả mục đang mở (✓).
+
+### Tài liệu (bước 11)
+
+- `docs/workflow-schema.md`: mục mới "Định dạng phụ" (bộ nhớ tạm của bước, file thư viện, khóa của thư viện trong trình duyệt);
+  `byStep`, `fix`, `POST /api/field-samples`, `meta.recordPresets` đã ghi ở các bước trước.
+- `docs/architecture.md`: bảng `shared/` (nhóm bước của `workflow-tree.js`), bảng client (`store.js` mới, `selection.js`,
+  `select-bar.js`, `clipboard.js`, `library.js`, `library-ui.js`, `menus.js`, `ops.js`).
+- `docs/ui-design-system.md`: §6.4 (chọn nhiều), §6.11 (toast hai nút, `.select-bar`, hộp Quản lý thư viện, nút `▾` và `▲ Chưa
+  lưu`), §8.3 (phím chọn nhiều, bộ nhớ tạm, Ctrl+O).
+- `CLAUDE.md` (Client state: thư viện thay một autosave, lựa chọn nhiều, định dạng bộ nhớ tạm), skill `smoke-test` (luồng 6, 13c,
+  13d, 17), chỉ mục `docs/design/README.md`.
+- `docs/org-connection.md` không đổi ở bước này: `nameField` và field mặc định theo describe đã ghi ở G; khung "Thiếu field bắt
+  buộc" thuộc F2, chưa làm.
+- Đo smoke cuối (4 CPU, ngân sách 15 s): 3 lần chạy đủ đều `SMOKE OK`, 9,9 s · 9,9 s · 10,2 s (luồng dài nhất `flowProductivity`
+  ≈ 9,4–9,8 s; `flowLibrary` 5,6–7,0 s).

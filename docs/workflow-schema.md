@@ -438,6 +438,38 @@ câu lỗi trong inspector, cả với cảnh báo có `fix`):
 `slots.<key>` cho một ô bước con (ví dụ `slots.body`: vòng lặp chưa có bước nào). Lỗi không gắn với bước nào thì không
 có `nodeId`.
 
+## Định dạng phụ ([0012](design/0012-nang-suat-soan-thao.md))
+
+Không phải workflow, không đi qua server; workflow JSON (`version: 2`) không đổi.
+
+**Bộ nhớ tạm khi sao chép bước** (Ctrl+C / Ctrl+X, `text/plain`, `client/js/clipboard.js`):
+
+```json
+{ "sfdg": "steps", "version": 2, "from": "Account + Contact",
+  "steps": [ { "id": "acc", "type": "record", "config": { … } }, { "id": "loopCon", "type": "loop", "config": { … }, "slots": { "body": [ … ] } } ] }
+```
+
+Bước theo thứ tự đọc của lựa chọn (chọn rời thì thành một dãy; bước nằm trong khung đã chọn đi theo khung). Dán (Ctrl+V)
+nhận cả một file workflow `{ "version": 2, "steps": [ … ] }`. Từ chối (toast, workflow không đổi): không phải JSON hay không có
+bước; bước sai dạng (`malformedSteps`); loại bước không có trong `/api/meta`; quá 2 000 bước hoặc 5 MB; workflow version 1 (mở
+bằng Thư viện → Mở file JSON… để chuyển). Khi dán (`pasteSteps`, `shared/workflow-tree.js`): id luôn mới; alias / `itemAlias`
+giữ tên nếu còn trống ở đích, trùng thì thành tên kế tiếp (`acc2`) và tham chiếu bên trong bản dán đi theo; biến lặp che Lặp
+bao quanh vị trí dán hoặc trùng alias bản ghi thì đổi (`loop2`); tham chiếu ra ngoài bản dán giữ nguyên chữ (đích không có ⇒ lỗi
+tham chiếu thường của validate).
+
+**File thư viện** ("Tải tất cả (JSON)" của Thư viện; "Mở file JSON…" nhận lại, mỗi workflow thành một mục mới):
+
+```json
+{ "sfdg": "library", "version": 1, "exportedAt": "2026-10-28T10:24:00Z",
+  "workflows": [ { "version": 2, "name": "Account + Contact", "steps": [ … ] } ] }
+```
+
+**Thư viện trong trình duyệt** (`localStorage` của origin, `client/js/library.js`): chỉ mục `sfdg.library`
+(`{ version: 1, activeId, items: [{ id, name, createdAt, updatedAt, steps, bytes }] }`), mỗi workflow một khóa `sfdg.wf.<id>`
+(đúng như file), mục vừa xóa ở `sfdg.library.trash`, mục đang mở của từng tab ở `sessionStorage['sfdg.activeId']`. Lần đầu,
+`sfdg.workflow.v2` (hoặc `sfdg.workflow.v1` qua `migrateV1`) thành mục đầu tiên; hai khóa cũ không bao giờ bị ghi hay xóa (v2
+chỉ còn là autosave khi bộ nhớ đầy ngay lần chuyển đầu).
+
 ## Version 1 (cũ) và chuyển đổi
 
 Version 1 là **đồ thị**: `nodes[]` (có `position` cho canvas, đúng một node `start`) và

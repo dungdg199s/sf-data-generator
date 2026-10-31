@@ -268,7 +268,7 @@ bo 10 px, sọc trái 4 px `--c`, nền `surface-raised`, viền 1 px `border`, 
 | --- | --- | --- | --- |
 | Mặc định | viền `border` | sọc + ô icon màu loại | — |
 | Hover | viền `border-strong` | hiện tay nắm ⠿ | — |
-| Đang chọn | vòng ngoài 2 px `accent` (box-shadow) | nền `accent-subtle` | tay nắm hiện |
+| Đang chọn | vòng ngoài 2 px `accent` (box-shadow) | nền `accent-subtle` | tay nắm hiện. Chọn nhiều ([0012](design/0012-nang-suat-soan-thao.md) B): **mọi** thẻ được chọn cùng kiểu này và `aria-selected="true"`; bước chính là điểm Tab (roving tabindex) và có thêm vòng focus khi focus bàn phím; `role="tree"` có `aria-multiselectable="true"` |
 | Focus bàn phím | thêm outline 2 px `focus-ring`, **hở 4 px** (`--focus-offset-card`, ngoài vòng chọn sát thẻ) | — | — |
 | Lỗi | viền 2 px `danger` (viền + bóng trong) | badge `⊗ n` nền `danger` | sọc loại giữ nguyên |
 | Cảnh báo (không có lỗi) | viền 1 px `warning` | badge `▲ n` nền `warning-fill`, chữ tối | — |
@@ -391,7 +391,10 @@ bằng chữ đó, trừ khi đang ở trong ô nhập; Esc, Tab và Shift+Tab �
 | Hộp thoại | Nền `surface-raised`, viền `border`, bo 14 px, padding 24 px, `shadow-3`, backdrop `--color-backdrop`. Tiêu đề 18 px 600. Nút: phụ bên trái, chính/nguy hiểm bên phải |
 | Hộp xác nhận Insert | Nút cuối "Insert" là **nguy hiểm đặc** (`.danger.solid`), "Hủy" là nút phụ |
 | Hộp cảnh báo (`.warn-box`) | Nền `warning-subtle`, viền 1 px `warning` + viền trái 4 px, icon ▲ màu `warning-text`, chữ `text`, bo 6 px |
-| Toast | Nền `inverse-bg`, chữ `inverse-text`, bo 6 px, `shadow-2`, `--z-toast`. Nút trong toast viền `currentColor`, nhấn không đổi nền, vòng focus `focus-ring-inverse` |
+| Toast | Nền `inverse-bg`, chữ `inverse-text`, bo 6 px, `shadow-2`, `--z-toast`. Nút trong toast viền `currentColor`, nhấn không đổi nền, vòng focus `focus-ring-inverse`. Có thể có hai nút và không tự tắt (`"…" vừa được sửa ở một tab khác.` [Dùng bản ở tab kia] [Giữ bản của tab này], 0012 A). Hộp thoại đang mở che toast: thao tác cần "Hoàn tác" trong hộp thoại thì hộp có dòng riêng (`.lib-undo`) |
+| Thanh chọn (`.select-bar`, [0012](design/0012-nang-suat-soan-thao.md) B) | Chỉ trong chế độ chọn (`body.select-mode`, ≤ 900 px hoặc cảm ứng, từ ⋯ → `Chọn nhiều bước`): dính đáy, cao 56 px, chỗ của bottom sheet (sheet đóng), nền `surface`, viền trên `border`, `shadow-3`; `role="toolbar"`, `aria-label="Thao tác với các bước đã chọn"`. `[n đã chọn] [Bọc ▾] [Xóa] [⋯] [Xong]` (≈ 280 px, vừa 360 px); nút cao 32 px. Toast nằm trên thanh; tay nắm ⠿ ẩn (chạm thẻ là chọn / bỏ chọn) |
+| Hộp "Quản lý thư viện" ([0012](design/0012-nang-suat-soan-thao.md) A) | Danh sách `.lib-list` (cuộn trong hộp, tối đa 60vh): ô tên sửa tại chỗ, `n bước · giờ · dung lượng` (12 px `text-muted`, `tabular-nums`), [Mở] [Nhân bản] [Tải JSON] [Xóa]; mục đang mở nền `accent-subtle`. ≤ 720 px: hộp rộng hết màn hình, mỗi mục hai dòng, Nhân bản / Tải JSON / Xóa vào nút `⋯` của mục. Dòng chú thích nói origin và dung lượng đã dùng |
+| Nút thư viện `▾` và `▲ Chưa lưu` (thanh trên) | `▾` (`#btn-library`, 32 × 32 px) dính bên phải ô tên (bỏ bo góc giữa hai phần), `aria-haspopup="menu"`, `aria-expanded`. `▲ Chưa lưu` chỉ khi bộ nhớ trình duyệt đầy: nền `warning-subtle`, viền `warning`, chữ `warning-text`, bấm mở hộp Quản lý thư viện |
 | Thanh lỗi (`#issues.issues`, [0009](design/0009-bo-cuc-man-hinh.md) §1) | **Trong luồng** của cột giữa, ngay dưới canvas (không `position: absolute`, không bóng, không bo góc), nên không bao giờ che thẻ: canvas co lại đúng bằng chiều cao thanh. Cao tối đa 25 % cột giữa (tối thiểu bằng đầu thanh), không tràn xuống dưới đầu panel kết quả. Nền `surface`, viền trên `border`, sọc trái 4 px `danger` (hoặc `warning` khi chỉ có cảnh báo, `.only-warnings`). `role="region"`, `aria-label="Lỗi và cảnh báo"`; ẩn khi không có gì |
 | Đầu thanh lỗi (`.issues-head`) | Cao 32 px: số đếm `2 lỗi · 1 cảnh báo` (600, 13 px, icon ⊗ / ▲ từng phần, `aria-live="polite"`, chỉ viết lại khi nhãn đổi để không đọc lại sau mỗi lần validate), gợi ý `Bấm một dòng để tới bước · F8: lỗi tiếp theo` (12 px `text-muted`, ẩn ở ≤ 720 px), nút ghost `Thu gọn` / `Hiện (n)` (`aria-expanded`, `aria-controls="issues-list"`). Thu gọn: sau số đếm là dòng lỗi đầu, một dòng, cắt `…`; bấm vào thì tới bước đó |
 | Dòng lỗi (`.issue`) | Icon ⊗ đỏ hoặc ▲ hổ phách (khác **hình**, không chỉ khác màu) + `[alias] câu lỗi`. Danh sách cao tối đa `--issues-max-h`, cuộn bên trong. Dòng vừa tới bằng F8 / bấm: nền `accent-subtle` + vạch trái 2 px `accent` (`.current`) |
@@ -557,6 +560,12 @@ Với người mù màu đỏ–lục, vài cặp chỉ còn khác về độ s�
   `title` theo giá trị (`Giao diện: Tối`…). Ở ≤ 720 px ô này vào menu ⋯ (nhóm Giao diện, hàng chọn một).
 - Nút `⤒ Insert` ở điện thoại: phần ` vào org` chỉ ẩn bằng mắt (kiểu `.sr-only`), nên tên đọc lên vẫn là "⤒ Insert vào org";
   `title` vẫn là câu đầy đủ `Sinh dữ liệu và insert vào <org>`.
+- **Chọn nhiều và bộ nhớ tạm** ([0012](design/0012-nang-suat-soan-thao.md) B): Shift+bấm / Shift+↑ / Shift+↓ (dải trong một dãy),
+  Ctrl/⌘+bấm (chọn rời), Ctrl+A khi focus trong cây (cả dãy của bước chính), Esc hai nấc (về bước chính, rồi bỏ chọn); Delete,
+  Ctrl+/, Ctrl+D, Alt+↑/↓, ContextMenu áp cho cả lựa chọn. Ctrl+C / Ctrl+X / Ctrl+V qua sự kiện `copy`/`cut`/`paste` (không cần
+  quyền, chạy cả khi không phải secure context); trong ô nhập trình duyệt làm như thường. Vùng `#sel-live` (`aria-live="polite"`,
+  ẩn) đọc `Đã chọn 3 bước.` khi số lượng đổi (không đọc khi về 1).
+- **Ctrl+O** mở popup Thư viện (kể cả trong ô nhập; chặn hộp mở file của trình duyệt).
 - **F8 / Shift+F8** tới lỗi hoặc cảnh báo tiếp theo / trước đó (theo thứ tự trong thanh lỗi, vòng lại), kể cả khi focus đang
   trong ô nhập của inspector. Không có gì thì toast `Không có lỗi hay cảnh báo.`
 - **Bảng chọn biến** ([0014](design/0014-hoan-thien-giao-dien.md), dự kiến): mở bằng `{{` (ô Mẫu), ↓ (ô đường dẫn), nút
