@@ -633,3 +633,38 @@ nhiều hơn). Trong khoảng 30 lần chạy khi làm có **một** lần `flow
 không lỗi nào khác); chạy lại hơn 25 lần (có lần ghi mốc
 thời gian từng dòng của `flowEditing`) không tái hiện được, nên chưa rõ nguyên nhân; nếu gặp lại, xem thao tác nào của
 `flowEditing` chờ đủ 30 s (thời hạn mặc định của Playwright).
+
+### Sửa sau review
+
+Review không có lỗi chặn; sửa các mục nên sửa và các góp ý nhỏ (commit `767216f`, `e7a4266`):
+
+1. **Kéo sheet**: cờ "nuốt cú click cuối cú kéo" chỉ sống tới task kế tiếp và không bao giờ nuốt click từ bàn phím
+   (`detail === 0`). Trước đây kéo bằng chạm, hoặc thả chuột ngoài sheet, để cờ treo và Enter kế tiếp trên tay nắm không có
+   tác dụng. Thả chuột ngoài cửa sổ (`pointermove` với `buttons === 0`) và cửa sổ mất focus (`blur`) kết thúc cú kéo, sheet
+   về nấc cũ. Chạm tay nắm không làm mất focus của ô đang sửa.
+2. **Sơ đồ / minimap**: `cull`, `clampPan` và minimap đọc kích thước đã lưu (một `ResizeObserver` trên khung nhìn,
+   inspector, minimap và thanh trên), nên mỗi khung hình pan / zoom không đọc layout sau khi vừa ghi `transform`.
+   `minimapPaths` vẽ bước thiếu loại hoặc loại lạ màu xám như bước tắt (`knownType`). Minimap ẩn không nhận con trỏ.
+3. **Tab Query** ghi `accs · Account (5)`: icon Query đã do `::before` vẽ, bỏ `↓` (cập nhật `architecture.md`,
+   `ui-design-system.md`, smoke 5c).
+4. Panel kết quả chỉ lưu `sfdg.resultsH` khi cú kéo thật sự đổi chiều cao; thụt dòng token tối.
+5. **Smoke chờ trạng thái thay vì chờ hết animation**:
+   - Tải CSV bấm qua `page.evaluate`: `page.click` chờ một điều hướng mà tải file không có. Đây nhiều khả năng là nguyên
+     nhân lần `flowEditing` mất 34 s.
+   - Lần chạy 60 Contact chờ kết quả của chính nó (nút Dừng ẩn, tóm tắt đổi) rồi mới bấm tab.
+   - Thu cửa sổ về 800 px thì chờ inspector `inert`.
+   - Các nấc sheet chờ lớp `full`. Lần `reveal` sau khi mở sheet chạy ở khung hình sau, nên chờ tới khi thẻ nằm trên mép sheet.
+6. **Tốc độ**: file tĩnh có `ETag` yếu (kích thước + mtime) cùng `Cache-Control: no-cache`, và file không đổi trả `304`. Nhờ
+   vậy tải lại trang giữ được module đã cache và code đã biên dịch: CPU bận của cả smoke giảm từ 50–55 xuống 45–48 CPU-giây
+   (test trong `server.test.js`).
+   - Đã thử và bỏ vì không thấy khác biệt ngoài nhiễu: cờ Chromium (`--disable-gpu`, `--disable-gpu-compositing`, tắt
+     cuộn / animation theo luồng, …) và cho `waitForFunction` hỏi mỗi 50 ms thay vì mỗi khung hình.
+   - Đo bằng hồ sơ CPU: phần JS của app trong một lần khởi động + xem trước chỉ khoảng 100 ms; phần còn lại là việc riêng
+     của Chromium (vẽ, ghép lớp, các tiến trình).
+
+**Thời gian smoke sau review**, trên máy 4 CPU của phiên này: **13,3 / 13,8 / 14,3 s**, cả ba `SMOKE OK` (ngân sách 15 s).
+Máy này chậm hơn máy lúc làm 0014 khoảng 20 %. Đo cùng lúc trên máy này: commit `d93a554` (hết 0014) mất 13,9 s, HEAD
+trước review `24304bc` mất 14,7 s, sau review 12,4–14,3 s. **Chưa đạt mục tiêu ≤ 11 s.** Smoke bận CPU (khoảng 50 trong 57
+CPU-giây của 4 nhân) và phần lớn nằm ở Chromium, nên không còn cách rẻ nào mà không bớt kiểm tra. Hướng đáng thử nếu cần:
+gộp các lần tải lại trong `flowFiles` (8 lần khởi động app, luồng tốn CPU nhất).
+
