@@ -1,7 +1,7 @@
 // Variable picker (design 0005): a popup that lists the variables usable at the field being
 // edited, grouped by source step, with type and sample values, and inserts the chosen one.
 // Attached by forms.js to every option that declares `vars` ('template': insert {{path}} at the
-// caret; 'path': replace the whole value). Opens with the {x} button, Ctrl+Space, typing "{{"
+// caret; 'path': replace the whole value). Opens with the {x} button, Ctrl+Space or Alt+↓ (design 0014), typing "{{"
 // (template) or focusing an empty / pressing ↓ in a path field.
 //
 // The input keeps the raw text; a read-only chip strip under it shows each {{…}} token, red
@@ -13,6 +13,9 @@ import { h, icoTile } from './dom.js';
 import { state, subscribe, stepById, currentScope } from './store.js';
 import { groupsFor, matchScore, tokenize, refAt, typeLabel, MAX_ROWS } from './variables.js';
 import { bindRefTarget, refSourceStep, sourceTitle } from './ref-target.js';
+import { isMac, isPickerOpenKey, pickerKeys, PICKER_ARIA_KEYS } from './keys.js';
+
+const KEYS = pickerKeys(isMac());
 
 let uid = 0;
 let open = null; // { el, input, opts, mode, query, items, active, replace, render }
@@ -52,6 +55,7 @@ export function attachVarPicker(input, opts) {
   input.setAttribute('role', 'combobox');
   input.setAttribute('aria-autocomplete', 'list');
   input.setAttribute('aria-expanded', 'false'); // aria-controls is set only while the list exists
+  input.setAttribute('aria-keyshortcuts', PICKER_ARIA_KEYS);
   input.spellcheck = false;
   let unsaved = Boolean(opts.unsaved);
   const state0 = { listId, opts, get unsaved() { return unsaved; }, set unsaved(v) { unsaved = v; } };
@@ -60,7 +64,7 @@ export function attachVarPicker(input, opts) {
   const btn = h('button', {
     type: 'button',
     class: 'var-btn',
-    title: opts.mode === 'template' ? 'Chèn biến (gõ {{ hoặc Ctrl+Space)' : 'Chọn biến (Ctrl+Space)',
+    title: KEYS[opts.mode === 'template' ? 'template' : 'path'],
     'aria-label': 'Chèn biến',
     onmousedown: (e) => e.preventDefault(), // keep the caret/selection of the input
     onclick: () => (open?.input === input && !open.auto ? closePicker() : openPicker(input, { focusSearch: true })),
@@ -179,7 +183,7 @@ function chip(part, input, opts, issues) {
 
 function onFieldKey(e, input) {
   const vp = input._varPicker;
-  if (e.ctrlKey && (e.code === 'Space' || e.key === ' ')) {
+  if (isPickerOpenKey(e)) {
     e.preventDefault();
     const auto = vp.opts.mode === 'template' ? autocompleteRange(input) : null; // path: search box, like {x}
     openPicker(input, { focusSearch: !auto, auto });

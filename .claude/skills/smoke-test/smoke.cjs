@@ -339,6 +339,13 @@ async function flowPicker() {
   const tplInput = `${title} input[data-key="template"]`;
   await page.waitForSelector(tplInput);
   await page.fill(tplInput, '');
+  // 0014 §6: Alt+↓ (⌥↓ on a Mac, where Ctrl+Space switches the input source) opens the picker with its search focused.
+  check(/Alt\+ArrowDown/.test(await page.getAttribute(tplInput, 'aria-keyshortcuts') ?? ''), 'template field: aria-keyshortcuts without Alt+ArrowDown');
+  await page.keyboard.press('Alt+ArrowDown');
+  await page.waitForSelector('.var-picker .vp-item', { timeout: 2000 }).catch(() => errors.push('Alt+ArrowDown in the template field did not open the picker'));
+  check(await page.evaluate(() => document.activeElement?.classList.contains('var-search')), 'Alt+ArrowDown did not focus the picker search');
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => !document.querySelector('.var-picker'), null, { timeout: 2000 }).catch(() => errors.push('Esc did not close the picker opened by Alt+ArrowDown'));
   await page.click(`${title} .var-btn`);
   await page.waitForSelector('.var-picker .vp-item');
   check(await page.evaluate(() => document.activeElement?.classList.contains('var-search')), '{x} did not focus the picker search');
@@ -439,6 +446,12 @@ async function flowPicker() {
   await page.keyboard.press('ArrowDown');
   await page.keyboard.press('Tab');
   check((await page.inputValue(leftSel)) !== '', 'Tab after moving the selection did not insert');
+  // Alt+↓ opens the path field's list too (0014 §6).
+  await page.focus(leftSel);
+  check(!(await page.$('.var-picker')), 'the path picker is open before Alt+ArrowDown');
+  await page.keyboard.press('Alt+ArrowDown');
+  check(await page.waitForSelector('.var-picker .vp-item', { timeout: 2000 }).catch(() => null), 'Alt+ArrowDown in a path field did not open the picker');
+  check(/Alt\+ArrowDown/.test(await page.getAttribute(leftSel, 'aria-keyshortcuts') ?? ''), 'path field: aria-keyshortcuts without Alt+ArrowDown');
   await page.context().close();
 }
 

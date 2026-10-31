@@ -24,6 +24,7 @@ import { selectedIds, selectionInfo, inSelectMode } from './selection.js';
 import { wrapItems, editItems, offDeleteItems } from './menus.js';
 import { stepLabel } from './summary.js';
 import { missingRequired, requiredHintText } from './required-fields.js';
+import { isMac, pickerKeys } from './keys.js';
 
 let root;
 const expanded = new Set(); // `${stepId}:${fieldIndex}` with options panel open
@@ -175,6 +176,7 @@ function renderWorkflow() {
       h('li', {}, 'Ctrl+D: nhân bản; Ctrl+/: tắt / bật bước'),
       h('li', {}, 'Delete: xóa bước (khung có bước con thì hỏi)'),
       h('li', {}, 'Enter: sửa bước đang chọn; Esc: quay lại danh sách'),
+      h('li', {}, pickerKeys(isMac()).shortcut),
       h('li', {}, 'Ctrl+Z / Ctrl+Shift+Z: hoàn tác / làm lại'),
       h('li', {}, 'Ctrl+O: thư viện workflow (đổi, tạo, mở file)'),
       h('li', {}, 'Ctrl+S: tải workflow JSON; Ctrl+Enter: xem trước'),
