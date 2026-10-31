@@ -174,6 +174,7 @@ function renderWorkflow() {
       h('li', {}, 'Delete: xóa bước (khung có bước con thì hỏi)'),
       h('li', {}, 'Enter: sửa bước đang chọn; Esc: quay lại danh sách'),
       h('li', {}, 'Ctrl+Z / Ctrl+Shift+Z: hoàn tác / làm lại'),
+      h('li', {}, 'Ctrl+O: thư viện workflow (đổi, tạo, mở file)'),
       h('li', {}, 'Ctrl+S: tải workflow JSON; Ctrl+Enter: xem trước'),
       h('li', {}, 'Ctrl+Shift+Enter: đọc lại org cho các bước Query rồi xem trước'),
       h('li', {}, 'F8 / Shift+F8: tới lỗi hoặc cảnh báo tiếp theo / trước đó'),

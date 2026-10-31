@@ -4,8 +4,8 @@
 import { api } from './api.js';
 import { h, toast, download, icoTile } from './dom.js';
 import {
-  state, emit, subscribe, updateWorkflow, replaceWorkflow, emptyWorkflow, loadPersisted, loadLegacy, persist,
-  undo, redo, select, stepById, runKey, saveCollapsed, backupBrokenAutosave, slotKeys,
+  state, emit, subscribe, updateWorkflow, emptyWorkflow,
+  undo, redo, select, stepById, runKey, saveCollapsed, slotKeys,
 } from './store.js';
 import { migrateV1, describeReport, reportIsEmpty } from '/shared/migrate-v1.js';
 import { malformedSteps, allSteps } from '/shared/workflow-tree.js';
@@ -20,6 +20,9 @@ import { SAMPLES } from './samples.js';
 import { stepAlias } from './summary.js';
 import { initSelection, selectedIds, isMulti, collapseToPrimary, selectAllInSequence, inSelectMode } from './selection.js';
 import { initSelectBar, exitSelectMode } from './select-bar.js';
+import {
+  initLibrary, openAsNew, importLibraryFile, openLibraryMenu, setLibraryLocked, libraryReady,
+} from './library-ui.js';
 
 const $ = (id) => document.getElementById(id);
 const ORG_KEY = 'sfdg.org';
@@ -31,7 +34,11 @@ async function boot() {
     document.body.replaceChildren(h('p', { style: { padding: '20px' } }, `Không kết nối được server: ${e.message}`));
     return;
   }
-  const afterBoot = loadInitialWorkflow();
+  // The workflow library (design 0012 A); on the first run it is made from the old autosave.
+  const afterBoot = initLibrary({
+    migrateV1: (v1) => migrateV1(v1, migrateOptions()),
+    onMigrated: (report, raw, name) => announceMigration(report, raw, { name, autosave: true }),
+  });
   saveCollapsed();
 
   renderPalette();
@@ -65,9 +72,20 @@ function firstRender() {
   } catch (e) {
     console.error(e);
     const json = JSON.stringify(state.workflow);
-    const key = backupBrokenAutosave(json);
-    state.workflow = structuredClone(SAMPLES[0].workflow); // not persisted: the autosave stays as it was
-    state.selection = null;
+    let key = null;
+    if (libraryReady()) {
+      // The broken entry stays in the library as it is; the sample opens as a new entry.
+      openAsNew(structuredClone(SAMPLES[0].workflow));
+    } else {
+      try {
+        if (localStorage.getItem('sfdg.workflow.v2.broken') === null) localStorage.setItem('sfdg.workflow.v2.broken', json);
+        key = 'sfdg.workflow.v2.broken';
+      } catch {
+        key = null;
+      }
+      state.workflow = structuredClone(SAMPLES[0].workflow); // not persisted: the autosave stays as it was
+      state.selection = null;
+    }
     emit('app', 'all');
     toast(
       `Không hiển thị được workflow lưu tự động (${e.message}). Đang mở mẫu "${SAMPLES[0].label}"; bản lưu cũ chưa bị ghi đè${key ? ` và có bản sao trong trình duyệt (${key})` : ''}. Bấm "Tải bản lưu" để lấy file JSON, sửa rồi Mở lại.`,
@@ -75,29 +93,6 @@ function firstRender() {
       { label: 'Tải bản lưu', onClick: () => download('workflow-autosave.json', json) },
     );
   }
-}
-
-/** v2 autosave → old v1 autosave (migrated, original kept) → first sample. */
-function loadInitialWorkflow() {
-  const saved = loadPersisted();
-  if (saved?.version === 2 && Array.isArray(saved.steps)) {
-    state.workflow = saved;
-    return null;
-  }
-  const legacy = loadLegacy();
-  if (legacy?.workflow?.version === 1 && Array.isArray(legacy.workflow.nodes)) {
-    try {
-      const { workflow, report } = migrateV1(legacy.workflow, migrateOptions());
-      state.workflow = workflow;
-      persist(); // writes sfdg.workflow.v2 only; sfdg.workflow.v1 stays as it was
-      return () => announceMigration(report, legacy.raw, { name: workflow.name, autosave: true });
-    } catch (e) {
-      console.error(e);
-      toast(`Không chuyển được workflow cũ trong trình duyệt (${e.message}). Bản cũ vẫn được giữ nguyên.`, 6000);
-    }
-  }
-  state.workflow = structuredClone(SAMPLES[0].workflow);
-  return null;
 }
 
 /** Toast when nothing changed; otherwise the report dialog with "Tải bản gốc (v1)". */
@@ -164,14 +159,9 @@ function renderPalette() {
   );
 }
 
-/** Mẫu (palette, or the "⋯" menu on narrow screens): asks before replacing a non-empty workflow. */
+/** Mẫu (palette, or the "⋯" menu on narrow screens): a new entry of the library (design 0012 A). */
 function loadSample(s) {
-  if (!confirmDiscard()) return;
-  replaceWorkflow(structuredClone(s.workflow));
-}
-
-function confirmDiscard() {
-  return !state.workflow.steps?.length || confirm('Thay workflow hiện tại? (Vẫn có thể hoàn tác bằng Ctrl+Z)');
+  openAsNew(structuredClone(s.workflow));
 }
 
 function wireToolbar() {
@@ -182,12 +172,8 @@ function wireToolbar() {
     if (source !== 'toolbar') name.value = state.workflow.name ?? '';
   });
 
-  $('btn-new').onclick = () => {
-    if (!confirmDiscard()) return;
-    replaceWorkflow(emptyWorkflow());
-  };
+  $('btn-new').onclick = () => openAsNew(emptyWorkflow());
   $('btn-save').onclick = saveFile;
-  $('btn-open').onclick = () => $('file-input').click();
   $('file-input').onchange = async (e) => {
     const file = e.target.files[0];
     e.target.value = '';
@@ -201,6 +187,7 @@ function wireToolbar() {
       toast('Không mở được file: không phải JSON hợp lệ.', 5000);
       return;
     }
+    if (importLibraryFile(wf)) return; // "Tải tất cả (JSON)" of the library: every workflow added
     openWorkflowObject(wf, raw, file.name);
   };
   $('btn-undo').onclick = () => undo() || toast('Không còn gì để hoàn tác.');
@@ -249,8 +236,9 @@ function openMoreMenu({ fromChip = false } = {}) {
   if (phone()) {
     items.push(
       { group: 'Workflow' },
-      { label: 'Mới', onSelect: click('btn-new') },
-      { label: 'Mở…', onSelect: click('btn-open') },
+      { label: 'Mới', onSelect: click('btn-new'), disabled: $('btn-new').disabled, title: $('btn-new').disabled ? $('btn-new').title : undefined },
+      { label: 'Thư viện…', kbd: 'Ctrl+O', onSelect: () => openLibraryMenu() },
+      { label: 'Mở file JSON…', onSelect: click('file-input'), disabled: $('btn-new').disabled, title: $('btn-new').disabled ? $('btn-new').title : undefined },
       { label: 'Lưu', kbd: 'Ctrl+S', onSelect: click('btn-save') },
       { group: 'Chạy' },
       {
@@ -305,7 +293,7 @@ function openWorkflowObject(wf, raw, fileName) {
     } catch (e) {
       return toast(`Không chuyển được file version 1: ${e.message}`, 6000);
     }
-    replaceWorkflow(migrated.workflow);
+    if (!openAsNew(migrated.workflow)) return undefined;
     announceMigration(migrated.report, raw, { name: migrated.workflow.name ?? fileName, autosave: false });
     return undefined;
   }
@@ -319,7 +307,7 @@ function openWorkflowObject(wf, raw, fileName) {
   }
   const bad = malformedSteps(wf);
   if (bad) return toast(`Không mở được file: ${bad}. Sửa file JSON rồi mở lại.`, 6000);
-  replaceWorkflow(wf);
+  if (!openAsNew(wf)) return undefined;
   toast(`Đã mở "${wf.name ?? fileName}".`);
   return undefined;
 }
@@ -352,6 +340,11 @@ function wireShortcuts() {
     } else if (mod && key === 's') {
       e.preventDefault();
       saveFile();
+    } else if (mod && key === 'o' && !e.shiftKey && !e.altKey) {
+      // Ctrl+O: the library popup, also from an input (not the browser's file dialog).
+      e.preventDefault();
+      if (popupAnchor() === $('btn-library')) closePopup(true);
+      else openLibraryMenu();
     } else if (typing) {
       // Inputs keep their native keys; Esc in the inspector goes back to the selected card.
       if (e.key === 'Escape' && e.target.closest('#inspector')) {
@@ -522,6 +515,7 @@ function matchingPreview(seed) {
 
 function setRunning(r) {
   running = r;
+  setLibraryLocked(Boolean(r)); // no switching workflows while a run is on (design 0012 A)
   $('btn-preview').disabled = Boolean(r);
   if (r) $('btn-insert').disabled = true;
   else updateInsertButton();
@@ -737,7 +731,7 @@ async function insertRun(base) {
     acceptResult(result, workflow);
     const ins = result.insert;
     // A later Insert with the same seed would create the same data again: the confirmation says so.
-    if (ins.inserted) state.lastInsert = { key: runKey(workflow, result.seed), org };
+    if (ins.inserted) state.lastInserts = [...state.lastInserts, { key: runKey(workflow, result.seed), org }].slice(-20);
     const where = bySobjectText(ins.bySobject);
     if (ins.stopped?.reason === 'allFailing') {
       const s = ins.stopped;
@@ -795,7 +789,7 @@ function confirmInsert(org, previewed) {
       isProd ? h('div', { class: 'warn-box' }, 'Org này không phải sandbox hay scratch org. Kiểm tra kỹ trước khi insert dữ liệu test.') : null,
       h('p', { class: 'insert-count' }, stats.total ? `Sẽ tạo ${fmt(stats.total)} bản ghi: ${counts}.` : 'Workflow không sinh bản ghi nào: không có gì để insert.'),
       h('p', {}, `Giống hệt bản xem trước (seed ${previewed.seed}).`),
-      state.lastInsert && state.lastInsert.org === state.org && state.lastInsert.key === runKey(state.workflow, previewed.seed)
+      state.lastInserts.some((x) => x.org === state.org && x.key === runKey(state.workflow, previewed.seed))
         ? h('div', { class: 'warn-box same-seed' }, `Seed ${previewed.seed} đã dùng cho lần insert trước vào org này với cùng workflow: cùng seed thì ra cùng dữ liệu (tên, email…), nên các bản ghi này có thể bị trùng với lần trước. Muốn dữ liệu mới, xóa ô Seed rồi bấm Insert lại.`)
         : null,
       read.length

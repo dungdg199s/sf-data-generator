@@ -11,11 +11,14 @@
   <header class="topbar">
     <div class="tb-file">
       <div class="brand">SF Data Generator</div>
-      <input id="wf-name" class="wf-name" type="text" aria-label="Tên workflow" placeholder="Tên workflow">
+      <div class="wf-name-group">
+        <input id="wf-name" class="wf-name" type="text" aria-label="Tên workflow" placeholder="Tên workflow">
+        <button id="btn-library" class="icon lib-btn" title="Thư viện workflow (Ctrl+O)" aria-label="Thư viện workflow" aria-haspopup="menu" aria-expanded="false">▾</button>
+        <button id="btn-unsaved" class="unsaved-btn" hidden aria-live="polite" title="Bộ nhớ trình duyệt đầy: thay đổi chưa được lưu. Bấm để mở Thư viện và xóa bớt workflow.">▲ Chưa lưu</button>
+      </div>
       <div class="toolbar">
         <button id="btn-new" class="tb-wide" title="Workflow mới">Mới</button>
-        <button id="btn-open" class="tb-wide" title="Mở file workflow JSON">Mở…</button>
-        <button id="btn-save" class="tb-wide" title="Tải workflow JSON (Ctrl+S)">Lưu</button>
+        <button id="btn-save" class="tb-wide" title="Tải file workflow JSON (Ctrl+S). Thư viện trong trình duyệt tự lưu mọi thay đổi.">Lưu</button>
         <button id="btn-undo" title="Hoàn tác (Ctrl+Z)" aria-label="Hoàn tác">↶</button>
         <button id="btn-redo" title="Làm lại (Ctrl+Shift+Z)" aria-label="Làm lại">↷</button>
         <input id="file-input" type="file" accept=".json,application/json" hidden>

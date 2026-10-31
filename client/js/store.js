@@ -1,4 +1,5 @@
-// Single app state + undo/redo history + localStorage autosave.
+// Single app state + undo/redo history + autosave (the workflow library of design 0012 A,
+// library-ui.js, sets the handler; without it, the single autosave `sfdg.workflow.v2` of before).
 // Views subscribe and receive the change `source` so a view can skip re-rendering
 // for edits it made itself (keeps input focus while typing in the inspector).
 
@@ -6,11 +7,9 @@ import { findStep, collectAliases, allSteps } from '/shared/workflow-tree.js';
 import { analyzeScope } from '/shared/scope.js';
 import { estimateSteps } from '/shared/estimate.js';
 
+// The single autosave of before the library: only written while the library could not be made
+// (storage full on the first run, design 0012 A "chế độ cũ").
 const STORAGE_KEY = 'sfdg.workflow.v2';
-// Autosave of the old graph editor. Read once for migration, never written or removed.
-const LEGACY_STORAGE_KEY = 'sfdg.workflow.v1';
-// Copy of an autosave that could not be shown, kept so the next edit cannot overwrite it.
-const BROKEN_STORAGE_KEY = 'sfdg.workflow.v2.broken';
 const COLLAPSED_KEY = 'sfdg.collapsed';
 const COLLAPSED_MAX = 500;
 const VIEW_KEY = 'sfdg.view'; // 'process' (Quy trình, default) | 'canvas' (Sơ đồ), design 0003
@@ -31,7 +30,9 @@ export const state = {
   orgs: [],
   org: '',
   result: null, // last run (design 0004: first previewRows records per sObject + totals)
-  lastInsert: null, // { key: runKey(workflow, seed), org } of the last insert that wrote records
+  // Inserts that wrote records in this tab, newest last, at most 20 ({ key: runKey(workflow, seed), org }):
+  // kept across workflows of the library, so a copied workflow inserted again with the same seed warns.
+  lastInserts: [],
   resultRun: null, // { workflow, seed, now, org, expectQueries } of that run: downloads regenerate from it
   lastRunKey: null,
   lastRunOrg: null, // org the Query steps of the last preview read ('' = sample rows)
@@ -120,36 +121,38 @@ export function select(selection) {
   emit('app', 'selection');
 }
 
+let persistHandler = null;
+/** The library's save (library-ui.js); null: the single autosave of before. */
+export function setPersistHandler(fn) {
+  persistHandler = fn;
+}
+
 export function persist() {
+  if (persistHandler) return persistHandler(state.workflow);
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state.workflow));
   } catch {
     // Storage full or disabled: autosave is a convenience, not a requirement.
   }
+  return undefined;
 }
 
-export function loadPersisted() {
-  return readJson(STORAGE_KEY);
-}
-
-/** Keep a copy of an autosave that could not be shown (see main.js). Returns the key or null. */
-export function backupBrokenAutosave(json) {
-  try {
-    localStorage.setItem(BROKEN_STORAGE_KEY, json);
-    return BROKEN_STORAGE_KEY;
-  } catch {
-    return null;
-  }
-}
-
-/** The old editor's autosave (version 1), if any. Read-only. */
-export function loadLegacy() {
-  try {
-    const raw = localStorage.getItem(LEGACY_STORAGE_KEY);
-    return raw ? { raw, workflow: JSON.parse(raw) } : null;
-  } catch {
-    return null;
-  }
+/**
+ * Show another workflow of the library (design 0012 A): undo / redo start empty (Ctrl+Z never
+ * brings workflow A's content into B), nothing selected, no run result. Not saved: it comes from
+ * the library (call persist() when it is new content for the open entry).
+ */
+export function openWorkflow(wf) {
+  state.workflow = wf;
+  past.length = 0;
+  future.length = 0;
+  lastCoalesce = { key: null, at: 0 };
+  revision++;
+  state.selection = null;
+  Object.assign(state, { result: null, resultRun: null, lastRunKey: null, lastRunOrg: null, lastRunSteps: null, runLive: null });
+  emit('replace', 'workflow');
+  emit('app', 'selection');
+  emit('run', 'result');
 }
 
 function readJson(key) {

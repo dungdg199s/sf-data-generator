@@ -1,6 +1,6 @@
 # 0012 — Năng suất soạn thảo: thư viện workflow, chọn nhiều, copy/paste, sửa nhanh, số liệu trên thẻ
 
-- **Trạng thái:** Đang làm (đã xong G, F1, C, I, H, D, E, B)
+- **Trạng thái:** Đang làm (đã xong G, F1, C, I, H, D, E, B, A)
 - **Ngày:** 2026-10-28
 - **Liên quan:** [0003](0003-process-mode.md) (cây bước, phím, "Việc tiếp theo": chọn nhiều, copy/paste, ước tính số bản
   ghi, tô thẻ cha, field tên mặc định), [0004](0004-streaming-execution.md) (sự kiện tiến độ, nhóm lỗi insert),
@@ -1012,3 +1012,35 @@ Làm từng phần theo [Kế hoạch](#kế-hoạch-thực-hiện); phần chư
   (Xong về lại thẻ bắt đầu); Ctrl+bấm ở màn hình rộng thì thẻ vừa bấm thành bước chính. Bản dán đổi tên cả biến lặp nên toast
   `Đổi tên alias:` có thể kể cả `loop → loop2`. Menu "Sao chép" khi trình duyệt không cho `execCommand` vẫn giữ bản sao trong tab
   (toast nói rõ chỉ dán được trong tab này).
+
+### A — Thư viện workflow (bước 10)
+
+- `client/js/library.js` (mới, không DOM, storage truyền vào): khóa `sfdg.library` / `sfdg.wf.<id>` / `sfdg.library.trash` /
+  `sessionStorage['sfdg.activeId']` đúng bảng; `createLibrary` (`create`, `save` — quota ⇒ xóa thùng rác rồi thử lại một lần,
+  trả `readded` khi mục bị tab khác xóa, `rename`, `duplicate` ngay dưới mục gốc, `remove` vào thùng rác, `restoreTrash`, `usage`,
+  `exportAll`), `repairIndex`, `copyName`, `parseLibraryFile`, `migrateToLibrary` (v2 hợp lệ ⇒ mục đầu; không có thì v1 qua
+  `migrateV1`; không có gì ⇒ mẫu đầu; v2 hỏng ⇒ bản sao `.broken` khi chưa có, thư viện bắt đầu bằng mẫu; quota ⇒ chế độ cũ, không
+  để lại chỉ mục dở). Ghi mục trước, chỉ mục sau; v1 và v2 không bao giờ bị ghi hay xóa (v2 chỉ còn được ghi ở chế độ cũ).
+- `client/js/library-ui.js` (mới): popup `▾` (`#btn-library`, Ctrl+O kể cả trong ô nhập; ô tìm khi > 6 mục, 20 mục gần đây, mục
+  cũ hơn chỉ hiện khi tìm — `popup.js` có `searchOnly`, `searchLabel`), `＋ Workflow mới`, `⇪ Mở file JSON…`, `Quản lý thư viện…`
+  (sửa tên tại chỗ — mục đang mở đi qua `updateWorkflow`, một bước undo; Mở / Nhân bản / Tải JSON / Xóa, ≤ 720 px gom vào `⋯`;
+  dòng nơi lưu + dung lượng; Tải tất cả). Mới / Mở file / Mẫu = `openAsNew` (mục mới, dùng lại mục trống tên "Workflow mới"); đổi
+  workflow = `store.openWorkflow` (đặt lại undo, bỏ chọn, xóa kết quả). Khóa khi đang chạy (`setLibraryLocked`, cả nút Mới).
+  Quota: `▲ Chưa lưu` (`#btn-unsaved`), toast 12 s [Mở Thư viện], `beforeunload`, `Đã lưu lại "…"`. Sự kiện `storage` của mục đang
+  mở ⇒ tạm dừng tự lưu, toast không tự tắt [Dùng bản ở tab kia] [Giữ bản của tab này] (`dom.toast` nhận nhiều nút, `ms: Infinity`).
+  Mục hỏng: mô tả `không mở được`, bấm ⇒ toast [Tải bản lưu].
+- `store.js`: `setPersistHandler`, `openWorkflow`; `lastInsert` thành `lastInserts` (≤ 20, giữ qua các workflow). `main.js`: khởi động
+  qua `initLibrary`, `#file-input` nhận cả file thư viện (`Đã thêm N workflow vào thư viện.`), menu ⋯ ở ≤ 720 px: Mới, Thư viện…,
+  Mở file JSON…, Lưu. `index.html`: `▾` dính ô tên, `Mở…` rời thanh trên, `title` mới của Lưu. Tab Phím tắt: Ctrl+O.
+- Test `test/library.test.js` (mới, storage giả có giới hạn): chuyển từ v2 (v2, v1 không đổi từng byte), từ v1, từ không có gì,
+  v2 hỏng (`.broken` không bị ghi đè), quota khi chuyển ⇒ chế độ cũ không để lại khóa nào; `repairIndex`; `copyName`; tạo / lưu /
+  đổi tên / nhân bản / xóa / hoàn tác, mục bị tab khác xóa được thêm lại; quota (xóa thùng rác rồi thử lại, vẫn đầy ⇒ giữ bản tốt
+  cuối); file thư viện khứ hồi.
+- Smoke: `flowLibrary` (17) phần A; mọi luồng đọc workflow tự lưu qua `smokeSaved()` (mục đang mở) thay vì `sfdg.workflow.v2`;
+  luồng 6 kiểm mục thư viện từ v1 (v1 không đổi, v2 không bị ghi) và thêm kiểm v2 ⇒ mục thư viện, khóa v2 không đổi từng byte;
+  luồng 7 giữ nguyên ý; luồng 13 mở workflow lỗi bằng `#file-input` rồi tải lại trang, menu ⋯ có `Thư viện…`, `Mở file JSON…`;
+  luồng 14 mở workflow bằng `#file-input` thay vì ghi `sfdg.workflow.v2` rồi tải lại.
+- Khác thiết kế: `Hoàn tác` của Xóa còn có ở một dòng ngay trong hộp Quản lý thư viện (10 s), vì hộp là modal nên nút của toast
+  phía sau không bấm được. Chế độ cũ (quota khi chuyển) giữ hộp hỏi `Thay workflow hiện tại?` và Ctrl+Z như trước khi có thư viện,
+  vì vẫn chỉ có một autosave. Mục hỏng là mục đang mở lúc khởi động: tab mở mục đọc được kế tiếp (hoặc tạo mục mẫu) và báo toast.
+  Danh sách "Gần đây" có cả mục đang mở (✓).

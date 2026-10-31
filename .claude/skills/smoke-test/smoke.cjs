@@ -48,7 +48,10 @@
 //      E — "Ví dụ:" row of an open picklist (POST /api/field-samples) follows its weights; a dependent field shows the preview's
 //  17. multi-select and copy / paste (0012 B): Shift+click two cards (inspector "2 bước đã chọn", aria-multiselectable,
 //      aria-selected), "Bọc trong Lặp" then one ↶, Shift+↓ + Ctrl+C / Ctrl+V pastes renamed copies (acc2, con2), Ctrl+/
-//      turns both off; at 390 px "⋯ → Chọn nhiều bước" shows the select bar, a tap adds a card, Xong leaves
+//      turns both off; at 390 px "⋯ → Chọn nhiều bước" shows the select bar, a tap adds a card, Xong leaves.
+//      Workflow library (0012 A): ▾ → "＋ Workflow mới" makes a second entry, a step copied in the first pastes
+//      there with its alias kept, Ctrl+O switches back (same content, Ctrl+Z does nothing), a Mẫu on a workflow
+//      with steps is a third entry (the first untouched), "Quản lý thư viện…" deletes one and "Hoàn tác" brings it back
 // The flows run in parallel, one browser context each (independent storage): see SKILL.md.
 // Usage: node .claude/skills/smoke-test/smoke.cjs [screenshotDir]
 // Needs Playwright with a Chromium build available (require('playwright')).
@@ -132,6 +135,13 @@ let base;
 async function newPage(label, ctxOpts = {}) {
   // Reduced motion: no transition to wait for (the app honours prefers-reduced-motion).
   const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, reducedMotion: 'reduce', ...ctxOpts });
+  // The workflow the app saved automatically: the library entry this tab has open (design 0012 A).
+  await ctx.addInitScript(() => {
+    window.smokeSaved = () => {
+      const raw = localStorage.getItem(`sfdg.wf.${sessionStorage.getItem('sfdg.activeId')}`);
+      return raw ? JSON.parse(raw) : null;
+    };
+  });
   const page = await ctx.newPage();
   page.on('pageerror', (e) => errors.push(`${label ? `[${label}] ` : ''}${e}`));
   page.on('dialog', (d) => d.accept());
@@ -296,11 +306,11 @@ async function flowEditing() {
   const aliasInput = '#inspector input[data-key="alias"]';
   await page.fill(aliasInput, '');
   await page.type(aliasInput, 'account');
-  const ref = await page.evaluate(() => JSON.stringify(JSON.parse(localStorage.getItem('sfdg.workflow.v2'))).match(/"ref":"(\w+)"/)?.[1]);
+  const ref = await page.evaluate(() => JSON.stringify(smokeSaved()).match(/"ref":"(\w+)"/)?.[1]);
   check(ref === 'account', `Lookup ref did not follow the alias rename (${ref})`);
   check(await page.evaluate((sel) => document.activeElement === document.querySelector(sel), aliasInput), 'alias input lost focus while typing');
   for (let i = 0; i < 'account'.length + 1; i++) await page.keyboard.press('Control+z');
-  await page.waitForFunction(() => /"ref":"acc"/.test(localStorage.getItem('sfdg.workflow.v2')));
+  await page.waitForFunction(() => /"ref":"acc"/.test(JSON.stringify(smokeSaved())));
 
   // "Hoàn tác" in the delete toast only undoes the delete: another edit removes the button.
   await page.click(`.step-card[data-id="${added}"] .type`);
@@ -370,12 +380,12 @@ async function flowPicker() {
   const industry = await page.$('#inspector .field-card[data-field="fields.Industry"] input[aria-label="Tên field"]');
   await industry.fill('Industry__c');
   await industry.press('Tab');
-  const followed = await page.evaluate(() => JSON.stringify(JSON.parse(localStorage.getItem('sfdg.workflow.v2'))).match(/"name":"Title","type":"template","options":\{"template":"([^"]*)"/)?.[1]);
+  const followed = await page.evaluate(() => JSON.stringify(smokeSaved()).match(/"name":"Title","type":"template","options":\{"template":"([^"]*)"/)?.[1]);
   check(followed === '{{acc.Industry__c}} #{{loop.index}} {{acc.Name}}', `field rename did not follow (${followed})`);
   check(/Đã cập nhật 1 tham chiếu: acc.Industry → acc.Industry__c/.test(await page.textContent('#toast')), 'no rename toast');
   // One undo restores both the name and the references.
   await page.click('#btn-undo');
-  const undone = await page.evaluate(() => JSON.stringify(JSON.parse(localStorage.getItem('sfdg.workflow.v2'))));
+  const undone = await page.evaluate(() => JSON.stringify(smokeSaved()));
   check(undone.includes('"name":"Industry","type":"picklist"') && undone.includes('"template":"{{acc.Industry}} #{{loop.index}} {{acc.Name}}"'), 'one Ctrl+Z did not undo the field rename and its references together');
 
   // Renaming the field that owns a chip strip keeps the strip live; $n chips are neutral; ⊗ on unresolved error chips.
@@ -487,9 +497,18 @@ async function flowFiles() {
   await page.waitForSelector('.step-card[data-id="a"]');
   const toastText = await page.textContent('#toast');
   check(/Đã chuyển workflow đang soạn sang định dạng mới/.test(toastText), `no migration toast (${toastText})`);
-  const kept = await page.evaluate(() => [localStorage.getItem('sfdg.workflow.v1'), JSON.parse(localStorage.getItem('sfdg.workflow.v2') || '{}').version]);
+  const kept = await page.evaluate(() => [localStorage.getItem('sfdg.workflow.v1'), smokeSaved()?.version, localStorage.getItem('sfdg.workflow.v2'), JSON.parse(localStorage.getItem('sfdg.library'))?.items.length]);
   check(kept[0] === v1Text, 'sfdg.workflow.v1 was modified');
-  check(kept[1] === 2, 'sfdg.workflow.v2 was not written');
+  check(kept[1] === 2 && kept[3] === 1, `the v1 autosave did not become a library entry (${kept})`);
+  check(kept[2] === null, 'sfdg.workflow.v2 was written');
+  // A v2 autosave becomes the first library entry, and the v2 key stays byte for byte (0012 A).
+  const v2Text = JSON.stringify({ version: 2, name: 'Đang soạn', steps: [{ id: 'q', type: 'record', config: { sobject: 'Account', alias: 'acc', count: 1, fields: [] } }] });
+  await page.evaluate((t) => { localStorage.clear(); localStorage.setItem('sfdg.workflow.v2', t); }, v2Text);
+  await page.reload();
+  await page.waitForSelector('.step-card[data-id="q"]');
+  check(/Workflow đang soạn đã được đưa vào Thư viện/.test(await page.textContent('#toast')), `no library migration toast (${await page.textContent('#toast')})`);
+  const lib = await page.evaluate(() => [localStorage.getItem('sfdg.workflow.v2'), JSON.parse(localStorage.getItem('sfdg.library')).items.map((i) => i.name).join(), smokeSaved()?.name]);
+  check(lib[0] === v2Text && lib[1] === 'Đang soạn' && lib[2] === 'Đang soạn', `v2 autosave → library: ${JSON.stringify(lib)}`);
 
   // A malformed v2 autosave: the sample is shown, the autosave is not overwritten.
   const broken = JSON.stringify({ version: 2, name: 'Hỏng', steps: [{ id: 'x', type: 'loop', config: {}, slots: { body: 5 } }] });
@@ -853,7 +872,7 @@ async function flowLayoutNarrow() {
     seed: Boolean(document.querySelector('.popup input[data-field="seed"]')),
     radio: document.querySelector('.popup [role="group"][aria-label="Giao diện"] [role="menuitemradio"][aria-checked="true"]')?.textContent ?? '',
   }));
-  const want = ['Mới', 'Mở…', 'Lưu', 'Account + Contact', 'Tối'];
+  const want = ['Mới', 'Thư viện…', 'Mở file JSON…', 'Lưu', 'Account + Contact', 'Tối']; // 0012 A: Mở… is in the library
   check(want.every((w) => menu.items.some((x) => x.includes(w))) && menu.seed && /Theo hệ thống/.test(menu.radio), `⋯ menu at 390px (${JSON.stringify(menu)})`);
   check(!menu.aria.length, `text or input directly inside role=menu: ${menu.aria.join(' | ')}`);
   await m.fill('.popup input[data-field="seed"]', '42');
@@ -939,7 +958,9 @@ async function flowLayoutNarrow() {
   await m.tap('#inspector .sheet-close');
 
   // Going to an issue on a phone: the card ends up fully between the palette and the sheet.
-  await m.evaluate((wf) => localStorage.setItem('sfdg.workflow.v2', JSON.stringify(wf)), await issuesWorkflow());
+  // Opened as a file (a new library entry), then a reload: the tab reopens its entry, panels as at start.
+  await m.setInputFiles('#file-input', { name: 'issues.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(await issuesWorkflow())) });
+  await m.waitForSelector('.step-card[data-id="opp"]');
   await m.reload();
   await m.waitForSelector('#issues:not([hidden]) .issue.error');
   const cardBetween = (id) => m.evaluate((id) => {
@@ -1020,7 +1041,7 @@ async function flowEach() {
   // Renaming the record looped over moves the references inside the body.
   await page.click(`${loopCard} .type`);
   await page.fill('#inspector input[data-key="itemAlias"]', 'a');
-  const con = await page.evaluate(() => JSON.parse(localStorage.getItem('sfdg.workflow.v2')).steps[1].slots.body[0].config.fields);
+  const con = await page.evaluate(() => smokeSaved().steps[1].slots.body[0].config.fields);
   check(con.find((f) => f.name === 'AccountId')?.options.ref === 'a' && /\{\{a\.Name\}\}/.test(con.find((f) => f.name === 'Title')?.options.template), `itemAlias rename did not follow: ${JSON.stringify(con)}`);
   await page.click('#btn-undo');
 
@@ -1042,8 +1063,8 @@ async function flowEach() {
     { id: 'e', type: 'loop', config: { mode: 'each', from: 'acc', itemAlias: 'a' }, slots: { body: [{ id: 'c', type: 'record', config: { sobject: 'Contact', alias: 'c', fields: [tpl('LastName')] } }] } },
     { id: 'e2', type: 'loop', config: { mode: 'each', from: 'accs', itemAlias: 'row', alias: 'k' }, slots: { body: [{ id: 'c2', type: 'record', config: { sobject: 'Contact', alias: 'c2', fields: [tpl('Title')] } }] } },
   ] };
-  await page.evaluate((w) => localStorage.setItem('sfdg.workflow.v2', JSON.stringify(w)), wfN);
-  await page.reload();
+  await page.setInputFiles('#file-input', { name: 'review.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(wfN)) });
+  await page.waitForSelector('.step-card[data-id="e"]');
   await page.click('.step-card[data-id="e"] .type');
   const accOpt = await page.$eval('#inspector select[data-key="from"] option:checked', (o) => o.textContent);
   check(accOpt === 'acc (Account · đã sinh)', `pool option of a record made in a finished loop: ${accOpt}`);
@@ -1124,7 +1145,7 @@ async function productivityG(page) {
     await fixBtn.click();
     await page.waitForFunction(() => !document.querySelector('.step-card[data-id="t"].has-warning'), null, { timeout: 3000 }).catch(() => {});
     check(!(await page.$('.step-card[data-id="t"].has-warning')), 'the noNameField warning stayed after "Đổi thành Subject"');
-    const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('sfdg.workflow.v2')).steps);
+    const saved = await page.evaluate(() => smokeSaved().steps);
     const subject = saved[0].config.fields[0];
     check(subject.name === 'Subject' && subject.options.mode === 'list', `renamed field: ${JSON.stringify(subject)}`);
     check(saved[1].config.fields[1].options.template === 'Việc {{task.Subject}}', `template did not follow the rename: ${saved[1].config.fields[1].options.template}`);
@@ -1167,7 +1188,7 @@ async function productivityRest(page) {
     await addBtn.click();
     await page.waitForFunction(() => !document.querySelector('.step-card[data-id="con"].has-error'), null, { timeout: 3000 }).catch(() => {});
     check(!(await page.$('.step-card[data-id="con"].has-error')), 'the unknownMember error stayed after "Thêm Industry vào SELECT"');
-    const fields = await page.evaluate(() => JSON.parse(localStorage.getItem('sfdg.workflow.v2')).steps[0].config.fields);
+    const fields = await page.evaluate(() => smokeSaved().steps[0].config.fields);
     check(fields.join() === 'Id,Name,Industry', `Query fields after the fix: ${fields}`);
     check(/Đã thêm Industry vào Query "accs"\. Bấm Xem trước để đọc lại\./.test(await page.textContent('#toast')), 'no "Đã thêm Industry vào Query" toast');
   }
@@ -1188,7 +1209,7 @@ async function productivityRest(page) {
 
   // C: ⋯ on con → "Bọc trong Lặp qua từng bản ghi": a Lặp each over accs (con refers to the pick acc
   // of accs), the record named acc2 (acc is taken); [Đổi] of the toast re-points the Lookup.
-  const saved = () => page.evaluate(() => JSON.parse(localStorage.getItem('sfdg.workflow.v2')).steps);
+  const saved = () => page.evaluate(() => smokeSaved().steps);
   await page.click('.step-card[data-id="con"] .menu-btn');
   await page.click('.popup [role="menuitem"]:has-text("Bọc trong Lặp qua từng bản ghi")');
   const wrapped = (await saved())[1].slots.body[1];
@@ -1277,16 +1298,58 @@ async function productivityRest(page) {
 }
 
 /** The workflow the app saved automatically (what the checks read after an edit). */
-const savedWorkflow = (page) => page.evaluate(() => JSON.parse(localStorage.getItem('sfdg.workflow.v2')));
+const savedWorkflow = (page) => page.evaluate(() => smokeSaved());
 const toastIs = (page, re) => page.waitForFunction((src) => new RegExp(src).test(document.getElementById('toast').textContent), re.source, { timeout: 3000 }).then(() => true, () => false);
 
-/** Flow 17: multi-select, group operations and copy / paste (design 0012 B). */
+/** Flow 17: multi-select, group operations and copy / paste (design 0012 B), then the library (A). */
 async function flowLibrary() {
   const page = await newPage('library');
   await page.goto(base);
   await page.waitForSelector('.step-card[data-id="con"]');
   await selectionSteps(page);
+  await librarySteps(page);
   await page.context().close();
+}
+
+/** 17 A: the workflow library, going on from the workflow B left. */
+async function librarySteps(page) {
+  const entries = () => page.evaluate(() => JSON.parse(localStorage.getItem('sfdg.library')).items.map((i) => i.name).sort().join(' | '));
+  const first = await page.evaluate(() => sessionStorage.getItem('sfdg.activeId'));
+  const firstJson = JSON.stringify(await savedWorkflow(page));
+  const stored = (id) => page.evaluate((i) => localStorage.getItem(`sfdg.wf.${i}`), id);
+  check(await entries() === 'Account + Contact', `one library entry at start: ${await entries()}`);
+  await page.click('.step-card[data-id="acc"] .type');
+  await page.keyboard.press('Control+c');
+  await page.click('#btn-library');
+  check((await page.getAttribute('#btn-library', 'aria-expanded')) === 'true' && (await page.textContent('.popup .popup-title')) === 'Thư viện', '▾ did not open the "Thư viện" popup');
+  await page.click('.popup .popup-item:has-text("Workflow mới")');
+  await page.waitForFunction(() => !document.querySelector('.step-card[data-id="acc"]'));
+  check(await entries() === 'Account + Contact | Workflow mới', `＋ Workflow mới: ${await entries()}`);
+  // B': the copied step pastes into the other workflow, its alias free there.
+  await page.keyboard.press('Control+v');
+  check(await toastIs(page, /^Đã dán 1 bước\.$/), `paste into another workflow: ${await page.textContent('#toast')}`);
+  check((await savedWorkflow(page))?.steps?.[0]?.config.alias === 'acc', 'the pasted step did not keep its alias in the new workflow');
+  // Ctrl+O, back to the first: its content, and no undo into it from the other workflow.
+  await page.keyboard.press('Control+o');
+  await page.click('.popup [role="menuitemradio"]:has-text("Account + Contact")');
+  await page.waitForSelector('.step-card[data-id="loopAcc"]');
+  check(JSON.stringify(await savedWorkflow(page)) === firstJson && (await page.inputValue('#wf-name')) === 'Account + Contact', 'switching back did not show the first workflow as it was');
+  await page.keyboard.press('Control+z');
+  check(await page.isVisible('.step-card[data-id="loopAcc"]') && JSON.stringify(await savedWorkflow(page)) === firstJson, 'Ctrl+Z after switching changed the workflow (undo was not reset)');
+  // A Mẫu on a workflow with steps: a new entry; the first one is untouched.
+  await page.click('#sample-items .palette-item:has-text("Lead theo xác suất")');
+  await page.waitForSelector('.step-card[data-id="lead"]');
+  check(await entries() === 'Account + Contact | Lead theo xác suất | Workflow mới', `Mẫu did not open as a new entry: ${await entries()}`);
+  check(await stored(first) === firstJson, 'the Mẫu overwrote the first workflow');
+  // Quản lý thư viện: delete one, "Hoàn tác" in the dialog brings it back.
+  await page.click('#btn-library');
+  await page.click('.popup .popup-item:has-text("Quản lý thư viện")');
+  const names = await page.$$eval('dialog[open] .lib-row .lib-name', (n) => n.map((x) => x.value));
+  await page.click(`dialog[open] .lib-row >> nth=${names.indexOf('Workflow mới')} >> button:text-is("Xóa")`);
+  check(await entries() === 'Account + Contact | Lead theo xác suất', `Xóa: ${await entries()}`);
+  await page.click('dialog[open] .lib-undo button:has-text("Hoàn tác")');
+  check(await entries() === 'Account + Contact | Lead theo xác suất | Workflow mới', `Hoàn tác of a delete: ${await entries()}`);
+  await page.click('dialog[open] button:has-text("Đóng")');
 }
 
 /** 17 B: the "Account + Contact" sample (loopAcc { acc, loopCon { con } }). */
@@ -1375,7 +1438,7 @@ async function flowCanvas() {
   }));
   check(sw.process === 0 && sw.hidden && sw.pressed === 'true' && sw.saved === 'canvas' && sw.tree === 'tree' && sw.tabStops.join() === 'con' && sw.posinset === '1' && /100%/.test(sw.zoomLabel), `switch state ${JSON.stringify(sw)}`);
   // Enter on a focused "+" opens its menu (review S5) → Record, added right after con.
-  const count = () => page.evaluate(() => (JSON.stringify(JSON.parse(localStorage.getItem('sfdg.workflow.v2')).steps).match(/"type":"record"/g) ?? []).length);
+  const count = () => page.evaluate(() => (JSON.stringify(smokeSaved().steps).match(/"type":"record"/g) ?? []).length);
   const before = await count();
   await page.focus('#canvas button.dg-add[aria-label="Thêm bước sau \\"con\\""]');
   await page.keyboard.press('Enter');
@@ -1383,7 +1446,7 @@ async function flowCanvas() {
   await page.click('.popup [role="menuitem"][data-type="record"]');
   const added = await page.waitForFunction(() => {
     const id = document.querySelector('#canvas .step-card.selected')?.dataset.id;
-    const wf = JSON.parse(localStorage.getItem('sfdg.workflow.v2'));
+    const wf = smokeSaved();
     const find = (list) => { for (const s of list) { for (const k of Object.keys(s.slots ?? {})) { const at = s.slots[k].findIndex((x) => x.id === id); if (at >= 0) return { prev: s.slots[k][at - 1]?.id, type: s.slots[k][at].type }; const deep = find(s.slots[k]); if (deep) return deep; } } return null; };
     return id && id !== 'con' && find(wf.steps);
   }, null, { timeout: 3000 }).then((x) => x.jsonValue()).catch(() => null);

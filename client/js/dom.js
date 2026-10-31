@@ -35,32 +35,37 @@ export function icoTile() {
 let toastTimer;
 let toastGeneration = 0;
 /**
- * Short status message at the bottom. With `action: { label, onClick }` the toast gets a
- * button (e.g. "Hoàn tác") and stays a little longer. Returns { removeAction() } to drop the
- * button later (no-op once another toast replaced this one).
+ * Short status message at the bottom. With `action: { label, onClick }` (or a list of them) the
+ * toast gets buttons (e.g. "Hoàn tác") and stays a little longer; `ms: Infinity` keeps it until
+ * a button is pressed or another toast replaces it. Returns { removeAction(), hide() } (no-ops
+ * once another toast replaced this one).
  */
 export function toast(message, ms = 2600, action = null) {
   const el = document.getElementById('toast');
   const generation = ++toastGeneration;
+  const actions = Array.isArray(action) ? action : action ? [action] : [];
   el.replaceChildren(document.createTextNode(message));
-  if (action) {
+  for (const a of actions) {
     el.append(' ', h('button', {
       class: 'toast-action',
       onclick: () => {
         el.classList.remove('show');
-        action.onClick();
+        a.onClick();
       },
-    }, action.label));
+    }, a.label));
   }
-  el.classList.toggle('has-action', Boolean(action));
+  el.classList.toggle('has-action', actions.length > 0);
   el.classList.add('show');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => el.classList.remove('show'), action ? Math.max(ms, 6000) : ms);
+  if (Number.isFinite(ms)) toastTimer = setTimeout(() => el.classList.remove('show'), actions.length ? Math.max(ms, 6000) : ms);
   return {
     removeAction() {
       if (generation !== toastGeneration) return;
-      el.querySelector('.toast-action')?.remove();
+      for (const b of el.querySelectorAll('.toast-action')) b.remove();
       el.classList.remove('has-action');
+    },
+    hide() {
+      if (generation === toastGeneration) el.classList.remove('show');
     },
   };
 }

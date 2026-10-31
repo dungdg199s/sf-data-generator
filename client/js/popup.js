@@ -56,16 +56,17 @@ function fieldRow(f) {
 
 /**
  * Opens a popup under (or above, if there is no room) `anchor`.
- * opts: { title, items, search, onClose, focus } — `focus`: data-field of an input to focus first.
+ * opts: { title, items, search, searchLabel, onClose, focus } — `focus`: data-field of an input to focus first.
  */
-export function openPopup(anchor, { title, items, search = false, onClose = null, focus = null }) {
+export function openPopup(anchor, { title, items, search = false, searchLabel = 'Tìm loại bước…', onClose = null, focus = null }) {
   closePopup();
   const list = h('div', { class: 'popup-items', role: 'none' });
   const focusables = []; // enabled rows and inputs, in order
   const build = (q = '') => {
     focusables.length = 0;
     const needle = q.trim().toLowerCase();
-    const shown = items.filter((it) => it.group || it.separator || it.field || !needle || `${it.label} ${it.desc ?? ''}`.toLowerCase().includes(needle));
+    // `searchOnly` rows (the library's older entries) only show up as search results.
+    const shown = items.filter((it) => it.group || it.separator || it.field || (!needle ? !it.searchOnly : `${it.label} ${it.desc ?? ''}`.toLowerCase().includes(needle)));
     const out = [];
     let group = null; // the role=group rows go into, after a group header
     for (const [i, it] of shown.entries()) {
@@ -114,10 +115,10 @@ export function openPopup(anchor, { title, items, search = false, onClose = null
     return b;
   };
   build();
-  const searchInput = search ? h('input', { class: 'popup-search', placeholder: 'Tìm loại bước…', 'aria-label': 'Tìm loại bước', oninput: (e) => build(e.target.value) }) : null;
+  const searchInput = search ? h('input', { class: 'popup-search', placeholder: searchLabel, 'aria-label': searchLabel.replace(/…$/, ''), oninput: (e) => build(e.target.value) }) : null;
   const el = h('div', { class: 'popup', role: 'menu', 'aria-label': title },
     title ? h('div', { class: 'popup-title', 'aria-hidden': 'true' }, title) : null,
-    searchInput ? h('div', { role: 'group', 'aria-label': 'Tìm loại bước' }, searchInput) : null,
+    searchInput ? h('div', { role: 'group', 'aria-label': searchLabel.replace(/…$/, '') }, searchInput) : null,
     list);
   el.addEventListener('keydown', (e) => {
     const i = focusables.indexOf(document.activeElement);
