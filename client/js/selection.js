@@ -6,8 +6,12 @@
 // Also: the narrow-screen select mode (body.select-mode, the .select-bar of select-bar.js) and
 // the hidden live region that reads "Đã chọn 3 bước.".
 
-import { state, select, subscribe, slotKeys, stepById, locate } from './store.js';
+import { state, select, subscribe, slotKeys, stepsById, locate } from './store.js';
 import { normalizeSelection, rangeBetween, subtreeIds } from '/shared/workflow-tree.js';
+
+// Lookups go through the id → step map of the workflow revision (store.stepsById), not a walk of
+// the tree per card (0012 review).
+const stepById = (id) => stepsById().get(id) ?? null;
 
 /** Ids of the selected steps (the primary one included), as stored; [] when no step is selected. */
 export function selectedIds() {
@@ -16,13 +20,19 @@ export function selectedIds() {
   return s.ids?.length ? s.ids.filter((id) => stepById(id)) : [s.id];
 }
 
+const idSets = new WeakMap(); // selection object → Set of its ids (a selection is replaced, never mutated)
+
 export const isMulti = () => selectedIds().length > 1;
 
 /** Is the step `id` in the selection (primary or not)? */
 export function isSelected(id) {
   const s = state.selection;
   if (s?.kind !== 'step') return false;
-  return s.id === id || Boolean(s.ids?.includes(id));
+  if (s.id === id) return true;
+  if (!s.ids) return false;
+  let set = idSets.get(s);
+  if (!set) idSets.set(s, (set = new Set(s.ids)));
+  return set.has(id);
 }
 
 /**

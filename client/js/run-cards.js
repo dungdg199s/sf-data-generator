@@ -8,9 +8,9 @@
 //   { phase: 'insert', base, insertByStep }          insert (base: the confirmed preview)
 
 import { h, toast } from './dom.js';
-import { state, slotKeys, workflowRevision } from './store.js';
+import { state, slotKeys, workflowRevision, stepsById } from './store.js';
 import { statChip, estimateChip } from './summary.js';
-import { walkSteps, allSteps } from '/shared/workflow-tree.js';
+import { walkSteps } from '/shared/workflow-tree.js';
 import { fmt, showInsertErrorsFor } from './results.js';
 
 let staleCache = { revision: -1, workflow: null, lastRunSteps: undefined, value: false };
@@ -29,14 +29,8 @@ export function resultStale() {
   return staleCache.value;
 }
 
-let idCache = { revision: -1, workflow: null, map: new Map() };
-/** id → step of the whole workflow, built once per workflow revision (decoration passes look cards up in it). */
-export function stepsById() {
-  if (idCache.revision !== workflowRevision() || idCache.workflow !== state.workflow) {
-    idCache = { revision: workflowRevision(), workflow: state.workflow, map: new Map(allSteps(state.workflow, slotKeys).map((s) => [s.id, s])) };
-  }
-  return idCache.map;
-}
+/** id → step of the whole workflow (store.js), re-exported for the two views. */
+export { stepsById };
 
 const STALE_TITLE = 'Số liệu của lần xem trước gần nhất; workflow đã đổi sau đó.';
 

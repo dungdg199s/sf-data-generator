@@ -14,7 +14,7 @@
       <div class="wf-name-group">
         <input id="wf-name" class="wf-name" type="text" aria-label="Tên workflow" placeholder="Tên workflow">
         <button id="btn-library" class="icon lib-btn" title="Thư viện workflow (Ctrl+O)" aria-label="Thư viện workflow" aria-haspopup="menu" aria-expanded="false">▾</button>
-        <button id="btn-unsaved" class="unsaved-btn" hidden aria-live="polite" title="Bộ nhớ trình duyệt đầy: thay đổi chưa được lưu. Bấm để mở Thư viện và xóa bớt workflow.">▲ Chưa lưu</button>
+        <button id="btn-unsaved" class="unsaved-btn" hidden title="Bộ nhớ trình duyệt đầy: thay đổi chưa được lưu. Bấm để mở Thư viện và xóa bớt workflow.">▲ Chưa lưu</button>
       </div>
       <div class="toolbar">
         <button id="btn-new" class="tb-wide" title="Workflow mới">Mới</button>
@@ -107,6 +107,7 @@
   <dialog id="modal"></dialog>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <div id="sel-live" class="sr-only" aria-live="polite"></div>
+  <div id="save-status" class="sr-only" role="status"></div>
 
   <script type="module" src="/js/main.js"></script>
 </body>

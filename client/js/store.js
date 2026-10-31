@@ -232,6 +232,18 @@ export function stepById(id) {
   return locate(id)?.step ?? null;
 }
 
+let idCache = { revision: -1, workflow: null, map: new Map() };
+/**
+ * id → step of the whole workflow, built once per workflow revision (decoration passes and the
+ * selection look steps up in it instead of walking the tree for each card).
+ */
+export function stepsById() {
+  if (idCache.revision !== revision || idCache.workflow !== state.workflow) {
+    idCache = { revision, workflow: state.workflow, map: new Map(allSteps(state.workflow, slotKeys).map((s) => [s.id, s])) };
+  }
+  return idCache.map;
+}
+
 export function selectedStep() {
   return state.selection?.kind === 'step' ? stepById(state.selection.id) : null;
 }

@@ -465,7 +465,7 @@ tham chiếu thường của validate).
 ```
 
 **Thư viện trong trình duyệt** (`localStorage` của origin, `client/js/library.js`): chỉ mục `sfdg.library`
-(`{ version: 1, activeId, items: [{ id, name, createdAt, updatedAt, steps, bytes }] }`), mỗi workflow một khóa `sfdg.wf.<id>`
+(`{ version: 1, activeId, items: [{ id, name, createdAt, updatedAt, steps, bytes, broken? }] }`; `bytes` = số ký tự, `broken` = mục không đọc được lần gần nhất), mỗi workflow một khóa `sfdg.wf.<id>`
 (đúng như file), mục vừa xóa ở `sfdg.library.trash`, mục đang mở của từng tab ở `sessionStorage['sfdg.activeId']`. Lần đầu,
 `sfdg.workflow.v2` (hoặc `sfdg.workflow.v1` qua `migrateV1`) thành mục đầu tiên; hai khóa cũ không bao giờ bị ghi hay xóa (v2
 chỉ còn là autosave khi bộ nhớ đầy ngay lần chuyển đầu).

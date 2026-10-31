@@ -283,7 +283,7 @@ function openMoreMenu({ fromChip = false } = {}) {
   openPopup(anchor, { title: 'Mẫu và thao tác khác', items, focus: fromChip ? 'seed' : null, onClose: () => btn.setAttribute('aria-expanded', 'false') });
 }
 
-function openWorkflowObject(wf, raw, fileName) {
+async function openWorkflowObject(wf, raw, fileName) {
   if (!wf || typeof wf !== 'object' || Array.isArray(wf)) return toast('Không mở được file: không phải file workflow.', 5000);
   if (wf.version === 1) {
     if (!Array.isArray(wf.nodes)) return toast('Không mở được file: không phải file workflow (thiếu "nodes").', 5000);
@@ -293,7 +293,7 @@ function openWorkflowObject(wf, raw, fileName) {
     } catch (e) {
       return toast(`Không chuyển được file version 1: ${e.message}`, 6000);
     }
-    if (!openAsNew(migrated.workflow)) return undefined;
+    if (!(await openAsNew(migrated.workflow))) return undefined;
     announceMigration(migrated.report, raw, { name: migrated.workflow.name ?? fileName, autosave: false });
     return undefined;
   }
@@ -307,7 +307,7 @@ function openWorkflowObject(wf, raw, fileName) {
   }
   const bad = malformedSteps(wf);
   if (bad) return toast(`Không mở được file: ${bad}. Sửa file JSON rồi mở lại.`, 6000);
-  if (!openAsNew(wf)) return undefined;
+  if (!(await openAsNew(wf))) return undefined;
   toast(`Đã mở "${wf.name ?? fileName}".`);
   return undefined;
 }

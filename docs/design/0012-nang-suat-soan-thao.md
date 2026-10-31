@@ -1,6 +1,6 @@
 # 0012 — Năng suất soạn thảo: thư viện workflow, chọn nhiều, copy/paste, sửa nhanh, số liệu trên thẻ
 
-- **Trạng thái:** Đã làm, trừ F2 (gợi ý field bắt buộc còn thiếu: không có trong Kế hoạch, chưa làm; xem cuối "Đã làm")
+- **Trạng thái:** Đang làm (còn F2)
 - **Ngày:** 2026-10-28
 - **Liên quan:** [0003](0003-process-mode.md) (cây bước, phím, "Việc tiếp theo": chọn nhiều, copy/paste, ước tính số bản
   ghi, tô thẻ cha, field tên mặc định), [0004](0004-streaming-execution.md) (sự kiện tiến độ, nhóm lỗi insert),
@@ -1061,3 +1061,27 @@ Làm từng phần theo [Kế hoạch](#kế-hoạch-thực-hiện); phần chư
   buộc" thuộc F2, chưa làm.
 - Đo smoke cuối (4 CPU, ngân sách 15 s): 3 lần chạy đủ đều `SMOKE OK`, 9,9 s · 9,9 s · 10,2 s (luồng dài nhất `flowProductivity`
   ≈ 9,4–9,8 s; `flowLibrary` 5,6–7,0 s).
+
+### Sửa sau review (B, A)
+
+- **Popup trong hộp thoại modal:** `openPopup` gắn popup vào `dialog[open]` chứa nút neo (không thì `body`), nên nút `⋯` của mục
+  trong "Quản lý thư viện" ở ≤ 720 px bấm được (trước đó popup nằm dưới top layer của `showModal`). Smoke 17: Xóa qua `⋯` ở 390 px.
+- **Ctrl+O** được xử lý trước lối thoát sớm khi có hộp thoại / popup (mở hoặc đóng popup Thư viện, không bao giờ hộp mở file;
+  khi một hộp thoại đang mở thì không làm gì). Gõ-để-nhảy của popup bỏ qua phím có Ctrl / ⌘ / Alt.
+- **Thanh chọn** dựng một lần, chỉ vá số đếm và cờ `disabled` (focus không mất); `role="toolbar"` có roving tabindex và
+  ← / → / Home / End; chừa `env(safe-area-inset-bottom)` (`test/css-tokens.test.js` cho phép `env(safe-area-inset-*)`).
+- **Đổi tên khi dán / Ctrl+D không nối chuỗi:** tên mới không bao giờ trùng một tên gốc trong bản sao (chép `[acc, acc2, →acc,
+  →acc2]` vào workflow đã có `acc` ⇒ `acc3`, `acc2`, hai Lookup vẫn tách). Record dán vào trong Lặp có biến trùng alias của nó
+  thì đổi tên (`row` ⇒ `row2`). Test cho cả hai.
+- **Hai tab / chưa lưu:** khi tạm dừng tự lưu, nút `▲ Tab khác đã sửa` (dùng lại `#btn-unsaved`) mở lại hai lựa chọn; toast xung
+  đột nhớ mục của nó (đã đổi workflow thì nút không làm gì, nói rõ). Đổi workflow / Mới / Mở file / Mẫu khi chưa lưu hoặc đang tạm
+  dừng thì hỏi `Đổi workflow khi chưa lưu?` [Tải file JSON] [Hủy] [Vẫn đổi]. Mục đang tạm dừng không được dùng lại cho Mới.
+  Mở mục khác xóa chỉ báo. Thông báo của chỉ báo đọc qua vùng `#save-status` (`role="status"`), không phải `aria-live` trên nút.
+- **Hiệu năng:** `store.stepsById()` (Map id → bước mỗi phiên bản workflow, `run-cards.js` dùng lại) cho `selection.js`; tập id đã
+  chọn là `Set` theo đối tượng lựa chọn. `library.js`: `repairIndex` dùng tập khóa của storage và chỉ chạy lúc khởi động, khi tab
+  khác đổi một mục (sự kiện `storage`) và khi mở popup / hộp Thư viện — không chạy trong mỗi lần lưu. Cờ `broken` được nhớ trong chỉ
+  mục (đặt khi đọc mục thất bại, bỏ khi đọc lại được), nên popup không phân tích mọi mục.
+- **Nhỏ:** `restoreTrash` dùng id mới khi khóa cũ đã bị chiếm; `newEntryId` thêm 4 ký tự từ `crypto.getRandomValues`; nhập file thư
+  viện chạy `malformedSteps` và toast nói số mục version 1 / hỏng bị bỏ qua; `rename` trả lại nội dung mục khi không ghi được chỉ mục;
+  câu "có bản sao trong trình duyệt" chỉ khi bản sao là của autosave này (bản `.broken` cũ hơn được giữ thì nói vậy); thùng rác bị
+  xóa khi hết 10 s hoàn tác; dung lượng (`bytes`, dòng "Đã dùng") đếm ký tự, đúng cái quota ~5 triệu ký tự đếm.

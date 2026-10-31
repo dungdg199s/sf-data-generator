@@ -4,7 +4,9 @@
 // test/library.test.js), and imports are relative so Node can run it. library-ui.js is the UI.
 //
 // Keys:
-//   sfdg.library         { version: 1, activeId, items: [{ id, name, createdAt, updatedAt, steps, bytes }] }
+//   sfdg.library         { version: 1, activeId, items: [{ id, name, createdAt, updatedAt, steps, bytes, broken? }] }
+//                        (`bytes`: characters, what the ~5 M-character quota counts; `broken`: the entry could not
+//                        be read last time it was opened or checked, so the list need not parse every entry)
 //   sfdg.wf.<id>         the workflow (version 2, exactly like a file)
 //   sfdg.library.trash   { item, workflow } of the last deleted entry (for "Hoàn tác")
 //   session sfdg.activeId  the entry this tab has open
@@ -47,7 +49,7 @@ export function itemOf(id, wf, json, { createdAt, updatedAt }) {
     createdAt,
     updatedAt,
     steps: Array.isArray(wf?.steps) ? countSteps(wf.steps) : 0,
-    bytes: json.length * 2, // localStorage counts UTF-16 code units
+    bytes: json.length,
   };
 }
 
@@ -83,24 +85,26 @@ function storageKeys(storage) {
 /**
  * Fix the index against what is stored (pure; `storage` is only read): an item without its
  * `sfdg.wf.<id>` is dropped, an `sfdg.wf.<id>` missing from the index is added back (name from the
- * workflow). → { index, changed }
+ * workflow, `broken` when it cannot be read). Only run at start, on another tab's change and when
+ * the library is shown — not on every save. → { index, changed }
  */
 export function repairIndex(index, storage, now = Date.now()) {
   const base = index && Array.isArray(index.items) ? index : { version: 1, activeId: null, items: [] };
+  const keys = new Set(storageKeys(storage));
   const seen = new Set();
   const items = base.items.filter((it) => {
-    if (!it || typeof it.id !== 'string' || seen.has(it.id) || storage.getItem(entryKey(it.id)) === null) return false;
+    if (!it || typeof it.id !== 'string' || seen.has(it.id) || !keys.has(entryKey(it.id))) return false;
     seen.add(it.id);
     return true;
   });
   let changed = items.length !== base.items.length || base !== index;
-  for (const key of storageKeys(storage)) {
+  for (const key of keys) {
     if (!key?.startsWith(ENTRY_PREFIX)) continue;
     const id = key.slice(ENTRY_PREFIX.length);
     if (seen.has(id)) continue;
     const raw = storage.getItem(key);
     const { workflow } = parseEntry(raw);
-    items.push(itemOf(id, workflow ?? {}, raw ?? '', { createdAt: now, updatedAt: now }));
+    items.push({ ...itemOf(id, workflow ?? {}, raw ?? '', { createdAt: now, updatedAt: now }), ...(workflow ? {} : { broken: true }) });
     seen.add(id);
     changed = true;
   }
@@ -115,29 +119,25 @@ export function sortedItems(index) {
 }
 
 let idCounter = 0;
-/** A new entry id (not random: the time plus a counter is unique enough within one browser). */
+/** A new entry id: the time, a counter and 4 random characters (two tabs creating at once differ). */
 export function newEntryId(now = Date.now()) {
   idCounter = (idCounter + 1) % 1296;
-  return `w${now.toString(36)}${idCounter.toString(36).padStart(2, '0')}`;
+  const random = new Uint32Array(1);
+  globalThis.crypto.getRandomValues(random);
+  return `w${now.toString(36)}${idCounter.toString(36).padStart(2, '0')}${(random[0] % 1679616).toString(36).padStart(4, '0')}`;
 }
 
 /**
  * The library on `local` (localStorage) for the tab whose sessionStorage is `session`. Every
- * operation reads the index again (another tab may have changed it). Writes throw on failure
- * (quota): the caller decides what to tell the user, except `save`, which empties the trash and
- * tries once more first.
+ * operation reads the index again (another tab may have changed it); `repair()` also fixes it
+ * against the stored entries (start, another tab's change, the library shown). Writes throw on
+ * failure (quota): the caller decides what to tell the user, except `save`, which empties the
+ * trash and tries once more first.
  */
 export function createLibrary({ local, session, now = () => Date.now(), makeId = newEntryId } = {}) {
   const readIndex = () => {
-    const { index, changed } = repairIndex(readJson(local, LIBRARY_KEY), local, now());
-    if (changed) {
-      try {
-        local.setItem(LIBRARY_KEY, JSON.stringify(index));
-      } catch {
-        /* repaired again next time */
-      }
-    }
-    return index;
+    const index = readJson(local, LIBRARY_KEY);
+    return index && Array.isArray(index.items) ? index : { version: 1, activeId: null, items: [] };
   };
   const writeIndex = (index) => local.setItem(LIBRARY_KEY, JSON.stringify(index));
   const freshId = () => {
@@ -145,13 +145,43 @@ export function createLibrary({ local, session, now = () => Date.now(), makeId =
     while (local.getItem(entryKey(id)) !== null) id = makeId(now());
     return id;
   };
+  /** Set (or clear) an item's `broken` flag. */
+  const markBroken = (id, broken) => {
+    const index = readIndex();
+    const it = index.items.find((x) => x.id === id);
+    if (!it || Boolean(it.broken) === broken) return;
+    if (broken) it.broken = true;
+    else delete it.broken;
+    try {
+      writeIndex(index);
+    } catch {
+      /* only a hint for the list */
+    }
+  };
 
   const lib = {
     exists: () => local.getItem(LIBRARY_KEY) !== null,
+    /** Fix the index against the stored entries (and save the fix). → the index */
+    repair() {
+      const { index, changed } = repairIndex(readJson(local, LIBRARY_KEY), local, now());
+      if (changed) {
+        try {
+          writeIndex(index);
+        } catch {
+          /* repaired again next time */
+        }
+      }
+      return index;
+    },
     index: readIndex,
     items: () => sortedItems(readIndex()),
     item: (id) => readIndex().items.find((it) => it.id === id) ?? null,
-    read: (id) => parseEntry(local.getItem(entryKey(id))),
+    /** Read an entry; an unreadable one gets the `broken` flag (and loses it once readable). */
+    read(id) {
+      const res = parseEntry(local.getItem(entryKey(id)));
+      if (res.raw !== null) markBroken(id, !res.workflow);
+      return res;
+    },
     raw: (id) => local.getItem(entryKey(id)),
 
     /** The entry this tab has open (sessionStorage), else the one opened last in any tab. */
@@ -190,10 +220,7 @@ export function createLibrary({ local, session, now = () => Date.now(), makeId =
       try {
         const index = readIndex();
         const t = now();
-        const at = index.items.findIndex((it) => it.id === id);
-        const item = itemOf(id, wf, json, { createdAt: t, updatedAt: updatedAt ?? t });
-        if (at >= 0) index.items[at] = item; // repairIndex just added it back from the entry
-        else index.items.push(item);
+        index.items = [...index.items.filter((it) => it.id !== id), itemOf(id, wf, json, { createdAt: t, updatedAt: updatedAt ?? t })];
         writeIndex(index);
       } catch (e) {
         local.removeItem(entryKey(id)); // entry and index together, or neither
@@ -232,17 +259,26 @@ export function createLibrary({ local, session, now = () => Date.now(), makeId =
       }
     },
 
-    /** Rename an entry that is not open (the open one is renamed through the workflow). */
+    /**
+     * Rename an entry that is not open (the open one is renamed through the workflow). The entry
+     * goes back to its old text when the index cannot be written. Throws when storage is full.
+     */
     rename(id, name) {
-      const res = lib.read(id);
+      const before = local.getItem(entryKey(id));
+      const res = parseEntry(before);
       if (!res.workflow) return false;
       res.workflow.name = name;
       const json = JSON.stringify(res.workflow);
       local.setItem(entryKey(id), json);
-      const index = readIndex();
-      const it = index.items.find((x) => x.id === id);
-      if (it) Object.assign(it, { name: name || NEW_NAME, bytes: json.length * 2 });
-      writeIndex(index);
+      try {
+        const index = readIndex();
+        const it = index.items.find((x) => x.id === id);
+        if (it) Object.assign(it, { name: name || NEW_NAME, bytes: json.length });
+        writeIndex(index);
+      } catch (e) {
+        local.setItem(entryKey(id), before); // shorter or equal in practice; both or neither
+        throw e;
+      }
       return true;
     },
 
@@ -272,28 +308,37 @@ export function createLibrary({ local, session, now = () => Date.now(), makeId =
       return item;
     },
 
-    /** "Hoàn tác" of a delete: the trashed entry back, under its id. → id or null. */
+    /**
+     * "Hoàn tác" of a delete: the trashed entry back — under a new id when its key was taken
+     * meanwhile (another tab). → the id, or null when the trash is empty.
+     */
     restoreTrash() {
       const trash = readJson(local, TRASH_KEY);
       if (!trash?.item?.id || typeof trash.workflow !== 'string') return null;
-      local.setItem(entryKey(trash.item.id), trash.workflow);
+      const id = local.getItem(entryKey(trash.item.id)) === null ? trash.item.id : freshId();
+      local.setItem(entryKey(id), trash.workflow);
       const index = readIndex();
-      index.items = [...index.items.filter((it) => it.id !== trash.item.id), trash.item];
+      index.items = [...index.items.filter((it) => it.id !== id), { ...trash.item, id }];
       writeIndex(index);
       local.removeItem(TRASH_KEY);
-      return trash.item.id;
+      return id;
     },
 
-    /** Bytes used by the app in this origin's localStorage (UTF-16). */
+    /** The undo time of a delete is over: drop the trash if it still holds entry `id`. */
+    clearTrash(id) {
+      if (readJson(local, TRASH_KEY)?.item?.id === id) local.removeItem(TRASH_KEY);
+    },
+
+    /** Characters used by the app in this origin's localStorage (what the ~5 M quota counts). */
     usage() {
       let n = 0;
-      for (const key of storageKeys(local)) if (key?.startsWith('sfdg.')) n += (key.length + (local.getItem(key)?.length ?? 0)) * 2;
+      for (const key of storageKeys(local)) if (key?.startsWith('sfdg.')) n += key.length + (local.getItem(key)?.length ?? 0);
       return n;
     },
 
     /** "Tải tất cả (JSON)": the library file. */
     exportAll(exportedAt = new Date(now()).toISOString()) {
-      const workflows = sortedItems(readIndex()).map((it) => lib.read(it.id).workflow).filter(Boolean);
+      const workflows = sortedItems(readIndex()).map((it) => parseEntry(local.getItem(entryKey(it.id))).workflow).filter(Boolean);
       return libraryFile(workflows, exportedAt);
     },
   };
@@ -305,10 +350,20 @@ export function libraryFile(workflows, exportedAt) {
   return { sfdg: 'library', version: 1, exportedAt, workflows };
 }
 
-/** The workflows of a library file, or null when `data` is not one. */
+/**
+ * A library file: → { workflows (version 2, well formed), v1: count skipped (version 1: open them
+ * one by one to convert), broken: count skipped (not a workflow, malformed) }, or null when
+ * `data` is not a library file.
+ */
 export function parseLibraryFile(data) {
   if (!data || typeof data !== 'object' || data.sfdg !== 'library' || !Array.isArray(data.workflows)) return null;
-  return data.workflows;
+  const out = { workflows: [], v1: 0, broken: 0 };
+  for (const wf of data.workflows) {
+    if (wf?.version === 1) out.v1++;
+    else if (wf && typeof wf === 'object' && wf.version === 2 && !malformedSteps(wf)) out.workflows.push(wf);
+    else out.broken++;
+  }
+  return out;
 }
 
 /**
@@ -319,23 +374,31 @@ export function parseLibraryFile(data) {
  * `migrateV1(v1) → { workflow, report }` (may throw). Storage full: nothing is kept, status 'legacy'
  * (the tab goes on with the single autosave, as before).
  * → { status: 'exists' | 'migrated' | 'legacy', from: 'v2' | 'v1' | 'sample' | 'broken', workflow,
- *     id?, report?, rawV1?, brokenRaw?, brokenError?, brokenKey?, v1Error? }
+ *     id?, report?, rawV1?, brokenRaw?, brokenError?, brokenKey?, brokenOlder?, v1Error? }
  */
 export function migrateToLibrary(lib, local, { samples, migrateV1 }) {
-  if (lib.exists()) return { status: 'exists' };
+  if (lib.exists()) {
+    lib.repair();
+    return { status: 'exists' };
+  }
   const out = { status: 'migrated' };
   const rawV2 = local.getItem(V2_KEY);
   const v2 = rawV2 === null ? null : parseEntry(rawV2);
   if (v2?.workflow) Object.assign(out, { from: 'v2', workflow: v2.workflow });
   else if (v2?.error) {
+    // brokenKey: a copy of this autosave was written; brokenOlder: an older copy was there and kept.
     let brokenKey = null;
+    let brokenOlder = false;
     try {
-      if (local.getItem(BROKEN_KEY) === null) local.setItem(BROKEN_KEY, rawV2);
-      brokenKey = BROKEN_KEY;
+      if (local.getItem(BROKEN_KEY) === null) {
+        local.setItem(BROKEN_KEY, rawV2);
+        brokenKey = BROKEN_KEY;
+      } else brokenOlder = local.getItem(BROKEN_KEY) !== rawV2;
+      if (!brokenOlder && !brokenKey) brokenKey = BROKEN_KEY; // the same text is already there
     } catch {
       brokenKey = null;
     }
-    Object.assign(out, { from: 'broken', brokenRaw: rawV2, brokenError: v2.error, brokenKey });
+    Object.assign(out, { from: 'broken', brokenRaw: rawV2, brokenError: v2.error, brokenKey, brokenOlder });
   } else {
     const rawV1 = local.getItem(V1_KEY);
     let v1 = null;
