@@ -1,6 +1,6 @@
 # 0013 — Mở rộng biến và vòng lặp
 
-- **Trạng thái:** Đã duyệt (2026-10-28; người dùng giao chọn theo đề xuất cho mọi quyết định, xem [Đã chốt](#đã-chốt-2026-10-28))
+- **Trạng thái:** Đang làm (xong đợt A, B) — đã duyệt 2026-10-28 (người dùng giao chọn theo đề xuất cho mọi quyết định, xem [Đã chốt](#đã-chốt-2026-10-28))
 - **Ngày:** 2026-10-28
 - **Liên quan:** [0004](0004-streaming-execution.md) (executor dạng luồng, pool chỉ đếm, hash vàng),
   [0005](0005-variable-picker.md) (`analyzeScope`, `vars`, `valueType`; Câu hỏi mở 3 và 4; "Ý tưởng để sau"),
@@ -765,4 +765,52 @@ Không có câu hỏi chặn việc làm (mọi quyết định đã chốt ở 
 
 ## Đã làm
 
-(Cập nhật khi code xong: commit hoặc PR, chỗ nào khác với thiết kế và vì sao.)
+### Đợt A và B (2026-10-31; đợt C — giao diện — chưa làm)
+
+Commit (nhánh `ccr-b0ea523c-v4j2nr`): `d834a1c` (bước 1–4: hợp đồng, phân tích, validate **và** executor trong một commit, vì
+danh mục đã quảng bá `values`/`weighted` thì executor phải chạy được chúng ngay; mọi tầng đổi cùng lúc), `72895a7` (bước 5),
+`c175ae7` (bước 6). Sau mỗi commit `npm test` xanh (390 → 393 → 396 test).
+
+- **Hash vàng:** `test/stream.test.js` không sửa. Thêm hai ca vào `test/fixtures/golden-cases.js` (`each extras: filter,
+  shuffle, limit over Query and Record pools (0013)` và `values loop, number-variable counts, branch right variable, weighted
+  pick, run vars (0013)`, × seed 42 và 7). So `golden-hashes.json` trước/sau: 20/20 khóa cũ giống từng byte (diff chỉ có dòng
+  thêm).
+- **Hiệu năng:** `nested each loops with an eq filter over 2 000 × 2 000 rows finish under 2 seconds` chạy ≈ 50 ms.
+- **Smoke:** `node .claude/skills/smoke-test/smoke.cjs` → `SMOKE OK`, 12,0 s (ngân sách 20 s, 4 CPU).
+- Tầng đã đổi: `shared/scope.js`, `shared/estimate.js`, `shared/soql.js`, `shared/workflow-tree.js`, `server/workflow/nodes.js`,
+  `schema.js`, `executor.js`, `conditions.js`, `paths.js`, `server/random.js`, `server/sf/query.js`, `server/run.js`,
+  `server/index.js` (meta `globals`), tài liệu (`workflow-schema.md`, `architecture.md`, `org-connection.md`, `CLAUDE.md`, skill
+  `add-node-type`), test (`scope`, `workflow`, `server`, `run`, `estimate`, `workflow-tree`).
+
+Khác với thiết kế, và vì sao:
+
+1. **`client/js/forms.js`: `showIf` bắc cầu đã làm ngay** (một dòng, dùng `optionShown` của `shared/scope.js`), dù thuộc
+   đợt C: không có nó, form Lặp với meta mới hiện ô lọc ở chế độ `fixed` khi "Lọc" từng được đặt là `compare`. Phần còn lại của
+   đợt C (ô số nhận biến, bảng chọn mode `number`, nhóm Lần chạy, `fillParentFilter`, câu tóm tắt) chưa làm; trong lúc chờ, thẻ
+   Lặp `values` ghi `0 lần` và Chọn bản ghi `weighted` ghi `weighted từ …` (`summary.js` chưa biết hai giá trị này), Lặp có
+   `count` là biến hiện ô số trống trong inspector (ô `type=number` không chứa được `{{…}}`).
+2. **`valueList`** (giá trị của Lặp `values`) chỉ tách chuỗi theo **dòng**, không theo `,`/`;` như `toList` của `kind: 'list'`:
+   giá trị có thể chứa dấu phẩy (tên công ty). Mảng (cách UI lưu) không đổi gì.
+3. **`valueType` có trên mọi tham chiếu** đã phân giải (không chỉ ô `number`): hợp đồng của `refs` rộng hơn, không ai bị ảnh
+   hưởng. Một tham chiếu chỉ mang một `code`: biến Chuỗi đang `maybe` giữ `maybe` (cảnh báo `notNumber` chỉ khi không có mã
+   khác); kiểu khác số luôn là lỗi `notNumber`.
+4. **`ownLoop`** chỉ áp cho biến lặp và bản ghi đang lặp **của chính bước Lặp** trong option của bước đó (không cho Record /
+   Chọn bản ghi dùng alias của chính nó: giữ `after`/`selfAlias` như cũ).
+5. **Nguồn `$run`**: `nodeId: null`, `nodeType: null`, `global: true`, `members[].example` tĩnh trong `WORKFLOW_GLOBALS` (mẫu là
+   seed của lần xem trước là việc của bảng chọn ở đợt C). Ghi chú khi bị che: `bị alias "run" che`, hoặc `bị biến lặp "run" che`
+   nếu là biến lặp.
+6. **Chỉ mục `eq`** tương đương đúng `compareValues` cả với vế trái không phải số nhưng đọc như số (mảng `[5]`, `Infinity`,
+   `NaN`): khi vế phải là số, tra thêm khóa `s:<chuỗi>` và gộp (test so 1 000 giá trị lẫn số/chuỗi/null/`$ref`/mảng/Đúng/Infinity).
+   Vị trí vượt ảnh chụp `n` được cắt bỏ (phòng xa; pool chỉ dài ra nên không xảy ra).
+7. **`eachFilterEmpty`** chỉ đếm lần chạy qua có pool **không rỗng** (pool rỗng đã có `eachEmpty`; không báo hai lần). Pool
+   rỗng thì không render `filterValue`.
+8. **`numberVarEmpty`** cho `min`/`max` nói `các lần đó dùng 0` (không phải `lặp 0 lần`, vì `range` vẫn có thể lặp theo cận
+   còn lại). Chuỗi `Infinity` → kẹp (`numberVarClamped`); `NaN` → trống.
+9. **`legacyReferenceOptions`** (không danh mục) thêm cả `count`/`min`/`max` (mode `number`) ngoài `right` và `filterValue`.
+10. **`shared/estimate.js`** (0012 H, doc này chưa nói tới): số lần là biến **không bao giờ chính xác**; `{{pool.$count}}` của
+    pool đã biết ước bằng cỡ pool, biến khác ước 1 lần (khoảng 0–100 000); `range` có biến: trung bình của cận đã biết, `min` =
+    cận dưới; Lặp `values` = số giá trị (chính xác); Lặp `each` có lọc không chính xác: lọc `eq` coi như chia pool cho các lần
+    chạy qua (cha–con: mỗi Contact một lần trên tổng các Account), phép khác giữ một nửa; `limit` kẹp mỗi lần chạy qua.
+11. **Lỗi `limit`** cũng từ chối giá trị Đúng/Sai (`true` → `Number(true) = 1` sẽ lọt qua kiểm tra số).
+12. Thông báo `numberFormat`/`notNumber`/`ownLoop` dùng nhãn option lấy từ danh mục (`"Ít nhất"`, `"So với"`…), như bảng Thông
+    báo; câu `unknownMember` của `loop.value` dựng từ `when` trong danh mục (nhãn option + nhãn lựa chọn), không hard-code.
