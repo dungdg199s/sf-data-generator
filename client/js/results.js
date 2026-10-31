@@ -8,13 +8,18 @@
 // their place to "Dừng" and a thin <progress> sits on the bottom edge of the header (0009 §4).
 // Insert failures are grouped (sObject, step, message); a group selects its step and field.
 // The header is one row at every width (0009 §4): on phones the summary scrolls sideways and the
-// two download buttons become one "⤓ Tải" menu that calls them.
+// two download buttons become one "Tải" menu that calls them.
+// Its height is the user's (design 0014 §2): a role=separator handle on its top edge (pointer,
+// keys, double click), remembered as a ratio in sfdg.resultsH, clamped so the main area keeps
+// min(240 px, 50 %) of the height below the top bar.
 
 import { h, ico, download, toast, watchOverflow } from './dom.js';
 import { state, subscribe, stepById } from './store.js';
 import { stepAlias } from './summary.js';
 import { api } from './api.js';
 import { openPopup, closePopup, popupAnchor } from './popup.js';
+import { reveal } from './ops.js';
+import { clampResults, resultsKeyStep, shouldCollapse, parseRatio, toRatio, resultsAria, RESULTS_MIN } from './sizing.js';
 
 const QUERY_TAB = 'q:'; // activeTab of a Query tab: `q:<stepId>`
 const ERRORS_TAB = '__errors';
@@ -54,6 +59,7 @@ export function initResults({ onRefresh: refresh, onGoTo: goTo } = {}) {
     if (q) download(`${fileBase()}-${q.alias}.csv`, toCsv(queryRecords(q)), 'text/csv');
     else if (activeTab && activeTab !== ERRORS_TAB) exportFile('csv', activeTab);
   };
+  wireResize();
   watchOverflow(summary); // ≤ 720 px the summary is one line that scrolls sideways (0014 §4)
   subscribe(({ kind }) => kind === 'result' && render());
 }
@@ -62,9 +68,146 @@ const fileBase = () => (state.workflow.name || 'workflow').replace(/[^\w.-]+/g, 
 
 /** Opens or collapses the panel; the toggle says which (aria-expanded, chevron down open / up collapsed). */
 function setOpen(open) {
+  if (open === !panel.classList.contains('collapsed')) return;
   panel.classList.toggle('collapsed', !open);
   toggle.setAttribute('aria-expanded', String(open));
   toggle.querySelector('.caret').dataset.ico = open ? 'chevron-down' : 'chevron-up';
+  syncSize();
+}
+
+// ---------- height of the panel (design 0014 §2) ----------
+
+const RATIO_KEY = 'sfdg.resultsH';
+let handle;
+let ratio = null; // saved height / height below the top bar, null: the CSS default (38vh)
+
+function readRatio() {
+  try { return parseRatio(localStorage.getItem(RATIO_KEY)); } catch { return null; }
+}
+function writeRatio(v) {
+  try {
+    if (v === null) localStorage.removeItem(RATIO_KEY);
+    else localStorage.setItem(RATIO_KEY, String(v));
+  } catch { /* storage full or blocked: the height is not remembered, nothing else breaks */ }
+}
+
+/** Height below the top bar: the main area plus this panel. */
+const totalHeight = () => document.body.clientHeight - document.querySelector('.topbar').offsetHeight;
+const limits = (want) => clampResults({ want, total: totalHeight(), min: RESULTS_MIN });
+
+/** Applies `px` (clamped) as the panel height; save: remember it (sfdg.resultsH). */
+function setHeight(px, { save = false } = {}) {
+  const lim = limits(px);
+  if (!lim.resizable) return;
+  panel.style.setProperty('--results-h', `${lim.height}px`);
+  if (save) {
+    ratio = toRatio(lim.height, totalHeight());
+    writeRatio(ratio);
+  }
+  updateHandle();
+}
+
+/** After a resize of the window or the top bar, or opening / collapsing: px from the saved ratio, clamped. */
+function syncSize() {
+  if (!handle) return;
+  const total = totalHeight();
+  const lim = limits(ratio === null ? panel.offsetHeight : ratio * total);
+  if (ratio !== null && lim.resizable) panel.style.setProperty('--results-h', `${lim.height}px`);
+  else panel.style.removeProperty('--results-h');
+  updateHandle();
+}
+
+function updateHandle() {
+  const collapsed = panel.classList.contains('collapsed');
+  const total = totalHeight();
+  const lim = limits(panel.offsetHeight);
+  handle.hidden = collapsed || !lim.resizable;
+  panel.classList.toggle('resizable', !handle.hidden);
+  if (handle.hidden) return;
+  const aria = resultsAria({ height: panel.offsetHeight, min: lim.min, max: lim.max, total });
+  handle.setAttribute('aria-valuemin', String(aria.min));
+  handle.setAttribute('aria-valuemax', String(aria.max));
+  handle.setAttribute('aria-valuenow', String(aria.now));
+  handle.setAttribute('aria-valuetext', aria.text);
+}
+
+/** Quy trình: the selected card, if fully visible now, is kept in view after the change (Sơ đồ does it itself). */
+function keepSelection() {
+  const process = document.getElementById('process');
+  const card = process.hidden ? null : process.querySelector('.step-card.selected');
+  if (!card) return () => {};
+  const c = card.getBoundingClientRect();
+  const v = process.getBoundingClientRect();
+  if (c.top < v.top || c.bottom > v.bottom) return () => {};
+  const id = card.dataset.id;
+  return () => requestAnimationFrame(() => reveal(id, { block: 'nearest', focus: false }));
+}
+
+function wireResize() {
+  handle = document.getElementById('results-resize');
+  ratio = readRatio();
+  let drag = null;
+  handle.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    handle.setPointerCapture(e.pointerId);
+    drag = { y: e.clientY, h: panel.offsetHeight, want: panel.offsetHeight, frame: 0, after: keepSelection() };
+    handle.classList.add('dragging');
+    document.body.classList.add('resizing');
+  });
+  handle.addEventListener('pointermove', (e) => {
+    if (!drag) return;
+    drag.want = drag.h + (drag.y - e.clientY);
+    if (!drag.frame) {
+      drag.frame = requestAnimationFrame(() => {
+        drag.frame = 0;
+        setHeight(drag.want);
+      });
+    }
+  });
+  const end = () => {
+    if (!drag) return;
+    const { want, frame, after } = drag;
+    cancelAnimationFrame(frame);
+    drag = null;
+    handle.classList.remove('dragging');
+    document.body.classList.remove('resizing');
+    if (shouldCollapse(want, limits(want).min)) {
+      // Dragged well under the minimum: collapse, keep the remembered height for the next opening.
+      setOpen(false);
+      toggle.focus({ preventScroll: true });
+      return;
+    }
+    setHeight(want, { save: true });
+    after();
+  };
+  handle.addEventListener('pointerup', end);
+  handle.addEventListener('pointercancel', end);
+  handle.addEventListener('lostpointercapture', end);
+  handle.addEventListener('dblclick', () => {
+    ratio = null;
+    writeRatio(null);
+    panel.style.removeProperty('--results-h');
+    updateHandle();
+  });
+  handle.addEventListener('keydown', (e) => {
+    const step = resultsKeyStep(e.key, e.shiftKey);
+    if (!step || e.ctrlKey || e.metaKey || e.altKey) return;
+    e.preventDefault();
+    if (step.toggle) {
+      setOpen(false); // the handle hides with the panel: focus goes to "Kết quả"
+      toggle.focus();
+      return;
+    }
+    const after = keepSelection();
+    const lim = limits(panel.offsetHeight);
+    const want = step.to === 'min' ? lim.min : step.to === 'max' ? lim.max : panel.offsetHeight + step.delta;
+    setHeight(want, { save: true });
+    after();
+  });
+  new ResizeObserver(syncSize).observe(document.querySelector('.topbar'));
+  window.addEventListener('resize', syncSize);
+  syncSize();
 }
 
 /** "⤓ Tải" (phones): the two download buttons as a menu; each row calls its button. */

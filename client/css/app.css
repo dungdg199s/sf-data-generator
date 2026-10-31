@@ -287,6 +287,10 @@
   --canvas-tail: 64px; /* room below the last "+" on the canvas */
   --issues-max-h: min(124px, 25vh); /* issues list under the canvas, about 4 rows, scrolls inside */
   --sheet-h: min(60dvh, calc(100dvh - 200px)); /* inspector bottom sheet (≤ 900 px) */
+  /* Results panel height (design 0014 §2): JS sets --results-h in px on #results; sizing.js holds the same limits. */
+  --results-h: 38vh; --results-min-h: 160px; --layout-min-h: 240px;
+  --resize-hit: 8px; --resize-hit-touch: 24px; --grip-w: 32px; --grip-h: 4px;
+  --topbar-h: 89px; /* measured by main.js (ResizeObserver on .topbar) */
   --shadow-1: 0 1px 2px rgb(16 24 40 / 0.08), 0 1px 3px rgb(16 24 40 / 0.06);
   --shadow-2: 0 4px 12px rgb(16 24 40 / 0.14);
   --shadow-3: 0 12px 32px rgb(16 24 40 / 0.22);
@@ -1012,7 +1016,28 @@ input:focus, select:focus, textarea:focus { border-color: var(--color-accent); }
 .btn-row { display: flex; gap: var(--space-2); margin: var(--space-2) 0; flex-wrap: wrap; }
 
 /* ---------- results (§6.10) ---------- */
-.results { background: var(--color-surface); border-top: 1px solid var(--color-border); height: 38vh; display: flex; flex-direction: column; }
+.results { position: relative; background: var(--color-surface); border-top: 1px solid var(--color-border); height: var(--results-h); display: flex; flex-direction: column; }
+/* Height handle (design 0014 §2): with a mouse an 8 px strip over the top edge (no row); with touch a 24 px row. */
+.results-resize {
+  position: absolute; left: 0; right: 0; top: calc(var(--resize-hit) / -2); height: var(--resize-hit); z-index: 1;
+  display: flex; align-items: center; justify-content: center; cursor: row-resize; touch-action: none; outline: none;
+}
+.results-resize::after {
+  content: ''; position: absolute; left: 0; right: 0; top: 50%; height: 2px; transform: translateY(-50%); background: transparent;
+}
+.resize-grip { position: relative; z-index: 1; width: 48px; height: 16px; display: flex; align-items: center; justify-content: center; border-radius: var(--radius-sm); }
+.resize-grip::before { content: ''; width: var(--grip-w); height: var(--grip-h); border-radius: var(--radius-pill); background: var(--color-border-control); }
+.results-resize:hover::after, .results-resize:focus-visible::after { background: var(--color-border-strong); }
+.results-resize:hover .resize-grip::before, .results-resize:focus-visible .resize-grip::before { background: var(--color-text-muted); }
+.results-resize.dragging::after, .results-resize.dragging .resize-grip::before { background: var(--color-accent); }
+.results-resize:focus-visible .resize-grip { outline: var(--ring-w) solid var(--color-focus-ring); outline-offset: var(--focus-offset); }
+body.resizing { cursor: row-resize; user-select: none; }
+body.resizing * { cursor: row-resize; }
+@media (pointer: coarse) {
+  .results-resize { position: relative; top: 0; flex: none; height: var(--resize-hit-touch); }
+  .results-resize::after { display: none; }
+  .results.resizable .results-head { padding-top: 0; }
+}
 .results.collapsed { height: auto; }
 .results.collapsed .results-body { display: none; }
 .results-head { position: relative; display: flex; align-items: center; gap: var(--space-3); padding: var(--space-2) var(--space-3); }

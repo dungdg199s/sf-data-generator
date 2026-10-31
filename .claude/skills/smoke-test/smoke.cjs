@@ -854,7 +854,63 @@ async function flowLayoutWide() {
   await page.waitForFunction(() => !document.getElementById('inspector').inert, null, { timeout: 2000 }).catch(() => errors.push('the inspector stays inert on a wide screen'));
   const theme = await page.evaluate(() => ({ title: document.getElementById('theme-select').title, color: getComputedStyle(document.querySelector('#theme-select option')).color }));
   check(theme.title === 'Giao diện: Theo hệ thống' && !/rgba\(0, 0, 0, 0\)|transparent/.test(theme.color), `theme select title/option colour (${JSON.stringify(theme)})`);
+  await resultsHeightSteps(page);
   await page.context().close();
+}
+
+/** 0014 §2 at 1440 × 900: the results panel's height handle (keys, mouse, remembered, Enter collapses). */
+async function resultsHeightSteps(page) {
+  await page.click('.step-card[data-id="con"] .type');
+  if ((await page.getAttribute('#btn-results-toggle', 'aria-expanded')) !== 'true') await page.click('#btn-results-toggle');
+  await page.focus('#btn-results-toggle');
+  await page.keyboard.press('Shift+Tab');
+  check(await page.evaluate(() => document.activeElement?.id === 'results-resize'), 'Shift+Tab from "Kết quả" did not reach the height handle');
+  const box = () => page.evaluate(() => {
+    const r = (s) => document.querySelector(s).getBoundingClientRect();
+    const card = r('.step-card[data-id="con"]');
+    const proc = r('#process');
+    const handle = document.getElementById('results-resize');
+    return {
+      h: r('#results').height, main: r('.layout').height, issues: r('#issues').height, col: r('.view-wrap').height,
+      cardIn: card.top >= proc.top - 0.5 && card.bottom <= proc.bottom + 0.5, now: handle.getAttribute('aria-valuenow'), text: handle.getAttribute('aria-valuetext'),
+    };
+  });
+  const h0 = (await box()).h;
+  for (let i = 0; i < 3; i++) await page.keyboard.press('ArrowUp');
+  let b = await box();
+  check(Math.abs(b.h - h0 - 48) <= 1 && /^Cao \d+ px \(\d+ % màn hình\)$/.test(b.text), `↑ × 3 on the handle: ${h0} → ${b.h} (+48 expected; ${b.text})`);
+  await page.keyboard.press('Home');
+  b = await box();
+  check(Math.abs(b.h - 160) <= 1, `Home on the handle: ${b.h} px (160 expected)`);
+  await page.keyboard.press('End');
+  await page.waitForFunction(() => {
+    const c = document.querySelector('.step-card[data-id="con"]').getBoundingClientRect();
+    const p = document.getElementById('process').getBoundingClientRect();
+    return c.top >= p.top - 0.5 && c.bottom <= p.bottom + 0.5;
+  }, null, { timeout: 2000 }).catch(() => {});
+  b = await box();
+  check(Math.abs(b.main - 240) <= 1 && b.issues <= 0.25 * b.col + 0.5 && b.cardIn, `End on the handle: main ${b.main} px (240), issues bar ${b.issues}/${b.col}, con visible ${b.cardIn}`);
+  // The mouse: from the minimum, up 100 px.
+  await page.keyboard.press('Home');
+  const hb = await page.$eval('#results-resize', (e) => { const r = e.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; });
+  await page.mouse.move(hb.x, hb.y);
+  await page.mouse.down();
+  await page.mouse.move(hb.x, hb.y - 50);
+  await page.mouse.move(hb.x, hb.y - 100);
+  await page.mouse.up();
+  b = await box();
+  check(Math.abs(b.h - 260) <= 1, `dragging the handle up 100 px: ${b.h} px (260 expected)`);
+  // Remembered after a reload (the panel opens at that height).
+  await page.reload();
+  await page.waitForSelector('.step-card[data-id="con"]');
+  await page.click('#btn-results-toggle');
+  b = await box();
+  check(Math.abs(b.h - 260) <= 1, `after a reload the panel is ${b.h} px (260 expected)`);
+  // Enter collapses; focus goes to "Kết quả" (the handle hides with the body).
+  await page.focus('#results-resize');
+  await page.keyboard.press('Enter');
+  const col = await page.evaluate(() => ({ collapsed: document.getElementById('results').classList.contains('collapsed'), focus: document.activeElement?.id, hidden: document.getElementById('results-resize').hidden }));
+  check(col.collapsed && col.hidden && col.focus === 'btn-results-toggle', `Enter on the handle (${JSON.stringify(col)})`);
 }
 
 /** 11 (narrow sheet), 13b (top bar at 390/360), 13c (⋯ menu, Seed chip), 13d (sheet), 13e (results header). */

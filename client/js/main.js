@@ -47,6 +47,8 @@ async function boot() {
   initSelection();
   initSelectBar();
   initResults({ onRefresh: () => run(false, { refresh: true }), onGoTo: goToIssue });
+  // --topbar-h (design 0014 §3): the sheet's tall snap stops under the top bar, which wraps to two rows.
+  new ResizeObserver(([entry]) => document.documentElement.style.setProperty('--topbar-h', `${Math.round(entry.target.offsetHeight)}px`)).observe(document.querySelector('.topbar'));
   watchOverflow(document.querySelector('.palette')); // ≤ 900 px the palette is a row that scrolls sideways (0014 §4)
   initIssues({ onGoTo: goToIssue });
   firstRender();
