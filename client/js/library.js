@@ -310,11 +310,14 @@ export function createLibrary({ local, session, now = () => Date.now(), makeId =
 
     /**
      * "Hoàn tác" of a delete: the trashed entry back — under a new id when its key was taken
-     * meanwhile (another tab). → the id, or null when the trash is empty.
+     * meanwhile (another tab). `expectId`: only when the trash still holds that entry (the trash
+     * keeps the last delete only; an older delete's "Hoàn tác" must not bring back a newer one).
+     * → the id, or null when the trash is empty or holds another entry.
      */
-    restoreTrash() {
+    restoreTrash(expectId) {
       const trash = readJson(local, TRASH_KEY);
       if (!trash?.item?.id || typeof trash.workflow !== 'string') return null;
+      if (expectId !== undefined && trash.item.id !== expectId) return null;
       const id = local.getItem(entryKey(trash.item.id)) === null ? trash.item.id : freshId();
       local.setItem(entryKey(id), trash.workflow);
       const index = readIndex();

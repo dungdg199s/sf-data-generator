@@ -253,7 +253,9 @@ function confirmLeave() {
         h('button', { onclick: () => done(false) }, 'Hủy'),
         h('button', { class: 'danger solid', onclick: () => done(true) }, 'Vẫn đổi')),
     );
-    modal.onclose = () => resolve(false);
+    // Ignore a stale close event: "Mở" in "Quản lý thư viện" closes the dialog just before this
+    // reopens it, and Chromium fires that close later, while this question is already shown.
+    modal.onclose = () => { if (!modal.open) resolve(false); };
     modal.showModal();
     modal.querySelector('.actions button:nth-child(2)')?.focus();
   });
@@ -322,9 +324,13 @@ function show(id, wf) {
 export async function switchTo(id) {
   if (locked) return toast(LOCKED_TITLE);
   if (id === activeId) return undefined;
+  if ((unsaved || paused) && !(await confirmLeave())) return undefined;
+  // Read after the question: another tab may have changed or deleted the entry meanwhile, and a
+  // run may have started.
+  if (locked) return toast(LOCKED_TITLE);
+  if (id === activeId) return undefined;
   const r = lib.read(id);
   if (!r.workflow) return brokenToast(lib.item(id), r);
-  if ((unsaved || paused) && !(await confirmLeave())) return undefined;
   show(id, r.workflow);
   return undefined;
 }
@@ -401,6 +407,9 @@ export function openLibraryMenu() {
 }
 
 // ---------- "Quản lý thư viện" ----------
+
+/** The dialog shows the library now (not another question that took the same <dialog>). */
+const libraryShown = () => $('modal').open && Boolean($('modal').querySelector('.lib-list'));
 
 export function openManage() {
   if (!libraryReady()) return;
@@ -486,10 +495,17 @@ function remove(item, render) {
       }
     }
   }
+  // Storage was full: the delete made room, so try the save again.
+  if (unsaved) persist();
   const undo = () => {
-    undoNote = null;
-    if (lib.restoreTrash() === null) toast('Không hoàn tác được: workflow đã xóa không còn trong thùng rác.', 5000);
-    if ($('modal').open) render();
+    if (undoNote === note) undoNote = null;
+    if (lib.restoreTrash(item.id) === null) {
+      // The trash keeps the last delete only (or the undo time is over).
+      toast(lib.raw(item.id) !== null
+        ? `"${item.name}" đã có lại trong thư viện.`
+        : `Không hoàn tác được lần xóa "${item.name}": thùng rác chỉ giữ lần xóa gần nhất, hoặc đã quá 10 giây. Nếu có file JSON của workflow này, bấm Mở file JSON… để thêm lại.`, 8000);
+    }
+    if (libraryShown()) render();
   };
   // The dialog is modal (the toast behind it cannot be clicked): the undo is also a line in it.
   const note = { text: `Đã xóa workflow "${item.name}".`, undo };
@@ -498,9 +514,9 @@ function remove(item, render) {
     lib.clearTrash(item.id); // the undo time is over: the copy no longer takes room
     if (undoNote !== note) return;
     undoNote = null;
-    if ($('modal').open) render();
+    if (libraryShown()) render();
   }, 10000);
-  if ($('modal').open) render();
+  if (libraryShown()) render();
   toast(note.text, 10000, { label: 'Hoàn tác', onClick: undo });
   return undefined;
 }

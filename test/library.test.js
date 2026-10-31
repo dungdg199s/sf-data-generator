@@ -138,6 +138,16 @@ test('entries: create, save, rename, duplicate right below, delete and restore f
   const back = lib.restoreTrash();
   assert.notEqual(back, b);
   assert.deepEqual([lib.read(back).workflow.name, lib.read(b).workflow.name], ['B', 'Khác']);
+  // The trash keeps the last delete only: an older delete's undo restores nothing (0012 review 2).
+  const d = lib.create({ version: 2, name: 'D', steps: [] });
+  const e = lib.create({ version: 2, name: 'E', steps: [] });
+  lib.remove(d);
+  lib.remove(e);
+  assert.equal(lib.restoreTrash(d), null);
+  assert.equal(lib.read(d).workflow, undefined);
+  assert.equal(lib.restoreTrash(e), e);
+  assert.equal(lib.restoreTrash(d), null);
+  lib.remove(e);
   // The undo time is over: the trash is emptied (only if it still holds that entry).
   lib.remove(back);
   lib.clearTrash('other');
