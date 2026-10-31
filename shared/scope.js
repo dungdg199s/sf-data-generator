@@ -82,8 +82,21 @@ export function loopMinIterations(config = {}, ctx = {}) {
   return isVar(c.count) ? 0 : Math.max(0, Number(c.count ?? 0)) || 0;
 }
 
+/**
+ * Can a run of this Chọn bản ghi end the rest of its sequence ("Bỏ qua các bước phía sau")?
+ * Not when it errors instead, nor when it always finds a record: no filter, not "không lặp lại",
+ * and `ctx.poolNonEmpty(from)` (review of 0013: a Record after a skipping pick in a loop body may
+ * never run, so its pool is not certain to hold a record after the loop).
+ */
+export function pickMaySkip(config = {}, ctx = {}) {
+  const c = config ?? {};
+  if ((c.onEmpty ?? 'skip') !== 'skip') return false;
+  return !((c.filter ?? 'none') === 'none' && (c.mode ?? 'random') !== 'unique' && ctx?.poolNonEmpty?.(c.from));
+}
+
 /** Per-type helpers that cannot travel through /api/meta (functions). */
 const MIN_ITERATIONS = { loop: loopMinIterations };
+const MAY_SKIP = { pick: pickMaySkip };
 const VAR_EXAMPLES = {
   loop(c = {}) {
     if (c.mode === 'each') {
@@ -483,7 +496,21 @@ export function analyzeScope(wf, catalog) {
     return out;
   };
   const raw = new Map(); // stepId → { head, vars, others, off }
-  function walk(list, head, vars, others, off) {
+  // Design 0013 C4: a Record pool that always holds a record at `head` (latest state on the chain;
+  // not when a skip could have cut every iteration of the loop that made it: `cut`).
+  const poolNonEmptyAt = (head, name) => {
+    for (let n = head; n && n !== ROOT; n = n.prev) {
+      const s = sources[n.id];
+      if (s?.name !== name || s.kind !== 'record') continue;
+      return s.pool && s.nonEmpty === true && n.entry.certainty !== 'maybe' && !n.entry.cut;
+    }
+    return false;
+  };
+  // `cut`: a step earlier in this loop iteration (this sequence, or a branch in it) may skip the
+  // rest of it. Entries pushed then are flagged `afterSkip`; when the loop ends they become `cut`.
+  // `escaped.skip` tells the caller a skip in `list` ends the enclosing sequence too.
+  function walk(list, head, vars, others, off, cut = false, escaped = { skip: false }) {
+    const mark = (e) => (cut && !e.afterSkip ? { ...e, afterSkip: true } : e);
     for (const step of Array.isArray(list) ? list : []) {
       if (!isStep(step)) continue;
       const stepOff = off || step.disabled === true;
@@ -503,31 +530,31 @@ export function analyzeScope(wf, catalog) {
           const s2 = sources[sid];
           if (sid !== step.id && s2?.kind === 'record' && s2.visibleIn?.inside === body) bodyHead = push(bodyHead, sid, { certainty: 'always', seq: ++seq });
         }
-        const inner = addedSince(walk(step.slots?.[body], bodyHead, innerVars, others, stepOff), bodyHead);
+        // A skip inside the body ends one iteration only: it does not escape the loop.
+        const inner = addedSince(walk(step.slots?.[body], bodyHead, innerVars, others, stepOff, false), bodyHead);
         const minFn = typeof type.minIterations === 'function' ? type.minIterations : MIN_ITERATIONS[step.type];
-        // Design 0013 C4: a pool that always holds a record here (latest state on the chain).
-        const poolNonEmpty = (name) => {
-          for (let n = head; n && n !== ROOT; n = n.prev) {
-            const s = sources[n.id];
-            if (s?.name !== name || s.kind !== 'record') continue;
-            return s.pool && s.nonEmpty === true && n.entry.certainty !== 'maybe';
-          }
-          return false;
-        };
+        const poolNonEmpty = (name) => poolNonEmptyAt(head, name);
         const once = (minFn ? minFn(step.config ?? {}, { poolNonEmpty }) : 0) >= 1;
         const loopName = src?.name ?? step.id;
         const mode = step.config?.mode ?? 'fixed';
         added = new Map();
-        for (const [id, e] of inner) {
+        for (const [id, e0] of inner) {
+          const { afterSkip, ...e } = e0;
+          if (afterSkip) e.cut = true;
           added.set(id, once ? { ...e, certainty: worse('last', e.certainty) } : { ...e, certainty: 'maybe', why: e.why ?? { loop: loopName, loopId: step.id, range: mode === 'range', ...(mode === 'each' ? { each: step.config?.from || '' } : {}) } });
         }
       } else if (keys.length && flow.kind !== 'sequence') {
         const alts = flow.alternatives ?? keys;
+        const inner = { skip: false };
         const results = alts.map((key, i) => {
           const others2 = new Set(others);
           alts.forEach((k, j) => { if (j !== i) definedIn(step.slots?.[k], others2); });
-          return addedSince(walk(step.slots?.[key], head, vars, others2, stepOff), head);
+          return addedSince(walk(step.slots?.[key], head, vars, others2, stepOff, cut, inner), head);
         });
+        if (inner.skip && !stepOff) {
+          cut = true;
+          escaped.skip = true;
+        }
         const ids = new Set(results.flatMap((r) => [...r.keys()]));
         added = new Map();
         for (const id of ids) {
@@ -537,15 +564,26 @@ export function analyzeScope(wf, catalog) {
           const certainty = all ? entries.map((x) => x.certainty).reduce(worse) : 'maybe';
           const why = certainty === 'maybe' ? entries.find((x) => x.why)?.why ?? (all ? undefined : { branch: step.id }) : undefined;
           const { why: _w, ...rest } = e;
-          added.set(id, { ...rest, certainty, ...(why ? { why } : {}) });
+          const flags = { ...(entries.some((x) => x.cut) ? { cut: true } : {}), ...(entries.some((x) => x.afterSkip) ? { afterSkip: true } : {}) };
+          added.set(id, { ...rest, ...flags, certainty, ...(why ? { why } : {}) });
         }
       } else if (keys.length) {
-        for (const key of keys) head = walk(step.slots?.[key], head, vars, others, stepOff);
+        const inner = { skip: false };
+        for (const key of keys) head = walk(step.slots?.[key], head, vars, others, stepOff, cut, inner);
+        if (inner.skip && !stepOff) {
+          cut = true;
+          escaped.skip = true;
+        }
       }
       // Turned-off containers contribute nothing to the steps after them.
-      if (added && !stepOff) for (const [id, e] of added) head = push(head, id, e);
+      if (added && !stepOff) for (const [id, e] of added) head = push(head, id, mark(e));
       const own = sources[step.id];
-      if (own && own.visibleIn === 'downstream' && !stepOff) head = push(head, step.id, { certainty: 'always', seq: ++seq });
+      if (own && own.visibleIn === 'downstream' && !stepOff) head = push(head, step.id, mark({ certainty: 'always', seq: ++seq }));
+      const skipFn = typeof type?.maySkip === 'function' ? type.maySkip : MAY_SKIP[step.type];
+      if (!stepOff && skipFn?.(step.config ?? {}, { poolNonEmpty: (name) => poolNonEmptyAt(head, name) })) {
+        cut = true;
+        escaped.skip = true;
+      }
     }
     return head;
   }
@@ -590,9 +628,9 @@ export function analyzeScope(wf, catalog) {
       for (let i = r.vars.length - 1; i >= 0; i--) if (r.vars[i].name === name) return r.vars[i];
       return null;
     };
-    /** { certainty, why? } when visible, else { reason }. */
     /** A user-given name hides the run variables of the same name (design 0013 G). */
     const shadowsGlobal = (name) => Boolean(varByName(name)) || (byName.get(name) ?? []).some((x) => !x.global && x.kind !== 'vars');
+    /** { certainty, why? } when visible, else { reason }. */
     const state = (sid) => {
       const s = sources[sid];
       if (!s) return { reason: 'after' };

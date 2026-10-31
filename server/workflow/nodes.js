@@ -15,7 +15,7 @@
 // inspector and the card summary assume); `initial`, when present, is what a step added from the
 // UI starts with instead (a new Lặp runs 3 times, a hand-written one without `count` runs 0 times).
 
-import { loopMinIterations } from '../../shared/scope.js';
+import { loopMinIterations, pickMaySkip } from '../../shared/scope.js';
 import { QUERY_DEFAULTS } from '../../shared/soql.js';
 
 export const LIMITS = {
@@ -247,6 +247,8 @@ export const NODE_TYPES = [
     description: 'Chọn một bản ghi từ pool (kết quả Query hoặc bản ghi đã sinh) làm bản ghi hiện tại của alias mới. Mỗi lần chạy qua chọn lại.',
     slots: [],
     flow: { kind: 'sequence' },
+    // May end the rest of its sequence (onEmpty 'skip'): what follows in a loop body may not run.
+    maySkip: pickMaySkip,
     exposes: {
       kind: 'record',
       name: { key: 'alias' },
@@ -412,7 +414,7 @@ export const nodeTypeMap = new Map(NODE_TYPES.map((n) => [n.type, n]));
 /** Slot keys of a step type in reading order (for shared/workflow-tree.js). */
 export const slotKeys = (type) => nodeTypeMap.get(type)?.slots.map((s) => s.key) ?? [];
 
-/** NODE_TYPES without function-valued keys (minIterations), as served by /api/meta. */
+/** NODE_TYPES without function-valued keys (minIterations, maySkip), as served by /api/meta. */
 export function serializableNodeTypes() {
   return NODE_TYPES.map((t) => Object.fromEntries(Object.entries(t).filter(([, v]) => typeof v !== 'function')));
 }

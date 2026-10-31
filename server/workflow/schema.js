@@ -239,8 +239,11 @@ export function prepareWorkflow(wf) {
         if (!isVar(c.min) && !isVar(c.max) && Number(c.min) > Number(c.max)) err('"Ít nhất" lớn hơn "Nhiều nhất".', step.id, 'min');
       } else if (mode === 'values') {
         const raw = c.values;
+        // One value is text, a number or a true/false; an object or a list is not (review of 0013).
+        const bad = Array.isArray(raw) ? raw.findIndex((v) => v !== null && typeof v === 'object') : -1;
         const n = raw === undefined || Array.isArray(raw) || typeof raw === 'string' ? valueList(raw).length : 0;
-        if (!n) err('Nhập ít nhất một giá trị, mỗi dòng một giá trị (ví dụ Hot, Warm, Cold).', step.id, 'values', { code: 'valuesEmpty' });
+        if (bad >= 0) err(`Giá trị thứ ${bad + 1} của danh sách không phải chữ hoặc số. Nhập mỗi dòng một giá trị (ví dụ Hot, Warm, Cold).`, step.id, 'values', { code: 'valuesObject' });
+        else if (!n) err('Nhập ít nhất một giá trị, mỗi dòng một giá trị (ví dụ Hot, Warm, Cold).', step.id, 'values', { code: 'valuesEmpty' });
         else if (n > LIMITS.maxCountPerNode) {
           err(`Danh sách có ${n.toLocaleString('vi-VN')} giá trị, quá giới hạn ${LIMITS.maxCountPerNode.toLocaleString('vi-VN')} lần lặp của một bước Lặp. Bớt giá trị.`, step.id, 'values');
         }
@@ -248,7 +251,7 @@ export function prepareWorkflow(wf) {
         validateFilter(step, c, { err });
         if (!EACH_ORDERS.has(c.order ?? 'pool')) err(`Thứ tự "${c.order}" không hợp lệ.`, step.id, 'order');
         const limit = c.limit ?? 0;
-        if (!Number.isInteger(Number(limit)) || Number(limit) < 0 || Number(limit) > LIMITS.maxCountPerNode || typeof limit === 'boolean') {
+        if (!Number.isInteger(Number(limit)) || Number(limit) < 0 || Number(limit) > LIMITS.maxCountPerNode || typeof limit === 'boolean' || (typeof limit === 'string' && !/^\s*\d+\s*$/.test(limit))) {
           err(`"Tối đa số bản ghi" phải là số nguyên từ 0 đến ${LIMITS.maxCountPerNode} (0 = tất cả).`, step.id, 'limit');
         }
       } else if (mode !== 'fixed') err(`Chế độ lặp "${mode}" không hợp lệ.`, step.id, 'mode');
@@ -434,9 +437,13 @@ function validateNumberOptions(step, c, { err }) {
       }
       continue;
     }
-    // (The message of before 0013, for every count of a Lặp.)
-    if (!Number.isInteger(Number(v)) || v < (def.min ?? 0) || v > (def.max ?? LIMITS.maxCountPerNode)) {
-      err(`Số lần lặp phải là số nguyên từ ${def.min ?? 0} đến ${def.max ?? LIMITS.maxCountPerNode}.`, step.id, def.key);
+    // (The message of before 0013 for "Số lần lặp"; the other counts say their own label.)
+    // `true` is not 1 here (review of 0013), like "Tối đa số bản ghi".
+    // A string is plain digits (or decimals where the option takes them): not `1e3`, `0x10`, `+5`.
+    const textOk = typeof v !== 'string' || (def.kind === 'integer' ? /^\s*\d+\s*$/ : /^\s*\d+(\.\d+)?\s*$/).test(v);
+    if (typeof v === 'boolean' || !textOk || !Number.isInteger(Number(v)) || v < (def.min ?? 0) || v > (def.max ?? LIMITS.maxCountPerNode)) {
+      const label = def.key === 'count' ? def.label : `"${def.label}"`;
+      err(`${label} phải là số nguyên từ ${def.min ?? 0} đến ${def.max ?? LIMITS.maxCountPerNode}.`, step.id, def.key);
     }
   }
 }
@@ -639,6 +646,10 @@ export function referenceIssue(ref, scope, step, stepOf = () => undefined) {
         return null;
     }
   }
+  // `{{run.seed}}` read from a step or loop called "run" (review of 0013): say what hides it.
+  const [head, runKey] = String(ref.path ?? '').split('.');
+  const runVar = head === 'run' && src && !src.global && Boolean(scope.sources.$run?.members.some((m) => m.key === runKey));
+  if (runVar) message += ` Alias "run" che biến Lần chạy; đổi alias để dùng {{run.${runKey}}}.`;
   const extra = { code: ref.code, path: ref.path, option: ref.option };
   if (ref.suggestion) extra.suggestion = ref.suggestion;
   if (fix) extra.fix = fix;

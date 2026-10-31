@@ -308,7 +308,7 @@ export function normalizeRow(row) {
 /**
  * Deterministic sample rows when no org is selected (no rng): Id `mẫu:accs#1`, Name
  * `Account mẫu 1`, other fields `<field> mẫu 1`; relationship fields become nested objects.
- * A field listed in `numeric` (design 0013 F, any case) is the row number 1, 2, 3…
+ * A field listed in `numeric` (design 0013 F, any case) is the row number 1, 2, 3… (not Id / Name).
  */
 export function sampleRows(config, alias, { numeric = [] } = {}) {
   // Fields read as numbers (design 0013 F: a loop count, a pick weight) get the row number, so a
@@ -331,9 +331,10 @@ export function sampleRows(config, alias, { numeric = [] } = {}) {
       });
       const leaf = parts[parts.length - 1];
       let value = `${f} mẫu ${i}`;
-      if (isNumeric.has(f.toLowerCase())) value = i;
-      else if (parts.length === 1 && leaf.toLowerCase() === 'id') value = `mẫu:${alias || 'q'}#${i}`;
+      // Id and Name keep their shape even when read as a number somewhere (review of 0013).
+      if (parts.length === 1 && leaf.toLowerCase() === 'id') value = `mẫu:${alias || 'q'}#${i}`;
       else if (parts.length === 1 && leaf.toLowerCase() === 'name') value = `${sobject} mẫu ${i}`;
+      else if (isNumeric.has(f.toLowerCase())) value = i;
       level[leaf] = value;
     }
     rows.push(row);

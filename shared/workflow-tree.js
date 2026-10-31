@@ -309,7 +309,8 @@ export function renameAlias(steps, from, to, { catalog, only } = {}) {
  * After renaming field `from` → `to` of step `stepId`: update `{{<alias>.from}}` everywhere,
  * `{{this.from}}` in the same step and branch `left` paths, using the scope analysis (only
  * references that resolve to this step, directly or through a Chọn bản ghi / the record of a
- * Lặp `each` whose records come from it). Returns { count, places: [{ nodeId, field }], names }
+ * Lặp `each` whose records come from it), and the `filterField` / `weightField` of those Chọn
+ * bản ghi / Lặp `each`. Returns { count, places: [{ nodeId, field }], names }
  * (`names`: the prefixes whose references changed, e.g. ['acc', 'this']).
  */
 export function renameField(wf, stepId, from, to, { catalog } = {}) {
@@ -318,12 +319,27 @@ export function renameField(wf, stepId, from, to, { catalog } = {}) {
   const scope = analyzeScope(wf, catalog);
   // Also through a Chọn bản ghi from its pool and the record a Lặp `each` loops over (0010 review).
   const refs = refsToRecords(scope, stepId, from, { includeHidden: true }).filter((r) => r.mode !== 'ref');
-  if (!refs.length) return none;
   let count = 0;
   const places = [];
   const changedNames = new Set();
   const steps = new Map();
   walkSteps(wf.steps, (s) => { steps.set(s.id, s); });
+  // Field names of the pool a Chọn bản ghi or a Lặp `each` reads (review of 0013): `filterField`
+  // and `weightField` name a field of the records of `from`, whose records are this step's.
+  const readers = new Set(Object.values(scope.sources).filter((x) => x.root === stepId && (x.current === 'picked' || x.current === 'item')).map((x) => x.nodeId));
+  for (const id of readers) {
+    const c = steps.get(id)?.config;
+    if (!c) continue;
+    for (const key of ['filterField', 'weightField']) {
+      const v = c[key];
+      if (typeof v !== 'string') continue;
+      const t = v.trim();
+      if (t !== from && !t.startsWith(`${from}.`)) continue;
+      c[key] = `${to}${t.slice(from.length)}`;
+      count++;
+      places.push({ nodeId: id, field: key });
+    }
+  }
   const byOption = new Map();
   for (const r of refs) {
     const key = `${r.nodeId}|${r.field}|${r.option}`;
