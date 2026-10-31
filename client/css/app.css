@@ -85,6 +85,7 @@
   --color-text-muted: var(--gray-600);
   --color-text-disabled: var(--gray-400);
   --color-bg-disabled: var(--gray-100);
+  --color-minimap-off: var(--gray-400);
   --color-accent: var(--blue-600);
   --color-accent-hover: var(--blue-700);
   --color-accent-subtle: var(--blue-50);
@@ -150,6 +151,7 @@
     --color-text-muted: var(--gray-350);
     --color-text-disabled: var(--gray-600);
     --color-bg-disabled: var(--gray-800);
+  --color-minimap-off: var(--gray-500);
     --color-accent: var(--blue-400);
     --color-accent-hover: var(--blue-200);
     --color-accent-subtle: color-mix(in srgb, var(--blue-400) 13%, var(--gray-850));
@@ -215,6 +217,7 @@
   --color-text-muted: var(--gray-350);
   --color-text-disabled: var(--gray-600);
   --color-bg-disabled: var(--gray-800);
+  --color-minimap-off: var(--gray-500);
   --color-accent: var(--blue-400);
   --color-accent-hover: var(--blue-200);
   --color-accent-subtle: color-mix(in srgb, var(--blue-400) 13%, var(--gray-850));
@@ -292,6 +295,7 @@
   --resize-hit: 8px; --resize-hit-touch: 24px; --grip-w: 32px; --grip-h: 4px;
   --topbar-h: 89px; /* measured by main.js (ResizeObserver on .topbar) */
   --sheet-h-full: min(90dvh, calc(100dvh - var(--topbar-h))); /* tall snap of the sheet: never over the top bar (0014 §3) */
+  --minimap-w: 240px; --minimap-min-h: 32px; --minimap-max-h: 120px; /* Sơ đồ minimap (0014 §5; minimap.js holds the same heights) */
   --shadow-1: 0 1px 2px rgb(16 24 40 / 0.08), 0 1px 3px rgb(16 24 40 / 0.06);
   --shadow-2: 0 4px 12px rgb(16 24 40 / 0.14);
   --shadow-3: 0 12px 32px rgb(16 24 40 / 0.22);
@@ -831,6 +835,29 @@ input:focus, select:focus, textarea:focus { border-color: var(--color-accent); }
 }
 .dg-zoom button { border-color: transparent; background: transparent; min-height: var(--control-h-sm); min-width: var(--control-h-sm); padding: 0 var(--space-1); }
 .dg-zoom .dg-zoom-level { font-size: var(--text-xs); font-variant-numeric: tabular-nums; min-width: 48px; color: var(--color-text-muted); }
+.dg-zoom button[aria-pressed="true"] { background: var(--color-accent-subtle); color: var(--color-accent-text); }
+/* Minimap (design 0014 §5): bottom right of the viewport, in DOM order after the zoom bar (no z-index). Shown
+   (.show, canvas.js) when switched on and the diagram is larger than the viewport; never over the sheet. */
+.dg-minimap {
+  position: absolute; right: var(--space-2); bottom: var(--space-2); width: var(--minimap-w); display: flex; flex-direction: column;
+  padding: var(--space-1); background: var(--color-surface-raised); border: 1px solid var(--color-border); border-radius: var(--radius-md);
+  box-shadow: var(--shadow-1); opacity: 0; visibility: hidden; transition: opacity var(--dur-base), visibility var(--dur-base);
+}
+.dg-minimap.show { opacity: 1; visibility: visible; }
+body.sheet-open .dg-minimap.show { opacity: 0; visibility: hidden; }
+.mm-map { display: block; width: 100%; height: var(--minimap-min-h); cursor: pointer; touch-action: none; }
+.mm-frame { fill: var(--c-subtle); stroke: var(--c); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.mm-card { fill: var(--c); }
+.mm-off { fill: var(--color-minimap-off); }
+.mm-err { fill: none; stroke: var(--color-danger); stroke-width: 2; vector-effect: non-scaling-stroke; }
+/* Selected and the viewport sit on a surface-raised halo: accent alone is only 1.07–1.48 : 1 against step colours. */
+.mm-sel { fill: var(--color-accent); stroke: var(--color-surface-raised); stroke-width: 4; paint-order: stroke; vector-effect: non-scaling-stroke; }
+.mm-view-halo { fill: none; stroke: var(--color-surface-raised); stroke-width: 6; vector-effect: non-scaling-stroke; }
+.mm-view { fill: none; stroke: var(--color-accent); stroke-width: 2; vector-effect: non-scaling-stroke; }
+.mm-track { position: relative; height: 16px; cursor: pointer; touch-action: none; }
+.mm-rail, .mm-thumb { position: absolute; top: 50%; height: 6px; transform: translateY(-50%); border-radius: var(--radius-pill); }
+.mm-rail { left: 0; right: 0; background: var(--color-surface-hover); }
+.mm-thumb { background: var(--color-accent); }
 
 /* ---------- popup menus (§6.7) ---------- */
 .popup {
@@ -1207,10 +1234,11 @@ dialog .actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap
 /* Sơ đồ on touch-size screens: 32 px targets on cards and the zoom bar (design 0003 đợt B review). */
 @media (max-width: 900px) {
   .dg-card button.icon, .dg-zoom button { min-width: var(--control-h-md); min-height: var(--control-h-md); }
+  .dg-minimap { --minimap-w: 200px; }
 }
 /* Phones and landscape phones: the zoom bar is only ⤢ (pinch zooms), so it covers less of the diagram. */
 @media (max-width: 720px), (max-width: 900px) and (max-height: 500px) {
-  .dg-zoom #btn-zoom-out, .dg-zoom #btn-zoom-in, .dg-zoom .dg-zoom-level { display: none; }
+  .dg-zoom #btn-zoom-out, .dg-zoom #btn-zoom-in, .dg-zoom .dg-zoom-level, .dg-zoom #btn-minimap, .dg-minimap { display: none; }
 }
 /* Short narrow screens (landscape phone): the "Thu gọn / Mở tất cả" row would leave less than one
    card of canvas above the sheet; its actions are in the ⋯ menu (main.js, same media query). */

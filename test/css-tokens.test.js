@@ -272,6 +272,9 @@ const PAIRS = [
   ['success-text', 'surface', 4.5], ['success-contrast', 'success', 4.5],
   ['border-control', 'surface', 3], ['border-control', 'surface-raised', 3], ['border-control', 'surface-sunken', 3],
   ['text-muted', 'bg-disabled', 4.5], ['inverse-text', 'inverse-bg', 4.5],
+  // Design 0014 §11: handles, minimap.
+  ['border-control', 'surface', 3], ['accent', 'surface-raised', 3], ['accent', 'surface-hover', 3], ['danger', 'surface-raised', 3],
+  ['minimap-off', 'surface-raised', 3], ['text', 'surface-raised', 3], ['accent-text', 'accent-subtle', 3],
 ].map(([f, b, min]) => [`--color-${f}`, `--color-${b}`, min]);
 for (const t of TYPES) {
   PAIRS.push(
