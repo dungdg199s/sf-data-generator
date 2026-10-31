@@ -97,7 +97,7 @@ export function samplesRow(step, index) {
       seq++;
       row.classList.add('dep');
       if (!state.result) {
-        show('Bấm Xem trước (Ctrl+Enter) để thấy giá trị: field này lấy dữ liệu từ bước khác.', { cls: 'dep' });
+        show('Bấm Xem trước (Ctrl+Enter) để thấy giá trị: field này lấy dữ liệu từ bước khác hoặc biến lần chạy.', { cls: 'dep' });
         return;
       }
       const values = state.result.records.filter((r) => r.nodeId === step.id).slice(0, 3).map((r) => r.fields?.[field.name]);

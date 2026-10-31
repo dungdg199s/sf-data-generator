@@ -157,8 +157,9 @@ export function fillEach(wf, step) {
  * nearest usable record read from the org (the record looped over, or picked) whose sObject S
  * gives the pool a field `${S}Id` (Salesforce naming: AccountId, ContactId; any case) makes the
  * parent–child condition `<S>Id = {{<record>.Id}}`. Generated records have no Id yet, so they are
- * never suggested. Mutates `step` (inside the caller's updateWorkflow: the same undo step).
- * → { field, value, parent } or null when nothing was filled.
+ * never suggested. The comparison is set to = only while unset (another one chosen stays).
+ * Mutates `step` (inside the caller's updateWorkflow: the same undo step).
+ * → { field, op, value, parent } or null when nothing was filled.
  */
 export function fillParentFilter(wf, step) {
   const c = (step.config ??= {});
@@ -176,9 +177,10 @@ export function fillParentFilter(wf, step) {
     const field = fields.get(`${s.sobject}id`.toLowerCase());
     if (!field) continue;
     c.filterField = field;
-    c.filterOp = 'eq';
+    // A comparison the user already chose stays (only = makes a parent–child condition by default).
+    if (c.filterOp === undefined || c.filterOp === '') c.filterOp = 'eq';
     c.filterValue = `{{${s.name}.Id}}`;
-    return { field, value: c.filterValue, parent: s.name };
+    return { field, op: c.filterOp, value: c.filterValue, parent: s.name };
   }
   return null;
 }

@@ -585,8 +585,16 @@ function onStepOption(step, key, v, form, meta) {
   // Pool / record names filled in: show them (the mode select loses nothing by a re-render).
   if (filled && Object.keys(filled).length) updateWorkflow(() => {}, { source: 'inspector-structure', history: false });
   if (parentFilter) {
-    updateWorkflow(() => {}, { source: 'inspector-structure', history: false });
-    toast(`Đã điền điều kiện ${parentFilter.field} = ${parentFilter.value} (bản ghi con của "${parentFilter.parent}"). Sửa nếu cần.`, 5000);
+    // Filled in place, no re-render: focus stays on "Lọc" (Chrome fires change on each arrow key).
+    const box = (k) => form.querySelector(`.options [data-key="${k}"]`) ?? form.querySelector(`[data-key="${k}"]`);
+    for (const [k, v2] of [['filterField', parentFilter.field], ['filterOp', parentFilter.op], ['filterValue', parentFilter.value]]) {
+      const el = box(k);
+      if (!el) continue;
+      el.value = v2;
+      if (el._varPicker) el._varPicker.unsaved = false;
+    }
+    const opText = nodeType(step.type)?.options.find((o) => o.key === 'filterOp')?.choices?.find((x) => x.value === parentFilter.op)?.label ?? parentFilter.op;
+    toast(`Đã điền điều kiện ${parentFilter.field} ${opText} ${parentFilter.value} (bản ghi con của "${parentFilter.parent}"). Sửa nếu cần.`, 5000);
   }
   if (step.type === 'query') {
     refreshSoqlBox(step);

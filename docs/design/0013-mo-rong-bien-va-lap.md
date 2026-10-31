@@ -858,3 +858,17 @@ Khác với thiết kế (đợt C), và vì sao:
 18. **Smoke đánh số 19**, không phải 15 như kế hoạch: số 15 đã là luồng Sơ đồ. Nhánh Rẽ nhánh trong smoke so `opp.Amount` với
     `{{opp.Amount}}` (một Record `opp` có Currency) cho đủ "chèn `{{opp.Amount}}`"; "`{{run.seed}}` có mẫu" được kiểm qua bảng
     chọn của ô số (`run.seed` là Số), mẫu bằng seed của `#results-summary`.
+
+### Sửa sau review đợt C (2026-10-31)
+
+- Bảng chọn ở chế độ `number` vẫn liệt kê "Không dùng được ở đây" (`groupsFor` dựng danh sách ẩn trước, chỉ lọc nhóm dùng được
+  theo kiểu); smoke luồng 19 kiểm tra.
+- Bật "Lọc" điền `filterField` / `filterOp` / `filterValue` **tại chỗ**, không vẽ lại inspector: focus ở lại ô "Lọc" (Chrome phát
+  `change` mỗi lần bấm mũi tên); smoke kiểm tra. `fillParentFilter` chỉ đặt `filterOp = eq` khi chưa có phép so sánh; toast dùng
+  nhãn phép so sánh đang có.
+- Thẻ Lặp `values`: giá trị có dấu phẩy được đặt trong ngoặc kép (`2 giá trị: "Công ty A, chi nhánh B", Hot · {{loop.value}}`).
+- Hàng `Ví dụ:` của field phụ thuộc: `…lấy dữ liệu từ bước khác hoặc biến lần chạy.`
+- Mẫu `run.seed`: title thêm `(đổi mỗi lần chạy nếu không giữ seed)` khi ô Seed trống.
+- Smoke luồng 19 chờ chip cuối (`.stat:not(.est):not(.live)`) và dòng `seed n` trước khi đọc; JSDoc của luồng 15 về lại trên
+  `flowCanvas`.
+

@@ -193,12 +193,13 @@ storage and reloading (one app boot less; flow 5b).
     Query `accs` and `cons`, Record `opp` (Currency `Amount`), Lặp `lf` (3 × Lead `lead`), Lặp each `accs` → `acc` holding Lặp
     each `cons` → `con` (`lc`), Rẽ nhánh `br` (`opp.Amount` > ``), Lặp `lv`. "Số lần lặp" of `lf` is a text box
     (`inputmode="numeric"`) holding `3`; its `{x}` lists `accs.$count`, `opp.Amount`, `run.seed` but not `opp.Name` nor `run.now`,
-    the "Lần chạy" group (`run · Lần chạy`) last and the line "Chỉ hiện biến kiểu Số và field đọc từ org (chưa biết kiểu).";
+    the "Lần chạy" group (`run · Lần chạy`) last, the line "Chỉ hiện biến kiểu Số và field đọc từ org (chưa biết kiểu)." and
+    "Không dùng được ở đây (n)" (steps below `lf`);
     `accs.$count` makes the box `{{accs.$count}}` with a chip, the saved `count` that string and the card `{{accs.$count}} lần ·
-    {{k.index}}`; `lead` has an `≈` estimate chip. Ctrl+Enter (no org, 5 sample rows): `lf` chip `5 lần lặp`, `lead` `5 bản ghi`;
+    {{k.index}}`; `lead` has an `≈` estimate chip. Ctrl+Enter (no org, 5 sample rows): `lf` chip `5 lần lặp` (waits for `.stat:not(.est):not(.live)`, then for `seed n` in the summary), `lead` `5 bản ghi`;
     Alt+↓ in the count box opens the picker and `run.seed`'s sample is the seed of `#results-summary`. On `lc`, "Lọc" →
     "Chỉ bản ghi thỏa điều kiện" fills `AccountId` / `{{acc.Id}}` with the toast "Đã điền điều kiện AccountId = {{acc.Id}} (bản
-    ghi con của "acc"). Sửa nếu cần."; "Lặp theo" → fixed hides `filter`…`limit`; two ↶ (mode, then filter) leave no filter
+    ghi con của "acc"). Sửa nếu cần." and "Lọc" keeps the focus (filled in place); "Lặp theo" → fixed hides `filter`…`limit`; two ↶ (mode, then filter) leave no filter
     and no filled field. Xáo trộn + Tối đa 2: card `Mỗi bản ghi trong cons → con · xáo trộn · tối đa 2 · {{loop2.index}}`, a
     preview gives `10 lần lặp`. `lv` → "Mỗi giá trị trong danh sách": the textarea is `.invalid`, has the placeholder
     `Hot\nWarm\nCold` and the valuesEmpty line, the card reads `Danh sách trống · nhập giá trị`; `Công ty A, chi nhánh B⏎Hot`

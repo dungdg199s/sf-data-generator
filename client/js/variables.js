@@ -92,12 +92,16 @@ function item(group, m, keys, nodeId) {
  */
 function runSample(m) {
   const r = state.result;
-  if (!r) return m.key === 'seed' ? { text: '—', title: 'Seed của lần chạy. Bấm Xem trước để thấy giá trị.' } : m.example ? { text: m.example, title: `Ví dụ. ${m.label ?? ''}` } : null;
+  // An empty Seed box: every run draws a new seed.
+  const random = !(document.getElementById('seed')?.value.trim());
+  const seedNote = random ? ' (đổi mỗi lần chạy nếu không giữ seed)' : '';
+  if (!r) return m.key === 'seed' ? { text: '—', title: `Seed của lần chạy${seedNote}. Bấm Xem trước để thấy giá trị.` } : m.example ? { text: m.example, title: `Ví dụ. ${m.label ?? ''}` } : null;
   const iso = Number.isFinite(Number(r.now)) ? new Date(Number(r.now)).toISOString() : null;
   const v = m.key === 'seed' ? r.seed : m.key === 'now' ? iso : m.key === 'today' ? iso?.slice(0, 10) : undefined;
   if (v === undefined || v === null) return m.example ? { text: m.example, title: m.label ?? '' } : null;
   const stale = samplesStale();
-  return { text: m.key === 'seed' ? String(v) : formatSample(v), title: stale ? 'Từ lần xem trước; workflow đã thay đổi sau đó.' : 'Từ lần xem trước.', stale };
+  const title = stale ? 'Từ lần xem trước; workflow đã thay đổi sau đó.' : 'Từ lần xem trước.';
+  return { text: m.key === 'seed' ? String(v) : formatSample(v), title: m.key === 'seed' ? `${title}${seedNote}` : title, stale };
 }
 
 /** Value types a number option takes (design 0013 B): Số, and org fields whose type is unknown. */
@@ -160,14 +164,15 @@ export function groupsFor(stepId, fieldIndex, { mode } = {}) {
     }
     groups.push(g);
   }
-  if (mode === 'number') {
-    for (const g of groups) g.items = g.items.filter((it) => NUMBER_TYPES.has(it.valueType));
-    return { groups: groups.filter((g) => g.items.length), hidden };
-  }
   for (const hdn of here?.hidden ?? []) {
     const src = scope.sources[hdn.source];
     if (!src || src.nodeId === stepId) continue;
     hidden.push({ text: `${src.name} · ${src.label || src.sobject || ''} — ${hdn.note}` });
+  }
+  // Only the usable groups are filtered by type: "Không dùng được ở đây" keeps every source.
+  if (mode === 'number') {
+    for (const g of groups) g.items = g.items.filter((it) => NUMBER_TYPES.has(it.valueType));
+    return { groups: groups.filter((g) => g.items.length), hidden };
   }
   return { groups, hidden };
 }

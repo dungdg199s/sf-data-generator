@@ -35,7 +35,9 @@ export function stepSummary(step) {
         const list = valueList(c.values);
         if (!list.length) return 'Danh sách trống · nhập giá trị';
         const more = list.length > 3 ? `, +${list.length - 3}` : '';
-        return `${list.length} giá trị: ${list.slice(0, 3).join(', ')}${more} · {{${c.alias || 'loop'}.value}}`;
+        // A value holding a comma is quoted, so "Công ty A, chi nhánh B" does not read as two values.
+        const shown = list.slice(0, 3).map((x) => (x.includes(',') ? `"${x}"` : x));
+        return `${list.length} giá trị: ${shown.join(', ')}${more} · {{${c.alias || 'loop'}.value}}`;
       }
       // Same fallbacks as the executor (server/workflow/executor.js) for a missing value; a
       // count from a variable is shown as written ({{acc.NumberOfEmployees__c}} lần).

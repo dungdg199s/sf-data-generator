@@ -59,7 +59,7 @@
 //  18. Sơ đồ minimap (0014 §5, flowMinimap): 1 000 steps, ≤ 16 paths, 75 % of the track, End keeps the card out from
 //      under it, the button hides it (remembered), hidden with the sheet at 800 px, no button at 390 px, none for one step.
 //  19. variables and loops (0013, flowVarsLoops): "Số lần lặp" {x} lists only Số variables (+ the explanation line,
-//      "Lần chạy" last) and fills {{accs.$count}} (chip, card "{{accs.$count}} lần", ≈ estimate); a preview without an
+//      "Lần chạy" last, "Không dùng được ở đây" kept) and fills {{accs.$count}} (chip, card "{{accs.$count}} lần", ≈ estimate); a preview without an
 //      org loops 5 times; Alt+↓ in the number box shows run.seed = the preview's seed; "Lọc" on a nested each fills
 //      AccountId = {{acc.Id}} with a toast, "fixed" hides every filter box, one ↶ takes back filter + fill; Xáo trộn +
 //      Tối đa 2 ⇒ "10 lần lặp"; an empty values list is outlined with valuesEmpty, a comma stays inside a value, Hot/Warm/Cold fill the card; Rẽ
@@ -1774,7 +1774,6 @@ async function flowMinimap() {
   await page.context().close();
 }
 
-/** Flow 15: the Sơ đồ view (design 0003 đợt B, + review fixes). Own contexts (wide, then phone). */
 /**
  * Flow 19 (design 0013, flowVarsLoops): number options that take a variable, each-loop filter /
  * shuffle / limit, a values loop, branch "So với" with a variable and the "Lần chạy" group.
@@ -1833,7 +1832,10 @@ async function flowVarsLoops() {
     paths: [...document.querySelectorAll('.var-picker .vp-item')].map((r) => r.dataset.path),
     groups: [...document.querySelectorAll('.var-picker .vp-group')].map((g) => g.getAttribute('aria-label')),
     why: document.querySelector('.var-picker .vp-why')?.textContent,
+    hidden: document.querySelector('.var-picker .vp-hidden summary')?.textContent ?? '',
   }));
+  // Steps below lf (acc, con, ld2…) are still listed as not usable here.
+  check(/^Không dùng được ở đây \(\d+\)$/.test(listed.hidden), `number picker "Không dùng được ở đây": ${listed.hidden}`);
   check(listed.paths.includes('accs.$count') && listed.paths.includes('opp.Amount') && !listed.paths.includes('opp.Name') && !listed.paths.includes('run.now'),
     `number picker rows: ${listed.paths.join(' ')}`);
   check(listed.groups.at(-1) === 'run · Lần chạy' && listed.paths.includes('run.seed'), `"Lần chạy" is not the last group: ${listed.groups.join(' | ')}`);
@@ -1850,10 +1852,12 @@ async function flowVarsLoops() {
   // picker, whose run.seed sample is the preview's seed.
   await page.keyboard.press('Escape');
   await page.keyboard.press('Control+Enter');
-  const chip = await page.waitForSelector('.step-card[data-id="lf"] .stat:not(.est)', { timeout: 5000 }).catch(() => null);
-  check(chip && (await chip.textContent()) === '5 lần lặp', `count-variable loop chip: ${chip && await chip.textContent()}`);
+  // The final chip (not the estimate nor the live one of the running preview), then the seed line.
+  const lfChip = '.step-card[data-id="lf"] .stat:not(.est):not(.live)';
+  check(await until(page, (s) => document.querySelector(s)?.textContent === '5 lần lặp', lfChip), `count-variable loop chip: ${await page.textContent(lfChip).catch(() => null)}`);
+  await until(page, () => /seed \d+/.test(document.getElementById('results-summary')?.textContent ?? ''));
   const summary = await page.textContent('#results-summary');
-  const leads = await page.textContent('.step-card[data-id="lead"] .stat:not(.est)').catch(() => null);
+  const leads = await page.textContent('.step-card[data-id="lead"] .stat:not(.est):not(.live)').catch(() => null);
   check(leads === '5 bản ghi', `Leads of {{accs.$count}} sample rows: ${leads}`);
   const seed = /seed (\d+)/.exec(summary)?.[1];
   await page.focus(opt('count'));
@@ -1867,8 +1871,11 @@ async function flowVarsLoops() {
   // "fixed" every filter box is hidden (chained showIf); one ↶ takes back the filter and the fill.
   await page.click('.step-card[data-id="lc"] .type');
   await page.waitForSelector(opt('filter'));
+  await page.focus(opt('filter'));
   await page.selectOption(opt('filter'), 'compare');
   await until(page, () => document.querySelector('#inspector [data-key="filterField"]')?.value === 'AccountId');
+  // Filled in place: "Lọc" keeps the focus (arrow keys fire change in Chrome).
+  check(await page.evaluate(() => document.activeElement?.dataset.key === 'filter'), `focus after the fill: ${await page.evaluate(() => document.activeElement?.outerHTML.slice(0, 80))}`);
   const fill = await page.evaluate(() => [document.querySelector('#inspector [data-key="filterField"]').value, document.querySelector('#inspector [data-key="filterValue"]').value]);
   check(fill.join(' ') === 'AccountId {{acc.Id}}', `parent–child fill: ${fill}`);
   const toastText = await page.textContent('#toast');
@@ -1888,8 +1895,8 @@ async function flowVarsLoops() {
   await page.fill(opt('limit'), '2');
   check(await sumIs('lc', 'Mỗi bản ghi trong cons → con · xáo trộn · tối đa 2 · {{loop2.index}}'), `each extras card: ${await sum('lc')}`);
   await page.keyboard.press('Control+Enter');
-  await until(page, () => document.querySelector('.step-card[data-id="lc"] .stat:not(.est)')?.textContent === '10 lần lặp');
-  check(await page.textContent('.step-card[data-id="lc"] .stat:not(.est)').catch(() => '') === '10 lần lặp', 'shuffle + limit 2 over 5 accounts is not "10 lần lặp"');
+  await until(page, () => document.querySelector('.step-card[data-id="lc"] .stat:not(.est):not(.live)')?.textContent === '10 lần lặp');
+  check(await page.textContent('.step-card[data-id="lc"] .stat:not(.est):not(.live)').catch(() => '') === '10 lần lặp', 'shuffle + limit 2 over 5 accounts is not "10 lần lặp"');
 
   // "Mỗi giá trị trong danh sách" empty: red box and valuesEmpty under it; Hot / Warm / Cold fill the card.
   await page.click('.step-card[data-id="lv"] .type');
@@ -1921,6 +1928,7 @@ async function flowVarsLoops() {
   await page.context().close();
 }
 
+/** Flow 15: the Sơ đồ view (design 0003 đợt B, + review fixes). Own contexts (wide, then phone). */
 async function flowCanvas() {
   const page = await newPage('canvas');
   // The empty-slot labels come from the catalogue (review nit): a different `empty` text for Lặp.
