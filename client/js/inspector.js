@@ -137,14 +137,18 @@ const snaps = () => sheetSnaps({ viewport: window.innerHeight, topbar: document.
  * (--sheet-h-full, only the top bar left). Back at the middle snap the selected card returns to the
  * sheet's edge. --sheet-now: the height the toast sits on.
  */
+let sheetNow = '';
 function setSheetFull(full, { reveal: show = true } = {}) {
   full = full && root.classList.contains('open');
   const was = sheetFull;
   sheetFull = full;
   root.classList.toggle('full', full);
   root.querySelector('.sheet-grip')?.setAttribute('aria-expanded', String(full));
+  if (!narrow()) return;
+  // Written only when it changes: a custom property on <body> restyles the whole page (every inspector render comes here).
   const sn = snaps();
-  document.body.style.setProperty('--sheet-now', `${Math.round(full ? sn.full : sn.mid)}px`);
+  const now = `${Math.round(full ? sn.full : sn.mid)}px`;
+  if (now !== sheetNow) document.body.style.setProperty('--sheet-now', (sheetNow = now));
   if (was && !full && show) {
     updateSheetOverlap();
     requestAnimationFrame(() => {
@@ -226,6 +230,7 @@ function wireSheet() {
     setSheetOpen(false);
   });
   window.addEventListener('resize', updateSheetOverlap);
+  window.addEventListener('resize', () => setSheetFull(sheetFull, { reveal: false })); // --sheet-now of the new size
   // The canvas changes height when the issues bar appears or grows.
   const views = new ResizeObserver(updateSheetOverlap);
   for (const v of document.querySelectorAll('.view-wrap > .view')) views.observe(v);

@@ -54,6 +54,10 @@
 //      with steps is a third entry (the first untouched), "Quản lý thư viện…" deletes one and "Hoàn tác" brings it back,
 //      at 390 px the row's ⋯ (a popup inside the modal dialog) deletes one. F2 (mocked org): "Thiếu 1 field bắt buộc của
 //      Contact trong dev: Region__c." on con, Chọn… groups it first in Import, Thêm 1 field adds it (↶ undoes), Bỏ qua hides it
+//  18. Sơ đồ minimap (0014 §5, flowMinimap): 1 000 steps, ≤ 16 paths, 75 % of the track, End keeps the card out from
+//      under it, the button hides it (remembered), hidden with the sheet at 800 px, no button at 390 px, none for one step.
+//  0014 also adds: SVG icons and aria-labels (1), Alt+↓ opens the picker (5b), Quy trình cards never overflow at 390 px,
+//      fades of sideways rows (13d, 13e), the results panel's height handle (13, wide), the sheet's two snaps (11, 13d).
 // The flows run in parallel, one browser context each (independent storage): see SKILL.md.
 // Usage: node .claude/skills/smoke-test/smoke.cjs [screenshotDir]
 // Needs Playwright with a Chromium build available (require('playwright')).
@@ -943,7 +947,7 @@ async function flowLayoutNarrow() {
   check(s.card <= s.sheet + 0.5 && s.sheet - s.canvas >= 190, `390px: sheet covers the selected card or leaves < 190px of canvas (${JSON.stringify(s)})`);
   if (outDir) await m.screenshot({ path: path.join(outDir, 'smoke-390-sheet.png') });
   // 0014 §3: two snaps. Enter on the grip → tall (its top at the top bar's bottom), a toast above it; Enter → middle,
-  // con back on the sheet's edge; a pointer drag on the head row up 200 px → tall, down 400 px → closed like Xong.
+  // con back on the sheet's edge; a pointer drag on the head row up 200 px → tall; from the middle, down 400 px → closed like Xong.
   const snap = () => m.evaluate(() => {
     const insp = document.getElementById('inspector');
     return {
@@ -980,6 +984,11 @@ async function flowLayoutNarrow() {
   await dragHead(-200);
   sn = await snap();
   check(Math.abs(sn.top - sn.bar) <= 1 && sn.expanded === 'true', `dragging the sheet head up 200 px: tall snap expected (${JSON.stringify(sn)})`);
+  // Closing from the middle snap: 506 − 400 px is under half of it, so it closes at any speed (from the tall snap a
+  // slow release would land on the middle one: the result would depend on the machine's speed).
+  await m.focus('#inspector .sheet-grip');
+  await m.keyboard.press('Enter');
+  await settle(m);
   await dragHead(400);
   sn = await snap();
   check(!sn.open && sn.inert && sn.focus === 'con', `dragging the sheet head down 400 px: closed, inert, focus on con expected (${JSON.stringify(sn)})`);
