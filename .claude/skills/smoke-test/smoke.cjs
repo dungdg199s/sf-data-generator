@@ -840,6 +840,8 @@ async function flowLayoutWide() {
   await page.setViewportSize({ width: 1440, height: 900 });
   const dl = await page.evaluate(() => ['btn-dl-json', 'btn-dl-csv', 'btn-dl-menu'].map((id) => document.getElementById(id).getBoundingClientRect().width > 0));
   check(dl.join() === 'true,true,false', `1440px: download buttons ${dl} (JSON, CSV shown; ⤓ Tải hidden)`);
+  // 0014 §4: the wide palette is a column, nothing hidden sideways, so no fade.
+  check(await page.waitForFunction(() => !document.querySelector('.palette').hasAttribute('data-overflow'), null, { timeout: 2000 }).then(() => true, () => false), '1440px: .palette has data-overflow');
   // N5: a selection on a wide screen does not pop a sheet open when the window gets narrow.
   await page.setViewportSize({ width: 800, height: 900 });
   await settle(page);
@@ -953,6 +955,17 @@ async function flowLayoutNarrow() {
   // 13e: one-row results header, "⤓ Tải" menu with the two downloads.
   const head = await m.evaluate(() => ({ h: document.querySelector('.results-head').getBoundingClientRect().height, expanded: document.getElementById('btn-results-toggle').getAttribute('aria-expanded') }));
   check(head.h <= 50 && head.expanded === 'true', `390px results header after Xem trước (${JSON.stringify(head)})`);
+  // 0014 §4: rows that scroll sideways fade the side that has more; a vertical wheel scrolls them sideways.
+  const overflowIs = (sel, want) => m.waitForFunction(({ sel, want }) => (document.querySelector(sel).dataset.overflow ?? '') === want, { sel, want }, { timeout: 2000 }).then(() => true, () => false);
+  check(await overflowIs('#results-summary', 'end'), `390px: #results-summary data-overflow is "${await m.getAttribute('#results-summary', 'data-overflow')}" ("end" expected)`);
+  check(await overflowIs('.palette', 'end'), `390px: .palette data-overflow is "${await m.getAttribute('.palette', 'data-overflow')}" ("end" expected)`);
+  const sumBox = await m.$eval('#results-summary', (e) => { const r = e.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; });
+  await m.mouse.move(sumBox.x, sumBox.y);
+  await m.mouse.wheel(0, 60);
+  check(await m.waitForFunction(() => document.getElementById('results-summary').scrollLeft > 0, null, { timeout: 2000 }).then(() => true, () => false), 'a vertical wheel over the summary did not scroll it sideways');
+  await m.$eval('#results-summary', (e) => { e.scrollLeft = e.scrollWidth; });
+  check(await overflowIs('#results-summary', 'start'), `390px: #results-summary scrolled to the end has data-overflow "${await m.getAttribute('#results-summary', 'data-overflow')}" ("start" expected)`);
+  await m.$eval('#results-summary', (e) => { e.scrollLeft = 0; });
   await m.tap('#btn-dl-menu');
   const dl = await m.$$eval('.popup .popup-item', (n) => n.map((x) => x.textContent));
   check(dl.join('|') === 'Tải JSON|Tải CSV (tab hiện tại)', `⤓ Tải menu: ${dl.join('|')}`);

@@ -40,6 +40,50 @@ export function ico(name) {
   return h('span', { class: 'ico', 'data-ico': name, 'aria-hidden': 'true' });
 }
 
+/**
+ * Horizontal-scroll hint (design 0014 §4): sets `data-overflow="start" | "end" | "both"` on `el` while
+ * it has hidden items on that side (CSS fades that edge), and removes it when nothing overflows.
+ * Recomputed once per frame on scroll, resize and content changes. A vertical wheel over an
+ * overflowing row scrolls it sideways, and only while it can still move that way (then the page
+ * gets the wheel back). → a function that stops watching.
+ */
+export function watchOverflow(el) {
+  let frame = 0;
+  const update = () => {
+    frame = 0;
+    const max = el.scrollWidth - el.clientWidth;
+    const start = max > 1 && el.scrollLeft > 1;
+    const end = max > 1 && el.scrollLeft < max - 1;
+    const v = start && end ? 'both' : start ? 'start' : end ? 'end' : null;
+    if (!v) el.removeAttribute('data-overflow');
+    else if (el.dataset.overflow !== v) el.dataset.overflow = v;
+  };
+  const schedule = () => { if (!frame) frame = requestAnimationFrame(update); };
+  const onWheel = (e) => {
+    if (e.ctrlKey || Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return;
+    const max = el.scrollWidth - el.clientWidth;
+    if (max <= 1) return;
+    const delta = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaMode === 2 ? e.deltaY * el.clientWidth : e.deltaY;
+    if ((delta < 0 && el.scrollLeft <= 0) || (delta > 0 && el.scrollLeft >= max - 1)) return;
+    e.preventDefault();
+    el.scrollLeft += delta;
+  };
+  el.addEventListener('scroll', schedule, { passive: true });
+  el.addEventListener('wheel', onWheel, { passive: false });
+  const resize = new ResizeObserver(schedule);
+  resize.observe(el);
+  const mutation = new MutationObserver(schedule);
+  mutation.observe(el, { childList: true, characterData: true, subtree: true });
+  update();
+  return () => {
+    cancelAnimationFrame(frame);
+    el.removeEventListener('scroll', schedule);
+    el.removeEventListener('wheel', onWheel);
+    resize.disconnect();
+    mutation.disconnect();
+  };
+}
+
 let toastTimer;
 let toastGeneration = 0;
 /**

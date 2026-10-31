@@ -10,7 +10,7 @@
 // The header is one row at every width (0009 §4): on phones the summary scrolls sideways and the
 // two download buttons become one "⤓ Tải" menu that calls them.
 
-import { h, ico, download, toast } from './dom.js';
+import { h, ico, download, toast, watchOverflow } from './dom.js';
 import { state, subscribe, stepById } from './store.js';
 import { stepAlias } from './summary.js';
 import { api } from './api.js';
@@ -19,6 +19,7 @@ import { openPopup, closePopup, popupAnchor } from './popup.js';
 const QUERY_TAB = 'q:'; // activeTab of a Query tab: `q:<stepId>`
 const ERRORS_TAB = '__errors';
 let activeTab = null;
+let unwatchTabs = null; // watchOverflow of the current tab row
 let panel, body, summary, progressBar, stopBtn, dlJson, dlCsv, dlMenu, toggle;
 let onRefresh = null;
 let onGoTo = null;
@@ -53,6 +54,7 @@ export function initResults({ onRefresh: refresh, onGoTo: goTo } = {}) {
     if (q) download(`${fileBase()}-${q.alias}.csv`, toCsv(queryRecords(q)), 'text/csv');
     else if (activeTab && activeTab !== ERRORS_TAB) exportFile('csv', activeTab);
   };
+  watchOverflow(summary); // ≤ 720 px the summary is one line that scrolls sideways (0014 §4)
   subscribe(({ kind }) => kind === 'result' && render());
 }
 
@@ -192,6 +194,8 @@ function render() {
   updateButtons();
   if (!r) {
     summary.textContent = 'Chưa chạy.';
+    unwatchTabs?.();
+    unwatchTabs = null;
     body.replaceChildren();
     return;
   }
@@ -234,6 +238,10 @@ function render() {
       dataTable(queryRecords(q), null, q.records.length));
   } else content = dataTable(r.records.filter((x) => x.sobject === activeTab), r.insert?.ids, r.stats.bySobject[activeTab] ?? 0);
   body.replaceChildren(tabs, content);
+  // Hidden tabs fade the row's edge (0014 §4); the open tab is scrolled into the row.
+  unwatchTabs?.();
+  unwatchTabs = watchOverflow(tabs);
+  if (tabs.scrollWidth > tabs.clientWidth) tabs.querySelector('.active')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 }
 
 /**

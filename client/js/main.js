@@ -2,7 +2,7 @@
 // narrow screens, design 0009), shortcuts, live validation (issues bar: issues.js) and runs.
 
 import { api } from './api.js';
-import { h, toast, download, icoTile } from './dom.js';
+import { h, toast, download, icoTile, watchOverflow } from './dom.js';
 import {
   state, emit, subscribe, updateWorkflow, emptyWorkflow,
   undo, redo, select, stepById, runKey, saveCollapsed, slotKeys,
@@ -47,6 +47,7 @@ async function boot() {
   initSelection();
   initSelectBar();
   initResults({ onRefresh: () => run(false, { refresh: true }), onGoTo: goToIssue });
+  watchOverflow(document.querySelector('.palette')); // ≤ 900 px the palette is a row that scrolls sideways (0014 §4)
   initIssues({ onGoTo: goToIssue });
   firstRender();
   wireToolbar();

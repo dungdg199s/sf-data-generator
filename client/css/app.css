@@ -279,6 +279,7 @@
   --space-0-5: 2px; --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px; --space-6: 24px; --space-8: 32px;
   --radius-sm: 4px; --radius-md: 6px; --radius-lg: 10px; --radius-xl: 14px; --radius-pill: 999px;
   --control-h-sm: 28px; --control-h-md: 32px; --hit-min: 24px;
+  --fade-w: var(--space-6); /* faded edge of a row that scrolls sideways; its scroll-padding-inline */
   --icon-xs: 12px; --icon-sm: 14px; --icon-md: 16px; /* icon next to 12 px text / next to 13 px text / in a button (design 0014) */
   --stripe-w: 4px; --ring-w: 2px; --focus-offset: 2px;
   /* Focus gap around a step card: outside the 2 px selection ring, so focus and selection stay distinct. */
@@ -312,6 +313,10 @@
 }
 :root {
   --color-backdrop: rgb(8 10 14 / 0.5);
+  /* Fade of a row that scrolls sideways (design 0014 §4): a mask (only alpha matters), not a visible colour. */
+  --mask-fade-start: linear-gradient(to right, transparent, black var(--fade-w));
+  --mask-fade-end: linear-gradient(to left, transparent, black var(--fade-w));
+  --mask-fade-both: linear-gradient(to right, transparent, black var(--fade-w), black calc(100% - var(--fade-w)), transparent);
   --ico-start: url("data:image/svg+xml,%3Csvg%20xmlns%3D'http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg'%20viewBox%3D'0%200%2024%2024'%20fill%3D'none'%20stroke%3D'black'%20stroke-width%3D'2'%20stroke-linecap%3D'round'%20stroke-linejoin%3D'round'%3E%3Cpath%20d%3D'M7%204.5v15l12-7.5z'%2F%3E%3C%2Fsvg%3E");
   --ico-record: url("data:image/svg+xml,%3Csvg%20xmlns%3D'http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg'%20viewBox%3D'0%200%2024%2024'%20fill%3D'none'%20stroke%3D'black'%20stroke-width%3D'2'%20stroke-linecap%3D'round'%20stroke-linejoin%3D'round'%3E%3Crect%20x%3D'4'%20y%3D'4'%20width%3D'16'%20height%3D'16'%20rx%3D'3'%2F%3E%3Cpath%20d%3D'M12%208.5v7M8.5%2012h7'%2F%3E%3C%2Fsvg%3E");
   --ico-query: url("data:image/svg+xml,%3Csvg%20xmlns%3D'http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg'%20viewBox%3D'0%200%2024%2024'%20fill%3D'none'%20stroke%3D'black'%20stroke-width%3D'2'%20stroke-linecap%3D'round'%20stroke-linejoin%3D'round'%3E%3Cellipse%20cx%3D'12'%20cy%3D'5.5'%20rx%3D'7'%20ry%3D'2.5'%2F%3E%3Cpath%20d%3D'M5%205.5v6c0%201.4%203.1%202.5%207%202.5M19%205.5V10'%2F%3E%3Cpath%20d%3D'M5%2011.5v6c0%201.4%203.1%202.5%207%202.5'%2F%3E%3Ccircle%20cx%3D'17.5'%20cy%3D'16.5'%20r%3D'2.5'%2F%3E%3Cpath%20d%3D'm19.5%2018.5%202%202'%2F%3E%3C%2Fsvg%3E");
@@ -1112,6 +1117,12 @@ dialog .actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap
 .toast-action:hover:not(:disabled), .toast-action:active:not(:disabled) { background: transparent; text-decoration: underline; }
 /* The page focus ring is too faint on the inverse toast background (docs/ui-design-system.md §8.1). */
 .toast-action:focus-visible { outline-color: var(--color-focus-ring-inverse); }
+
+/* ---------- rows that scroll sideways (§6.14, design 0014 §4): watchOverflow() in dom.js sets data-overflow ---------- */
+.palette, #results-summary, .tabs, [data-scroll-x] { scroll-padding-inline: var(--fade-w); }
+[data-overflow="start"] { -webkit-mask-image: var(--mask-fade-start); mask-image: var(--mask-fade-start); }
+[data-overflow="end"] { -webkit-mask-image: var(--mask-fade-end); mask-image: var(--mask-fade-end); }
+[data-overflow="both"] { -webkit-mask-image: var(--mask-fade-both); mask-image: var(--mask-fade-both); }
 
 /* ---------- width breakpoints (docs/ui-design-system.md §7; media queries cannot use variables) ---------- */
 /* < 1 300 px: no app name (still in <title>), so the bar stays one row down to ≈ 1 140 px. */
