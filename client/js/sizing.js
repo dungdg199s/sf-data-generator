@@ -62,3 +62,36 @@ export function resultsAria({ height, min, max, total }) {
   const pct = (v) => Math.round((v / total) * 100);
   return { min: pct(min), max: pct(max), now: pct(height), text: `Cao ${Math.round(height)} px (${pct(height)} % màn hình)` };
 }
+
+/** A drag on the sheet's head becomes a drag past this many px (under it: a tap). */
+export const SHEET_DRAG_START = 8;
+/** px/ms over the last 100 ms of a drag above which the release is a flick (next snap that way). */
+export const FLICK_SPEED = 0.5;
+
+/**
+ * Where the bottom sheet goes when a drag of its head is released (design 0014 §3).
+ * height: its height at release (px); velocity: px/ms, > 0 growing (finger going up); mid / full:
+ * the two snaps (px). A flick goes to the next snap that way from `height` (below the middle snap
+ * that is closing); a slow release goes to the nearest of { closed (only under half the middle snap),
+ * mid, full }. → 'closed' | 'mid' | 'full'.
+ */
+export function snapSheet({ height, velocity = 0, mid, full }) {
+  if (velocity > FLICK_SPEED) return height < mid ? 'mid' : 'full';
+  if (velocity < -FLICK_SPEED) return height > mid ? 'mid' : 'closed';
+  if (height < mid / 2) return 'closed';
+  return Math.abs(height - mid) <= Math.abs(full - height) ? 'mid' : 'full';
+}
+
+/** The sheet's two snaps in px, as the CSS computes them (--sheet-h, --sheet-h-full). */
+export function sheetSnaps({ viewport, topbar }) {
+  return { mid: Math.min(0.6 * viewport, viewport - 200), full: Math.min(0.9 * viewport, viewport - topbar) };
+}
+
+/** Velocity (px/ms, > 0 upward) over the last `ms` of pointer samples [{ t, y }]. */
+export function dragVelocity(samples, ms = 100) {
+  if (samples.length < 2) return 0;
+  const last = samples[samples.length - 1];
+  const first = samples.find((s) => last.t - s.t <= ms) ?? samples[0];
+  const dt = Math.max(1, last.t - first.t);
+  return (first.y - last.y) / dt;
+}

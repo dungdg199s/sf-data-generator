@@ -291,6 +291,7 @@
   --results-h: 38vh; --results-min-h: 160px; --layout-min-h: 240px;
   --resize-hit: 8px; --resize-hit-touch: 24px; --grip-w: 32px; --grip-h: 4px;
   --topbar-h: 89px; /* measured by main.js (ResizeObserver on .topbar) */
+  --sheet-h-full: min(90dvh, calc(100dvh - var(--topbar-h))); /* tall snap of the sheet: never over the top bar (0014 §3) */
   --shadow-1: 0 1px 2px rgb(16 24 40 / 0.08), 0 1px 3px rgb(16 24 40 / 0.06);
   --shadow-2: 0 4px 12px rgb(16 24 40 / 0.14);
   --shadow-3: 0 12px 32px rgb(16 24 40 / 0.22);
@@ -1178,18 +1179,30 @@ dialog .actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap
   .inspector {
     position: fixed; left: 0; right: 0; bottom: 0; height: var(--sheet-h); z-index: var(--z-sheet); border-left: none;
     border-top: 1px solid var(--color-border); border-radius: var(--radius-xl) var(--radius-xl) 0 0; box-shadow: var(--shadow-3);
-    transform: translateY(105%); transition: transform var(--dur-base) var(--ease-out);
+    transform: translateY(105%); transition: transform var(--dur-base) var(--ease-out), height var(--dur-base) var(--ease-out);
   }
   .inspector.open { transform: none; }
+  /* Two snaps (design 0014 §3): middle (--sheet-h) and tall; while dragged the height follows the pointer. */
+  .inspector.full { height: var(--sheet-h-full); }
+  .inspector.dragging { transition: none; }
   .sheet-head {
     display: flex; position: sticky; top: 0; z-index: 1; background: var(--color-surface); border-bottom: 1px solid var(--color-border);
     margin: calc(-1 * var(--space-3)) calc(-1 * var(--space-3)) var(--space-3); padding: var(--space-2) var(--space-3);
+    touch-action: none; /* a drag on this row moves the sheet, it never scrolls the page */
   }
+  .sheet-grip {
+    position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: 64px; height: 44px; min-height: 0; padding: 0;
+    border: none; background: transparent; cursor: grab;
+  }
+  .sheet-grip:hover:not(:disabled), .sheet-grip:active:not(:disabled) { background: transparent; }
+  .sheet-grip::before { content: ''; width: var(--grip-w); height: var(--grip-h); border-radius: var(--radius-pill); background: var(--color-border-control); }
+  .sheet-grip:hover::before, .sheet-grip:focus-visible::before { background: var(--color-text-muted); }
+  .inspector.dragging .sheet-grip::before { background: var(--color-accent); }
   /* The selected card scrolls to just above the sheet, and the last one can still get there. */
   /* --sheet-overlap (inspector.js) is the part of the canvas under the sheet, measured. */
   body.sheet-open .process { scroll-padding-bottom: var(--sheet-overlap, var(--sheet-h)); }
   body.sheet-open .process::after { content: ''; display: block; height: var(--sheet-overlap, var(--sheet-h)); }
-  body.sheet-open .toast { bottom: calc(var(--sheet-h) + var(--space-3)); }
+  body.sheet-open .toast { bottom: calc(var(--sheet-now, var(--sheet-h)) + var(--space-3)); }
 }
 /* Sơ đồ on touch-size screens: 32 px targets on cards and the zoom bar (design 0003 đợt B review). */
 @media (max-width: 900px) {

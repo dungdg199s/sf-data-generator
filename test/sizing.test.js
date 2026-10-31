@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   clampResults, resultsKeyStep, shouldCollapse, parseRatio, toRatio, resultsAria, RESULTS_MIN, LAYOUT_MIN, MIN_RANGE,
+  snapSheet, sheetSnaps, dragVelocity,
 } from '../client/js/sizing.js';
 
 test('clampResults at 1440 × 900 (top bar 49 px): 160 … 611 px, main keeps 240 px', () => {
@@ -73,4 +74,38 @@ test('saved ratio: parse, round to 3 decimals, invalid values are ignored', () =
 
 test('resultsAria: percentages of the height below the top bar and a spoken text', () => {
   assert.deepEqual(resultsAria({ height: 312, min: 160, max: 611, total: 851 }), { min: 19, max: 72, now: 37, text: 'Cao 312 px (37 % màn hình)' });
+});
+
+test('snapSheet: slow releases go to the nearest snap, closing only under half the middle snap', () => {
+  const s = { mid: 506, full: 755 };
+  assert.equal(snapSheet({ ...s, height: 506 }), 'mid');
+  assert.equal(snapSheet({ ...s, height: 620 }), 'mid');
+  assert.equal(snapSheet({ ...s, height: 640 }), 'full');
+  assert.equal(snapSheet({ ...s, height: 755 }), 'full');
+  assert.equal(snapSheet({ ...s, height: 300 }), 'mid');
+  assert.equal(snapSheet({ ...s, height: 254 }), 'mid');
+  assert.equal(snapSheet({ ...s, height: 252 }), 'closed');
+  assert.equal(snapSheet({ ...s, height: 0, velocity: 0.3 }), 'closed');
+});
+
+test('snapSheet: a flick (> 0.5 px/ms) goes to the next snap that way', () => {
+  const s = { mid: 506, full: 755 };
+  assert.equal(snapSheet({ ...s, height: 520, velocity: 0.8 }), 'full'); // just above mid, up
+  assert.equal(snapSheet({ ...s, height: 400, velocity: 0.8 }), 'mid'); // under mid, up
+  assert.equal(snapSheet({ ...s, height: 740, velocity: -0.8 }), 'mid'); // from full, down
+  assert.equal(snapSheet({ ...s, height: 480, velocity: -0.8 }), 'closed'); // from mid, down: closes
+  assert.equal(snapSheet({ ...s, height: 520, velocity: 0.5 }), 'mid'); // exactly 0.5 is not a flick
+});
+
+test('sheetSnaps: 390 × 844 → 506 / 755 px; 844 × 390 → 190 / 301 px', () => {
+  assert.deepEqual(sheetSnaps({ viewport: 844, topbar: 89 }), { mid: 506.4, full: 755 });
+  assert.deepEqual(sheetSnaps({ viewport: 390, topbar: 89 }), { mid: 190, full: 301 });
+});
+
+test('dragVelocity: px/ms over the last 100 ms, positive upward', () => {
+  assert.equal(dragVelocity([]), 0);
+  assert.equal(dragVelocity([{ t: 0, y: 500 }]), 0);
+  assert.equal(dragVelocity([{ t: 0, y: 500 }, { t: 100, y: 400 }]), 1);
+  // Only the last 100 ms count: a slow start, then a fast end.
+  assert.equal(dragVelocity([{ t: 0, y: 500 }, { t: 400, y: 480 }, { t: 450, y: 520 }, { t: 500, y: 560 }]), -0.8);
 });

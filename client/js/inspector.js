@@ -25,10 +25,12 @@ import { wrapItems, editItems, offDeleteItems } from './menus.js';
 import { stepLabel } from './summary.js';
 import { missingRequired, requiredHintText } from './required-fields.js';
 import { isMac, pickerKeys } from './keys.js';
+import { snapSheet, sheetSnaps, dragVelocity, SHEET_DRAG_START } from './sizing.js';
 
 let root;
 const expanded = new Set(); // `${stepId}:${fieldIndex}` with options panel open
-let sheetClosed = false; // narrow screens: "‹ Xong" hides the sheet but keeps the selection
+let sheetClosed = false; // narrow screens: "Xong" hides the sheet but keeps the selection
+let sheetFull = false; // narrow screens: the sheet is at its tall snap (design 0014 §3); it always opens at the middle one
 let lastSelectionKey = null;
 // Last good alias per step: references wait there while the alias field is empty or clashing.
 const aliasMemo = new Map();
@@ -61,7 +63,17 @@ function render() {
   if (key !== lastSelectionKey) sheetClosed = false;
   lastSelectionKey = key;
   // The "Xong" row sticks to the top of the sheet, so it closes without scrolling back up.
-  const head = h('div', { class: 'sheet-head' }, h('button', { class: 'sheet-close', title: 'Đóng bảng cấu hình (vẫn giữ bước đang chọn)', onclick: closeSheet }, ico('chevron-left'), 'Xong'));
+  const head = h('div', { class: 'sheet-head' },
+    h('button', { class: 'sheet-close', title: 'Đóng bảng cấu hình (vẫn giữ bước đang chọn)', onclick: closeSheet }, ico('chevron-left'), 'Xong'),
+    // Design 0014 §3: tap / Enter / Space switches the middle and tall snaps; dragging anywhere on this row moves the sheet.
+    h('button', {
+      class: 'sheet-grip',
+      'aria-label': 'Mở rộng bảng cấu hình',
+      'aria-expanded': String(sheetFull),
+      'aria-controls': 'inspector',
+      title: 'Kéo hoặc chạm để đổi chiều cao',
+      onclick: () => setSheetFull(!sheetFull),
+    }));
   root.replaceChildren(head, multi.length > 1 ? renderMulti() : step ? renderStep(step) : renderWorkflow());
   // The narrow select mode has its own bar instead of the sheet (design 0012 B).
   setSheetOpen(Boolean(s) && !sheetClosed && !inSelectMode());
@@ -107,6 +119,7 @@ function setSheetOpen(open) {
   root.classList.toggle('open', open);
   root.inert = narrow() && !open;
   document.body.classList.toggle('sheet-open', open);
+  if (!open || !was) setSheetFull(false, { reveal: false }); // it always opens at the middle snap
   if (open) updateSheetOverlap();
   if (open && !was) {
     // The selected card just above the sheet's edge, in either view (Sơ đồ pans, Quy trình scrolls).
@@ -117,12 +130,92 @@ function setSheetOpen(open) {
   }
 }
 
-/** --sheet-overlap: how much of the canvas the open sheet covers (scroll padding, end spacer). */
+const snaps = () => sheetSnaps({ viewport: window.innerHeight, topbar: document.querySelector('.topbar').offsetHeight });
+
+/**
+ * The sheet's snap (design 0014 §3): middle (--sheet-h, the selected card stays above it) or tall
+ * (--sheet-h-full, only the top bar left). Back at the middle snap the selected card returns to the
+ * sheet's edge. --sheet-now: the height the toast sits on.
+ */
+function setSheetFull(full, { reveal: show = true } = {}) {
+  full = full && root.classList.contains('open');
+  const was = sheetFull;
+  sheetFull = full;
+  root.classList.toggle('full', full);
+  root.querySelector('.sheet-grip')?.setAttribute('aria-expanded', String(full));
+  const sn = snaps();
+  document.body.style.setProperty('--sheet-now', `${Math.round(full ? sn.full : sn.mid)}px`);
+  if (was && !full && show) {
+    updateSheetOverlap();
+    requestAnimationFrame(() => {
+      const sel = state.selection;
+      if (sel) reveal(sel.kind === 'step' ? sel.id : START_ID, { focus: false, block: 'nearest' });
+    });
+  }
+}
+
+/**
+ * Dragging the sheet's head row (design 0014 §3), not its "Xong": over 8 px it is a drag, the sheet
+ * follows the pointer; the release snaps (sizing.js snapSheet: a flick goes on to the next snap, a slow
+ * release to the nearest; under half the middle snap the sheet closes like "Xong").
+ */
+function wireSheetDrag() {
+  let drag = null;
+  let swallowClick = false;
+  const move = (e) => {
+    if (!drag || e.pointerId !== drag.id) return;
+    const dy = e.clientY - drag.y;
+    if (!drag.moving && Math.abs(dy) <= SHEET_DRAG_START) return;
+    drag.moving = true;
+    drag.samples.push({ t: e.timeStamp, y: e.clientY });
+    if (drag.samples.length > 20) drag.samples.shift();
+    root.classList.add('dragging');
+    drag.height = Math.max(0, Math.min(drag.max, drag.h - dy));
+    root.style.height = `${drag.height}px`;
+  };
+  const up = (e) => {
+    if (!drag || e.pointerId !== drag.id) return;
+    const d = drag;
+    drag = null;
+    window.removeEventListener('pointermove', move);
+    window.removeEventListener('pointerup', up);
+    window.removeEventListener('pointercancel', up);
+    if (!d.moving) return; // a tap: the grip's click does the rest
+    swallowClick = true;
+    root.classList.remove('dragging');
+    root.style.removeProperty('height');
+    const sn = snaps();
+    const to = e.type === 'pointercancel' ? (sheetFull ? 'full' : 'mid') : snapSheet({ height: d.height, velocity: dragVelocity(d.samples), mid: sn.mid, full: sn.full });
+    if (to === 'closed') {
+      closeSheet();
+      document.querySelector('.view-wrap .step-card.selected')?.focus({ preventScroll: true });
+    } else setSheetFull(to === 'full');
+  };
+  root.addEventListener('pointerdown', (e) => {
+    swallowClick = false;
+    if (!narrow() || !root.classList.contains('open') || e.button !== 0) return;
+    if (!e.target.closest('.sheet-head') || e.target.closest('.sheet-close')) return;
+    e.preventDefault(); // no text selection or native drag on the way (it would swallow the pointer events)
+    drag = { id: e.pointerId, y: e.clientY, h: root.offsetHeight, height: root.offsetHeight, max: snaps().full, moving: false, samples: [{ t: e.timeStamp, y: e.clientY }] };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+    window.addEventListener('pointercancel', up);
+  });
+  // The click that ends a drag started on the grip must not switch the snap again.
+  root.addEventListener('click', (e) => {
+    if (!swallowClick) return;
+    swallowClick = false;
+    e.stopPropagation();
+    e.preventDefault();
+  }, true);
+}
+
+/** --sheet-overlap: how much of the canvas the open sheet covers at its middle snap (scroll padding, end spacer). */
 function updateSheetOverlap() {
-  if (!document.body.classList.contains('sheet-open')) return;
+  if (!document.body.classList.contains('sheet-open') || sheetFull) return;
   const canvas = document.querySelector('.view-wrap > .view:not([hidden])').getBoundingClientRect();
-  // offsetHeight ignores the slide-in transform, so this is the sheet's final position.
-  const sheetTop = window.innerHeight - root.offsetHeight;
+  // The middle snap as computed by the CSS (not offsetHeight: it is animated while the snap changes).
+  const sheetTop = window.innerHeight - snaps().mid;
   document.body.style.setProperty('--sheet-overlap', `${Math.max(0, Math.round(canvas.bottom - sheetTop))}px`);
 }
 
@@ -137,6 +230,7 @@ function wireSheet() {
   const views = new ResizeObserver(updateSheetOverlap);
   for (const v of document.querySelectorAll('.view-wrap > .view')) views.observe(v);
   root.inert = narrow();
+  wireSheetDrag();
 }
 
 /** "‹ Xong", or a run started on a narrow screen: hide the sheet, keep the selection. */
@@ -145,10 +239,14 @@ export function closeSheet() {
   setSheetOpen(false);
 }
 
-/** Show the sheet again for the current selection (a run failed on validation: goToIssue). */
+/**
+ * Show the sheet again for the current selection (a tap on the selected card; F8, an issue row or a
+ * run failed on validation: goToIssue), at the middle snap so the card shows above it (0014 §3).
+ */
 export function openSheet() {
   sheetClosed = false;
   setSheetOpen(Boolean(state.selection));
+  setSheetFull(false);
 }
 
 function renderWorkflow() {

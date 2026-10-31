@@ -942,6 +942,52 @@ async function flowLayoutNarrow() {
   let s = await sheet();
   check(s.card <= s.sheet + 0.5 && s.sheet - s.canvas >= 190, `390px: sheet covers the selected card or leaves < 190px of canvas (${JSON.stringify(s)})`);
   if (outDir) await m.screenshot({ path: path.join(outDir, 'smoke-390-sheet.png') });
+  // 0014 §3: two snaps. Enter on the grip → tall (its top at the top bar's bottom), a toast above it; Enter → middle,
+  // con back on the sheet's edge; a pointer drag on the head row up 200 px → tall, down 400 px → closed like Xong.
+  const snap = () => m.evaluate(() => {
+    const insp = document.getElementById('inspector');
+    return {
+      top: insp.getBoundingClientRect().top, h: insp.getBoundingClientRect().height, bar: document.querySelector('.topbar').getBoundingClientRect().bottom,
+      expanded: insp.querySelector('.sheet-grip').getAttribute('aria-expanded'), open: insp.classList.contains('open'), inert: insp.inert,
+      card: document.querySelector('.step-card[data-id="con"]').getBoundingClientRect().bottom, focus: document.activeElement?.dataset.id ?? document.activeElement?.className,
+    };
+  });
+  await m.focus('#inspector .sheet-grip');
+  await m.keyboard.press('Enter');
+  await settle(m);
+  let sn = await snap();
+  check(Math.abs(sn.top - sn.bar) <= 1 && sn.expanded === 'true', `Enter on the sheet grip: tall snap expected (${JSON.stringify(sn)})`);
+  await m.keyboard.press('F8'); // nothing to go to: a toast, above the tall sheet
+  await m.waitForSelector('#toast.show');
+  await settle(m);
+  const toastTall = await m.evaluate(() => ({ toast: document.getElementById('toast').getBoundingClientRect().bottom, sheet: document.getElementById('inspector').getBoundingClientRect().top }));
+  check(toastTall.toast <= toastTall.sheet + 0.5, `toast under the tall sheet (${JSON.stringify(toastTall)})`);
+  await m.focus('#inspector .sheet-grip');
+  await m.keyboard.press('Enter');
+  await settle(m);
+  await m.waitForFunction(() => document.querySelector('.step-card[data-id="con"]').getBoundingClientRect().bottom <= document.getElementById('inspector').getBoundingClientRect().top + 0.5, null, { timeout: 2000 }).catch(() => {});
+  sn = await snap();
+  check(sn.expanded === 'false' && sn.top > sn.bar + 100 && sn.card <= sn.top + 0.5, `Enter again: middle snap with con above it (${JSON.stringify(sn)})`);
+  const dragHead = async (dy) => {
+    const hb = await m.$eval('#inspector .sheet-head', (e) => { const r = e.getBoundingClientRect(); return { x: r.right - 40, y: r.top + r.height / 2 }; });
+    await m.mouse.move(hb.x, hb.y);
+    await m.mouse.down();
+    await m.mouse.move(hb.x, hb.y + dy / 2);
+    await m.mouse.move(hb.x, hb.y + dy);
+    await m.mouse.up();
+    await settle(m);
+  };
+  await dragHead(-200);
+  sn = await snap();
+  check(Math.abs(sn.top - sn.bar) <= 1 && sn.expanded === 'true', `dragging the sheet head up 200 px: tall snap expected (${JSON.stringify(sn)})`);
+  await dragHead(400);
+  sn = await snap();
+  check(!sn.open && sn.inert && sn.focus === 'con', `dragging the sheet head down 400 px: closed, inert, focus on con expected (${JSON.stringify(sn)})`);
+  await m.tap('.step-card[data-id="con"] .type');
+  await m.waitForSelector('#inspector.open');
+  await settle(m);
+  sn = await snap();
+  check(sn.expanded === 'false' && sn.top > sn.bar + 100, `the sheet reopened at the tall snap (${JSON.stringify(sn)})`);
   // "‹ Xong" by keyboard: focus goes to the selected card, the closed sheet is inert.
   await m.focus('#inspector .sheet-close');
   await m.keyboard.press('Enter');
@@ -1048,6 +1094,13 @@ async function flowLayoutNarrow() {
   await settle(m);
   s = await sheet();
   check(s.sheet >= s.palette + 60 - 0.5 && s.sheet - s.canvas >= 60 - 0.5, `844×390: less than 60 px of canvas above the sheet (${JSON.stringify(s)})`);
+  await m.focus('#inspector .sheet-grip');
+  await m.keyboard.press('Enter');
+  await settle(m);
+  const tall = await m.evaluate(() => document.getElementById('inspector').getBoundingClientRect().height);
+  check(Math.abs(tall - 301) <= 1, `844×390: tall snap ${tall} px (301 expected)`);
+  await m.keyboard.press('Enter');
+  await settle(m);
   await m.tap('#btn-more');
   check(await m.$('.popup .popup-item:has-text("Thu gọn tất cả")'), '844×390: "Thu gọn tất cả" is neither on screen nor in the ⋯ menu');
   await m.keyboard.press('Escape');
