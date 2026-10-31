@@ -507,7 +507,7 @@ màu **và** độ dày đường mép / con trỏ.
 
 Không có thay đổi contract (bảng của `.claude/agents/implementer.md`: chỉ hàng UI, Docs, Tests). Mỗi bước tự chạy được,
 có kiểm tra riêng. Smoke: thêm vào đúng nhóm luồng đang chạy song song; luồng minimap là **một nhóm mới** (`flowMinimap`)
-để không kéo dài `flowCanvas` (đã dài nhất, 0003). Ngân sách smoke: `SMOKE_BUDGET_MS` hoặc 15 s × max(1, 4 / số CPU) (skill `smoke-test`; trước review 0012 là 12 s), hiện
+để không kéo dài `flowCanvas` (đã dài nhất, 0003). Ngân sách smoke: `SMOKE_BUDGET_MS` hoặc 20 s × max(1, 4 / số CPU) (skill `smoke-test`; trước review 0012 là 12 s), hiện
 ~9,5–10 s trên máy 4 CPU; mục tiêu sau doc này không chậm hơn quá 1 s (đo 3 lần, ghi vào "Đã làm"). Không `waitForTimeout` cố định.
 
 | # | Việc | File | Kiểm tra |

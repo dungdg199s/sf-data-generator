@@ -234,10 +234,11 @@ storage and reloading (one app boot less; flow 5b).
     toast) and hides the hint, ↶ brings both back, "Bỏ qua" keeps it hidden when `con` is selected again.
 
 It also fails on any page error or a run over the **time budget**: `SMOKE_BUDGET_MS` when set, else
-`15 000 × max(1, 4 / os.availableParallelism())` ms (15 s on 4 or more CPUs, 30 s on 2). The flows run in parallel and are
+`20 000 × max(1, 4 / os.availableParallelism())` ms (20 s on 4 or more CPUs, 40 s on 2). The flows run in parallel and are
 CPU-bound, so the cap scales with the CPUs; it is there to catch fixed waits and runaway flows, not to benchmark. The run prints
 `flows: <name> <ms>, …` (longest first) and `duration=… (budget …)`, to see which flow is the critical path. History: the cap was
-12 s until the 0012 review; with flow 16 complete a 4-CPU sandbox measured 11.3–11.9 s (10.5–12.3 s for the commit before
+12 s until the 0012 review, then 15 s until the 0014 review (raised to 20 s: a slower 4-CPU sandbox ran 0014 at
+12.4–14.3 s with no fixed waits, and 0013/0011 add flows; the `waitForTimeout(` ban is the real guard); with flow 16 complete a 4-CPU sandbox measured 11.3–11.9 s (10.5–12.3 s for the commit before
 0012 C/I/H/D/E), ~9.5–10 s once reduced motion and the flow 5b file-open went in. A second context for flow 16 made it slower,
 not faster. Design 0014 (flow 18 in parallel, checks in flows 1, 5b, 11, 13): 11.1–11.6 s for the same machine that ran
 the commit before it in 9.5–10.0 s.

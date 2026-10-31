@@ -120,14 +120,14 @@ const errors = [];
 const check = (cond, msg) => { if (!cond) errors.push(msg); };
 
 /**
- * Total time cap (ms): SMOKE_BUDGET_MS, else 15 000 on 4 or more CPUs, scaled up on fewer
- * (15 000 × 4 / CPUs), since the parallel flows are CPU-bound.
+ * Total time cap (ms): SMOKE_BUDGET_MS, else 20 000 on 4 or more CPUs, scaled up on fewer
+ * (20 000 × 4 / CPUs), since the parallel flows are CPU-bound.
  */
 function smokeBudgetMs() {
   const env = Number(process.env.SMOKE_BUDGET_MS);
   if (Number.isFinite(env) && env > 0) return env;
   const cpus = typeof os.availableParallelism === 'function' ? os.availableParallelism() : os.cpus().length;
-  return Math.round(15000 * Math.max(1, 4 / Math.max(1, cpus)));
+  return Math.round(20000 * Math.max(1, 4 / Math.max(1, cpus)));
 }
 
 /** Fixed waits make the smoke slow and flaky: wait on a response, an element or a function instead. */
