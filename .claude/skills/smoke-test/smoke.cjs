@@ -168,6 +168,19 @@ async function flowEditing() {
   const untyped = await page.$$eval('.step, .start-card, #palette-items .palette-item', (els) =>
     els.filter((e) => !e.dataset.type || !e.querySelector('.ico-tile .ico') || e.style.getPropertyValue('--c')).length);
   check(untyped === 0, `${untyped} step/palette elements without data-type + .ico-tile (or with inline --c)`);
+  // 0014 §1 icons: with a Record selected (inspector head and field cards drawn), every button without text has an
+  // aria-label, every .ico picks its icon (data-ico) unless it is a step-type tile, and icons in buttons are 16 px.
+  await page.click('.step-card[data-id="acc"] .type');
+  await page.waitForSelector('#inspector .field-card .actions button[aria-label="Xóa field"]');
+  const icons = await page.evaluate(() => {
+    const unnamed = [...document.querySelectorAll('button')].filter((b) => !b.closest('[hidden]') && !b.textContent.trim() && !b.getAttribute('aria-label')).map((b) => b.id || b.className || b.title);
+    const unpicked = [...document.querySelectorAll('.ico')].filter((i) => !i.dataset.ico && !i.closest('.ico-tile')).length;
+    const sizes = [...document.querySelectorAll('button:not(.link) > .ico')].filter((i) => i.getClientRects().length).map((i) => Math.round(i.getBoundingClientRect().width));
+    return { unnamed, unpicked, sizes: [...new Set(sizes)], count: sizes.length };
+  });
+  check(icons.unnamed.length === 0, `buttons without text or aria-label: ${icons.unnamed.join(', ')}`);
+  check(icons.unpicked === 0, `${icons.unpicked} .ico without data-ico outside an .ico-tile`);
+  check(icons.count >= 10 && icons.sizes.join() === '16', `button icons should be 16 px (${JSON.stringify(icons)})`);
   // Each type wins over the neutral [data-type] fallback (equal specificity: source order).
   const stripes = await page.evaluate(() => {
     const probe = document.createElement('div');
@@ -641,7 +654,7 @@ async function flowDark() {
   await d.waitForSelector('dialog[open]');
   const confirmText = await d.textContent('dialog[open]');
   check(/Đọc từ org, không ghi: Account 2 \(accs, đọc lúc/.test(confirmText), `confirmation does not list the rows read (${confirmText})`);
-  check(/quá 10 phút/.test(confirmText) && /⟳ Đọc lại/.test(confirmText), 'confirmation over-promises change detection');
+  check(/quá 10 phút/.test(confirmText) && /bấm Đọc lại rồi Insert/.test(confirmText), 'confirmation over-promises change detection');
   check(!/null/.test(confirmText), 'confirmation prints "null"');
   await d.click('dialog[open] .actions button:has-text("Hủy")');
   check(!insertSent, 'an insert request was sent');

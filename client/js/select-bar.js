@@ -2,7 +2,7 @@
 // select mode (selection.js) where a tap adds or removes a card, and this bar, docked where the
 // bottom sheet would be, acts on the selection: [n đã chọn] [Bọc ▾] [Xóa] [⋯] [Xong].
 
-import { h } from './dom.js';
+import { h, ico } from './dom.js';
 import { subscribe } from './store.js';
 import { selectedIds, inSelectMode, onSelectMode, setSelectMode, collapseToPrimary } from './selection.js';
 import { wrapItems, editItems, moveItems, offDeleteItems } from './menus.js';
@@ -17,7 +17,7 @@ export function initSelectBar() {
   const n = () => selectedIds().length;
   parts = {
     count: h('span', { class: 'sb-count' }),
-    wrap: h('button', { class: 'sb-wrap', 'aria-haspopup': 'menu', 'aria-expanded': 'false', onclick: (e) => toggleMenu(e.currentTarget, 'Bọc', wrapItems()) }, 'Bọc ▾'),
+    wrap: h('button', { class: 'sb-wrap', 'aria-haspopup': 'menu', 'aria-expanded': 'false', onclick: (e) => toggleMenu(e.currentTarget, 'Bọc', wrapItems()) }, 'Bọc', ico('chevron-down')),
     del: h('button', { class: 'danger', onclick: () => ops.deleteSelection() }, 'Xóa'),
     more: h('button', {
       class: 'icon',
@@ -26,7 +26,7 @@ export function initSelectBar() {
       'aria-haspopup': 'menu',
       'aria-expanded': 'false',
       onclick: (e) => toggleMenu(e.currentTarget, `${n()} bước đã chọn`, [...editItems({ pasteLabel: 'Dán' }), offDeleteItems()[0], ...moveItems()]),
-    }, '⋯'),
+    }, ico('more')),
     done: h('button', { class: 'primary', onclick: exitSelectMode }, 'Xong'),
   };
   bar = h('div', { class: 'select-bar', role: 'toolbar', 'aria-label': 'Thao tác với các bước đã chọn', hidden: true },

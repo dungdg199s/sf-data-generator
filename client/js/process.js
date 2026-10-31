@@ -8,7 +8,7 @@
 // scroll position survive. While the Sơ đồ view is shown (views.js) this view is empty and
 // does not render.
 
-import { h, icoTile } from './dom.js';
+import { h, ico, icoTile } from './dom.js';
 import { state, subscribe, select, nodeType, fieldType, slotKeys, stepById, setCollapsed, currentScope } from './store.js';
 import { allSteps, slotList } from '/shared/workflow-tree.js';
 import {
@@ -87,7 +87,7 @@ function render() {
       steps.length
         ? renderSeq(steps, null, null, 1)
         : h('div', { class: 'add-point big', ...targetAttrs({ parentId: null, slot: null, index: 0 }) },
-          h('button', { class: 'add-first', title: 'Thêm bước ở đây (/)', onclick: (e) => openAddMenu(e.currentTarget, { parentId: null, slot: null, index: 0 }) }, '+ Thêm bước đầu tiên')),
+          h('button', { class: 'add-first', title: 'Thêm bước ở đây (/)', onclick: (e) => openAddMenu(e.currentTarget, { parentId: null, slot: null, index: 0 }) }, ico('plus'), 'Thêm bước đầu tiên')),
     ),
   );
   root.scrollTop = scroll;
@@ -157,7 +157,7 @@ function addPoint(target, list) {
   return h(
     'div',
     { class: 'add-point', ...targetAttrs(target) },
-    h('button', { class: 'add-btn', title: 'Thêm bước ở đây (/)', 'aria-label': label, onclick: (e) => openAddMenu(e.currentTarget, target) }, '+'),
+    h('button', { class: 'add-btn', title: 'Thêm bước ở đây (/)', 'aria-label': label, onclick: (e) => openAddMenu(e.currentTarget, target) }, ico('plus')),
   );
 }
 
@@ -194,7 +194,7 @@ function renderStep(step, level, at) {
         card.focus({ preventScroll: true });
       },
     },
-    h('span', { class: 'handle', title: 'Kéo để di chuyển (hoặc Alt+↑ / Alt+↓)', 'aria-hidden': 'true', onpointerdown: (e) => onHandleDown(e, step) }, '⠿'),
+    h('span', { class: 'handle', title: 'Kéo để di chuyển (hoặc Alt+↑ / Alt+↓)', 'aria-hidden': 'true', onpointerdown: (e) => onHandleDown(e, step) }, ico('grip')),
     h('span', { class: 'type' }, icoTile(), type?.label ?? step.type),
     alias ? h('span', { class: 'alias' }, alias) : null,
     h('span', { class: 'sum', title: summary }, summary),
@@ -202,9 +202,9 @@ function renderStep(step, level, at) {
     h('span', { class: 'badges' }),
     step.disabled ? h('span', { class: 'tag-off', title: 'Bước này đang tắt: không chạy và không được kiểm tra. Ctrl+/ để bật lại.' }, 'Đã tắt') : null,
     type?.needsOrg && !state.org && !step.disabled ? h('span', { class: 'tag-sample', title: 'Chưa chọn org: Xem trước dùng bản ghi mẫu (Id giả). Chọn org ở thanh trên để đọc dữ liệu thật.' }, 'chưa chọn org') : null,
-    h('button', { class: 'icon menu-btn', title: 'Thao tác với bước', 'aria-label': `Thao tác với bước ${stepLabel(step)}`, onclick: (e) => openStepMenu(e.currentTarget, step.id) }, '⋯'),
+    h('button', { class: 'icon menu-btn', title: 'Thao tác với bước', 'aria-label': `Thao tác với bước ${stepLabel(step)}`, onclick: (e) => openStepMenu(e.currentTarget, step.id) }, ico('more')),
     container
-      ? h('button', { class: 'icon toggle', title: collapsed ? 'Mở khung' : 'Thu gọn khung', 'aria-label': collapsed ? 'Mở khung' : 'Thu gọn khung', onclick: () => setCollapsed([step.id], !collapsed) }, collapsed ? '▸' : '▾')
+      ? h('button', { class: 'icon toggle', title: collapsed ? 'Mở khung' : 'Thu gọn khung', 'aria-label': collapsed ? 'Mở khung' : 'Thu gọn khung', onclick: () => setCollapsed([step.id], !collapsed) }, ico(collapsed ? 'chevron-right' : 'chevron-down'))
       : step.type === 'record'
         ? h('button', {
           class: 'icon toggle',
@@ -214,7 +214,7 @@ function renderStep(step, level, at) {
             showDetails ? detailsOpen.delete(step.id) : detailsOpen.add(step.id);
             render();
           },
-        }, showDetails ? '▾' : '▸')
+        }, ico(showDetails ? 'chevron-down' : 'chevron-right'))
         : null,
   );
 
@@ -518,7 +518,7 @@ function onPaletteDrop(e) {
   if (point) ops.addStep(type, targetOf(point));
 }
 
-// Steps are moved with pointer events on the ⠿ handle (mouse and touch).
+// Steps are moved with pointer events on the grip handle (mouse and touch).
 function onHandleDown(e, step) {
   if (e.pointerType === 'mouse' && e.button !== 0) return;
   e.preventDefault();

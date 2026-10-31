@@ -3,7 +3,7 @@
 // state (▲ Chưa lưu), two tabs on one workflow, and the first-run migration of the old autosave.
 // Storage itself is library.js.
 
-import { h, toast, download } from './dom.js';
+import { h, ico, toast, download } from './dom.js';
 import { state, openWorkflow, replaceWorkflow, persist, setPersistHandler, updateWorkflow, emptyWorkflow } from './store.js';
 import {
   createLibrary, migrateToLibrary, parseLibraryFile, sortedItems, ENTRY_PREFIX, NEW_NAME, RECENT_MAX,
@@ -57,7 +57,7 @@ export function initLibrary(options) {
   wireTopBar();
   const after = [];
   if (res.from === 'v2' && res.status === 'migrated') {
-    after.push(() => toast('Workflow đang soạn đã được đưa vào Thư viện (nút ▾ cạnh tên). Bản lưu cũ vẫn được giữ trong trình duyệt.', 8000));
+    after.push(() => toast('Workflow đang soạn đã được đưa vào Thư viện (nút Thư viện cạnh tên). Bản lưu cũ vẫn được giữ trong trình duyệt.', 8000));
   }
   if (res.from === 'v1') after.push(() => deps.onMigrated(res.report, res.rawV1, res.workflow.name));
   if (res.v1Error) after.push(() => toast(`Không chuyển được workflow cũ trong trình duyệt (${res.v1Error}). Bản cũ vẫn được giữ nguyên.`, 6000));
@@ -162,10 +162,10 @@ function save(wf) {
  */
 function updateIndicator() {
   const b = $('btn-unsaved');
-  const text = paused ? '▲ Tab khác đã sửa' : unsaved ? '▲ Chưa lưu' : '';
+  const text = paused ? 'Tab khác đã sửa' : unsaved ? 'Chưa lưu' : '';
   b.hidden = !text;
   if (!text) return say('');
-  b.textContent = text;
+  b.replaceChildren(ico('warning'), text);
   b.title = paused
     ? 'Workflow này vừa được sửa ở một tab khác nên tab này tạm dừng tự lưu. Bấm để chọn giữ bản nào.'
     : 'Bộ nhớ trình duyệt đầy: thay đổi chưa được lưu. Bấm để mở Thư viện và xóa bớt workflow.';
@@ -389,8 +389,8 @@ export function openLibraryMenu() {
     search: items.length > 6,
     searchLabel: 'Tìm workflow…',
     items: [
-      { label: '＋ Workflow mới', ...lock, onSelect: () => openAsNew(emptyWorkflow()) },
-      { label: '⇪ Mở file JSON…', ...lock, onSelect: () => $('file-input').click() },
+      { label: 'Workflow mới', icon: 'plus', ...lock, onSelect: () => openAsNew(emptyWorkflow()) },
+      { label: 'Mở file JSON…', icon: 'folder', ...lock, onSelect: () => $('file-input').click() },
       { group: 'Gần đây' },
       ...rows,
       { separator: true },
@@ -431,7 +431,7 @@ export function openManage() {
             'aria-label': `Thao tác khác với "${it.name}"`,
             'aria-haspopup': 'menu',
             onclick: (e) => openPopup(e.currentTarget, { title: it.name, items: actions }),
-          }, '⋯')));
+          }, ico('more'))));
     };
     const used = lib.usage();
     modal.replaceChildren(...[

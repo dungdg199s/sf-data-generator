@@ -32,6 +32,14 @@ export function icoTile() {
   return h('span', { class: 'ico-tile', 'aria-hidden': 'true' }, h('span', { class: 'ico' }));
 }
 
+/**
+ * Action icon (design 0014 §1, docs/ui-design-system.md §5): a mask of `--ico-<name>`, coloured by
+ * currentColor, hidden from screen readers (an icon-only button needs its own aria-label).
+ */
+export function ico(name) {
+  return h('span', { class: 'ico', 'data-ico': name, 'aria-hidden': 'true' });
+}
+
 let toastTimer;
 let toastGeneration = 0;
 /**

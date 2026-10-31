@@ -5,14 +5,14 @@
 //   { group }                                   group header
 //   { separator: true }                         ends the group; the next rows stand alone under a line
 //   { type, label, desc, kbd, disabled, title, danger, onSelect }   a menu row (`type`: step-type icon tile)
-//   { label, checked, onSelect }                a radio row (role=menuitemradio, ✓ when checked)
+//   { label, checked, onSelect }                a radio row (role=menuitemradio, check icon when checked)
 //   { field: { label, value, placeholder, title, onInput, onEnter } }  a label + text input row
 // Arrow keys move between rows and inputs; a printable key jumps to the next row starting with
 // it (not while an input has focus); Esc and Tab / Shift+Tab close it and put focus back on the
 // anchor. ARIA: role=menu holds only menu items and role=group (one per group header, named by
 // it); the title and headers are aria-hidden text, inputs always sit in a group.
 
-import { h, icoTile } from './dom.js';
+import { h, ico, icoTile } from './dom.js';
 
 let popup = null; // { el, anchor, onClose }
 
@@ -108,7 +108,7 @@ export function openPopup(anchor, { title, items, search = false, searchLabel = 
         it.onSelect();
       },
     },
-    h('span', { class: 'pi-label' }, it.type ? icoTile() : null, radio ? h('span', { class: 'pi-check', 'aria-hidden': 'true' }, it.checked ? '✓' : '') : null, it.label),
+    h('span', { class: 'pi-label' }, it.type ? icoTile() : null, it.icon ? ico(it.icon) : null, radio ? h('span', { class: 'pi-check', 'aria-hidden': 'true' }, it.checked ? ico('check') : null) : null, it.label),
     it.desc ? h('small', {}, it.desc) : null,
     it.kbd ? h('kbd', {}, it.kbd) : null);
     if (!it.disabled) focusables.push(b);
@@ -140,7 +140,7 @@ export function openPopup(anchor, { title, items, search = false, searchLabel = 
       const buttons = focusables.filter((x) => x.matches('button'));
       const at = buttons.indexOf(document.activeElement);
       const order = [...buttons.slice(at + 1), ...buttons.slice(0, at + 1)];
-      order.find((b) => b.textContent.replace(/^✓/, '').trim().toLowerCase().startsWith(k))?.focus();
+      order.find((b) => b.textContent.trim().toLowerCase().startsWith(k))?.focus();
     }
   });
   // Inside an open modal dialog (its ⋯ buttons): the popup must be in the same top layer to be clickable.

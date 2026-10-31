@@ -187,13 +187,13 @@ Icon chỉ để trang trí (`aria-hidden="true"`), nhãn chữ luôn có.
 | `stale` | đồng hồ | (tùy chọn) chip số liệu cũ |
 | `theme` | vòng tròn tô nửa | Ô **Giao diện** thu gọn ở thanh trên ([0009](design/0009-bo-cuc-man-hinh.md)) |
 
-**Icon thao tác ([0014](design/0014-hoan-thien-giao-dien.md), dự kiến).** Thay mọi ký tự dùng làm icon. Hình ghi bằng lệnh
-SVG trên lưới 24 (cùng nét 2 px, đầu tròn):
+**Icon thao tác ([0014](design/0014-hoan-thien-giao-dien.md)).** Thay mọi ký tự dùng làm icon. Hình ghi bằng lệnh SVG
+trên lưới 24 (cùng nét 2 px, đầu tròn):
 
 | Tên | Hình | Thay ký tự | Dùng cho |
 | --- | --- | --- | --- |
-| `more` | 3 chấm ngang | `⋯` | Menu ⋯ thanh trên, menu bước |
-| `chevron-right` / `-down` / `-up` / `-left` | `M9 6l6 6-6 6` (xoay theo hướng) | `▸ ▾ ▴ ‹` | Thu gọn/mở khung và chi tiết field (phải = đóng, xuống = mở); nút `Kết quả` (xuống = mở, lên = thu gọn); "Ẩn tùy chọn" field; `Xong` của sheet |
+| `more` | 3 chấm ngang | `⋯` | Menu ⋯ thanh trên, menu bước, ⋯ của thanh chọn và của mục thư viện |
+| `chevron-right` / `chevron-down` / `chevron-up` / `chevron-left` | `M9 6l6 6-6 6` (xoay theo hướng) | `▸ ▾ ▴ ‹` | Thu gọn/mở khung và chi tiết field (phải = đóng, xuống = mở); nút `Kết quả` (xuống = mở, lên = thu gọn); "Ẩn tùy chọn" field; `Xong` của sheet; nút thư viện cạnh tên, `Bọc` của thanh chọn (xuống = mở menu) |
 | `grip` | 6 chấm, 2 cột × 3 hàng | `⠿` | Tay nắm kéo trên thẻ |
 | `undo` / `redo` | mũi tên cong trái / phải | `↶ ↷` | Hoàn tác / Làm lại |
 | `refresh` | vòng tròn mở có mũi tên | `⟳` | Tải lại danh sách org, "Đọc lại" |
@@ -201,7 +201,7 @@ SVG trên lưới 24 (cùng nét 2 px, đầu tròn):
 | `insert` | vạch trên, mũi tên lên | `⤒` | "Insert vào org" |
 | `run` | tam giác **tô đặc** | `▶` | "Xem trước" (khác `start` viền rỗng) |
 | `fit` | 4 góc chéo ra ngoài | `⤢` | Vừa khung (Sơ đồ) |
-| `plus` / `minus` | dấu + / − | `+ −` | "+" thêm bước, thu phóng |
+| `plus` / `minus` | dấu + / − | `+ − ＋` | "+" thêm bước, "Thêm bước đầu tiên", "Thêm field", thu phóng, "Workflow mới" (menu thư viện) |
 | `x` | dấu × | `✕ ✗` | Xóa field; nhãn nhánh "Sai" |
 | `check` | dấu ✓ | `✓` | Hàng menu chọn một; nhãn nhánh "Đúng" |
 | `trash` | thùng rác | `✕` | Xóa bước (đầu inspector) |
@@ -210,7 +210,12 @@ SVG trên lưới 24 (cùng nét 2 px, đầu tròn):
 | `arrow-up` / `arrow-down` | mũi tên thẳng | `↑ ↓` | Lên / Xuống field |
 | `pin` | đinh ghim | `📌` | "giữ seed" |
 | `minimap` | khung có ô nhỏ bên trong | — | Bật/tắt minimap Sơ đồ |
-| (có sẵn) `off`, `info`, `error` | | `⊘ ◉`, `ⓘ`, `✕` ô Id lỗi | Tắt/bật bước (cả hai trạng thái), hộp thông tin, ô Id insert lỗi trong bảng |
+| `folder` | thư mục | `⇪` | "Mở file JSON…" (menu thư viện; thêm khi làm 0014, vì menu của 0012 có ký tự này) |
+| (có sẵn) `off`, `info`, `error`, `warning` | | `⊘ ◉`, `ⓘ`, `✕` ô Id lỗi, `▲` | Tắt/bật bước (cả hai trạng thái), hộp thông tin, ô Id insert lỗi trong bảng, `Chưa lưu` / `Tab khác đã sửa` và tag `quá giới hạn` |
+
+**Cỡ.** `--icon-xs` 12 px cạnh chữ 12 px (chip, badge, nhãn làn, tag, ô bảng), `--icon-sm` 14 px cạnh chữ 13 px (link ở
+tóm tắt kết quả, nhãn cột Đúng/Sai, số đếm thanh lỗi, tab), `--icon-md` 16 px trong nút (mặc định của `.ico`), dòng lỗi và
+hộp cảnh báo / thông tin. Ô icon loại bước giữ 15 px trong ô 24 px.
 
 **Cách dùng.** Phần tử `<span class="ico" data-ico="<tên>" aria-hidden="true">` (JS: `ico('<tên>')` trong `dom.js`); mỗi
 icon có một luật `.ico[data-ico="<tên>"] { --ico: var(--ico-<tên>); }`, **kể cả icon cũ**: thiếu luật thì `.ico` lấy `--ico`

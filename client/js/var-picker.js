@@ -9,7 +9,7 @@
 // execCommand('insertText') so the field's native undo still works, and each one is its own
 // undo step in the store (unique coalesceKey).
 
-import { h, icoTile } from './dom.js';
+import { h, ico, icoTile } from './dom.js';
 import { state, subscribe, stepById, currentScope } from './store.js';
 import { groupsFor, matchScore, tokenize, refAt, typeLabel, MAX_ROWS } from './variables.js';
 import { bindRefTarget, refSourceStep, sourceTitle } from './ref-target.js';
@@ -172,7 +172,7 @@ function chip(part, input, opts, issues) {
         openPicker(input, { focusSearch: true, replace: { start: part.start, end: part.end } });
       },
     },
-    known ? h('span', { class: 'ico', 'aria-hidden': 'true' }) : null,
+    known ? ico(type || 'info') : null,
     h('span', { class: 'var-src' }, name),
     rest.length ? ` · ${rest.join('.')}` : '',
   );
@@ -256,7 +256,7 @@ function openPicker(input, { focusSearch = false, auto = null, replace = null, t
   const extra = h('div');
   const scroll = h('div', { class: 'vp-list' }, list, extra);
   const foot = h('div', { class: 'vp-foot' }, '↑↓ chọn · Enter chèn · Esc đóng');
-  const hint = h('div', { class: 'vp-foot vp-hint', hidden: Boolean(state.result) }, 'Bấm ▶ Xem trước (Ctrl+Enter) để thấy giá trị mẫu.');
+  const hint = h('div', { class: 'vp-foot vp-hint', hidden: Boolean(state.result) }, 'Bấm Xem trước (Ctrl+Enter) để thấy giá trị mẫu.');
   const el = h('div', { class: 'var-picker' }, search, scroll, foot, hint);
   el.addEventListener('mousedown', (e) => { if (e.target !== search) e.preventDefault(); });
   document.body.append(el);

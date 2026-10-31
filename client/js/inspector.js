@@ -5,7 +5,7 @@
 // On narrow screens the panel is a bottom sheet (.inspector.open, body.sheet-open) shown while a
 // step is selected (design 0009 §3).
 
-import { h, toast, icoTile } from './dom.js';
+import { h, ico, toast, icoTile } from './dom.js';
 import { renderOptions } from './forms.js';
 import { api } from './api.js';
 import {
@@ -60,8 +60,8 @@ function render() {
   const key = multi.length > 1 ? `steps:${multi.join(',')}` : step ? `step:${step.id}` : s?.kind ?? 'none';
   if (key !== lastSelectionKey) sheetClosed = false;
   lastSelectionKey = key;
-  // The "‹ Xong" row sticks to the top of the sheet, so it closes without scrolling back up.
-  const head = h('div', { class: 'sheet-head' }, h('button', { class: 'sheet-close', title: 'Đóng bảng cấu hình (vẫn giữ bước đang chọn)', onclick: closeSheet }, '‹ Xong'));
+  // The "Xong" row sticks to the top of the sheet, so it closes without scrolling back up.
+  const head = h('div', { class: 'sheet-head' }, h('button', { class: 'sheet-close', title: 'Đóng bảng cấu hình (vẫn giữ bước đang chọn)', onclick: closeSheet }, ico('chevron-left'), 'Xong'));
   root.replaceChildren(head, multi.length > 1 ? renderMulti() : step ? renderStep(step) : renderWorkflow());
   // The narrow select mode has its own bar instead of the sheet (design 0012 B).
   setSheetOpen(Boolean(s) && !sheetClosed && !inSelectMode());
@@ -160,9 +160,9 @@ function renderWorkflow() {
     h(
       'ol',
       { class: 'hint' },
-      h('li', {}, 'Bấm "+ Thêm bước đầu tiên" hoặc Record ở cột trái.'),
+      h('li', {}, 'Bấm "Thêm bước đầu tiên" hoặc Record ở cột trái.'),
       h('li', {}, 'Chọn org ở thanh trên rồi "Import từ org…" để lấy field có sẵn.'),
-      h('li', {}, 'Bấm ▶ Xem trước (Ctrl+Enter) để kiểm tra dữ liệu trước khi insert.'),
+      h('li', {}, 'Bấm Xem trước (Ctrl+Enter) để kiểm tra dữ liệu trước khi insert.'),
     ),
     h('h3', {}, 'Phím tắt'),
     h(
@@ -207,9 +207,9 @@ function renderStep(step) {
       h('h2', {}, type?.label ?? step.type),
       step.disabled ? h('span', { class: 'tag-off', title: 'Bước này đang tắt: không chạy và không được kiểm tra.' }, 'Đã tắt') : null,
       h('div', { class: 'spacer' }),
-      h('button', { class: 'icon', title: step.disabled ? 'Bật bước (Ctrl+/)' : 'Tắt bước (Ctrl+/)', onclick: () => toggleDisabled(step.id) }, step.disabled ? '◉' : '⊘'),
-      h('button', { class: 'icon', title: 'Nhân bản (Ctrl+D)', onclick: () => duplicateStep(step.id) }, '⧉'),
-      h('button', { class: 'icon danger', title: 'Xóa (Delete)', onclick: () => deleteStep(step.id) }, '✕'),
+      h('button', { class: 'icon', title: step.disabled ? 'Bật bước (Ctrl+/)' : 'Tắt bước (Ctrl+/)', 'aria-label': step.disabled ? 'Bật bước' : 'Tắt bước', onclick: () => toggleDisabled(step.id) }, ico('off')),
+      h('button', { class: 'icon', title: 'Nhân bản (Ctrl+D)', 'aria-label': 'Nhân bản', onclick: () => duplicateStep(step.id) }, ico('duplicate')),
+      h('button', { class: 'icon danger', title: 'Xóa (Delete)', 'aria-label': 'Xóa bước', onclick: () => deleteStep(step.id) }, ico('trash')),
     ),
     h('p', { class: 'desc' }, type?.description ?? ''),
     step.disabled ? h('div', { class: 'warn-box' }, 'Bước này đang tắt nên không chạy và không được kiểm tra. Bấm Ctrl+/ để bật lại.') : null,
@@ -217,7 +217,7 @@ function renderStep(step) {
   if (!type?.options.length && step.type !== 'record') return wrap;
 
   if (type?.needsOrg && !state.org) {
-    wrap.append(h('div', { class: 'info-box' }, `ⓘ Chưa chọn org: Xem trước sẽ dùng ${SAMPLE_ROWS} bản ghi mẫu (Id giả).`));
+    wrap.append(h('div', { class: 'info-box' }, `Chưa chọn org: Xem trước sẽ dùng ${SAMPLE_ROWS} bản ghi mẫu (Id giả).`));
   }
   const form = renderOptions(type.options, step.config ?? {}, (key, v, meta) => onStepOption(step, key, v, form, meta), {
     vars: { stepId: step.id },
@@ -726,10 +726,10 @@ function renderFields(node) {
           h(
             'div',
             { class: 'actions' },
-            h('button', { title: open ? 'Ẩn tùy chọn' : 'Tùy chọn', onclick: () => { open ? expanded.delete(key) : expanded.add(key); render(); } }, open ? '▴' : '⚙'),
-            h('button', { title: 'Lên', disabled: i === 0, onclick: () => structural(() => fields.splice(i - 1, 0, fields.splice(i, 1)[0])) }, '↑'),
-            h('button', { title: 'Xuống', disabled: i === fields.length - 1, onclick: () => structural(() => fields.splice(i + 1, 0, fields.splice(i, 1)[0])) }, '↓'),
-            h('button', { title: 'Xóa field', onclick: () => removeField(node, i) }, '✕'),
+            h('button', { title: open ? 'Ẩn tùy chọn' : 'Tùy chọn', 'aria-label': open ? 'Ẩn tùy chọn' : 'Tùy chọn', 'aria-expanded': String(open), onclick: () => { open ? expanded.delete(key) : expanded.add(key); render(); } }, ico(open ? 'chevron-up' : 'options')),
+            h('button', { title: 'Lên', 'aria-label': 'Lên', disabled: i === 0, onclick: () => structural(() => fields.splice(i - 1, 0, fields.splice(i, 1)[0])) }, ico('arrow-up')),
+            h('button', { title: 'Xuống', 'aria-label': 'Xuống', disabled: i === fields.length - 1, onclick: () => structural(() => fields.splice(i + 1, 0, fields.splice(i, 1)[0])) }, ico('arrow-down')),
+            h('button', { title: 'Xóa field', 'aria-label': 'Xóa field', onclick: () => removeField(node, i) }, ico('x')),
           ),
         ),
       );
@@ -772,7 +772,7 @@ function renderFields(node) {
           fields.push({ name: '', type: 'text', options: {} });
           expanded.add(`${node.id}:${fields.length - 1}`);
         }),
-      }, '+ Thêm field'),
+      }, ico('plus'), 'Thêm field'),
       h('button', {
         disabled: !state.org,
         title: state.org ? `Lấy field từ ${state.org}` : 'Chọn org ở thanh trên trước',
