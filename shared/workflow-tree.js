@@ -440,7 +440,11 @@ export function cloneSteps(steps, { ids = new Set(), aliases = new Set(), makeId
   // A new name is never one of the copy's own names: the renames below run one after the other,
   // so `acc → acc2` then `acc2 → acc3` would send the references to `acc` on to `acc3` (0012 review).
   const originals = new Set();
-  walkSteps(copy, (s) => { for (const { value } of stepNames(s, catalog)) originals.add(value); });
+  // Loop variables inside the copy count too: `item → item2` must not land on a copied loop's `item2`.
+  walkSteps(copy, (s) => {
+    for (const { value } of stepNames(s, catalog)) originals.add(value);
+    if (s.type === 'loop') originals.add(s.config?.alias || 'loop');
+  });
   walkSteps(copy, (s) => {
     const entry = { id: s.id, copyId: makeId(s.id, ids) };
     ids.add(entry.copyId);
@@ -641,8 +645,8 @@ export function neighbourTargetBlock(wf, ids, dir, collapsed = new Set(), slotKe
   return same(next) && next.index >= sel.start ? { ...next, index: next.index + size } : next;
 }
 
-/** Loop variables of the loops that enclose a step inserted at `target`. */
-function loopVarsAround(wf, target, slotKeys) {
+/** Loop variables of the loops that enclose a step inserted at `target` (paste, Ctrl+D). */
+export function loopVarsAround(wf, target, slotKeys) {
   if (!target?.parentId) return new Set();
   const at = findStep(wf, target.parentId, slotKeys);
   if (!at) return new Set();

@@ -398,7 +398,7 @@ test('renameField follows references through the record of an each loop and a Ch
 // ---------- design 0012 B: groups of steps, paste ----------
 
 import {
-  normalizeSelection, rangeBetween, wrapSteps, removeSteps, moveBlock, neighbourTargetBlock, pasteSteps, countSteps,
+  normalizeSelection, rangeBetween, wrapSteps, removeSteps, moveBlock, neighbourTargetBlock, pasteSteps, countSteps, loopVarsAround,
 } from '../shared/workflow-tree.js';
 
 test('rangeBetween lifts both ends to the nearest common sequence', () => {
@@ -540,4 +540,28 @@ test('pasteSteps renames a record alias that equals a loop variable around the t
   assert.equal(a.config.alias, 'row2');
   assert.equal(b.config.fields[0].options.template, '{{row2.Name}}');
   assert.deepEqual(res.renamed, [{ from: 'row', to: 'row2' }]);
+});
+
+test('pasteSteps: a rename never lands on a loop variable inside the copy (0012 review 2)', () => {
+  const catalog = scopeCatalog();
+  const tpl = (t) => ({ name: 'T', type: 'template', options: { template: t } });
+  const copied = [r('a', 'item'), loop('l', [r('c', 'c', [tpl('{{item.Name}} #{{item2}}')])], { count: 2, alias: 'item2' })];
+  const wf = tree([r('x', 'item')]);
+  const res = pasteSteps(wf, { parentId: null, slot: null, index: 1 }, copied, { catalog, slotKeys });
+  const [a, l] = res.ids.map((id) => findStep(wf, id).step);
+  assert.equal(a.config.alias, 'item3');
+  assert.equal(l.config.alias, 'item2', 'the loop variable is not taken here: it stays');
+  assert.equal(l.slots.body[0].config.fields[0].options.template, '{{item3.Name}} #{{item2}}');
+  assert.deepEqual(res.renamed, [{ from: 'item', to: 'item3' }]);
+});
+
+test('Ctrl+D inside a loop: the copy does not take the name of the enclosing loop variable (0012 review 2)', () => {
+  const catalog = scopeCatalog();
+  const tpl = (t) => ({ name: 'T', type: 'template', options: { template: t } });
+  const wf = tree([loop('l', [r('a', 'row'), r('b', 'b', [tpl('{{row2.index}}')])], { count: 2, alias: 'row2' })]);
+  const at = findStep(wf, 'a', slotKeys);
+  // As client/js/ops.js duplicateStep: the record aliases plus the loop variables around the step.
+  const aliases = new Set([...collectAliases(wf, catalog), ...loopVarsAround(wf, { parentId: at.parentId }, slotKeys)]);
+  const { steps: [copy] } = cloneSteps([at.step], { ids: collectIds(wf), aliases, catalog });
+  assert.equal(copy.config.alias, 'row3');
 });

@@ -12,7 +12,7 @@ import { eachWrapPlan as planEachWrap, applyEachRewire } from '/shared/each-wrap
 import {
   insertStep, removeStep, moveStep, wrapStep, cloneSteps, collectIds, collectAliases,
   defaultInsertTarget, neighbourTarget, findStep, walkSteps, slotList, subtreeIds,
-  normalizeSelection, wrapSteps, removeSteps, moveBlock, neighbourTargetBlock, pasteSteps,
+  normalizeSelection, wrapSteps, removeSteps, moveBlock, neighbourTargetBlock, pasteSteps, loopVarsAround,
 } from '/shared/workflow-tree.js';
 import { stepLabel } from './summary.js';
 import { placesText } from './variables.js';
@@ -266,7 +266,10 @@ export function duplicateStep(id = selectedId()) {
   if (!at) return;
   let copyId = null;
   updateWorkflow((wf) => {
-    const { steps: [copy] } = cloneSteps([at.step], { ids: collectIds(wf), aliases: collectAliases(wf, state.meta), catalog: state.meta });
+    // As in paste: the copy must not take the name of a loop variable around it either.
+    const around = loopVarsAround(wf, { parentId: at.parentId }, slotKeys);
+    const aliases = new Set([...collectAliases(wf, state.meta), ...around]);
+    const { steps: [copy] } = cloneSteps([at.step], { ids: collectIds(wf), aliases, catalog: state.meta });
     copyId = copy.id;
     insertStep(wf, { parentId: at.parentId, slot: at.slot, index: at.index + 1 }, copy);
   });
