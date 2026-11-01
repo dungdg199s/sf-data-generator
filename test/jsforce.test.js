@@ -256,7 +256,7 @@ test('real jsforce: a refreshed token of another org is refused; the call is not
     const getConnection = cli.getConnection.bind(cli);
     cli.getConnection = async (t, o = {}) => ({ ...(await getConnection(t, o)), ...(o.refresh ? { orgId: '00D000000000002BBB' } : {}) });
     const client = createSfClient({ cli });
-    await assert.rejects(client.create('dev', 'Contact', [{ LastName: 'A' }]), /bây giờ là org khác/);
+    await assert.rejects(client.create('dev', 'Contact', [{ LastName: 'A' }]), /bây giờ trỏ tới org khác/);
     assert.equal(fake.requests.filter((r) => r.method === 'POST').length, 1, 'only the request refused with 401');
     assert.equal(fake.records.size, 0);
     const who = await createSfClient({ cli: fakeCli(fake) }).whoami('dev');

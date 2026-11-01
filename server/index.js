@@ -109,7 +109,7 @@ export function allowedHostsFor(bindHost) {
 }
 
 /** The sentence of an insert refused because history cannot be written (S7; also server/run.js). */
-export const historyOffMessage = ({ reason, dir }) => `Không ghi được Lịch sử (${reason}), nên chưa ghi gì vào org. Kiểm tra quyền ghi thư mục ${dir} hoặc đặt SFDG_DATA_DIR.`;
+export const historyOffMessage = ({ reason, dir, locked }) => `Không ghi được Lịch sử (${reason}), nên chưa ghi gì vào org.${locked ? '' : ` Kiểm tra quyền ghi thư mục ${dir} hoặc đặt SFDG_DATA_DIR.`}`;
 /** Review 2, item 3: rows of an Id file that a delete never touches. */
 export const rejectedMessage = (n) => `${n} dòng trong file Id không thuộc bước nào của lần insert này (file có thể đã bị sửa), không xóa.`;
 const HISTORY_MISSING = 'Không tìm thấy lần insert này trong Lịch sử (có thể đã bị dọn vì vượt giới hạn lưu trữ).';
@@ -161,7 +161,8 @@ export function createApp({
   /** History must be writable (and this server its only writer, N6) for a delete or a forget. */
   async function requireHistory(what) {
     const st = await history.status({ retry: true });
-    if (!st.enabled) throw httpError(503, `Không ghi được Lịch sử (${st.reason}), nên không ${what} được. Kiểm tra quyền ghi thư mục ${st.dir} hoặc đặt SFDG_DATA_DIR.`);
+    // A lock held by another server: its sentence already says what to do (N11).
+    if (!st.enabled) throw httpError(503, `Không ghi được Lịch sử (${st.reason}), nên không ${what} được.${st.locked ? '' : ` Kiểm tra quyền ghi thư mục ${st.dir} hoặc đặt SFDG_DATA_DIR.`}`);
   }
 
   /**
@@ -205,7 +206,13 @@ export function createApp({
     if (now.kind !== 'sandbox' && now.kind !== 'scratch') {
       const typed = typeof confirm.typedOrg === 'string' ? confirm.typedOrg.trim().toLowerCase() : '';
       const names = [was.alias, was.username].filter(Boolean).map((x) => x.toLowerCase());
-      if (!typed || !names.includes(typed)) throw httpError(400, `Org "${name}" là production: gõ đúng tên org trong hộp xác nhận để xóa.`);
+      if (!typed || !names.includes(typed)) {
+        // The dialog may not have shown the name field (the kind changed since it opened): tell it to (review, S3).
+        const text = now.kind === 'production'
+          ? `Org "${name}" là production: gõ đúng tên org trong hộp xác nhận để xóa.`
+          : `sf CLI không trả lời nên coi như production: gõ đúng tên org "${name}" trong hộp xác nhận để xóa.`;
+        throw Object.assign(httpError(400, text), { body: { needTypedOrg: true, kind: now.kind } });
+      }
     }
     return { target, rem, pending, session: now.session ?? target };
   }
@@ -221,8 +228,12 @@ export function createApp({
     throw Object.assign(httpError(409, `Số bản ghi còn phải xóa đã đổi (còn ${rem.total}, hộp xác nhận ghi ${count}). Mở lại hộp xác nhận để xem số mới.`), { body: { count: rem.total } });
   }
 
-  /** The history entry of a URL segment, or 404 (also for a malformed hid: no path traversal). */
-  async function historyEntry(raw) {
+  /**
+   * The history entry of a URL segment, or 404 (also for a malformed hid: no path traversal).
+   * corrupt: an entry whose .json is broken or missing but whose files exist gives `data: null`
+   * (its Ids can still be downloaded and the entry forgotten; review S4).
+   */
+  async function historyEntry(raw, { corrupt = false } = {}) {
     let hid;
     try {
       hid = decodeURIComponent(raw);
@@ -231,7 +242,7 @@ export function createApp({
     }
     if (!isValidHid(hid)) throw httpError(404, HISTORY_MISSING);
     const data = await history.read(hid);
-    if (!data) throw httpError(404, HISTORY_MISSING);
+    if (!data && !(corrupt && await history.exists(hid))) throw httpError(404, HISTORY_MISSING);
     return { hid, data };
   }
 
@@ -391,7 +402,7 @@ export function createApp({
       async () => {
         const st = await history.status();
         return {
-          enabled: st.enabled, ...(st.reason ? { reason: st.reason } : {}), dir: st.dir, maxRuns: st.maxRuns, runs: st.enabled ? await history.list() : [],
+          enabled: st.enabled, ...(st.reason ? { reason: st.reason } : {}), ...(st.locked ? { locked: true } : {}), dir: st.dir, maxRuns: st.maxRuns, runs: st.enabled ? await history.list() : [],
           // Entries the next insert would drop although they still have records in an org (S4): the
           // insert confirmation warns before the user confirms (the `plan` event repeats it).
           prune: st.enabled ? await history.prunePreview() : [],
@@ -424,7 +435,7 @@ export function createApp({
       'GET',
       /^\/api\/history\/([^/]+)\/ids\.csv$/,
       async ([, raw], _body, params, { res }) => {
-        const { hid, data } = await historyEntry(raw);
+        const { hid, data } = await historyEntry(raw, { corrupt: true });
         await streamIdsCsv(res, history, hid, data, params.get('sobject'));
         return STREAMED;
       },
@@ -433,9 +444,9 @@ export function createApp({
       'POST',
       /^\/api\/history\/([^/]+)\/forget$/,
       async ([, raw]) => {
-        const { hid, data } = await historyEntry(raw);
+        const { hid, data } = await historyEntry(raw, { corrupt: true });
         await requireHistory('quên lần insert này');
-        if (history.activeKind(hid) || data.status === 'running') throw httpError(409, 'Lần insert này đang chạy. Bấm "Dừng", chờ nó dừng rồi mới quên.');
+        if (history.activeKind(hid) || data?.status === 'running') throw httpError(409, 'Lần insert này đang chạy. Bấm "Dừng", chờ nó dừng rồi mới quên.');
         await history.forget(hid); // marks the entry active while it removes it, refuses an active one (N1)
         return { ok: true };
       },
@@ -444,6 +455,11 @@ export function createApp({
       'POST',
       /^\/api\/history\/([^/]+)\/delete$/,
       async ([, raw], body, _params, { req, res }) => {
+        // A client that left (Hủy while the org was being checked, tab closed) gets no delete (review, S1).
+        let gone = false;
+        const onEarlyClose = () => { gone = true; };
+        res.on('close', onEarlyClose);
+        const left = () => gone || res.destroyed || req.socket.destroyed;
         const { hid, data } = await historyEntry(raw);
         await requireHistory('xóa');
         const checked = await checkDelete(hid, data, body);
@@ -451,6 +467,10 @@ export function createApp({
         let { rem } = checked;
         // Checked again right before marking: another request may have started meanwhile.
         if (history.activeKind(hid)) throw httpError(409, 'Đang xóa dữ liệu của lần insert này ở một tab khác. Chờ lần đó xong.');
+        if (left()) {
+          res.off('close', onEarlyClose);
+          return STREAMED;
+        }
         const release = history.markActive(hid, 'delete');
         // S2: Bulk jobs whose Ids were never read are collected FIRST (read-only), then the count the
         // user confirmed is compared with the new total; a difference ⇒ 409 and nothing deleted.
@@ -465,6 +485,11 @@ export function createApp({
         } catch (e) {
           release();
           throw e;
+        }
+        res.off('close', onEarlyClose);
+        if (left()) {
+          release();
+          return STREAMED;
         }
         const handle = runs.open();
         const onClose = () => { if (!res.writableEnded) runs.cancel(handle.id); };
@@ -620,10 +645,10 @@ export function createApp({
  */
 async function streamIdsCsv(res, history, hid, data, sobject) {
   const outcome = await history.deletedMap(hid);
-  const t = new Date(data.startedAt ?? Date.now());
+  const t = new Date(data?.startedAt ?? Date.now());
   const p2 = (n) => String(n).padStart(2, '0');
   const when = `${t.getFullYear()}${p2(t.getMonth() + 1)}${p2(t.getDate())}-${p2(t.getHours())}${p2(t.getMinutes())}`;
-  const base = String(data.workflow?.name || 'workflow').replace(/[^\w.-]+/g, '_');
+  const base = String(data?.workflow?.name || 'workflow').replace(/[^\w.-]+/g, '_');
   res.writeHead(200, {
     'Content-Type': 'text/csv; charset=utf-8',
     'Content-Disposition': `attachment; filename="${base}-${when}-ids.csv"`,

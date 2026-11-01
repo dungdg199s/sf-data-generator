@@ -200,13 +200,13 @@ test('sf client: a re-pointed alias gets a new connection; refreshFn refuses a t
   await client.create('dev', 'Contact', [{ LastName: 'A' }]);
   who = { orgId: '00DB', username: 'me@x.com' };
   const refused = await new Promise((resolve) => made[0].options.refreshFn(made[0], (err) => resolve(err)));
-  assert.match(refused.message, /^Org "dev" bây giờ là org khác \(00DB, me@x.com\)/);
+  assert.match(refused.message, /^Alias "dev" bây giờ trỏ tới org khác \(00DB, me@x.com; kết nối đang dùng: .*sf org display --target-org dev; .*sf org login web --alias dev vào đúng org\.$/);
   await client.create('dev', 'Contact', [{ LastName: 'B' }]);
   assert.equal(made.length, 2, 'the new org gets its own connection');
   assert.equal(made[0].calls.length, 1);
   assert.equal(made[1].calls.length, 1);
   who = { orgId: '00DB', username: 'other@x.com' };
-  assert.match((await new Promise((resolve) => made[1].options.refreshFn(made[1], (err) => resolve(err)))).message, /bây giờ là org khác/);
+  assert.match((await new Promise((resolve) => made[1].options.refreshFn(made[1], (err) => resolve(err)))).message, /bây giờ trỏ tới org khác/);
 });
 
 test('sf client reports Salesforce errors as 502 with the error code', async () => {

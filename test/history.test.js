@@ -178,7 +178,8 @@ test('N1: forget refuses an entry in use; N5: crash leftovers are cleaned, an em
   const again = createHistory({ dir, random: hex });
   const list = await again.list();
   assert.deepEqual(list.map((e) => [e.id, e.status]), [['h20260101T000000Z-cccccc', 'corrupt']]);
-  assert.match(list[0].error, /^File h20260101T000000Z-cccccc\.json rỗng/);
+  assert.ok(list[0].error.startsWith(`File ${path.join(root, 'h20260101T000000Z-cccccc.json')} rỗng`), list[0].error);
+  assert.equal(list[0].hasIds, false);
   const left = (await readdir(root)).filter((f) => !f.startsWith('.')).sort();
   assert.deepEqual(left, ['h20260101T000000Z-cccccc.json']);
 });
@@ -257,9 +258,15 @@ test('item 5: an orphan Id file with Ids is kept and listed as corrupt; one with
   const h = createHistory({ dir, random: hex });
   const list = await h.list();
   assert.deepEqual(list.map((e) => [e.id, e.status]), [['h20260101T000000Z-aaaaaa', 'corrupt']]);
-  assert.match(list[0].error, /^Thiếu file h20260101T000000Z-aaaaaa\.json/);
+  assert.ok(list[0].error.startsWith(`Thiếu file ${path.join(root, 'h20260101T000000Z-aaaaaa.json')}:`), list[0].error);
+  assert.match(list[0].error, /Quên/);
+  assert.deepEqual([list[0].orphan, list[0].hasIds], [true, true]);
   const left = (await readdir(root)).filter((f) => !f.startsWith('.')).sort();
   assert.deepEqual(left, ['h20260101T000000Z-aaaaaa.ids.csv']);
+  // review S4: its Ids are readable and "Quên" removes the file.
+  assert.deepEqual((await (async () => { const out = []; for await (const r of h.ids('h20260101T000000Z-aaaaaa')) out.push(r.id); return out; })()), ['001000000000001AAA']);
+  assert.equal(await h.forget('h20260101T000000Z-aaaaaa'), true);
+  assert.deepEqual((await readdir(root)).filter((f) => !f.startsWith('.')), []);
 });
 
 test('corrupt entries count toward maxRuns and are pruned first only after their grace period', async () => {
@@ -279,4 +286,24 @@ test('corrupt entries count toward maxRuns and are pruned first only after their
   t += 1000;
   await h.create({ org: ORG, workflow: null, seed: 1, now: 1, steps: [], total: 0 });
   assert.ok(!(await readdir(root)).includes('h20200101T000000Z-cccccc.json'));
+});
+
+test('review N7: without hard links the lock is an exclusive create with the pid; stale-aside files are cleaned; N11: a held lock says locked', async () => {
+  const dir = await tmp();
+  const root = path.join(dir, 'history');
+  const { mkdir } = await import('node:fs/promises');
+  await mkdir(root, { recursive: true });
+  await writeFile(path.join(root, '.lock.stale-abcdef'), '123');
+  const noLink = async () => { throw Object.assign(new Error('operation not permitted'), { code: 'EPERM' }); };
+  const h = createHistory({ dir, random: hex, linkFn: noLink });
+  const st = await h.status();
+  assert.equal(st.enabled, true, st.reason);
+  assert.equal((await readFile(path.join(root, '.lock'), 'utf8')).trim(), String(process.pid));
+  assert.deepEqual((await readdir(root)).filter((f) => f.startsWith('.lock.')), []);
+  // Another live process holds it (the parent of this test process).
+  await writeFile(path.join(root, '.lock'), String(process.ppid));
+  const other = createHistory({ dir, random: hex, linkFn: noLink });
+  const st2 = await other.status();
+  assert.deepEqual([st2.enabled, st2.locked], [false, true]);
+  assert.match(st2.reason, new RegExp(`pid ${process.ppid}`));
 });

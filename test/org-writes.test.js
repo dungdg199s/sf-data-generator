@@ -281,6 +281,78 @@ test('production: typedOrg must be the alias or username (case and spaces ignore
   }
 });
 
+test('review S3: a 400 for a missing typed name says needTypedOrg and the kind (unknown has its own sentence)', async () => {
+  const s = await stack({ cli: { isSandbox: false } });
+  try {
+    const hid = await inserted(s);
+    const good = await confirmOf(s, hid);
+    let r = await s.post(`/api/history/${hid}/delete`, { confirm: good });
+    assert.deepEqual(await r.json(), { error: 'Org "dev" là production: gõ đúng tên org trong hộp xác nhận để xóa.', needTypedOrg: true, kind: 'production' });
+    s.cli.listOrgs = async () => { throw new Error('sf broke'); };
+    r = await s.post(`/api/history/${hid}/delete`, { confirm: good });
+    const body = await r.json();
+    assert.equal(r.status, 400);
+    assert.deepEqual([body.needTypedOrg, body.kind], [true, 'unknown']);
+    assert.match(body.error, /^sf CLI không trả lời nên coi như production/);
+  } finally {
+    await s.close();
+  }
+});
+
+test('review S4: a corrupt entry (broken .json) still serves ids.csv and can be forgotten; delete stays 404', async () => {
+  const s = await stack();
+  try {
+    const hid = await inserted(s);
+    const { writeFile } = await import('node:fs/promises');
+    await writeFile(path.join(s.dir, 'history', `${hid}.json`), '{ broken');
+    const list = (await (await s.get('/api/history')).json()).runs;
+    assert.deepEqual([list[0].status, list[0].hasIds], ['corrupt', true]);
+    const csv = await s.get(`/api/history/${hid}/ids.csv`);
+    assert.equal(csv.status, 200);
+    assert.equal((await csv.text()).trim().split('\r\n').length, 16);
+    assert.equal((await s.post(`/api/history/${hid}/delete`, { confirm: { username: 'me@example.com', count: 15 } })).status, 404);
+    const f = await s.post(`/api/history/${hid}/forget`, {});
+    assert.equal(f.status, 200);
+    assert.deepEqual((await readdir(path.join(s.dir, 'history'))).filter((x) => !x.startsWith('.')), []);
+  } finally {
+    await s.close();
+  }
+});
+
+test('review S1: a client that disconnects before the headers (Hủy while the org is checked) gets no delete', async () => {
+  const s = await stack();
+  try {
+    const hid = await inserted(s);
+    const good = await confirmOf(s, hid);
+    const writes = s.fake.writes().length;
+    let reached;
+    const atCli = new Promise((r) => { reached = r; });
+    let open;
+    const gate = new Promise((r) => { open = r; });
+    const listOrgs = s.cli.listOrgs;
+    s.cli.listOrgs = async (...a) => { reached(); await gate; return listOrgs.apply(s.cli, a); };
+    const ctrl = new AbortController();
+    const req = fetch(`${s.url}/api/history/${hid}/delete`, { method: 'POST', signal: ctrl.signal, headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson' }, body: JSON.stringify({ confirm: good }) }).catch((e) => e);
+    await atCli;
+    ctrl.abort();
+    const seen = s.fake.requests.length;
+    assert.equal((await req).name, 'AbortError');
+    await new Promise((r) => setTimeout(r, 50)); // the server sees the socket close
+    open();
+    for (let i = 0; i < 20 && s.history.activeKind(hid); i++) await new Promise((r) => setTimeout(r, 10));
+    await new Promise((r) => setTimeout(r, 50));
+    s.cli.listOrgs = listOrgs;
+    assert.equal(s.fake.writes().length, writes, 'no delete request reached the org');
+    // Not even the delete's reads (describe for the key prefix): the handler stopped before marking the entry.
+    assert.deepEqual(s.fake.requests.slice(seen).filter((r) => /describe/.test(r.path)).map((r) => r.path), []);
+    assert.equal(s.history.activeKind(hid), null);
+    const entry = await (await s.get(`/api/history/${hid}`)).json();
+    assert.equal(entry.remaining.total, good.count);
+  } finally {
+    await s.close();
+  }
+});
+
 test('insert then delete through real jsforce: the Ids deleted are exactly the Ids inserted (Collections and Bulk), never hardDelete; then nothing is left', async () => {
   const s = await stack();
   try {
@@ -689,7 +761,7 @@ test('item 1: a refresh that lands on org B is refused: the insert stops with or
     };
     const res = await t.post('/api/run', { workflow: accCon(3, 100), seed: 1, target: { kind: 'org', org: 'dev', bulk: 'off' } });
     assert.equal(res.insert.stopped.reason, 'orgChanged');
-    assert.match(res.insert.stopped.message, /^Org "dev" bây giờ là org khác \(00D000000000002BBB, me@example.com\) so với kết nối đang dùng \(00D000000000001AAA, me@example.com\)\. Không gửi tiếp\./);
+    assert.match(res.insert.stopped.message, /^Alias "dev" bây giờ trỏ tới org khác \(00D000000000002BBB, me@example.com; kết nối đang dùng: 00D000000000001AAA, me@example.com\)\. Không gửi tiếp\. Kiểm tra bằng sf org display --target-org dev;/);
     assert.equal(res.insert.inserted, t.A.alive().length);
     assert.equal(res.insert.inserted + res.insert.failed + res.insert.notSent, 303);
     assert.equal(t.B.requests.length, 0);

@@ -191,7 +191,7 @@ export async function executeRun({
       hid = await history.create({ org: orgIdentity ?? { alias: target }, workflow, seed: run.seed, now: run.now, bulk, steps: plan.steps, total });
       releaseHistory = history.markActive(hid, 'insert');
     } catch (e) {
-      const ev = { type: 'error', error: `Không ghi được Lịch sử (${e.message}), nên chưa ghi gì vào org. Kiểm tra quyền ghi thư mục ${history.dir} hoặc đặt SFDG_DATA_DIR.`, insert: null };
+      const ev = { type: 'error', error: `Không ghi được Lịch sử (${e.message}), nên chưa ghi gì vào org.${e.locked ? '' : ` Kiểm tra quyền ghi thư mục ${history.dir} hoặc đặt SFDG_DATA_DIR.`}`, insert: null };
       emit(ev);
       return ev;
     }

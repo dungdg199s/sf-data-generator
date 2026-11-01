@@ -49,7 +49,7 @@ export function createSfClient({ cli, createConnection = (options) => new Connec
                 if (!fresh?.orgId || (expected.orgId && fresh.orgId !== expected.orgId) || (expected.username && fresh.username !== expected.username)) {
                   // jsforce rewraps this error ("Unable to refresh session…"), so the refusal is also
                   // remembered on the connection for `call` to recognise; the connection is dropped.
-                  expected.refused = `Org "${target}" bây giờ là org khác (${fresh?.orgId ?? 'không rõ org Id'}, ${fresh?.username ?? '?'}) so với kết nối đang dùng (${expected.orgId ?? '?'}, ${expected.username ?? '?'}). Không gửi tiếp. Chạy lại thao tác này.`;
+                  expected.refused = `Alias "${target}" bây giờ trỏ tới org khác (${fresh?.orgId ?? 'không rõ org Id'}, ${fresh?.username ?? '?'}; kết nối đang dùng: ${expected.orgId ?? '?'}, ${expected.username ?? '?'}). Không gửi tiếp. Kiểm tra bằng sf org display --target-org ${target}; nếu đúng org muốn ghi thì chạy lại, nếu không: sf org login web --alias ${target} vào đúng org.`;
                   connections.delete(key);
                   callback(Object.assign(new Error(expected.refused), { errorCode: 'ORG_CHANGED', code: 'ORG_CHANGED' }));
                 } else callback(null, fresh.accessToken);

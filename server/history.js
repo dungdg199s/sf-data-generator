@@ -26,6 +26,8 @@ import path from 'node:path';
 export const HID_RE = /^h\d{8}T\d{6}Z-[0-9a-f]{6}$/;
 export const isValidHid = (hid) => typeof hid === 'string' && HID_RE.test(hid);
 const FILE_MODE = 0o600;
+/** link() errors of a file system without hard links: the lock falls back to an exclusive create (N7). */
+const LINK_UNSUPPORTED = new Set(['EPERM', 'ENOSYS', 'ENOTSUP', 'EOPNOTSUPP', 'EXDEV', 'EMLINK']);
 const DIR_MODE = 0o700;
 const IDS_HEADER = 'sobject,step,ref,id\n';
 /** An empty lock file this young is a server between creating and filling it (review 2, item 4). */
@@ -112,9 +114,9 @@ const stamp = (ms) => new Date(ms).toISOString().replace(/[-:]/g, '').replace(/\
  * @param random    () → 6 hex characters
  * @param maxRuns / maxBytes  pruning limits
  */
-export function createHistory({ dir = defaultDataDir(), clock = () => Date.now(), random = () => randomBytes(3).toString('hex'), maxRuns = 100, maxBytes = 256 * 1024 * 1024 } = {}) {
+export function createHistory({ dir = defaultDataDir(), clock = () => Date.now(), random = () => randomBytes(3).toString('hex'), maxRuns = 100, maxBytes = 256 * 1024 * 1024, linkFn = link } = {}) {
   const root = path.join(dir, 'history');
-  const state = { enabled: false, reason: null, ready: null };
+  const state = { enabled: false, reason: null, locked: false, ready: null };
   const chains = new Map(); // hid → Promise (serialized writes)
   const active = new Map(); // hid → 'insert' | 'delete'
   const live = new Map(); // hid → Ids appended by the running insert
@@ -184,13 +186,16 @@ export function createHistory({ dir = defaultDataDir(), clock = () => Date.now()
       const other = await takeLock();
       if (other) {
         state.enabled = false;
+        state.locked = true; // the sentence already says what to do (no "check permissions / SFDG_DATA_DIR" after it, N11)
         state.reason = `Một server sf-data-generator khác (pid ${other}) đang dùng thư mục Lịch sử ${root}. Dừng server đó, hoặc đặt SFDG_DATA_DIR khác cho server này. Nếu không còn server nào khác, xóa file ${path.join(root, '.lock')}`;
         return;
       }
       state.enabled = true;
       state.reason = null;
+      state.locked = false;
     } catch (e) {
       state.enabled = false;
+      state.locked = false;
       state.reason = e.message;
       return;
     }
@@ -234,6 +239,8 @@ export function createHistory({ dir = defaultDataDir(), clock = () => Date.now()
   }
 
   const ready = () => (state.ready ??= init());
+  let linkUnsupported = !linkFn;
+  let retries = 0;
 
   /** → null when this process holds the lock, else the pid of the live process that does. */
   /**
@@ -245,18 +252,44 @@ export function createHistory({ dir = defaultDataDir(), clock = () => Date.now()
    */
   async function takeLock() {
     const lock = path.join(root, '.lock');
+    retries = 0;
+    const taken = async () => {
+      LOCKS.add(lock);
+      await clearStale();
+      return null;
+    };
     for (let attempt = 0; attempt < 3; attempt++) {
-      const tmp = path.join(root, `.lock.${process.pid}.${random()}`);
-      await writeSynced(tmp, String(process.pid), 'wx');
-      try {
-        await link(tmp, lock);
-        LOCKS.add(lock);
-        return null;
-      } catch (e) {
-        if (e.code === 'ENOENT') continue; // our temporary file vanished: try again
-        if (e.code !== 'EEXIST') throw e;
-      } finally {
-        await unlink(tmp).catch(() => {});
+      if (linkUnsupported) {
+        // File systems without hard links (some network / FAT drives; N7): an exclusive create with
+        // the pid written at once. A crash between create and write leaves an empty lock, which
+        // lockHolder treats as stale after LOCK_FRESH_MS.
+        try {
+          await writeSynced(lock, String(process.pid), 'wx');
+          return taken();
+        } catch (e) {
+          if (e.code !== 'EEXIST') throw new Error(`Không tạo được file khóa ${lock} (${e.code ?? e.message}): thư mục Lịch sử phải ghi được. Kiểm tra quyền ghi thư mục hoặc đặt SFDG_DATA_DIR tới một thư mục trên ổ máy này`);
+        }
+      } else {
+        const tmp = path.join(root, `.lock.${process.pid}.${random()}`);
+        await writeSynced(tmp, String(process.pid), 'wx');
+        let retry = false;
+        try {
+          await linkFn(tmp, lock);
+          return await taken();
+        } catch (e) {
+          if (e.code === 'ENOENT') retry = true; // our temporary file vanished: try again
+          else if (LINK_UNSUPPORTED.has(e.code)) {
+            linkUnsupported = true;
+            retry = true;
+          } else if (e.code !== 'EEXIST') throw e;
+        } finally {
+          await unlink(tmp).catch(() => {});
+        }
+        if (retry) {
+          attempt--;
+          if (++retries > 5) break;
+          continue;
+        }
       }
       const held = await lockHolder(lock);
       if (held === 'mine') return null;
@@ -270,13 +303,22 @@ export function createHistory({ dir = defaultDataDir(), clock = () => Date.now()
       }
       const again = await lockHolder(aside);
       if (again && again !== 'mine') {
-        await link(aside, lock).catch(() => {}); // a live lock was moved by mistake: put it back
+        await (linkUnsupported ? rename(aside, lock) : linkFn(aside, lock)).catch(() => {}); // a live lock was moved by mistake: put it back
         await unlink(aside).catch(() => {});
         return again;
       }
       await unlink(aside).catch(() => {});
     }
     return lockHolder(lock).then((h) => (h === 'mine' ? null : h ?? 'không rõ'));
+  }
+
+  /** Locks a crash left moved aside (`.lock.stale-*`), and temporary lock files of dead processes. */
+  async function clearStale() {
+    const names = await readdir(root).catch(() => []);
+    for (const f of names) {
+      const tmpPid = /^\.lock\.(\d+)\.[0-9a-f]+$/.exec(f)?.[1];
+      if (f.startsWith('.lock.stale-') || (tmpPid && Number(tmpPid) !== process.pid && !alive(Number(tmpPid)))) await unlink(path.join(root, f)).catch(() => {});
+    }
   }
 
   /** → 'mine' | pid (or 'không rõ') of a live holder | null when stale or missing */
@@ -390,7 +432,7 @@ export function createHistory({ dir = defaultDataDir(), clock = () => Date.now()
         state.ready = null;
         await ready();
       }
-      return { enabled: state.enabled, reason: state.reason, dir: root, maxRuns };
+      return { enabled: state.enabled, reason: state.reason, ...(state.locked ? { locked: true } : {}), dir: root, maxRuns };
     },
 
     /**
@@ -402,7 +444,7 @@ export function createHistory({ dir = defaultDataDir(), clock = () => Date.now()
       if (!state.enabled) {
         state.ready = null; // the directory may have been fixed: try again once
         await ready();
-        if (!state.enabled) throw new Error(state.reason);
+        if (!state.enabled) throw Object.assign(new Error(state.reason), { locked: state.locked });
       }
       await prune();
       let hid;
@@ -544,7 +586,8 @@ export function createHistory({ dir = defaultDataDir(), clock = () => Date.now()
       const withJson = new Set(names.filter((f) => f.endsWith('.json')).map((f) => f.slice(0, -5)));
       const orphans = names.map((f) => f.match(/^(.*)\.ids\.csv$/)?.[1]).filter((h) => h && isValidHid(h) && !withJson.has(h));
       for (const hid of orphans.sort().reverse()) {
-        out.push({ id: hid, status: 'corrupt', error: `Thiếu file ${hid}.json: không đọc được lần insert này, nhưng ${hid}.ids.csv vẫn còn Id đã insert (có thể vẫn ở trong org).` });
+        // Never pruned (only "Quên" removes it): its Ids may still be in an org (review, S4).
+        out.push({ id: hid, status: 'corrupt', orphan: true, hasIds: true, error: `Thiếu file ${path.join(root, `${hid}.json`)}: không đọc được lần insert này, nhưng ${path.join(root, `${hid}.ids.csv`)} vẫn còn Id đã insert (có thể vẫn ở trong org). Bấm "⤓ Id" để tải danh sách Id, xóa các bản ghi đó trong org bằng công cụ khác nếu cần (app không biết org nào), rồi bấm "Quên" để xóa file.` });
       }
       for (const hid of (await hids()).reverse()) {
         const d = await readJson(hid).catch(() => null);
@@ -552,7 +595,8 @@ export function createHistory({ dir = defaultDataDir(), clock = () => Date.now()
           // An empty or broken .json is shown, not dropped (N5): its Ids may still be in the org.
           const size = await stat(file(hid, '.json')).then((x) => x.size, () => null);
           if (size === null) continue;
-          out.push({ id: hid, status: 'corrupt', error: `File ${hid}.json ${size ? 'hỏng' : 'rỗng'}: không đọc được lần insert này. Id đã ghi (nếu có) vẫn ở ${hid}.ids.csv.` });
+          const hasIds = await stat(file(hid, '.ids.csv')).then(() => true, () => false);
+          out.push({ id: hid, status: 'corrupt', hasIds, error: `File ${path.join(root, `${hid}.json`)} ${size ? 'hỏng' : 'rỗng'}: không đọc được lần insert này.${hasIds ? ` Id đã ghi vẫn ở ${path.join(root, `${hid}.ids.csv`)}: bấm "⤓ Id" để tải, xóa các bản ghi đó trong org bằng công cụ khác nếu cần, rồi bấm "Quên".` : ' Bấm "Quên" để xóa file.'}` });
           continue;
         }
         const inserted = live.get(hid) ?? d.inserted ?? 0;
@@ -582,7 +626,8 @@ export function createHistory({ dir = defaultDataDir(), clock = () => Date.now()
 
     /** Removes the entry's files; refuses (409) while a run uses it (N1). */
     async forget(hid) {
-      if (!(await api.read(hid))) return false;
+      // A corrupt entry (broken .json, or Id file without one; review S4) can be forgotten too.
+      if (!(await api.read(hid)) && !(await api.exists(hid))) return false;
       if (active.has(hid)) throw Object.assign(new Error('Lần insert này đang được dùng (insert, xóa hoặc quên đang chạy). Chờ việc đó xong rồi thử lại.'), { status: 409 });
       active.set(hid, 'forget');
       try {
@@ -591,6 +636,14 @@ export function createHistory({ dir = defaultDataDir(), clock = () => Date.now()
         active.delete(hid);
       }
       return true;
+    },
+
+    /** Any file of the entry is on disk (a corrupt entry has no readable .json). */
+    async exists(hid) {
+      if (!isValidHid(hid)) return false;
+      await ready();
+      for (const ext of ['.json', '.ids.csv']) if (await stat(file(hid, ext)).then(() => true, () => false)) return true;
+      return false;
     },
 
     /** A run in progress on an entry ('insert' | 'delete'): forget / delete refuse it. */
