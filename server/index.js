@@ -108,6 +108,8 @@ export function allowedHostsFor(bindHost) {
   return new Set([...LOCAL_HOSTS, ...(bindHost ? [String(bindHost).toLowerCase()] : [])]);
 }
 
+/** The sentence of an insert refused because history cannot be written (S7; also server/run.js). */
+export const historyOffMessage = ({ reason, dir }) => `Không ghi được Lịch sử (${reason}), nên chưa ghi gì vào org. Kiểm tra quyền ghi thư mục ${dir} hoặc đặt SFDG_DATA_DIR.`;
 const HISTORY_MISSING = 'Không tìm thấy lần insert này trong Lịch sử (có thể đã bị dọn vì vượt giới hạn lưu trữ).';
 const LIMITS_CACHE_MS = 60000;
 const LIMITS_TIMEOUT_MS = 3000;
@@ -294,6 +296,9 @@ export function createApp({
           if (body.target.bulk !== undefined && body.target.bulk !== 'auto' && body.target.bulk !== 'off') {
             throw httpError(400, 'target.bulk phải là "auto" hoặc "off".');
           }
+          // No history ⇒ no insert (review of 0011, S7), answered before the run is even prepared.
+          const st = await history.status({ retry: true });
+          if (!st.enabled) throw httpError(503, historyOffMessage(st));
         }
         // Validation (422), the Query pre-fetch (409 / 502) and `now` (400) answer as plain JSON.
         const { run, pre, workflow } = await prepareRun(body, { insert });

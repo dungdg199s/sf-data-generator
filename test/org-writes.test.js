@@ -134,12 +134,18 @@ test('history that cannot be written: the insert answers an error and the org re
   await new Promise((r) => app.listen(0, '127.0.0.1', r));
   try {
     const url = `http://127.0.0.1:${app.address().port}`;
-    const res = await fetch(`${url}/api/run`, { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson' }, body: JSON.stringify({ workflow: accCon(2, 2), seed: 1, target: { kind: 'org', org: 'dev' } }) });
-    const last = JSON.parse((await res.text()).trim().split('\n').at(-1));
-    assert.equal(last.type, 'error');
-    assert.equal(last.insert, null);
-    assert.match(last.error, /^Không ghi được Lịch sử \(.*\), nên chưa ghi gì vào org\. Kiểm tra quyền ghi thư mục .* hoặc đặt SFDG_DATA_DIR\.$/);
+    // S7: answered 503 before the run is prepared, in NDJSON and JSON mode alike.
+    for (const accept of ['application/x-ndjson', 'application/json']) {
+      const res = await fetch(`${url}/api/run`, { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: accept }, body: JSON.stringify({ workflow: accCon(2, 2), seed: 1, target: { kind: 'org', org: 'dev' } }) });
+      assert.equal(res.status, 503, accept);
+      assert.match(res.headers.get('content-type'), /^application\/json/);
+      assert.match((await res.json()).error, /^Không ghi được Lịch sử \(.*\), nên chưa ghi gì vào org\. Kiểm tra quyền ghi thư mục .*history hoặc đặt SFDG_DATA_DIR\.$/);
+    }
     assert.equal(fake.writes().length, 0);
+    assert.equal(fake.requests.length, 0, 'not even the identity is read');
+    // A preview still works without history.
+    const prev = await fetch(`${url}/api/run`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ workflow: accCon(2, 2), seed: 1 }) });
+    assert.equal(prev.status, 200);
     const h = await (await fetch(`${url}/api/history`)).json();
     assert.equal(h.enabled, false);
     assert.ok(h.reason);

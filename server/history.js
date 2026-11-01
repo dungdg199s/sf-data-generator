@@ -217,8 +217,13 @@ export function createHistory({ dir = defaultDataDir(), clock = () => Date.now()
       if (!state.enabled) return [];
       return (await pruneCandidates()).filter((e) => e.remaining > 0).map((e) => ({ id: e.hid, startedAt: e.data.startedAt, org: e.data.org, workflowName: e.data.workflow?.name ?? '', remaining: e.remaining }));
     },
-    async status() {
+    /** `retry`: a disabled history tries its directory again (it may have been fixed meanwhile). */
+    async status({ retry = false } = {}) {
       await ready();
+      if (retry && !state.enabled) {
+        state.ready = null;
+        await ready();
+      }
       return { enabled: state.enabled, reason: state.reason, dir: root, maxRuns };
     },
 

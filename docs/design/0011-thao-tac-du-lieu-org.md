@@ -79,8 +79,9 @@ Ngoài ra còn ba câu hỏi chưa có câu trả lời: chạy tiếp một l�
 - **Thiếu quyền Delete:** 3 lời gọi xóa đầu của một sObject đều lỗi 100 % ⇒ tự dừng, câu lỗi nói kiểm tra quyền.
 - **Bản ghi đã bị xóa** (bằng tay, hoặc bị xóa dây chuyền khi xóa cha): đếm là "đã không còn", không phải lỗi.
 - **Server tắt giữa lúc insert:** khi khởi động lại, lần chạy đó hiện `Bị gián đoạn`; các Id đã ghi vẫn tải và xóa được.
-- **Không ghi được Lịch sử** (thư mục không ghi được, đầy đĩa): hộp xác nhận insert báo trước; nếu lỗi ghi xảy ra giữa
-  chừng thì insert dừng sau lô đang gửi, để không có bản ghi nào trong org mà app không biết Id.
+- **Không ghi được Lịch sử** (thư mục không ghi được, đầy đĩa): **không insert được** — hộp xác nhận insert báo trước và nút
+  Insert bị khóa; server trả 503 trước khi chạy (sửa sau review, S7). Nếu lỗi ghi xảy ra giữa chừng thì insert dừng sau lô
+  đang gửi, để không có bản ghi nào trong org mà app không biết Id.
 
 ## Thiết kế UI
 
@@ -113,7 +114,7 @@ Có thể bấm "Dừng" bất cứ lúc nào; bản ghi đã insert không tự
 | Dòng bước Bulk | Mỗi bước đủ điều kiện một dòng: `<alias> (<sObject>) <n>: 200 bản ghi đầu gửi thử bằng sObject Collections, phần còn lại <k> job Bulk.` Tối đa 5 dòng, phần còn lại `… và 3 bước khác`. Checkbox tắt thì các dòng này mờ (`text-muted`) |
 | Số lời gọi | Tính bằng `planInsert` của `shared/insert-plan.js` (cùng hàm server dùng cho sự kiện `plan`) |
 | Hạn mức org | `GET /api/orgs/:org/limits` gọi khi mở hộp (timeout 3 s, cache 60 s). Lỗi hay chậm thì bỏ dòng này, không chặn. Nếu ước tính > còn lại: `.warn-box` `Ước tính cần khoảng 1 000 lời gọi API nhưng org chỉ còn 640 trong 24 giờ. Insert có thể dừng giữa chừng với lỗi REQUEST_LIMIT_EXCEEDED. Bật Bulk API 2.0, giảm số bản ghi hoặc chờ hạn mức hồi lại.` (không khóa nút) |
-| Dòng Lịch sử | Khi Lịch sử tắt (`GET /api/history` trả `enabled: false`) thay bằng `.warn-box`: `Không ghi được Lịch sử vào <thư mục>: <lỗi>. Lần insert này sẽ không tải Id hay xóa lại được qua app. Đặt biến môi trường SFDG_DATA_DIR tới một thư mục ghi được rồi khởi động lại server.` |
+| Dòng Lịch sử | Khi Lịch sử tắt (`GET /api/history` trả `enabled: false`) thay bằng `.warn-box`: `Không ghi được Lịch sử vào <thư mục>: <lỗi>, nên không insert được (app phải ghi được Id để tải lại hay xóa dữ liệu). Đặt biến môi trường SFDG_DATA_DIR tới một thư mục ghi được rồi khởi động lại server.` và nút **Insert** bị khóa (`disabled`, `title` cùng câu). Server cũng từ chối: `POST /api/run` với org trả 503 `Không ghi được Lịch sử (<lỗi>), nên chưa ghi gì vào org. Kiểm tra quyền ghi thư mục <thư mục> hoặc đặt SFDG_DATA_DIR.` (sửa sau review, S7) |
 
 ### 2. Panel kết quả khi insert có Bulk
 
@@ -168,7 +169,7 @@ thanh trên vừa 1 280 px). Không có phím tắt riêng (không phải việc
 | Phần | Quy tắc |
 | --- | --- |
 | Hộp | `<dialog class="history">` theo §6.11, rộng `min(960px, 100vw − 2 × --space-4)`, cao tối đa 80dvh, bảng cuộn bên trong. Esc / × đóng. Focus đầu tiên: checkbox lọc |
-| Dòng đầu | `Lưu trên máy này tại <thư mục> · giữ <historyMaxRuns> lần insert gần nhất` (12 px `text-muted`). Lịch sử tắt: `.warn-box` câu như ở hộp xác nhận Insert, bảng trống |
+| Dòng đầu | `Lưu trên máy này tại <thư mục> · giữ <historyMaxRuns> lần insert gần nhất` (12 px `text-muted`). Lịch sử tắt: `.warn-box` câu như ở hộp xác nhận Insert (không insert được tới khi sửa thư mục), bảng trống |
 | Lọc | Checkbox `Chỉ org đang chọn (<org>)`, mặc định bật khi đã chọn org; không chọn org thì ẩn và hiện tất cả. Không lưu |
 | Bảng | Mới nhất trên cùng. Cột: Thời gian (`HH:mm dd/MM`, `title` đầy đủ), Org (alias, `title` = username · orgId · loại), Workflow (tên lúc insert), Bản ghi (`inserted` hoặc `inserted/total` nếu chưa gửi hết, ` · lỗi n` màu `danger-text`), Trạng thái (hai phần: lần chạy · dữ liệu), nút |
 | Trạng thái lần chạy | `Đang insert` (đang chạy), `Xong`, `Đã dừng`, `Tự dừng (lỗi hàng loạt)`, `Lỗi`, `Bị gián đoạn` (`warning-text`, `title="Server dừng giữa lúc insert. Đã ghi được <n> Id; có thể thiếu Id của lô cuối hoặc job Bulk đang chạy."`) |
@@ -343,7 +344,9 @@ sách Id từ client.
 Thư mục dữ liệu (`dataDir`): biến môi trường `SFDG_DATA_DIR` nếu có; không thì Linux `$XDG_DATA_HOME/sf-data-generator` (mặc
 định `~/.local/share/sf-data-generator`), macOS `~/Library/Application Support/sf-data-generator`, Windows
 `%APPDATA%\sf-data-generator`. Lịch sử nằm ở `<dataDir>/history/`, thư mục tạo với quyền `0700`, file `0600`. Không ghi
-được thư mục lúc khởi động ⇒ Lịch sử tắt (`enabled: false`, `reason`), app vẫn chạy (xem trước không cần nó).
+được thư mục ⇒ Lịch sử tắt (`enabled: false`, `reason`): app vẫn chạy và xem trước được, nhưng **không insert được**
+(`/api/run` với org trả 503 trước khi chạy; nút Insert khóa với cùng câu; sửa sau review, S7). Mỗi lần insert thử mở lại thư mục
+một lần, nên sửa quyền xong không cần khởi động lại.
 
 ```
 <dataDir>/history/
