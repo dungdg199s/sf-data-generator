@@ -351,3 +351,51 @@ test('an interrupted run whose Bulk job results were never read: delete reads th
     await s.close();
   }
 });
+
+// ---------- safety locks (design 0011 §8, step 8) ----------
+
+test('requests from another site get 403 on delete, ids.csv, history and limits; a text/plain delete gets 415; the org sees no write', async () => {
+  const s = await stack();
+  try {
+    const hid = await inserted(s);
+    const writes = s.fake.writes().length;
+    const limitsReads = () => s.fake.requests.filter((r) => r.path === '/limits').length;
+    const body = JSON.stringify({ confirm: await confirmOf(s, hid) });
+    const foreign = [
+      { Origin: 'https://evil.example' },
+      { 'Sec-Fetch-Site': 'cross-site' },
+    ];
+    for (const h of foreign) {
+      const del = await fetch(`${s.url}/api/history/${hid}/delete`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...h }, body });
+      assert.equal(del.status, 403, JSON.stringify(h));
+      for (const p of [`/api/history/${hid}/ids.csv`, `/api/history/${hid}`, '/api/history', '/api/orgs/dev/limits']) {
+        const r = await fetch(s.url + p, { headers: h });
+        assert.equal(r.status, 403, `${p} ${JSON.stringify(h)}`);
+        assert.ok(!(await r.text()).includes(hid.slice(1)), 'no Id or entry leaks');
+      }
+      const forget = await fetch(`${s.url}/api/history/${hid}/forget`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...h }, body: '{}' });
+      assert.equal(forget.status, 403);
+    }
+    // DNS rebinding: a foreign Host header (fetch cannot set Host, so plain http.request).
+    for (const [method, p] of [['POST', `/api/history/${hid}/delete`], ['GET', `/api/history/${hid}/ids.csv`], ['GET', '/api/orgs/dev/limits']]) {
+      const status = await new Promise((resolve, reject) => {
+        const req = http.request(`${s.url}${p}`, { method, headers: { Host: 'evil.example', 'Content-Type': 'application/json' } }, (res) => { res.resume(); resolve(res.statusCode); });
+        req.on('error', reject);
+        req.end(method === 'POST' ? body : undefined);
+      });
+      assert.equal(status, 403, p);
+    }
+    for (const type of ['text/plain', 'application/x-www-form-urlencoded', 'multipart/form-data; boundary=x']) {
+      const r = await fetch(`${s.url}/api/history/${hid}/delete`, { method: 'POST', headers: { 'Content-Type': type }, body });
+      assert.equal(r.status, 415, type);
+    }
+    assert.equal(s.fake.writes().length, writes);
+    assert.equal(limitsReads(), 0);
+    assert.equal((await s.history.remaining(hid)).total, 15, 'still there');
+    // The app itself (same origin) still works.
+    const ok = await fetch(`${s.url}/api/history/${hid}/delete`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: s.url, 'Sec-Fetch-Site': 'same-origin' }, body });
+    assert.equal(ok.status, 200);
+  } finally {
+    await s.close();
+  }
+});
