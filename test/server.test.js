@@ -731,3 +731,38 @@ test('POST /api/runs/:id/cancel accepts { force: true } (Dừng ngay); unknown r
   const res = await post('/api/runs/rnope/cancel', { force: true });
   assert.equal(res.status, 404);
 });
+
+test('S6: on a wildcard bind, org writes need an IP, localhost or this machine\'s name as Host; previews do not', async () => {
+  const os = await import('node:os');
+  const { url, close } = await appWith({ create: async (_t, _s, recs) => recs.map(() => ({ success: true, id: '001x' })) }, { allowedHosts: null });
+  const send = (path, body, host) => new Promise((resolve, reject) => {
+    const req = http.request(url + path, { method: 'POST', headers: { Host: host, 'Content-Type': 'application/json' } }, (res) => {
+      let text = '';
+      res.on('data', (c) => (text += c));
+      res.on('end', () => resolve({ status: res.statusCode, text }));
+    });
+    req.on('error', reject);
+    req.end(JSON.stringify(body));
+  });
+  const w = wf([record('a', 'Account', 'acc', [{ name: 'Name', type: 'text' }])]);
+  try {
+    for (const [path, body] of [
+      ['/api/run', { workflow: w, target: { kind: 'org', org: 'dev' } }],
+      ['/api/history/h20261028T103200Z-a1b2c3/delete', { confirm: { username: 'a@x.com', count: 1 } }],
+      ['/api/history/h20261028T103200Z-a1b2c3/forget', {}],
+      ['/api/runs/rnope/cancel', { force: true }],
+    ]) {
+      const r = await send(path, body, 'evil.example:3000');
+      assert.equal(r.status, 403, path);
+      assert.match(JSON.parse(r.text).error, /^Từ chối ghi hoặc xóa dữ liệu org qua địa chỉ "evil\.example:3000"\./);
+    }
+    assert.equal((await send('/api/run', { workflow: w }, 'evil.example')).status, 200, 'a preview is not an org write');
+    assert.equal((await send('/api/runs/rnope/cancel', {}, 'evil.example')).status, 404, 'a plain Dừng is not refused');
+    for (const host of ['127.0.0.1:3000', 'localhost', '[::1]:3000', '192.168.1.20:3000', os.hostname()]) {
+      assert.notEqual((await send('/api/runs/rnope/cancel', { force: true }, host)).status, 403, host);
+    }
+    assert.equal((await send('/api/run', { workflow: w, target: { kind: 'org', org: 'dev', bulk: 'off' } }, '127.0.0.1')).status, 200);
+  } finally {
+    close();
+  }
+});

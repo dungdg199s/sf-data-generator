@@ -214,6 +214,11 @@ Server hành động bằng quyền sf CLI của máy, nên phải chặn mọi 
   - POST phải có `Content-Type: application/json` ⇒ không thì 415. Một trang khác chỉ gửi được `text/plain`, form hay
     multipart mà không qua CORS preflight, và server không trả header CORS nào, nên preflight cũng thất bại.
   - curl và script không gửi `Origin`/`Sec-Fetch-Site` nên vẫn gọi được (`-H 'Content-Type: application/json'`).
+  - **Bind mọi địa chỉ** (`HOST=0.0.0.0` hoặc `::`): Host không còn được so với danh sách, nên các yêu cầu ghi/xóa org (`/api/run`
+    với `target.kind === 'org'`, `POST /api/history/:hid/delete`, `…/forget`, `POST /api/runs/:runId/cancel` có `force`) chỉ
+    nhận `Host` là địa chỉ IP, `localhost` hoặc tên máy (`os.hostname()`); tên miền khác ⇒ 403 `Từ chối ghi hoặc xóa dữ liệu org
+    qua địa chỉ "<host>". …` (sửa sau review 0011, S6: tên miền của trang DNS rebinding không bao giờ là IP hay tên máy). Xem
+    trước, đọc describe… vẫn như cũ.
 - Ghi vào org chỉ qua `/api/run` với `target.kind === 'org'`, sau hộp xác nhận ở UI.
 - **Endpoint ghi / xóa** ([0011](design/0011-thao-tac-du-lieu-org.md) §8):
 

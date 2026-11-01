@@ -4,6 +4,8 @@
 // so it must not be reachable from the network unless HOST is set explicitly.
 
 import http from 'node:http';
+import net from 'node:net';
+import os from 'node:os';
 import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -69,6 +71,35 @@ export function requestGuard(req, { allowedHosts = null } = {}) {
     return { status: 415, message: 'Body phải là JSON (Content-Type: application/json).' };
   }
   return null;
+}
+
+/**
+ * Requests that write to or delete from an org, or abort a Bulk job (review of 0011, S6): an insert
+ * (`/api/run` with an org target), a delete or forget of a history entry, a forced cancel.
+ */
+export function isOrgWrite(method, pathname, body) {
+  if (method !== 'POST') return false;
+  if (pathname === '/api/run') return body?.target?.kind === 'org';
+  if (/^\/api\/history\/[^/]+\/(delete|forget)$/.test(pathname)) return true;
+  if (/^\/api\/runs\/[^/]+\/cancel$/.test(pathname)) return body?.force === true;
+  return false;
+}
+
+/**
+ * On a wildcard bind (HOST=0.0.0.0 / ::) requestGuard cannot check Host against a list, so the
+ * requests of isOrgWrite still need a Host that cannot be a DNS-rebinding name: an IP literal,
+ * localhost, or this machine's own host name. → { status, message } | null
+ */
+export function writeHostGuard(req, { hostname: machine = os.hostname() } = {}) {
+  const host = String(req.headers.host ?? '');
+  let name = host.toLowerCase();
+  if (name.startsWith('[')) name = name.slice(1, name.indexOf(']') > 0 ? name.indexOf(']') : undefined);
+  else name = name.replace(/:\d+$/, '');
+  if (net.isIP(name) || name === 'localhost' || name === String(machine).toLowerCase()) return null;
+  return {
+    status: 403,
+    message: `Từ chối ghi hoặc xóa dữ liệu org qua địa chỉ "${host}". Server đang nghe mọi địa chỉ mạng, nên thao tác này chỉ nhận qua địa chỉ IP, localhost hoặc tên máy "${machine}". Mở app bằng http://127.0.0.1:<cổng>.`,
+  };
 }
 
 /** Hosts for requestGuard from the HOST the server listens on (a wildcard bind accepts any name). */
@@ -529,6 +560,10 @@ export function createApp({
         const route = routes.find(([method, re]) => method === req.method && re.test(url.pathname));
         if (!route) throw httpError(404, 'Không có API này.');
         const body = req.method === 'POST' ? await readJson(req) : undefined;
+        if (allowedHosts === null && isOrgWrite(req.method, url.pathname, body)) {
+          const refusedWrite = writeHostGuard(req);
+          if (refusedWrite) throw httpError(refusedWrite.status, refusedWrite.message);
+        }
         const data = await route[2](url.pathname.match(route[1]), body, url.searchParams, { req, res });
         if (data === STREAMED) return undefined;
         return sendJson(res, 200, data);
