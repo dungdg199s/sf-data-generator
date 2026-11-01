@@ -799,3 +799,24 @@ tài liệu riêng. Lưu ý cho UI: job không đọc được Id nằm ở `los
 9. `CLAUDE.md` và `.claude/agents/implementer.md` không sửa (người điều phối sửa).
 
 Chưa làm: số đo Bulk thật (chưa chạy trên org thật nào).
+
+### Sửa sau review cuối (2026-11-01)
+
+Review cuối không thấy lỗi chặn. Ba commit, `npm test` xanh (513 test, hash vàng của `test/stream.test.js` không đổi), smoke
+`SMOKE OK` năm lần liền (10,0–10,3 s, máy 4 CPU). Smoke 20a nay chờ dòng Lịch sử (đến sau khi hộp mở, N8); smoke 20b–20d thêm
+400 `needTypedOrg`, Esc khi "Đang gửi…" (request bị hủy, toast "Đã hủy"), mục `corrupt` có `⤓ Id` và Quên, nhãn hộp / ô tên:
+
+| # | Commit | Sửa |
+| --- | --- | --- |
+| S1 | `c0a371f`, `696ad30` | Hủy / Esc khi "Đang gửi…" hủy request (AbortSignal từ hộp xác nhận tới `startDelete`); server kiểm `res.destroyed`/`req.socket.destroyed` trước khi đọc job Bulk và trước `writeHead`, rời thì không làm gì (test: client rời trước header ⇒ 0 request ghi, 0 describe) |
+| S2, N9 | `696ad30` | Cờ `deleteInFlight` (không mở hộp xóa khác, `isRunning()` đúng từ lúc bấm tới khi request xong), token chủ của `#modal` trước mọi render/close muộn, lần bấm "Xóa…" sau cùng thắng |
+| S3 | `c0a371f`, `696ad30` | 400 thiếu tên org có `needTypedOrg: true, kind`; hộp hiện ô gõ tên; loại không rõ có câu riêng "sf CLI không trả lời nên coi như production…" (test server + smoke 20b) |
+| S4 | `c0a371f`, `696ad30` | Mục `corrupt`: câu ghi đường dẫn đầy đủ và việc cần làm, `hasIds`/`orphan`; `ids.csv` và Quên dùng được (Quên xóa file sau khi hỏi); sửa câu dọn trong `org-connection.md` (file Id mồ côi không bao giờ bị dọn tự động) |
+| S5 | `c0a371f` | Câu `orgChanged`: `Alias "X" bây giờ trỏ tới org khác (…). … Kiểm tra bằng sf org display --target-org X; nếu đúng org muốn ghi thì chạy lại, nếu không: sf org login web --alias X vào đúng org.` |
+| N1 | `696ad30` | Lỗi id bước có `field: 'id'`; câu id số thêm "hoặc mở file trong app để tự sửa" |
+| N2 | `696ad30` | `normalizeStepIds`: không tạo tên trùng (id trùng của Record không alias ⇒ tham chiếu ở lại với bước giữ tên), id cũ không dùng được làm alias ⇒ alias mới (`r_<id>` nếu cần) và Lookup / template trỏ id cũ được đổi theo (test) |
+| N3 | `696ad30` | Client chỉ đọc đúng dạng server gửi (`prune`, `rejected` số + `rejectedMessage`, `warnings` chuỗi, `lostBulkJobs[].message`) |
+| N4, N5, N6, N8 | `696ad30` | Giờ địa phương trong toast `historyPruned`; focus giữ ở checkbox Bulk sau render lại; `aria-labelledby` cho hộp xóa / quên và `aria-describedby` cho ô tên org; hộp Insert mở ngay, dòng Lịch sử và cảnh báo dọn điền khi `GET /api/history` trả lời (nút Insert chờ câu trả lời) |
+| N7, N11 | `c0a371f` | Khóa không có `link()`: `open(…, 'wx')` + pid, câu tiếng Việt khi không tạo được, dọn `.lock.stale-*`; khóa do server khác giữ ⇒ không thêm lời khuyên `SFDG_DATA_DIR` (`locked: true`) |
+| N10 | commit tài liệu | `workflow-schema.md`: `runs[].rejected?`, dạng mục `corrupt`, `locked` |
+

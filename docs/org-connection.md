@@ -194,9 +194,13 @@ dữ liệu: server chỉ xóa Id chính nó đã ghi, không bao giờ nhận d
   hoặc đặt SFDG_DATA_DIR khác cho server này. Nếu không còn server nào khác, xóa file <thư mục>/history/.lock`, nên insert / xóa /
   quên trả 503. Khóa cũ (pid đã chết, hoặc rỗng quá 5 giây) được đổi tên sang bên, kiểm lại, rồi mới lấy.
 - **Dọn sau sự cố** (N5; review lần 2, mục 5): file tạm còn sót bị xóa; file Id không có `.json` chỉ bị xóa khi chỉ có dòng tiêu
-  đề, còn có Id thì được giữ và hiện trong danh sách với `status: "corrupt"`; `.json` rỗng hoặc hỏng cũng vậy. Mục `corrupt` tính
-  vào giới hạn số lần, và chỉ bị dọn (trước mọi mục khác) sau 7 ngày. Ghi `.json` còn `fsync` thư mục sau khi rename (trừ
-  Windows).
+  đề, còn có Id thì được giữ và hiện trong danh sách với `status: "corrupt"`; `.json` rỗng hoặc hỏng cũng vậy. Mục có `.json`
+  hỏng tính vào giới hạn số lần và chỉ bị dọn (trước mọi mục khác) sau 7 ngày; file Id **không có** `.json` không bao giờ bị dọn
+  tự động (không tính vào giới hạn), chỉ "Quên" mới xóa nó. Câu của mục `corrupt` ghi đường dẫn đầy đủ của file và việc cần làm;
+  `⤓ Id` (`ids.csv`) và "Quên" dùng được cho mục này, xóa thì không (404: không biết org). Ghi `.json` còn `fsync` thư mục sau
+  khi rename (trừ Windows). Ổ không hỗ trợ `link()` (EPERM, ENOSYS, EXDEV…): khóa tạo bằng `open(…, 'wx')` rồi ghi pid; các file
+  `.lock.stale-*` còn sót được dọn khi lấy khóa. Khóa bị server khác giữ: câu không kèm lời khuyên `SFDG_DATA_DIR` thừa
+  (`locked: true` trong `GET /api/history`).
 - **Khi nào ghi:** mục được tạo sau lượt chạy thử, ngay trước sự kiện `plan`. **Lịch sử tắt ⇒ `/api/run` với org trả 503 trước
   khi chạy** (`Không ghi được Lịch sử (…), nên chưa ghi gì vào org. Kiểm tra quyền ghi thư mục … hoặc đặt SFDG_DATA_DIR.`, cả chế
   độ JSON; S7); tạo mục lỗi lúc chạy ⇒ lần chạy kết thúc với `error`, `insert: null`, chưa ghi gì vào org. Id của mỗi lời gọi Collections và mỗi job
@@ -281,6 +285,10 @@ insert/xóa, toast), `client/js/results.js` (link, nút, tab "Lỗi xóa").
   bấm (số theo bước, job Bulk, `pendingBulkJobs` kể cả `idsLost`, `rejected`, lỗi insert, lần xóa gần nhất), `⤓ Id`,
   `Xóa khỏi org…` / `Xóa phần còn lại…` (khóa khi lần đó đang chạy), `⋯ → Quên lần insert này` (hỏi trước; nút phụ). Mục
   `corrupt` hiện câu của server, không có nút.
+- **Hủy hoặc Esc khi đang "Đang gửi…"** (server còn kiểm tra org): request bị hủy trước khi có header, server thấy client đã rời và
+  không xóa gì (không đọc job Bulk, không đánh dấu mục). Trong lúc một lần xóa đã gửi chưa xong, không mở được hộp xóa khác hay
+  chạy Xem trước / Insert; bấm "Xóa…" ở hai dòng liên tiếp thì dòng bấm sau cùng thắng. Server đòi gõ tên org mà hộp chưa có ô
+  (loại org đổi): 400 có `needTypedOrg: true, kind`, hộp hiện ô gõ tên.
 - **Hộp xác nhận xóa:** số còn phải xóa theo sObject (con trước), loại org theo `GET /api/orgs` lúc mở (org không còn trong sf CLI ⇒
   khóa; CLI lỗi ⇒ coi như production), production / không rõ loại ⇒ ô gõ tên org (alias hoặc username, không phân biệt hoa thường),
   Thùng rác, xóa dây chuyền (khi lần insert có hơn một sObject), job Bulk chưa lấy Id, checkbox Bulk, số lời gọi từ `planDelete`.

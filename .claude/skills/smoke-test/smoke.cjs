@@ -2203,6 +2203,8 @@ async function flowHistory() {
   await page.waitForFunction(() => !document.getElementById('btn-insert').disabled);
   await page.click('#btn-insert');
   await page.waitForSelector('dialog[open] .bulk-check');
+  // N8: the dialog opens at once; the history line comes with GET /api/history (Insert waits for it).
+  await page.waitForSelector('dialog[open] .history-line', { timeout: 3000 }).catch(() => {});
   const dlg = () => page.textContent('dialog[open]');
   check(await page.isChecked('dialog[open] .bulk-check input'), '20a: the Bulk checkbox is not checked by default');
   check((await page.evaluate(() => document.activeElement?.textContent)) === 'Hủy', '20a: the insert confirmation does not focus Hủy');

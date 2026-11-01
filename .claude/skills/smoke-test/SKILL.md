@@ -265,15 +265,19 @@ storage and reloading (one app boot less; flow 5b).
       `.warn-box`. The insert sends `target.bulk: "off"`; the summary shows `Bulk: Contact job 1/2`; Dừng (cancel `{}`) gets a `stopping`
       event ⇒ **Dừng ngay** with its tooltip and `Đang chờ job Bulk Contact đang chạy xong (6 200/10 000) rồi dừng…`; Dừng ngay sends
       `{ force: true }` and the toast says the job was aborted and its Ids written. The summary has `⤓ Id` (downloads the server-named
-      `Account_Contact-20261028-1032-ids.csv`) and `Lịch sử`, no `null`.
+      `Account_Contact-20261028-1032-ids.csv`) and `Lịch sử`, no `null`. The history line is waited for (it comes after the dialog
+      opens, final review N8).
     - **20b**: the toast's `Xóa dữ liệu này…` opens the delete confirmation (focus on Hủy, `Xóa 12 005 bản ghi` `.danger.solid`, kind
-      sandbox, children first, Thùng rác); the first `POST …/delete` gets a 409 with `count: 12105`: the refusal shows, the button reads
+      sandbox, children first, Thùng rác); the first `POST …/delete` gets a 400 `needTypedOrg` (kind unknown) ⇒ the name field shows
+      with the "sf CLI không trả lời…" sentence and `dev-sb` is typed; the next gets a 409 with `count: 12105`: the refusal shows, the button reads
       `Xóa 12 105 bản ghi` and nothing is resent until it is clicked again; the second answers NDJSON with 2 failures ⇒ `Lỗi xóa (2)`
-      tab and toast. Requests: `confirm.username` `me@example.com`, `count` 12 005 then 12 105, no `typedOrg`. Then `GET /api/history`
+      tab and toast. Requests: `confirm.username` `me@example.com`, `count` 12 005, 12 005 then 12 105, `typedOrg` from the second on. Then `GET /api/history`
       answers `enabled: false` and ⟳ (orgs) locks Insert with the reason (`SFDG_DATA_DIR`) and a toast.
     - **20c / 20d** (`dev-prod` production): the history dialog (results header button) has the org filter checked and focused, hides
       the `uat` run until unchecked, `Bị gián đoạn` has its title, a row opens its details; `⋯ → Quên lần insert này` asks first (secondary
-      button, `còn 1 200 bản ghi trong dev-prod`) and forgets once. `Xóa khỏi org…` on a production run: Hủy focused, button locked until
+      button, `còn 1 200 bản ghi trong dev-prod`) and forgets once; a `corrupt` entry has `⤓ Id` and `⋯ → Quên` ("mục hỏng"). Before the
+      real delete, Esc while the button reads `Đang gửi…` (a held request) drops the request and toasts "Đã hủy. Chưa xóa bản ghi nào.";
+      the dialog has `aria-labelledby="delete-title"` and the name field `aria-describedby="type-org-help"`. `Xóa khỏi org…` on a production run: Hủy focused, button locked until
       ` DEV-PROD ` is typed (`dev-pro` keeps it locked); the request carries `typedOrg: "DEV-PROD"`. At 390 px the header button is a
       32 px icon (`aria-label="Lịch sử insert"`) and the dialog fills the screen with no horizontal scroll (`smoke-390-history.png`,
       `smoke-390-history-dark.png`).
