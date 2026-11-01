@@ -61,8 +61,12 @@ export function toSObject(record, idByRef) {
   return out;
 }
 
-/** "STATUS: message [Field]" of a SaveResult, and the field when Salesforce names exactly one of the record. */
-function describeFailure(res, record) {
+/**
+ * "STATUS: message [Field]" of a SaveResult, and the field when Salesforce names exactly one of the
+ * record. Bulk API 2.0 failures (server/sf/bulk-csv.js parseBulkError) go through it too, so both
+ * paths give the same message and error group.
+ */
+export function describeFailure(res, record) {
   const errs = res?.errors ?? [];
   const message = errs.map((er) => `${er.statusCode ? `${er.statusCode}: ` : ''}${er.message}${er.fields?.length ? ` [${er.fields.join(', ')}]` : ''}`).join('; ') || 'Lỗi không rõ.';
   const names = [...new Set(errs.flatMap((er) => er.fields ?? []))];
