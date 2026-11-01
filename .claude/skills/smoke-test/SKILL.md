@@ -288,7 +288,7 @@ CPU-bound, so the cap scales with the CPUs; it is there to catch fixed waits and
 not faster. Design 0014 (flow 18 in parallel, checks in flows 1, 5b, 11, 13): 11.1–11.6 s for the same machine that ran
 the commit before it in 9.5–10.0 s. Design 0013 đợt C (flow 19 in parallel, ~9–10 s on its own track): 12.8–14.1 s on a
 4-CPU sandbox that ran the commit before it in 13.4 s. Design 0011 UI (flows 20, two parallel contexts of ~5–9 s, off the
-critical path): 9.5, 11.8 and 13.3 s on a 4-CPU sandbox (the commit before it: 9.0 s).
+critical path): 9.7, 9.7 and 14.7 s on a 4-CPU sandbox (the commit before it: 9.0 s).
 Screenshots (only when a directory is given): `smoke-1440.png`, `smoke-390.png`, `smoke-390-sheet.png`,
 `smoke-390-dark.png`, `smoke-390-topbar.png`, `smoke-1280-issues.png`, `smoke-1440-dark.png`, `smoke-1440-dark-insert.png`,
 `smoke-1440-canvas.png`, `smoke-1440-canvas-dark.png`, `smoke-390-canvas.png`, `smoke-1440-minimap.png`,

@@ -775,7 +775,7 @@ tài liệu riêng. Lưu ý cho UI: job không đọc được Id nằm ở `los
 | 10 | `7f0f929` | `client/js/history.js`: hộp Lịch sử (lọc, chi tiết, Quên), hộp xác nhận xóa (gõ tên org với production / không rõ loại, 409 có `count` mới ⇒ bấm lại), xóa trong panel kết quả (tiến độ, Dừng / Dừng ngay, toast, tab `Lỗi xóa`), nút / icon `history`, mục ⋯, link `Lịch sử`, toast `Xóa dữ liệu này…`; smoke luồng 20b–20d |
 | 11 | (commit tài liệu) | `ui-design-system.md` (§5 icon `history`, §6.10, §6.11), `architecture.md`, `org-connection.md` (mục "Giao diện của Lịch sử và xóa"), `workflow-schema.md` (`prune`), smoke `SKILL.md`, doc này, `docs/design/README.md` |
 
-`npm test` xanh (504 test lúc commit bước 10). Smoke chạy 3 lần đều `SMOKE OK`: 9,5 s, 11,8 s, 13,3 s (máy 4 CPU, ngân sách 20 s).
+`npm test` xanh (504 test lúc commit bước 10, 508 sau các commit server song song). Smoke chạy 3 lần đều `SMOKE OK`: 9,7 s, 9,7 s, 14,7 s (máy 4 CPU, ngân sách 20 s; lần đo trước bước sửa `lostBulkJobs`: 9,5 s, 11,8 s, 13,3 s).
 
 **Khác thiết kế và lý do:**
 
@@ -794,7 +794,7 @@ tài liệu riêng. Lưu ý cho UI: job không đọc được Id nằm ở `los
 7. **Mục ⋯ `Lịch sử insert`** ở nhóm Chạy: trên điện thoại cuối nhóm Chạy có sẵn, ở 721–900 px là nhóm Chạy riêng trước Mẫu (smoke 13c
    đổi thành `Chạy,Mẫu`).
 8. **Job Bulk hủy mà chưa trả Id** (`bulkAborted.idsKnown: false`): câu nói app lấy lại Id từ job khi xóa (theo sửa S3), không nói
-   "không xóa được" như bản thiết kế. `pendingBulkJobs` có `idsLost` thì hiện câu của server (hoặc câu mặc định). `rejected` /
+   "không xóa được" như bản thiết kế. `lostBulkJobs` (và `pendingBulkJobs` có `idsLost`) hiện câu của server ở chi tiết, hộp xóa và kết quả xóa. `rejected` /
    `rejectedMessage` của chi tiết và `warnings` của kết quả xóa hiện nguyên câu server.
 9. `CLAUDE.md` và `.claude/agents/implementer.md` không sửa (người điều phối sửa).
 

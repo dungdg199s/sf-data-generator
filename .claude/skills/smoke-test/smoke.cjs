@@ -2307,7 +2307,7 @@ async function flowHistoryProd() {
     }
     const hid = url.pathname.split('/')[3];
     if (hid) {
-      return r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ...prodRun(hid), steps: [{ nodeId: 'lead', alias: 'lead', sobject: 'Lead', mode: 'collections', total: 30, inserted: 30, failed: 0 }], bulkJobs: [], errorGroups: [], pendingBulkJobs: [], deletion: { status: 'none', deleted: 0, gone: 0, lastAt: null, errorGroups: [] }, remaining: { total: 30, bySobject: { Lead: 30 }, steps: [{ nodeId: 'lead', sobject: 'Lead', remaining: 30 }] } }) });
+      return r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ...prodRun(hid), steps: [{ nodeId: 'lead', alias: 'lead', sobject: 'Lead', mode: 'collections', total: 30, inserted: 30, failed: 0 }], bulkJobs: [], errorGroups: [], pendingBulkJobs: [], lostBulkJobs: [{ jobId: '750LOST', sobject: 'Lead', message: 'Id của job 750LOST (Lead) không còn đọc được (smoke).' }], rejected: 2, rejectedMessage: '2 dòng trong file Id không thuộc bước nào (smoke).', deletion: { status: 'none', deleted: 0, gone: 0, lastAt: null, errorGroups: [] }, remaining: { total: 30, bySobject: { Lead: 30 }, steps: [{ nodeId: 'lead', sobject: 'Lead', remaining: 30 }] } }) });
     }
     const runs = [
       prodRun(PROD_HIDS[0]),
@@ -2332,6 +2332,8 @@ async function flowHistoryProd() {
   await page.check('#history-dialog .hist-filter input');
   await page.click(`#history-dialog .hist-run[data-hid="${PROD_HIDS[0]}"] .hist-main`);
   await page.waitForFunction((hid) => /lead · Lead 30/.test(document.querySelector(`#history-dialog .hist-run[data-hid="${hid}"] .hist-detail`)?.textContent ?? ''), PROD_HIDS[0], { timeout: 3000 }).catch(() => errors.push('20d: the run details did not open'));
+  const detail = await page.textContent(`#history-dialog .hist-run[data-hid="${PROD_HIDS[0]}"] .hist-detail`);
+  check(/750LOST \(Lead\) không còn đọc được/.test(detail) && /2 dòng trong file Id không thuộc bước nào/.test(detail) && !/undefined|null/.test(detail), `20d: details lack lostBulkJobs / rejected (${detail})`);
   if (outDir) await page.screenshot({ path: path.join(outDir, 'smoke-1440-history.png') });
   // ⋯ → Quên lần insert này asks first (a modal on top), then forgets.
   await page.click(`#history-dialog .hist-run[data-hid="${PROD_HIDS[1]}"] .hist-more`);

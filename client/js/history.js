@@ -102,8 +102,11 @@ function rejectedText(x) {
   return r > 0 ? `${fmt(r)} dòng của file Id không thuộc bước nào của lần insert này (file có thể đã bị sửa) nên không bao giờ bị xóa.` : null;
 }
 
-/** Lines about Bulk jobs whose Ids are not in history yet (a delete reads them first). */
-function pendingLines(jobs) {
+/** Pending jobs plus the ones whose Ids are lost for good (`lostBulkJobs`, each with the server's sentence). */
+export const bulkJobsOf = (x) => [...(x?.pendingBulkJobs ?? []), ...(x?.lostBulkJobs ?? []).map((j) => ({ ...j, idsLost: true }))];
+
+/** Lines about Bulk jobs whose Ids are not in history yet (a delete reads them first), or never will be. */
+export function pendingLines(jobs) {
   return (jobs ?? []).map((j) => (j.idsLost
     ? j.message ?? `Job Bulk ${j.jobId} (${j.sobject}): Salesforce không còn giữ kết quả, nên Id của các bản ghi này không lấy lại được và app không xóa được chúng. Xem job trong Setup → Bulk Data Load Jobs.`
     : `Job Bulk ${j.jobId} (${j.sobject}${j.records ? `, ${fmt(j.records)} bản ghi` : ''}${j.state ? `, ${j.state}` : ''}) chưa lấy Id: lần xóa lấy Id của nó trước rồi hỏi xác nhận lại nếu số bản ghi đổi.`));
@@ -266,7 +269,7 @@ function detailView(run) {
     h('ul', { class: 'hist-steps' }, (d.steps ?? []).map((s) => h('li', {}, stepLine(s)))),
     h('p', {}, [`Seed ${d.seed}`, Number.isFinite(d.now) ? `now ${new Date(d.now).toISOString()}` : null, dur, d.notSent ? `chưa gửi ${fmt(d.notSent)}` : null].filter(Boolean).join(' · ')),
     jobs.length ? h('p', {}, `Job Bulk: ${jobs.slice(0, 5).map((j) => j.jobId).join(', ')}${jobs.length > 5 ? ` và ${jobs.length - 5} job khác` : ''}`) : null,
-    ...pendingLines(d.pendingBulkJobs).map((t) => h('p', { class: 'warning-text' }, t)),
+    ...pendingLines(bulkJobsOf(d)).map((t) => h('p', { class: 'warning-text' }, t)),
     rejectedText(d) ? h('p', { class: 'warning-text' }, rejectedText(d)) : null,
     d.stopped?.message || d.stopped?.text ? h('p', { class: 'err' }, d.stopped.text ?? d.stopped.message) : null,
     d.error ? h('p', { class: 'err' }, d.error) : null,
@@ -405,7 +408,7 @@ export async function confirmDelete(hid) {
       refusal ? h('div', { class: 'warn-box delete-refused', role: 'alert' }, refusal) : null,
       h('p', { class: 'delete-count' }, `Sẽ xóa ${fmt(count)} bản ghi${partial ? ' còn lại' : ''} do lần insert lúc ${longWhen(entry.startedAt)} (workflow "${entry.workflowName || 'không tên'}") tạo ra:`),
       order.length ? h('p', {}, `${order.map((o) => `${o.sobject} ${fmt(o.n)}`).join(', ')}.${order.length > 1 ? ' Xóa bản ghi con trước, bản ghi cha sau.' : ''}`) : null,
-      ...pendingLines(pending).map((t) => h('p', { class: 'hint pending-jobs' }, t)),
+      ...pendingLines([...pending, ...(entry.lostBulkJobs ?? []).map((j) => ({ ...j, idsLost: true }))]).map((t) => h('p', { class: 'hint pending-jobs' }, t)),
       rejectedText(entry) ? h('p', { class: 'hint' }, rejectedText(entry)) : null,
       h('p', { class: 'hint' }, 'Chỉ xóa đúng các Id app đã ghi lúc insert, kể cả bản ghi đã bị sửa sau đó. Bản ghi đã bị xóa trước đó được bỏ qua.'),
       cascade ? h('p', { class: 'hint' }, 'Xóa bản ghi cha có thể làm Salesforce tự xóa bản ghi con của nó (ví dụ Contact, Opportunity của Account), kể cả bản ghi con không do app tạo.') : null,

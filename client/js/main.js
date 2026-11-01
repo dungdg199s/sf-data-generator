@@ -25,7 +25,7 @@ import { initSelectBar, exitSelectMode } from './select-bar.js';
 import {
   initLibrary, openAsNew, importLibraryFile, openLibraryMenu, setLibraryLocked, libraryReady,
 } from './library-ui.js';
-import { historyStatus, refreshHistory, historyOffText, initHistory, openHistory, confirmDelete, historyChanged } from './history.js';
+import { historyStatus, refreshHistory, historyOffText, initHistory, openHistory, confirmDelete, historyChanged, bulkJobsOf } from './history.js';
 
 const $ = (id) => document.getElementById(id);
 const ORG_KEY = 'sfdg.org';
@@ -938,7 +938,7 @@ function deleteEndMessage(res, { org }) {
   const extra = [];
   if (res.collected) extra.push(`Đã lấy thêm ${fmt(res.collected)} Id từ job Bulk chưa lấy kết quả.`);
   for (const sk of res.skipped ?? []) extra.push(sk.reason ?? `Không xóa ${fmt(sk.count)} bản ghi ${sk.sobject} của bước "${sk.nodeId}".`);
-  for (const j of res.pendingBulkJobs ?? []) {
+  for (const j of bulkJobsOf(res)) {
     extra.push(j.idsLost
       ? j.message ?? `Job Bulk ${j.jobId} (${j.sobject}): Salesforce không còn giữ kết quả, nên app không xóa được các bản ghi của job này. Xem Setup → Bulk Data Load Jobs.`
       : `Job Bulk ${j.jobId} (${j.sobject}) chưa trả Id${j.state ? ` (${j.state})` : ''}; bản ghi của job này chưa bị xóa. Bấm "Xóa phần còn lại…" trong Lịch sử khi job xong.`);
