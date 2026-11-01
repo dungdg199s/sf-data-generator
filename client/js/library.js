@@ -14,7 +14,7 @@
 // removed here (v2 stays as a frozen backup); `sfdg.workflow.v2.broken` is only written when absent.
 // Every write puts the entry first and the index second.
 
-import { malformedSteps, countSteps } from '../../shared/workflow-tree.js';
+import { malformedSteps, countSteps, normalizeStepIds } from '../../shared/workflow-tree.js';
 
 export const LIBRARY_KEY = 'sfdg.library';
 export const ENTRY_PREFIX = 'sfdg.wf.';
@@ -363,7 +363,7 @@ export function parseLibraryFile(data) {
   const out = { workflows: [], v1: 0, broken: 0 };
   for (const wf of data.workflows) {
     if (wf?.version === 1) out.v1++;
-    else if (wf && typeof wf === 'object' && wf.version === 2 && !malformedSteps(wf)) out.workflows.push(wf);
+    else if (wf && typeof wf === 'object' && wf.version === 2 && !malformedSteps(wf)) out.workflows.push(normalizeStepIds(wf).workflow);
     else out.broken++;
   }
   return out;

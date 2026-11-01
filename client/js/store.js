@@ -3,7 +3,7 @@
 // Views subscribe and receive the change `source` so a view can skip re-rendering
 // for edits it made itself (keeps input focus while typing in the inspector).
 
-import { findStep, collectAliases, allSteps } from '/shared/workflow-tree.js';
+import { findStep, collectAliases, allSteps, normalizeStepIds } from '/shared/workflow-tree.js';
 import { analyzeScope } from '/shared/scope.js';
 import { estimateSteps } from '/shared/estimate.js';
 
@@ -143,7 +143,8 @@ export function persist() {
  * the library (call persist() when it is new content for the open entry).
  */
 export function openWorkflow(wf) {
-  state.workflow = wf;
+  // Invalid step ids (old or hand-edited files) are rewritten: the server refuses them (0011 review 2).
+  state.workflow = normalizeStepIds(wf).workflow;
   past.length = 0;
   future.length = 0;
   lastCoalesce = { key: null, at: 0 };

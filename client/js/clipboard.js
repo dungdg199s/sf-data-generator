@@ -6,7 +6,7 @@
 //   { "sfdg": "steps", "version": 2, "from": "<workflow name>", "steps": [ step… ] }
 // A whole workflow file { "version": 2, "steps": [ … ] } is accepted as well.
 
-import { malformedSteps, countSteps } from '../../shared/workflow-tree.js';
+import { malformedSteps, countSteps, normalizeStepIds } from '../../shared/workflow-tree.js';
 
 export const PASTE_MAX_STEPS = 2000;
 export const PASTE_MAX_BYTES = 5 * 1024 * 1024;
@@ -52,7 +52,8 @@ export function parseClipboard(text, meta) {
     const unknown = firstUnknownType(data.steps, known);
     if (unknown !== null) return { kind: 'unknownType', error: `Không dán được: bước loại "${unknown}" không có trong phiên bản này.` };
   }
-  return { steps: data.steps, from: typeof data.from === 'string' ? data.from : typeof data.name === 'string' ? data.name : '' };
+  // Invalid step ids (hand-written text, old files) are rewritten before pasting (0011 review 2).
+  return { steps: normalizeStepIds({ steps: data.steps }).workflow.steps, from: typeof data.from === 'string' ? data.from : typeof data.name === 'string' ? data.name : '' };
 }
 
 /** The first step type (reading order, nested included) not in `known`, or null. */

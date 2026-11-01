@@ -211,3 +211,9 @@ test('library file round trip: export, parse, the workflows as they were', () =>
   assert.deepEqual(parseLibraryFile(mixed), { workflows: [SAMPLES[0].workflow], v1: 1, broken: 2 });
   assert.deepEqual(libraryFile([], 'x').workflows, []);
 });
+
+test('an imported library file gets valid step ids (review 2 of 0011, item 8)', async () => {
+  const { parseLibraryFile } = await import('../client/js/library.js');
+  const out = parseLibraryFile({ sfdg: 'library', version: 1, workflows: [{ version: 2, name: 'x', steps: [{ id: '-bad id', type: 'record', config: {} }] }] });
+  assert.deepEqual(out.workflows[0].steps.map((s) => s.id), ['bad_id']);
+});

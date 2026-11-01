@@ -43,3 +43,9 @@ test('refused: an unknown step type (also nested), a malformed step, more than 2
   assert.equal(big.error, 'Nội dung dán quá lớn (2.001 bước). Dán tối đa 2.000 bước mỗi lần.');
   assert.equal(parseClipboard(JSON.stringify({ version: 2, steps: [], pad: 'a'.repeat(5 * 1024 * 1024) }), META).kind, 'tooLarge');
 });
+
+test('pasted text with invalid step ids gets valid ones (review 2 of 0011, item 8)', () => {
+  const text = JSON.stringify({ sfdg: 'steps', version: 2, steps: [{ id: 'a b', type: 'record', config: { sobject: 'Account', alias: 'acc', fields: [] } }, { id: 7, type: 'record', config: { sobject: 'Account', alias: 'acc2', fields: [] } }] });
+  const r = parseClipboard(text, { nodeTypes: [{ type: 'record' }] });
+  assert.deepEqual(r.steps.map((s) => s.id), ['a_b', '7']);
+});

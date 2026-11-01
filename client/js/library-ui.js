@@ -5,6 +5,7 @@
 
 import { h, ico, toast, download } from './dom.js';
 import { state, openWorkflow, replaceWorkflow, persist, setPersistHandler, updateWorkflow, emptyWorkflow } from './store.js';
+import { normalizeStepIds } from '/shared/workflow-tree.js';
 import {
   createLibrary, migrateToLibrary, parseLibraryFile, sortedItems, ENTRY_PREFIX, NEW_NAME, RECENT_MAX,
 } from './library.js';
@@ -281,6 +282,7 @@ const reusable = () => !paused && !state.workflow.steps?.length && (state.workfl
  * except the open one when it is empty and still named "Workflow mới". → true when opened.
  */
 export async function openAsNew(wf) {
+  wf = normalizeStepIds(wf).workflow; // a file's invalid step ids are fixed before it is stored (0011 review 2)
   if (locked) {
     toast(LOCKED_TITLE);
     return false;
