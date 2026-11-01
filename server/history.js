@@ -1,0 +1,382 @@
+// Insert history (design 0011 §5): one entry per insert into an org, on the machine running the
+// server, so the Ids of every record the app created can be downloaded and deleted later — and
+// so a delete only ever touches Ids the server itself wrote down (it never takes Ids from a client).
+//
+// <dataDir>/history/  (directory 0700, files 0600)
+//   <hid>.json          the run: org (alias, username, orgId, instanceUrl, kind — never a token),
+//                       workflow snapshot, seed, now, steps, counts, Bulk jobs, error groups, deletion.
+//                       Rewritten whole (temp file + rename).
+//   <hid>.ids.csv       Ids inserted, append-only: sobject,step,ref,id
+//   <hid>.deleted.csv   delete outcomes, append-only: id,outcome   (deleted | gone)
+//
+// Appends are awaited by the inserter before its next write call (server/sf/insert.js
+// onInserted), so every record in the org has its Id on disk unless the server dies mid-call.
+// Writes of one entry are serialized. On start (first use) entries still `running` become
+// `interrupted`. Old entries are pruned past LIMITS.historyMaxRuns / historyMaxBytes, fully
+// deleted (or empty) ones first, never a running one. Time is the server's Date.now (injectable):
+// determinism only applies to generators and the executor.
+
+import { mkdir, writeFile, rename, readFile, appendFile, readdir, stat, unlink, chmod } from 'node:fs/promises';
+import { createReadStream } from 'node:fs';
+import { createInterface } from 'node:readline';
+import { randomBytes } from 'node:crypto';
+import os from 'node:os';
+import path from 'node:path';
+
+export const HID_RE = /^h\d{8}T\d{6}Z-[0-9a-f]{6}$/;
+export const isValidHid = (hid) => typeof hid === 'string' && HID_RE.test(hid);
+const FILE_MODE = 0o600;
+const DIR_MODE = 0o700;
+const IDS_HEADER = 'sobject,step,ref,id\n';
+const DELETED_HEADER = 'id,outcome\n';
+
+/** SFDG_DATA_DIR, else the OS data directory of the app. */
+export function defaultDataDir(env = process.env, platform = process.platform, home = os.homedir()) {
+  if (env.SFDG_DATA_DIR) return path.resolve(env.SFDG_DATA_DIR);
+  if (platform === 'win32') return path.join(env.APPDATA || path.join(home, 'AppData', 'Roaming'), 'sf-data-generator');
+  if (platform === 'darwin') return path.join(home, 'Library', 'Application Support', 'sf-data-generator');
+  return path.join(env.XDG_DATA_HOME || path.join(home, '.local', 'share'), 'sf-data-generator');
+}
+
+/** The org as history stores it: identity only, never credentials. */
+export function orgIdentity(org = {}) {
+  const str = (v) => (typeof v === 'string' && v ? v : null);
+  return { alias: str(org.alias), username: str(org.username), orgId: str(org.orgId), instanceUrl: str(org.instanceUrl), kind: str(org.kind) ?? 'unknown' };
+}
+
+function cell(v) {
+  const s = String(v ?? '');
+  return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+/** One CSV line (as written by this module: no line breaks inside cells for Ids/refs) → cells. */
+function splitLine(line) {
+  const out = [];
+  let cur = '';
+  let q = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (q) {
+      if (c === '"' && line[i + 1] === '"') {
+        cur += '"';
+        i++;
+      } else if (c === '"') q = false;
+      else cur += c;
+    } else if (c === '"') q = true;
+    else if (c === ',') {
+      out.push(cur);
+      cur = '';
+    } else cur += c;
+  }
+  out.push(cur);
+  return out;
+}
+
+async function* lines(file) {
+  let stream;
+  try {
+    stream = createReadStream(file, { encoding: 'utf8' });
+    const rl = createInterface({ input: stream, crlfDelay: Infinity });
+    let first = true;
+    for await (const line of rl) {
+      if (first) {
+        first = false;
+        continue; // header
+      }
+      if (line) yield splitLine(line);
+    }
+  } catch (e) {
+    if (e.code !== 'ENOENT') throw e;
+  } finally {
+    stream?.destroy();
+  }
+}
+
+const stamp = (ms) => new Date(ms).toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
+
+/**
+ * @param dir       data directory (history lives in <dir>/history)
+ * @param clock     () → ms (Date.now)
+ * @param random    () → 6 hex characters
+ * @param maxRuns / maxBytes  pruning limits
+ */
+export function createHistory({ dir = defaultDataDir(), clock = () => Date.now(), random = () => randomBytes(3).toString('hex'), maxRuns = 100, maxBytes = 256 * 1024 * 1024 } = {}) {
+  const root = path.join(dir, 'history');
+  const state = { enabled: false, reason: null, ready: null };
+  const chains = new Map(); // hid → Promise (serialized writes)
+  const active = new Map(); // hid → 'insert' | 'delete'
+  const live = new Map(); // hid → Ids appended by the running insert
+  const file = (hid, ext) => {
+    if (!isValidHid(hid)) throw Object.assign(new Error('Không tìm thấy lần insert này trong Lịch sử (có thể đã bị dọn vì vượt giới hạn lưu trữ).'), { status: 404 });
+    return path.join(root, `${hid}${ext}`);
+  };
+  const serial = (hid, fn) => {
+    const next = (chains.get(hid) ?? Promise.resolve()).then(fn, fn);
+    const settled = next.catch(() => {});
+    chains.set(hid, settled);
+    settled.then(() => { if (chains.get(hid) === settled) chains.delete(hid); });
+    return next;
+  };
+
+  async function writeJson(hid, data) {
+    const tmp = `${file(hid, '.json')}.tmp-${random()}`;
+    await writeFile(tmp, `${JSON.stringify(data, null, 1)}\n`, { mode: FILE_MODE });
+    await rename(tmp, file(hid, '.json'));
+  }
+
+  async function readJson(hid) {
+    try {
+      return JSON.parse(await readFile(file(hid, '.json'), 'utf8'));
+    } catch (e) {
+      if (e.code === 'ENOENT' || e instanceof SyntaxError) return null;
+      throw e;
+    }
+  }
+
+  async function countLines(f) {
+    let n = 0;
+    for await (const _ of lines(f)) n++; // eslint-disable-line no-unused-vars
+    return n;
+  }
+
+  async function init() {
+    try {
+      await mkdir(root, { recursive: true, mode: DIR_MODE });
+      if (process.platform !== 'win32') await chmod(root, DIR_MODE);
+      const probe = path.join(root, `.probe-${random()}`);
+      await writeFile(probe, '', { mode: FILE_MODE });
+      await unlink(probe);
+      state.enabled = true;
+      state.reason = null;
+    } catch (e) {
+      state.enabled = false;
+      state.reason = e.message;
+      return;
+    }
+    // Entries a previous server left running were interrupted (server stopped mid-insert).
+    for (const hid of await hids()) {
+      const data = await readJson(hid).catch(() => null);
+      if (data?.status !== 'running') continue;
+      data.status = 'interrupted';
+      data.inserted = await countLines(file(hid, '.ids.csv'));
+      await writeJson(hid, data).catch(() => {});
+    }
+  }
+
+  const ready = () => (state.ready ??= init());
+
+  async function hids() {
+    try {
+      return (await readdir(root)).filter((f) => f.endsWith('.json')).map((f) => f.slice(0, -5)).filter(isValidHid).sort();
+    } catch {
+      return [];
+    }
+  }
+
+  async function sizeOf(hid) {
+    let n = 0;
+    for (const ext of ['.json', '.ids.csv', '.deleted.csv']) n += await stat(file(hid, ext)).then((s) => s.size, () => 0);
+    return n;
+  }
+
+  async function removeFiles(hid) {
+    for (const ext of ['.json', '.ids.csv', '.deleted.csv']) await unlink(file(hid, ext)).catch((e) => { if (e.code !== 'ENOENT') throw e; });
+    live.delete(hid);
+  }
+
+  /** Room for one more entry: oldest fully deleted / empty entries first, never a running one. */
+  async function prune() {
+    const all = [];
+    for (const hid of await hids()) {
+      const data = await readJson(hid).catch(() => null);
+      all.push({ hid, data, size: await sizeOf(hid) });
+    }
+    let count = all.length;
+    let bytes = all.reduce((s, e) => s + e.size, 0);
+    const removable = (e) => !active.has(e.hid) && e.data?.status !== 'running';
+    const empty = (e) => !e.data || remainingOf(e.data) === 0;
+    const order = [...all.filter((e) => removable(e) && empty(e)), ...all.filter((e) => removable(e) && !empty(e))];
+    for (const e of order) {
+      if (count + 1 <= maxRuns && bytes <= maxBytes) break;
+      await removeFiles(e.hid);
+      count--;
+      bytes -= e.size;
+    }
+  }
+
+  function remainingOf(data) {
+    const inserted = live.get(data.id) ?? data.inserted ?? 0;
+    return Math.max(0, inserted - (data.deletion?.deleted ?? 0) - (data.deletion?.gone ?? 0));
+  }
+
+  const api = {
+    get dir() {
+      return root;
+    },
+    async status() {
+      await ready();
+      return { enabled: state.enabled, reason: state.reason, dir: root, maxRuns };
+    },
+
+    /**
+     * New entry, right before the first write of an insert. Throws (the insert must not start)
+     * when history is off or cannot be written.
+     */
+    async create({ org, workflow, seed, now, bulk = 'auto', steps = [], total = 0 }) {
+      await ready();
+      if (!state.enabled) {
+        state.ready = null; // the directory may have been fixed: try again once
+        await ready();
+        if (!state.enabled) throw new Error(state.reason);
+      }
+      await prune();
+      let hid;
+      do hid = `h${stamp(clock())}-${random()}`; while (await stat(file(hid, '.json')).then(() => true, () => false));
+      const data = {
+        version: 1,
+        id: hid,
+        status: 'running',
+        startedAt: new Date(clock()).toISOString(),
+        finishedAt: null,
+        org: orgIdentity(org),
+        workflow: workflow ? { version: workflow.version, name: workflow.name ?? '', ...(workflow.settings ? { settings: workflow.settings } : {}), steps: workflow.steps ?? [] } : null,
+        seed,
+        now,
+        bulk,
+        steps: steps.map((s) => ({ nodeId: s.nodeId, alias: s.alias ?? null, sobject: s.sobject, mode: s.mode ?? 'collections', total: s.records ?? s.total ?? 0, inserted: 0, failed: 0 })),
+        total,
+        inserted: 0,
+        failed: 0,
+        notSent: 0,
+        bulkJobs: [],
+        errorGroups: [],
+        errorGroupsOther: null,
+        stopped: null,
+        warnings: [],
+        deletion: { status: 'none', deleted: 0, gone: 0, lastAt: null, errorGroups: [] },
+      };
+      await writeFile(file(hid, '.ids.csv'), IDS_HEADER, { mode: FILE_MODE, flag: 'wx' });
+      await writeJson(hid, data);
+      live.set(hid, 0);
+      return hid;
+    },
+
+    /** Ids of one call: [{ sobject, nodeId, ref, id }]. Resolves once on disk. */
+    appendIds(hid, rows) {
+      if (!rows.length) return Promise.resolve();
+      const text = rows.map((r) => `${cell(r.sobject)},${cell(r.nodeId)},${cell(r.ref)},${cell(r.id)}\n`).join('');
+      return serial(hid, async () => {
+        await appendFile(file(hid, '.ids.csv'), text, { mode: FILE_MODE });
+        if (live.has(hid)) live.set(hid, live.get(hid) + rows.length);
+      });
+    },
+
+    /** Delete outcomes: [{ id, outcome: 'deleted' | 'gone' }]. */
+    appendDeleted(hid, rows) {
+      if (!rows.length) return Promise.resolve();
+      const text = rows.map((r) => `${cell(r.id)},${cell(r.outcome)}\n`).join('');
+      return serial(hid, async () => {
+        const f = file(hid, '.deleted.csv');
+        const fresh = await stat(f).then(() => false, () => true);
+        await appendFile(f, `${fresh ? DELETED_HEADER : ''}${text}`, { mode: FILE_MODE });
+      });
+    },
+
+    /** Merges `patch` into the entry (a function gets the current data and returns the patch). */
+    update(hid, patch) {
+      return serial(hid, async () => {
+        const data = await readJson(hid);
+        if (!data) throw Object.assign(new Error('Không tìm thấy lần insert này trong Lịch sử (có thể đã bị dọn vì vượt giới hạn lưu trữ).'), { status: 404 });
+        const next = { ...data, ...(typeof patch === 'function' ? patch(data) : patch) };
+        await writeJson(hid, next);
+        return next;
+      });
+    },
+
+    /** The insert ended (done, cancelled, stopped, error). */
+    async finish(hid, patch) {
+      const out = await api.update(hid, { ...patch, finishedAt: new Date(clock()).toISOString() });
+      live.delete(hid);
+      return out;
+    },
+
+    async read(hid) {
+      if (!isValidHid(hid)) return null;
+      await ready();
+      const data = await readJson(hid);
+      if (data && live.has(hid)) data.inserted = live.get(hid);
+      return data;
+    },
+
+    /** Every Id row: { sobject, nodeId, ref, id }, in insert order. */
+    async* ids(hid) {
+      for await (const [sobject, nodeId, ref, id] of lines(file(hid, '.ids.csv'))) yield { sobject, nodeId, ref, id };
+    },
+
+    /** id → 'deleted' | 'gone' */
+    async deletedMap(hid) {
+      const map = new Map();
+      for await (const [id, outcome] of lines(file(hid, '.deleted.csv'))) map.set(id, outcome);
+      return map;
+    },
+
+    /**
+     * Ids still to delete, grouped by step in insert order (step order = `steps` of the entry, then
+     * any other step in first-seen order). → { steps: [{ nodeId, sobject, ids }], total, bySobject, inserted }
+     */
+    async remaining(hid) {
+      const data = await api.read(hid);
+      if (!data) return null;
+      const done = await api.deletedMap(hid);
+      const byStep = new Map(data.steps.map((s) => [s.nodeId, { nodeId: s.nodeId, sobject: s.sobject, ids: [] }]));
+      let inserted = 0;
+      for await (const r of api.ids(hid)) {
+        inserted++;
+        if (done.has(r.id)) continue;
+        const key = r.nodeId || `\u0000${r.sobject}`;
+        if (!byStep.has(key)) byStep.set(key, { nodeId: r.nodeId || null, sobject: r.sobject, ids: [] });
+        byStep.get(key).ids.push(r.id);
+      }
+      const steps = [...byStep.values()];
+      const bySobject = {};
+      for (const s of steps) if (s.ids.length) bySobject[s.sobject] = (bySobject[s.sobject] ?? 0) + s.ids.length;
+      return { steps, total: steps.reduce((n, s) => n + s.ids.length, 0), bySobject, inserted };
+    },
+
+    async list() {
+      await ready();
+      const out = [];
+      for (const hid of (await hids()).reverse()) {
+        const d = await readJson(hid).catch(() => null);
+        if (!d) continue;
+        const inserted = live.get(hid) ?? d.inserted ?? 0;
+        const bySobject = {};
+        for (const s of d.steps ?? []) bySobject[s.sobject] = (bySobject[s.sobject] ?? 0) + (s.inserted ?? 0);
+        out.push({
+          id: d.id, status: d.status, startedAt: d.startedAt, finishedAt: d.finishedAt, org: d.org, workflowName: d.workflow?.name ?? '',
+          seed: d.seed, total: d.total, inserted, failed: d.failed, notSent: d.notSent, bySobject,
+          deletion: { status: d.deletion?.status ?? 'none', deleted: d.deletion?.deleted ?? 0, gone: d.deletion?.gone ?? 0, remaining: remainingOf({ ...d, inserted }) },
+          ...(active.has(hid) ? { active: active.get(hid) } : {}),
+        });
+      }
+      return out;
+    },
+
+    async forget(hid) {
+      if (!(await api.read(hid))) return false;
+      await serial(hid, () => removeFiles(hid));
+      return true;
+    },
+
+    /** A run in progress on an entry ('insert' | 'delete'): forget / delete refuse it. */
+    activeKind: (hid) => active.get(hid) ?? null,
+    markActive(hid, kind) {
+      active.set(hid, kind);
+      return () => { if (active.get(hid) === kind) active.delete(hid); };
+    },
+
+    /** Raw files of an entry (tests: modes, secret scan). */
+    files: (hid) => ['.json', '.ids.csv', '.deleted.csv'].map((ext) => file(hid, ext)),
+  };
+  return api;
+}
