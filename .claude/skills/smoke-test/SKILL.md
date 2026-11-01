@@ -13,13 +13,15 @@ node .claude/skills/smoke-test/smoke.cjs /path/to/screenshot-dir   # dir optiona
 
 It runs the app **in its own process** (`createApp` from `server/index.js` on port 0, so it dies with the smoke on
 Ctrl+C or kill and a stale server on a busy port can never answer instead) with a **stub sf CLI** that fails like a machine
-without `sf` (503 `smoke: …`, checked at start), so no flow can reach a real org. It drives headless Chromium through these
+without `sf` (503 `smoke: …`, checked at start), so no flow can reach a real org. Its insert history (design 0011) lives in a
+temporary directory (`createHistory({ dir })`, removed at the end): the UI reads `GET /api/history` once an org is selected, and
+the smoke never touches the user's data directory. It drives headless Chromium through these
 flows
 (failed checks are collected and reported together; a timed-out wait aborts that flow, the others finish).
 
 **Speed (since design 0009).** The flows are grouped into seven independent functions that run **in parallel**, each in
 its own browser context (so storage, routes and dialogs never leak between them): `flowEditing` (1–5), `flowPicker`
-(5b), `flowFiles` (5c–10), `flowDark` (12), `flowLayoutWide` and `flowLayoutNarrow` (11, 13), `flowEach` (14), `flowCanvas` (15), `flowProductivity` (16), `flowLibrary` (17), `flowMinimap` (18), `flowVarsLoops` (19). The browser launches
+(5b), `flowFiles` (5c–10), `flowDark` (12), `flowLayoutWide` and `flowLayoutNarrow` (11, 13), `flowEach` (14), `flowCanvas` (15), `flowProductivity` (16), `flowLibrary` (17), `flowMinimap` (18), `flowVarsLoops` (19), `flowHistory` and `flowHistoryProd` (20). The browser launches
 while the server starts; a fresh context starts with empty storage, so no `localStorage.clear()` + reload; storage a flow
 needs before its first load is written by `addInitScript` (once, guarded by a marker key, so reloads keep it); layout
 checks resize one page (`setViewportSize`) instead of opening a context per width; waits for the sheet or toast
@@ -125,8 +127,8 @@ storage and reloading (one app boot less; flow 5b).
       hệ thống", its `option` colour is not transparent (`smoke-390-topbar.png`).
     - **13c ⋯ menu at 390 × 844**: Mới, Thư viện…, Mở file JSON…, Lưu (0012 A: `Mở…` left the top bar), a Seed field, Account + Contact, Tối (radio, "Theo hệ thống" checked);
       typing 42 sets `#seed` and shows the chip "Seed 42"; the chip reopens the menu on the Seed field; Mẫu "Lead theo xác
-      suất" then "Account + Contact" open (each a new library entry). At 800 px the menu only has the Mẫu group. Esc in the menu opened
-      from the chip returns focus to the chip; Tab and Shift+Tab close the menu onto ⋯. Inside `role=menu` there is no
+      suất" then "Account + Contact" open (each a new library entry). Esc in the menu opened
+      from the chip returns focus to the chip; at 800 px the groups are Chạy (only `Lịch sử insert`, 0011) and Mẫu; Tab and Shift+Tab close the menu onto ⋯. Inside `role=menu` there is no
       text or input outside a group, a menu item or `aria-hidden` text.
     - **13d sheet at 390 × 844**: tapping `con` leaves its bottom ≤ the sheet top and ≥ 190 px of canvas above the sheet;
       "‹ Xong" by keyboard closes it, makes it inert and focuses the `con` card; Ctrl+Enter in the alias field closes the
@@ -251,6 +253,31 @@ storage and reloading (one app boot less; flow 5b).
     "Chọn…" opens Import with "Bắt buộc, chưa có (1)" first and Region__c checked, "Thêm 1 field" adds `Region__c` (picklist,
     toast) and hides the hint, ↶ brings both back, "Bỏ qua" keeps it hidden when `con` is selected again.
 
+20. **Insert history, Bulk and delete (design 0011; the design calls them smoke 16a–16d, renumbered because 16 is
+    `flowProductivity`), `flowHistory` and `flowHistoryProd`, own contexts (parallel).** Every org, history and delete call is
+    answered by `page.route` (`/api/orgs`, `/api/orgs/<org>/limits` with 50 API calls left, other org calls 404, `/api/history…`),
+    previews of "Account + Contact" are a canned 5 Account + 12 000 Contact, and inserts are answered **in the page** by a `fetch`
+    wrapper holding the NDJSON stream (an insert reaching the network is aborted and fails the flow): nothing reaches the sf CLI or
+    an org.
+    - **20a** (`dev-sb` sandbox): Insert ⇒ the confirmation focuses Hủy, has the Bulk checkbox checked, the line `con (Contact) 12 000:
+      200 bản ghi đầu…, phần còn lại 2 job Bulk.`, `Khoảng 26 lời gọi API (sObject Collections 2, Bulk khoảng 24)`, the history line and
+      (after `/limits`) `Org còn 50/15 000 lời gọi API`; unchecking gives `Khoảng 61 lời gọi API`, muted step lines and the limits
+      `.warn-box`. The insert sends `target.bulk: "off"`; the summary shows `Bulk: Contact job 1/2`; Dừng (cancel `{}`) gets a `stopping`
+      event ⇒ **Dừng ngay** with its tooltip and `Đang chờ job Bulk Contact đang chạy xong (6 200/10 000) rồi dừng…`; Dừng ngay sends
+      `{ force: true }` and the toast says the job was aborted and its Ids written. The summary has `⤓ Id` (downloads the server-named
+      `Account_Contact-20261028-1032-ids.csv`) and `Lịch sử`, no `null`.
+    - **20b**: the toast's `Xóa dữ liệu này…` opens the delete confirmation (focus on Hủy, `Xóa 12 005 bản ghi` `.danger.solid`, kind
+      sandbox, children first, Thùng rác); the first `POST …/delete` gets a 409 with `count: 12105`: the refusal shows, the button reads
+      `Xóa 12 105 bản ghi` and nothing is resent until it is clicked again; the second answers NDJSON with 2 failures ⇒ `Lỗi xóa (2)`
+      tab and toast. Requests: `confirm.username` `me@example.com`, `count` 12 005 then 12 105, no `typedOrg`. Then `GET /api/history`
+      answers `enabled: false` and ⟳ (orgs) locks Insert with the reason (`SFDG_DATA_DIR`) and a toast.
+    - **20c / 20d** (`dev-prod` production): the history dialog (results header button) has the org filter checked and focused, hides
+      the `uat` run until unchecked, `Bị gián đoạn` has its title, a row opens its details; `⋯ → Quên lần insert này` asks first (secondary
+      button, `còn 1 200 bản ghi trong dev-prod`) and forgets once. `Xóa khỏi org…` on a production run: Hủy focused, button locked until
+      ` DEV-PROD ` is typed (`dev-pro` keeps it locked); the request carries `typedOrg: "DEV-PROD"`. At 390 px the header button is a
+      32 px icon (`aria-label="Lịch sử insert"`) and the dialog fills the screen with no horizontal scroll (`smoke-390-history.png`,
+      `smoke-390-history-dark.png`).
+
 It also fails on any page error or a run over the **time budget**: `SMOKE_BUDGET_MS` when set, else
 `20 000 × max(1, 4 / os.availableParallelism())` ms (20 s on 4 or more CPUs, 40 s on 2). The flows run in parallel and are
 CPU-bound, so the cap scales with the CPUs; it is there to catch fixed waits and runaway flows, not to benchmark. The run prints
@@ -260,11 +287,13 @@ CPU-bound, so the cap scales with the CPUs; it is there to catch fixed waits and
 0012 C/I/H/D/E), ~9.5–10 s once reduced motion and the flow 5b file-open went in. A second context for flow 16 made it slower,
 not faster. Design 0014 (flow 18 in parallel, checks in flows 1, 5b, 11, 13): 11.1–11.6 s for the same machine that ran
 the commit before it in 9.5–10.0 s. Design 0013 đợt C (flow 19 in parallel, ~9–10 s on its own track): 12.8–14.1 s on a
-4-CPU sandbox that ran the commit before it in 13.4 s.
+4-CPU sandbox that ran the commit before it in 13.4 s. Design 0011 UI (flows 20, two parallel contexts of ~5–9 s, off the
+critical path): 9.5, 11.8 and 13.3 s on a 4-CPU sandbox (the commit before it: 9.0 s).
 Screenshots (only when a directory is given): `smoke-1440.png`, `smoke-390.png`, `smoke-390-sheet.png`,
 `smoke-390-dark.png`, `smoke-390-topbar.png`, `smoke-1280-issues.png`, `smoke-1440-dark.png`, `smoke-1440-dark-insert.png`,
 `smoke-1440-canvas.png`, `smoke-1440-canvas-dark.png`, `smoke-390-canvas.png`, `smoke-1440-minimap.png`,
-`smoke-1440-minimap-dark.png`.
+`smoke-1440-minimap-dark.png`, `smoke-1440-insert-bulk.png`, `smoke-1440-history.png`, `smoke-390-history.png`,
+`smoke-390-history-dark.png`.
 Requires Playwright with Chromium (`require('playwright')`); exit code 2 means it is not installed.
 
 Extend the script when you add a UI flow worth guarding (keep it fast: see "Speed" above).

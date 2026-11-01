@@ -64,6 +64,10 @@
 //      AccountId = {{acc.Id}} with a toast, "fixed" hides every filter box, one ↶ takes back filter + fill; Xáo trộn +
 //      Tối đa 2 ⇒ "10 lần lặp"; an empty values list is outlined with valuesEmpty, a comma stays inside a value, Hot/Warm/Cold fill the card; Rẽ
 //      nhánh "So với" {x} inserts {{opp.Amount}}
+//  20. insert history and delete (0011, its smoke 16a–d; flowHistory, flowHistoryProd): mocked orgs / limits / history and a held
+//      insert stream in the page; Bulk checkbox and calls, limits warn-box, target.bulk "off", Bulk progress, Dừng ngay, ⤓ Id, the
+//      "Xóa dữ liệu này…" toast, delete confirmation (Hủy focused, 409 new count needs a new click), Lỗi xóa tab, history off ⇒
+//      Insert locked; production name typed (typedOrg), history dialog filter / interrupted title / Quên, full screen at 390 px
 //  0014 also adds: SVG icons and aria-labels (1), Alt+↓ opens the picker (5b), Quy trình cards never overflow at 390 px,
 //      fades of sideways rows (13d, 13e), the results panel's height handle (13, wide), the sheet's two snaps (11, 13d).
 // The flows run in parallel, one browser context each (independent storage): see SKILL.md.

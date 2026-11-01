@@ -1,6 +1,6 @@
 # 0011 — Thao tác dữ liệu trên org: Bulk API 2.0, lịch sử insert, xóa dữ liệu đã insert
 
-- **Trạng thái:** Đang làm (xong phía server: bước 0–8; còn UI bước 9–10 và tài liệu UI của bước 11)
+- **Trạng thái:** Đã làm (server bước 0–8, UI bước 9–10, tài liệu bước 11; chưa có số đo Bulk trên org thật)
 - **Ngày:** 2026-10-28
 - **Liên quan:** [0002](0002-jsforce-api.md) (jsforce, sf CLI chỉ lấy token), [0004](0004-streaming-execution.md) (insert theo
   cửa sổ, Dừng, nhóm lỗi; câu hỏi mở 6 và 7), [0006](0006-query-pick-nodes.md) (Query chỉ đọc, cache, dấu vân tay),
@@ -749,6 +749,36 @@ Reviewer tìm 1 lỗi chặn (B1) và 7 lỗi nên sửa (S1–S7) cùng các ni
 Ghi chú: khác thiết kế số 1 ở trên nay là quyết định của review (S7); số 6 (`idsUnknown`) đã bỏ: job không đọc được kết quả
 luôn thu lại được. Vẫn chưa sửa `CLAUDE.md` / `.claude/agents/implementer.md` (người điều phối làm).
 
-Chưa làm: UI bước 9–10 (hộp xác nhận, tiến độ Bulk, Dừng ngay, hộp Lịch sử, hộp xóa, smoke 16), tài liệu UI
-(`ui-design-system.md`), `CLAUDE.md`, `.claude/agents/implementer.md`, `.claude/skills/smoke-test/SKILL.md`; số đo Bulk thật
-(chưa chạy trên org thật nào).
+### Phía giao diện (bước 9–10) và tài liệu (bước 11), 2026-11-01
+
+| Bước | Commit | Nội dung |
+| --- | --- | --- |
+| chuẩn bị | `17472ba` | `GET /api/history` thêm `prune` (chỉ đọc, cùng `prunePreview` của lần chạy) để hộp xác nhận Insert cảnh báo **trước** khi xác nhận (sự kiện `plan` chỉ tới sau) |
+| 9 | `4e8e6d4` | Hộp xác nhận Insert (checkbox Bulk, dòng bước, số lời gọi từ `planInsert` + `poolUsage` của workflow đã xem trước, hạn mức `/limits`, dòng Lịch sử, cảnh báo `prune`, focus ở Hủy), `target.bulk`, tiến độ `Bulk: … job i/k`, Dừng ngay (`stopping` ⇒ `cancel` `force`), link `⤓ Id`, câu kết thúc theo `stopped.reason` / `bulkAborted` / `bulkUnknown`, Lịch sử tắt ⇒ nút Insert khóa (+ toast một lần); smoke luồng 20a |
+| 10 | `7f0f929` | `client/js/history.js`: hộp Lịch sử (lọc, chi tiết, Quên), hộp xác nhận xóa (gõ tên org với production / không rõ loại, 409 có `count` mới ⇒ bấm lại), xóa trong panel kết quả (tiến độ, Dừng / Dừng ngay, toast, tab `Lỗi xóa`), nút / icon `history`, mục ⋯, link `Lịch sử`, toast `Xóa dữ liệu này…`; smoke luồng 20b–20d |
+| 11 | (commit tài liệu) | `ui-design-system.md` (§5 icon `history`, §6.10, §6.11), `architecture.md`, `org-connection.md` (mục "Giao diện của Lịch sử và xóa"), `workflow-schema.md` (`prune`), smoke `SKILL.md`, doc này, `docs/design/README.md` |
+
+`npm test` xanh (504 test lúc commit bước 10). Smoke chạy 3 lần đều `SMOKE OK`: 9,5 s, 11,8 s, 13,3 s (máy 4 CPU, ngân sách 20 s).
+
+**Khác thiết kế và lý do:**
+
+1. **Smoke đánh số 20** (`flowHistory`, `flowHistoryProd`), không phải 16: số 16 đã là `flowProductivity` (0012). Hai context song
+   song, không nằm trên đường găng.
+2. **Trạng thái Lịch sử** lấy từ `GET /api/history` (`enabled`, `reason`, `dir`), đọc khi chọn / tải lại org, khi mở hộp xác nhận và
+   khi `/api/run` trả 503; không thêm trường mới ở server. `GET /api/history` không thử mở lại thư mục (chỉ insert, xóa, quên làm),
+   nên câu nói "khởi động lại server" như thiết kế.
+3. **`historyPruned`** hiện ở cả hai chỗ: `.warn-box` trong hộp xác nhận (từ `prune`) và toast khi sự kiện `plan` mang nó.
+4. **Bảng của hộp Lịch sử** là danh sách (`ul`) mỗi lần chạy một nút `aria-expanded` (bấm / Enter mở chi tiết) với hàng đầu cột
+   `aria-hidden`, thay cho `<table>`: hai dòng ở ≤ 720 px và nút mở/đóng có ngữ nghĩa đúng.
+5. **Dòng xóa dây chuyền** hiện khi lần insert có hơn một sObject: `GET /api/history/:hid` không trả workflow nên không biết chắc bước
+   nào có Lookup trỏ tới; hiện thừa an toàn hơn thiếu.
+6. **Lỗi trong hộp thoại** (quên, xóa bị từ chối) hiện trong hộp (`.hist-note`, `.warn-box role=alert`), không bằng toast, vì hộp
+   modal che toast.
+7. **Mục ⋯ `Lịch sử insert`** ở nhóm Chạy: trên điện thoại cuối nhóm Chạy có sẵn, ở 721–900 px là nhóm Chạy riêng trước Mẫu (smoke 13c
+   đổi thành `Chạy,Mẫu`).
+8. **Job Bulk hủy mà chưa trả Id** (`bulkAborted.idsKnown: false`): câu nói app lấy lại Id từ job khi xóa (theo sửa S3), không nói
+   "không xóa được" như bản thiết kế. `pendingBulkJobs` có `idsLost` thì hiện câu của server (hoặc câu mặc định). `rejected` /
+   `rejectedMessage` của chi tiết và `warnings` của kết quả xóa hiện nguyên câu server.
+9. `CLAUDE.md` và `.claude/agents/implementer.md` không sửa (người điều phối sửa).
+
+Chưa làm: số đo Bulk thật (chưa chạy trên org thật nào).

@@ -20,10 +20,19 @@ khác kết nối đang dùng ⇒ bị từ chối (`Org "…" bây giờ là or
 Kết nối jsforce được giữ theo **danh tính** (instance URL + username + org Id mà CLI trả), không theo alias: alias trỏ sang
 org khác (đăng nhập lại sau khi refresh sandbox) dùng kết nối mới.
 
-**Org thật là ai** (`client.whoami`, S1): org Id và username lấy từ dịch vụ identity của Salesforce qua **chính kết nối sẽ ghi**
-(jsforce `conn.identity()`), không chỉ tin CLI. Insert ghi danh tính này vào Lịch sử; khác điều CLI nói (hoặc không lấy được)
-⇒ lần insert kết thúc lỗi trước mọi lời gọi ghi: `Không xác định được org "dev" (…), nên chưa ghi gì vào org. Đăng nhập lại:
-sf org login web --alias dev rồi chạy lại.` (S5). Xóa đọc lại CLI (`refresh`) rồi hỏi identity trước khi kiểm tra org. Lỗi từ Salesforce được trả về
+**Org thật là ai** (`client.whoami`, S1; sửa sau review lần 2, mục 9): hỏi qua **chính kết nối sẽ ghi**, không chỉ tin CLI:
+org Id và user Id **tách từ đường dẫn** của URL `identity` trong REST root (`GET /services/data/vXX.X`; URL đó trỏ tới
+login.salesforce.com nên app không bao giờ gọi nó, token không bao giờ nằm trong URL), username bằng một câu
+`SELECT Username FROM User WHERE Id = '<userId>'` trên instance (Id đã kiểm định dạng). Insert ghi danh tính này vào Lịch sử;
+khác điều CLI nói (hoặc không lấy được) ⇒ lần insert kết thúc lỗi trước mọi lời gọi ghi: `Không xác định được org "dev" (…), nên
+chưa ghi gì vào org. Đăng nhập lại: sf org login web --alias dev rồi chạy lại.` (S5). Xóa đọc lại CLI (`refresh`) rồi hỏi identity
+trước khi kiểm tra org.
+
+**Kết nối ghi được ghim** (review lần 2, mục 1): `whoami` trả một `session`; inserter và `deleteRun` gửi mọi `create` / `destroy` /
+`bulkJob` qua đúng kết nối đó, nên alias có bị trỏ sang org khác giữa chừng thì phần còn lại vẫn vào org đã kiểm (không lời gọi nào
+tới org mới). `refreshFn` **từ chối khi không biết org Id** của token mới, hoặc org Id / username khác điều đã kiểm; khi đó phiên
+chết hẳn và lần chạy dừng với `stopped.reason: "orgChanged"` (`Org "dev" bây giờ là org khác (…) so với kết nối đang dùng (…).
+Không gửi tiếp. Chạy lại thao tác này.`); xóa không ghi Id nào là "đã không còn" vì chuyện này. Lỗi từ Salesforce được trả về
 UI với HTTP 502 và mã lỗi, ví dụ `Salesforce: NOT_FOUND: ...`.
 Nếu máy chưa cài `sf` thì `/api/orgs` trả 503 kèm thông báo; UI vẫn dùng được ở chế độ xem trước.
 
@@ -177,11 +186,17 @@ dữ liệu: server chỉ xóa Id chính nó đã ghi, không bao giờ nhận d
   (`sobject,step,ref,id`, chỉ nối thêm, `fsync` sau mỗi lần nối), `<hid>.deleted.csv` (`id,outcome`, `deleted` | `gone`). `hid` =
   `h<yyyyMMdd>T<HHmmss>Z-<6 hex>`; `hid` sai định dạng ⇒ 404 (không path traversal). File CSV được đọc bằng parser RFC 4180 thật
   (ô trong ngoặc kép giữ nguyên xuống dòng) và **không bao giờ ghi ô có xuống dòng** (ghi như vậy bị từ chối ⇒ insert dừng với
-  `stopped.reason: "history"`); id bước chỉ gồm chữ, số, `_`, `-` (sửa sau review, B1).
-- **Một server mỗi thư mục** (N6): `<thư mục>/history/.lock` giữ pid; một tiến trình khác còn sống đang giữ ⇒ Lịch sử tắt với câu
-  `Một server sf-data-generator khác (pid …) đang dùng thư mục Lịch sử …`, nên insert / xóa / quên trả 503. Khóa của tiến trình đã
-  chết được lấy lại. Lúc khởi tạo, file tạm còn sót và file Id không có `.json` bị dọn; `.json` rỗng hoặc hỏng vẫn hiện trong danh
-  sách với `status: "corrupt"` (N5).
+  `stopped.reason: "history"`); id bước chỉ gồm chữ, số, `_`, `-`, không bắt đầu bằng `-`, là chuỗi (sửa sau review B1 và lần 2;
+  UI tự sửa id sai khi mở file, nhập file thư viện, dán).
+- **Một server mỗi thư mục** (N6; review lần 2, mục 4): `<thư mục>/history/.lock` giữ pid, tạo bằng file tạm có sẵn pid rồi
+  `link()` (không bao giờ có khóa rỗng do mình tạo). Khóa có pid còn sống (kể cả pid đã bị chương trình khác dùng lại) hoặc khóa
+  rỗng mới hơn 5 giây ⇒ Lịch sử tắt với câu `Một server sf-data-generator khác (pid …) đang dùng thư mục Lịch sử …. Dừng server đó,
+  hoặc đặt SFDG_DATA_DIR khác cho server này. Nếu không còn server nào khác, xóa file <thư mục>/history/.lock`, nên insert / xóa /
+  quên trả 503. Khóa cũ (pid đã chết, hoặc rỗng quá 5 giây) được đổi tên sang bên, kiểm lại, rồi mới lấy.
+- **Dọn sau sự cố** (N5; review lần 2, mục 5): file tạm còn sót bị xóa; file Id không có `.json` chỉ bị xóa khi chỉ có dòng tiêu
+  đề, còn có Id thì được giữ và hiện trong danh sách với `status: "corrupt"`; `.json` rỗng hoặc hỏng cũng vậy. Mục `corrupt` tính
+  vào giới hạn số lần, và chỉ bị dọn (trước mọi mục khác) sau 7 ngày. Ghi `.json` còn `fsync` thư mục sau khi rename (trừ
+  Windows).
 - **Khi nào ghi:** mục được tạo sau lượt chạy thử, ngay trước sự kiện `plan`. **Lịch sử tắt ⇒ `/api/run` với org trả 503 trước
   khi chạy** (`Không ghi được Lịch sử (…), nên chưa ghi gì vào org. Kiểm tra quyền ghi thư mục … hoặc đặt SFDG_DATA_DIR.`, cả chế
   độ JSON; S7); tạo mục lỗi lúc chạy ⇒ lần chạy kết thúc với `error`, `insert: null`, chưa ghi gì vào org. Id của mỗi lời gọi Collections và mỗi job
@@ -195,7 +210,7 @@ dữ liệu: server chỉ xóa Id chính nó đã ghi, không bao giờ nhận d
   bản ghi trong org (đã xóa hết, không insert được gì) trước bất kỳ mục nào còn bản ghi (job Bulk chưa lấy Id cũng tính là còn),
   cũ nhất trước trong mỗi nhóm; không bao giờ dọn mục đang chạy. Sắp phải dọn một mục còn bản ghi ⇒ sự kiện `plan` có
   `warnings: [{ code: "historyPruned", historyId, message }]` (S4).
-- **API:** `GET /api/history` (`{ enabled, reason?, dir, maxRuns, runs }`), `GET /api/history/:hid` (bỏ `workflow`, thêm
+- **API:** `GET /api/history` (`{ enabled, reason?, dir, maxRuns, runs, prune }`; `prune`: mục lần insert tới sẽ dọn dù còn bản ghi, để hộp xác nhận Insert cảnh báo trước), `GET /api/history/:hid` (bỏ `workflow`, thêm
   `remaining`, `pendingBulkJobs`), `GET /api/history/:hid/ids.csv[?sobject=]` (`sobject,id,ref,step,status`; ô bắt đầu bằng
   `=` `+` `-` `@` được thêm `'` để bảng tính không chạy như công thức, N10), `POST /api/history/:hid/forget` (409 khi đang chạy,
   đang xóa hoặc đang quên ở tab khác; N1). Chi tiết ở [workflow-schema.md](workflow-schema.md#lịch-sử-insert-và-xóa-0011).
@@ -218,9 +233,12 @@ dữ liệu: server chỉ xóa Id chính nó đã ghi, không bao giờ nhận d
   hoặc `Số bản ghi còn phải xóa đã đổi (…)` (`count`), và không xóa gì. `GET /api/history/:hid` có `pendingBulkJobs` để hộp xác
   nhận nói trước.
 - **Chỉ Id của chính các bước của lần insert** (B1): dòng của file Id có bước không thuộc mục, hay sObject khác sObject của bước,
-  bị bỏ (`remaining().rejected`). Trước khi gửi một bước, mọi Id của bước phải cùng **tiền tố 3 ký tự** và đúng `keyPrefix` của
-  sObject theo describe (đọc qua client); sai ⇒ không gửi Id nào của bước đó, `result.skipped: [{ nodeId, sobject, count,
-  reason }]`.
+  bị bỏ và được báo: `rejected` trong `GET /api/history/:hid` (kèm `rejectedMessage`), trong kết quả xóa (kèm câu `N dòng trong file
+  Id không thuộc bước nào của lần insert này (file có thể đã bị sửa), không xóa.` trong `warnings`), và số "còn lại" của danh sách
+  cũng chỉ đếm dòng hợp lệ (review lần 2, mục 3). Trước khi gửi một bước, mọi Id của bước phải cùng **tiền tố 3 ký tự** và đúng
+  `keyPrefix` của sObject theo describe (đọc qua client); sai ⇒ không gửi Id nào của bước đó, `result.skipped: [{ nodeId, sobject,
+  count, reason }]`. Các kiểm tra này bắt file hỏng hoặc lẫn dòng; chúng **không** chống được người cố ý sửa file bằng Id hợp lệ cùng
+  sObject: thứ bảo vệ file Lịch sử là quyền `0700`/`0600` của thư mục trên máy chạy server.
 - **Thứ tự:** các bước theo thứ tự ngược lúc insert (con trước cha), trong bước Id theo thứ tự ngược.
 - **Cách gửi:** bước còn < 10 000 Id (hoặc `bulk: "off"`): `client.destroy` 200 Id mỗi lời gọi (`DELETE /composite/sobjects`).
   Bước lớn hơn: `destroy` tới khi có một lời gọi thành công, rồi job Bulk `operation: 'delete'` (CSV một cột `Id`) 10 000 Id mỗi
@@ -231,9 +249,47 @@ dữ liệu: server chỉ xóa Id chính nó đã ghi, không bao giờ nhận d
   đều lỗi 100 % ⇒ dừng (`stopped.reason: "allFailing"`, `stopped.text`: kiểm tra quyền Delete; với `DELETE_FAILED` thì nói còn
   bản ghi liên quan trỏ tới chúng, N8).
 - Job Bulk chưa trả Id vì còn đang chạy: `result.pendingBulkJobs: [{ jobId, sobject, state, reason }]` (N4); bản ghi của nó không
-  nằm trong lần xóa này. Mục biến mất giữa lúc xóa (bị xóa khỏi thư mục) ⇒ dừng sau lời gọi đang gửi, 404 (hoặc sự kiện `error`)
+  nằm trong lần xóa này. Trước khi đọc Id của một job chờ, Salesforce phải xác nhận job là `insert` đúng sObject của bước (không
+  phân biệt hoa thường) và do user của phiên tạo (`createdById` = user Id của `whoami`; review lần 2, mục 7). Job không khớp, hoặc
+  job / kết quả đã bị Salesforce xóa (404), được đánh dấu `idsLost: true`: không còn tính là đang chờ, không tính vào "còn lại" hay
+  việc dọn, và có câu hướng dẫn (`Id của job … không còn đọc được (Salesforce xóa kết quả sau 7 ngày); tìm bản ghi trong Setup → Bulk
+  Data Load Jobs hoặc theo CreatedDate, rồi xóa bằng tay nếu cần.`) trong `lostBulkJobs` của `GET /api/history/:hid` và của kết quả
+  xóa (mục 6). Mục biến mất giữa lúc xóa (bị xóa khỏi thư mục) ⇒ dừng sau lời gọi đang gửi, 404 (hoặc sự kiện `error`)
   `Lần insert này không còn trong Lịch sử (…), nên đã dừng xóa. …` và không tạo lại file (N11).
 - **Dừng / Dừng ngay** như insert; Id chưa gửi vẫn "còn trong org" và xóa được bằng lần xóa sau ("Xóa phần còn lại…").
+
+## Giao diện của Lịch sử và xóa (0011 bước 9–10)
+
+`client/js/history.js` (hộp Lịch sử, hộp xác nhận xóa, trạng thái Lịch sử), `client/js/main.js` (hộp xác nhận Insert, tiến độ
+insert/xóa, toast), `client/js/results.js` (link, nút, tab "Lỗi xóa").
+
+- **Không có Lịch sử thì không insert:** khi đã chọn org, UI đọc `GET /api/history`; `enabled: false` ⇒ nút **Insert** khóa,
+  `title` và một toast (một lần) nói thư mục, lỗi và cách sửa (`SFDG_DATA_DIR` rồi khởi động lại server). `/api/run` vẫn tự trả 503;
+  UI đọc lại trạng thái khi nhận 503.
+- **Hộp xác nhận Insert:** checkbox `Dùng Bulk API 2.0 cho bước từ 10 000 bản ghi` (chỉ khi có bước đủ điều kiện, mặc định bật,
+  không nhớ), một dòng mỗi bước Bulk (tối đa 5), số lời gọi từ `planInsert` (đổi checkbox tính lại ngay), `Org còn R/M lời gọi API
+  trong 24 giờ.` từ `/api/orgs/:org/limits` (≤ 3 s, cache 60 s; lỗi thì bỏ dòng, ước tính vượt thì `.warn-box`, không khóa nút),
+  dòng Lịch sử, `.warn-box` cho mỗi mục `prune`. Focus đầu ở **Hủy**. Gửi `target.bulk`.
+- **Khi chạy:** tóm tắt thêm `· Bulk: <sObject> job i/k`; sau Dừng, sự kiện `stopping` đổi nút thành **Dừng ngay** (gửi
+  `cancel` với `force`, rồi `Đang hủy job Bulk…`). Lỗi của `cancel` (ví dụ 403 khi server nghe mọi địa chỉ mà mở app bằng tên lạ)
+  hiện nguyên câu của server. `plan.warnings` `historyPruned` thành toast.
+- **Khi xong:** tóm tắt có link **⤓ Id** (`/api/history/:hid/ids.csv`, tên file do server đặt) và **Lịch sử**; mọi kết thúc có bản
+  ghi trong org có toast ≥ 10 s với nút **Xóa dữ liệu này…**. Câu kết thúc theo `stopped.reason` (`allFailing`, `bulkFailing`,
+  `history`, `bulkTimeout`, `bulkError`, `orgChanged`…), `bulkAborted`, `bulkUnknown`.
+- **Hộp Lịch sử** (nút ghost `Lịch sử` ở đầu panel kết quả — icon 32 px ở ≤ 720 px —, link trong tóm tắt, mục `Lịch sử insert`
+  của menu ⋯): lọc theo org đang chọn (mặc định bật), mỗi lần chạy một hàng (≤ 720 px: hai dòng, hộp toàn màn hình), chi tiết khi
+  bấm (số theo bước, job Bulk, `pendingBulkJobs` kể cả `idsLost`, `rejected`, lỗi insert, lần xóa gần nhất), `⤓ Id`,
+  `Xóa khỏi org…` / `Xóa phần còn lại…` (khóa khi lần đó đang chạy), `⋯ → Quên lần insert này` (hỏi trước; nút phụ). Mục
+  `corrupt` hiện câu của server, không có nút.
+- **Hộp xác nhận xóa:** số còn phải xóa theo sObject (con trước), loại org theo `GET /api/orgs` lúc mở (org không còn trong sf CLI ⇒
+  khóa; CLI lỗi ⇒ coi như production), production / không rõ loại ⇒ ô gõ tên org (alias hoặc username, không phân biệt hoa thường),
+  Thùng rác, xóa dây chuyền (khi lần insert có hơn một sObject), job Bulk chưa lấy Id, checkbox Bulk, số lời gọi từ `planDelete`.
+  Focus đầu ở **Hủy**, nút `Xóa N bản ghi` là `.danger.solid`. Gửi `confirm: { username, count, typedOrg? }`. Bị từ chối trước khi
+  xóa (400/404/409/502/503) ⇒ câu của server trong hộp; 409 có `count` mới ⇒ nút đổi thành số mới và phải bấm lại (không bao giờ tự
+  gửi lại).
+- **Xóa chạy trong panel kết quả** như insert (Xem trước / Insert khóa, Dừng, Dừng ngay khi có job Bulk, `beforeunload`): `Đang xóa
+  khỏi …: n/N (p %) · lỗi k` + chip theo sObject. Xong: toast theo §6 của thiết kế, kèm `collected`, `skipped`, `pendingBulkJobs`,
+  câu `warnings` của server; có lỗi thì tab `Lỗi xóa (n)`.
 
 ## An toàn
 
