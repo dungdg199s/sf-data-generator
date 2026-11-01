@@ -192,7 +192,7 @@ test('N6: a history directory locked by another live process is off, with a sent
   const h = createHistory({ dir, random: hex });
   const s = await h.status();
   assert.equal(s.enabled, false);
-  assert.equal(s.reason, `Một server sf-data-generator khác (pid ${process.ppid}) đang dùng thư mục Lịch sử ${root}. Dừng server đó, hoặc đặt SFDG_DATA_DIR khác cho server này`);
+  assert.equal(s.reason, `Một server sf-data-generator khác (pid ${process.ppid}) đang dùng thư mục Lịch sử ${root}. Dừng server đó, hoặc đặt SFDG_DATA_DIR khác cho server này. Nếu không còn server nào khác, xóa file ${path.join(root, '.lock')}`);
   await assert.rejects(h.create({ org: ORG, workflow: null, seed: 1, now: 1, steps: [], total: 0 }), /đang dùng thư mục Lịch sử/);
   await writeFile(path.join(root, '.lock'), '999999999'); // no such process
   const h2 = createHistory({ dir, random: hex });
@@ -206,4 +206,77 @@ test('item 2: a numeric nodeId still matches its rows (keys are String(nodeId))'
   await h.appendIds(hid, [{ sobject: 'Account', nodeId: 5, ref: 'acc#1', id: '001000000000001AAA' }]);
   const rem = await h.remaining(hid);
   assert.deepEqual([rem.total, rem.rejected, rem.steps[0].nodeId], [1, 0, '5']);
+});
+
+test('item 4: an empty lock younger than 5 s is held (a server is writing it); an old empty one is taken over', async () => {
+  const { mkdir, utimes } = await import('node:fs/promises');
+  const dir = await tmp();
+  const root = path.join(dir, 'history');
+  await mkdir(root, { recursive: true });
+  const lock = path.join(root, '.lock');
+  await writeFile(lock, '');
+  const h = createHistory({ dir, random: hex });
+  const st = await h.status();
+  assert.equal(st.enabled, false);
+  assert.match(st.reason, /^Một server sf-data-generator khác \(pid không rõ\) đang dùng thư mục Lịch sử .*Nếu không còn server nào khác, xóa file .*\.lock$/);
+  assert.equal(await readFile(lock, 'utf8'), '', 'the lock was not touched');
+  const old = new Date(Date.now() - 60000);
+  await utimes(lock, old, old);
+  const h2 = createHistory({ dir, random: hex });
+  assert.equal((await h2.status()).enabled, true);
+  assert.equal(await readFile(lock, 'utf8'), String(process.pid));
+  assert.deepEqual((await readdir(root)).filter((f) => f.startsWith('.lock.')), [], 'no temporary lock file left');
+});
+
+test('item 4: a lock whose pid now belongs to another live program is still held (safe side) and the sentence says how to remove it', async () => {
+  const { mkdir } = await import('node:fs/promises');
+  const dir = await tmp();
+  const root = path.join(dir, 'history');
+  await mkdir(root, { recursive: true });
+  await writeFile(path.join(root, '.lock'), String(process.ppid)); // reused pid: alive, not a server of ours
+  const st = await createHistory({ dir, random: hex }).status();
+  assert.equal(st.enabled, false);
+  assert.ok(st.reason.endsWith(`Nếu không còn server nào khác, xóa file ${path.join(root, '.lock')}`));
+});
+
+test('item 4: two histories racing for one directory in this process share the lock; the file always holds a pid', async () => {
+  const dir = await tmp();
+  const [a, b] = [createHistory({ dir, random: hex }), createHistory({ dir, random: hex })];
+  const [sa, sb] = await Promise.all([a.status(), b.status()]);
+  assert.deepEqual([sa.enabled, sb.enabled], [true, true]);
+  assert.equal(await readFile(path.join(dir, 'history', '.lock'), 'utf8'), String(process.pid));
+});
+
+test('item 5: an orphan Id file with Ids is kept and listed as corrupt; one with only the header is removed', async () => {
+  const { mkdir } = await import('node:fs/promises');
+  const dir = await tmp();
+  const root = path.join(dir, 'history');
+  await mkdir(root, { recursive: true });
+  await writeFile(path.join(root, 'h20260101T000000Z-aaaaaa.ids.csv'), 'sobject,step,ref,id\nAccount,a,acc#1,001000000000001AAA\n');
+  await writeFile(path.join(root, 'h20260101T000000Z-bbbbbb.ids.csv'), 'sobject,step,ref,id\n');
+  const h = createHistory({ dir, random: hex });
+  const list = await h.list();
+  assert.deepEqual(list.map((e) => [e.id, e.status]), [['h20260101T000000Z-aaaaaa', 'corrupt']]);
+  assert.match(list[0].error, /^Thiếu file h20260101T000000Z-aaaaaa\.json/);
+  const left = (await readdir(root)).filter((f) => !f.startsWith('.')).sort();
+  assert.deepEqual(left, ['h20260101T000000Z-aaaaaa.ids.csv']);
+});
+
+test('corrupt entries count toward maxRuns and are pruned first only after their grace period', async () => {
+  const { utimes } = await import('node:fs/promises');
+  const dir = await tmp();
+  let t = Date.now();
+  const h = createHistory({ dir, clock: () => t, random: hex, maxRuns: 2 });
+  const good = await h.create({ org: ORG, workflow: null, seed: 1, now: 1, steps: [], total: 0 });
+  await h.finish(good, { status: 'done', inserted: 3 });
+  const root = path.join(dir, 'history');
+  const bad = path.join(root, 'h20200101T000000Z-cccccc.json');
+  await writeFile(bad, '');
+  assert.deepEqual((await h.prunePreview()).map((e) => e.id), [good], 'young corrupt entry is kept: the good one would go');
+  const old = new Date(t - 8 * 24 * 3600 * 1000);
+  await utimes(bad, old, old);
+  assert.deepEqual(await h.prunePreview(), [], 'an old corrupt entry goes first');
+  t += 1000;
+  await h.create({ org: ORG, workflow: null, seed: 1, now: 1, steps: [], total: 0 });
+  assert.ok(!(await readdir(root)).includes('h20200101T000000Z-cccccc.json'));
 });

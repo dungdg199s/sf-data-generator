@@ -16,7 +16,7 @@
 // deleted (or empty) ones first, never a running one. Time is the server's Date.now (injectable):
 // determinism only applies to generators and the executor.
 
-import { mkdir, writeFile, rename, readFile, readdir, stat, unlink, chmod, open } from 'node:fs/promises';
+import { mkdir, writeFile, rename, readFile, readdir, stat, unlink, chmod, open, link } from 'node:fs/promises';
 import { readFileSync, unlinkSync } from 'node:fs';
 import { parseCsv } from './sf/bulk-csv.js';
 import { randomBytes } from 'node:crypto';
@@ -28,6 +28,10 @@ export const isValidHid = (hid) => typeof hid === 'string' && HID_RE.test(hid);
 const FILE_MODE = 0o600;
 const DIR_MODE = 0o700;
 const IDS_HEADER = 'sobject,step,ref,id\n';
+/** An empty lock file this young is a server between creating and filling it (review 2, item 4). */
+const LOCK_FRESH_MS = 5000;
+/** A corrupt entry is kept this long before pruning may take it (its Ids may still be in an org). */
+const CORRUPT_GRACE_MS = 7 * 24 * 3600 * 1000;
 const DELETED_HEADER = 'id,outcome\n';
 
 /** SFDG_DATA_DIR, else the OS data directory of the app. */
@@ -137,6 +141,21 @@ export function createHistory({ dir = defaultDataDir(), clock = () => Date.now()
     const tmp = `${file(hid, '.json')}.tmp-${random()}`;
     await writeSynced(tmp, `${JSON.stringify(data, null, 1)}\n`, 'wx');
     await rename(tmp, file(hid, '.json'));
+    await syncDir();
+  }
+
+  /** fsync the directory so the rename itself survives a crash (not supported on Windows). */
+  async function syncDir() {
+    if (process.platform === 'win32') return;
+    let fh;
+    try {
+      fh = await open(root, 'r');
+      await fh.sync();
+    } catch {
+      // some file systems refuse fsync on a directory
+    } finally {
+      await fh?.close().catch(() => {});
+    }
   }
 
   async function readJson(hid) {
@@ -165,7 +184,7 @@ export function createHistory({ dir = defaultDataDir(), clock = () => Date.now()
       const other = await takeLock();
       if (other) {
         state.enabled = false;
-        state.reason = `Một server sf-data-generator khác (pid ${other}) đang dùng thư mục Lịch sử ${root}. Dừng server đó, hoặc đặt SFDG_DATA_DIR khác cho server này`;
+        state.reason = `Một server sf-data-generator khác (pid ${other}) đang dùng thư mục Lịch sử ${root}. Dừng server đó, hoặc đặt SFDG_DATA_DIR khác cho server này. Nếu không còn server nào khác, xóa file ${path.join(root, '.lock')}`;
         return;
       }
       state.enabled = true;
@@ -175,13 +194,31 @@ export function createHistory({ dir = defaultDataDir(), clock = () => Date.now()
       state.reason = e.message;
       return;
     }
-    // Leftovers of a crash (N5): temporary files, Id files whose entry never got its .json.
+    // Leftovers of a crash (N5): temporary files; an Id file whose entry never got its .json only if
+    // it holds nothing but the header (review 2, item 5: one with Ids is kept and listed as corrupt).
     try {
       const names = await readdir(root);
       const entries = new Set(names.filter((f) => f.endsWith('.json')).map((f) => f.slice(0, -5)));
       for (const f of names) {
-        const base = f.replace(/\.(json\.tmp-.*|ids\.csv|deleted\.csv)$/, '');
-        if (/\.json\.tmp-/.test(f) || (/\.(ids|deleted)\.csv$/.test(f) && isValidHid(base) && !entries.has(base))) await unlink(path.join(root, f)).catch(() => {});
+        if (/\.json\.tmp-/.test(f)) {
+          await unlink(path.join(root, f)).catch(() => {});
+          continue;
+        }
+        // Temporary lock files of a server that is gone (never one of a live process: it may be
+        // linking it right now).
+        const lockTmp = f.match(/^\.lock\.(\d+)\./);
+        if (lockTmp && Number(lockTmp[1]) !== process.pid && !alive(Number(lockTmp[1]))) {
+          await unlink(path.join(root, f)).catch(() => {});
+          continue;
+        }
+        const m = f.match(/^(.*)\.ids\.csv$/);
+        if (m && isValidHid(m[1]) && !entries.has(m[1])) {
+          const text = await readFile(path.join(root, f), 'utf8').catch(() => null);
+          if (text !== null && (text === '' || text === IDS_HEADER)) {
+            await unlink(path.join(root, f)).catch(() => {});
+            await unlink(path.join(root, `${m[1]}.deleted.csv`)).catch(() => {});
+          }
+        }
       }
     } catch {
       // best effort
@@ -199,21 +236,62 @@ export function createHistory({ dir = defaultDataDir(), clock = () => Date.now()
   const ready = () => (state.ready ??= init());
 
   /** → null when this process holds the lock, else the pid of the live process that does. */
+  /**
+   * The pid is written to a temporary file first and then hard-linked to `.lock` (atomic: the lock
+   * never exists without its pid; review 2, item 4). An existing lock is held if its pid is alive
+   * (even if that pid was reused by another program: the 503 sentence says how to remove the lock),
+   * or if it is empty and younger than LOCK_FRESH_MS. A stale lock is renamed aside, re-checked,
+   * then removed, and the link retried.
+   */
   async function takeLock() {
     const lock = path.join(root, '.lock');
-    for (let attempt = 0; attempt < 2; attempt++) {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const tmp = path.join(root, `.lock.${process.pid}.${random()}`);
+      await writeSynced(tmp, String(process.pid), 'wx');
       try {
-        await writeSynced(lock, String(process.pid), 'wx');
+        await link(tmp, lock);
         LOCKS.add(lock);
         return null;
       } catch (e) {
+        if (e.code === 'ENOENT') continue; // our temporary file vanished: try again
         if (e.code !== 'EEXIST') throw e;
-        const pid = Number(await readFile(lock, 'utf8').catch(() => ''));
-        if (pid === process.pid) return null;
-        if (pid > 0 && alive(pid)) return pid;
-        await unlink(lock).catch(() => {}); // stale: its server is gone
+      } finally {
+        await unlink(tmp).catch(() => {});
       }
+      const held = await lockHolder(lock);
+      if (held === 'mine') return null;
+      if (held) return held;
+      // Stale: move it aside, and make sure what was moved is the stale lock judged above.
+      const aside = path.join(root, `.lock.stale-${random()}`);
+      try {
+        await rename(lock, aside);
+      } catch {
+        continue; // someone else moved or replaced it meanwhile: look again
+      }
+      const again = await lockHolder(aside);
+      if (again && again !== 'mine') {
+        await link(aside, lock).catch(() => {}); // a live lock was moved by mistake: put it back
+        await unlink(aside).catch(() => {});
+        return again;
+      }
+      await unlink(aside).catch(() => {});
     }
+    return lockHolder(lock).then((h) => (h === 'mine' ? null : h ?? 'không rõ'));
+  }
+
+  /** → 'mine' | pid (or 'không rõ') of a live holder | null when stale or missing */
+  async function lockHolder(f) {
+    let text;
+    let info;
+    try {
+      [text, info] = await Promise.all([readFile(f, 'utf8'), stat(f)]);
+    } catch {
+      return null;
+    }
+    const pid = Number(text.trim());
+    if (!text.trim()) return Date.now() - info.mtimeMs < LOCK_FRESH_MS ? 'không rõ' : null;
+    if (pid === process.pid) return 'mine';
+    if (Number.isInteger(pid) && pid > 0 && alive(pid)) return pid;
     return null;
   }
 
@@ -246,12 +324,15 @@ export function createHistory({ dir = defaultDataDir(), clock = () => Date.now()
     const all = [];
     for (const hid of await hids()) {
       const data = await readJson(hid).catch(() => null);
-      all.push({ hid, data, size: await sizeOf(hid), remaining: data ? remainingOf(data) : 0 });
+      const mtime = await stat(file(hid, '.json')).then((x) => x.mtimeMs, () => 0);
+      all.push({ hid, data, size: await sizeOf(hid), remaining: data ? remainingOf(data) : 0, mtime });
     }
     let count = all.length;
     let bytes = all.reduce((s, e) => s + e.size, 0);
+    // A corrupt entry counts toward the limits; past its grace period it is the first to go.
+    const corruptOld = (e) => e.data === null && !active.has(e.hid) && clock() - e.mtime >= CORRUPT_GRACE_MS;
     const removable = (e) => !active.has(e.hid) && e.data?.status !== 'running' && e.data !== null;
-    const order = [...all.filter((e) => removable(e) && e.remaining === 0), ...all.filter((e) => removable(e) && e.remaining > 0)];
+    const order = [...all.filter(corruptOld), ...all.filter((e) => removable(e) && e.remaining === 0), ...all.filter((e) => removable(e) && e.remaining > 0)];
     const out = [];
     for (const e of order) {
       if (count + 1 <= maxRuns && bytes <= maxBytes) break;
@@ -458,6 +539,13 @@ export function createHistory({ dir = defaultDataDir(), clock = () => Date.now()
     async list() {
       await ready();
       const out = [];
+      // Id files without their .json (kept by the clean-up because they hold Ids): corrupt entries.
+      const names = await readdir(root).catch(() => []);
+      const withJson = new Set(names.filter((f) => f.endsWith('.json')).map((f) => f.slice(0, -5)));
+      const orphans = names.map((f) => f.match(/^(.*)\.ids\.csv$/)?.[1]).filter((h) => h && isValidHid(h) && !withJson.has(h));
+      for (const hid of orphans.sort().reverse()) {
+        out.push({ id: hid, status: 'corrupt', error: `Thiếu file ${hid}.json: không đọc được lần insert này, nhưng ${hid}.ids.csv vẫn còn Id đã insert (có thể vẫn ở trong org).` });
+      }
       for (const hid of (await hids()).reverse()) {
         const d = await readJson(hid).catch(() => null);
         if (!d) {

@@ -724,3 +724,33 @@ test('item 1: a delete whose alias moves to org B mid-run: no request to B and n
     await t.close();
   }
 });
+
+test('item 10: with history off (another live server holds the lock) delete and forget answer 503 and the org sees no write', async () => {
+  const s = await stack();
+  try {
+    const hid = await inserted(s);
+    const writes = s.fake.writes().length;
+    // A second server on the same directory: the lock belongs to another live process.
+    await writeRaw(path.join(s.dir, 'history', '.lock'), String(process.ppid));
+    const app = http.createServer(createApp({ cli: s.cli, history: createHistory({ dir: s.dir }) }));
+    await new Promise((r) => app.listen(0, '127.0.0.1', r));
+    try {
+      const url = `http://127.0.0.1:${app.address().port}`;
+      const post = (p, body) => fetch(url + p, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      const del = await post(`/api/history/${hid}/delete`, { confirm: { username: 'me@example.com', count: 15 } });
+      assert.equal(del.status, 503);
+      assert.match((await del.json()).error, /^Không ghi được Lịch sử \(Một server sf-data-generator khác \(pid \d+\) đang dùng thư mục Lịch sử .*\), nên không xóa được\./);
+      const forget = await post(`/api/history/${hid}/forget`, {});
+      assert.equal(forget.status, 503);
+      assert.match((await forget.json()).error, /nên không quên lần insert này được\./);
+      const run = await post('/api/run', { workflow: accCon(1, 1), seed: 1, target: { kind: 'org', org: 'dev' } });
+      assert.equal(run.status, 503);
+    } finally {
+      app.close();
+    }
+    assert.equal(s.fake.writes().length, writes);
+    assert.equal((await s.history.remaining(hid)).total, 15, 'still listed, nothing forgotten');
+  } finally {
+    await s.close();
+  }
+});
