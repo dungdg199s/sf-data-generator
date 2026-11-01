@@ -766,3 +766,11 @@ test('S6: on a wildcard bind, org writes need an IP, localhost or this machine\'
     close();
   }
 });
+
+test('N9: a malformed org in the URL is a 400, not a crash', async () => {
+  for (const p of ['/api/orgs/%E0%A4%A/limits', '/api/orgs/%E0%A4%A/sobjects', '/api/orgs/%/sobjects/Account']) {
+    const r = await fetch(base + p);
+    assert.equal(r.status, 400, p);
+    assert.equal((await r.json()).error, 'Tên org trong đường dẫn không hợp lệ.');
+  }
+});

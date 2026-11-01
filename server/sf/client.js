@@ -118,7 +118,8 @@ export function createSfClient({ cli, createConnection = (options) => new Connec
     /**
      * A Bulk API 2.0 ingest job (design 0011). `operation` must be 'insert' or 'delete': anything
      * else (hardDelete, update, upsert…) throws here, before any request. `{ jobId }` instead
-     * attaches to an existing job for reading only (check / results). Every method goes through
+     * attaches to an existing job for reading only (check / results; open, upload, close and abort
+     * throw). `open()` resolves with the job info Salesforce returns. Every method goes through
      * `call` (502 on Salesforce errors, token refresh).
      * → { id, open(), upload(csv), close(), check() → { state, numberRecordsProcessed,
      *     numberRecordsFailed, errorMessage }, abort(), successfulResults() → CSV text,
@@ -150,7 +151,7 @@ export function createSfClient({ cli, createConnection = (options) => new Connec
         open: writable(() => withJob((j) => j.open())),
         upload: writable((csv) => withJob((j) => j.uploadData(String(csv)))),
         close: writable(() => withJob((j) => j.close())),
-        abort: () => withJob((j) => j.abort()),
+        abort: writable(() => withJob((j) => j.abort())),
         check: () => withJob(async (j) => {
           const info = await j.check();
           return {

@@ -23,6 +23,19 @@ export function defaultSleep(ms, signal) {
   });
 }
 
+/** check() with up to CHECK_RETRIES more tries (1 s, 2 s) on a transient error (review of 0011, N2). */
+export const CHECK_RETRIES = 2;
+async function checkWithRetry(handle, sleep) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await handle.check();
+    } catch (e) {
+      if (attempt >= CHECK_RETRIES) throw e;
+      await sleep(1000 * 2 ** attempt);
+    }
+  }
+}
+
 /**
  * → { state, info, timedOut, forced }  info: last check() answer
  */
@@ -44,7 +57,7 @@ export async function waitForJob(handle, {
       }
     }
     await sleep(forced ? Math.min(pollStart, delay) : delay, forced ? undefined : forceSignal);
-    info = await handle.check();
+    info = await checkWithRetry(handle, sleep);
     onCheck?.(info);
     if (TERMINAL.has(info.state)) return { state: info.state, info, timedOut: false, forced };
     if (forceSignal?.aborted && !forced) continue;

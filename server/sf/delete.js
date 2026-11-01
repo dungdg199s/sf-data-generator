@@ -100,6 +100,7 @@ export async function deleteRun({
     let ok = 0;
     let bad = 0;
     let firstMessage = null;
+    let firstCode = null;
     for (const o of outcomes) {
       if (o.ok) {
         deleted++;
@@ -115,10 +116,12 @@ export async function deleteRun({
         retry.push({ sobject, nodeId, id: o.id, message: o.message, code: o.code });
         bad++;
         firstMessage ??= o.message;
+        firstCode ??= o.code;
       } else {
         failOne(sobject, nodeId, o.id, o.message, o.code);
         bad++;
         firstMessage ??= o.message;
+        firstCode ??= o.code;
       }
     }
     try {
@@ -126,7 +129,7 @@ export async function deleteRun({
     } catch (e) {
       stopped ??= e.status === 404 ? { reason: 'entryGone', message: ENTRY_GONE } : { reason: 'history', message: e.message };
     }
-    return { ok, bad, firstMessage };
+    return { ok, bad, firstMessage, firstCode };
   }
 
   async function destroyCall(sobject, nodeId, ids, opts) {
@@ -150,11 +153,16 @@ export async function deleteRun({
     if (r.ok) fc.anySuccess = true;
     fc.failed += r.bad;
     fc.message ??= r.firstMessage;
+    fc.code ??= r.firstCode;
     firstCalls.set(sobject, fc);
     if (!fc.anySuccess && fc.calls >= failFast) {
+      // DELETE_FAILED means other records still depend on these (N8), anything else is usually a permission.
+      const hint = fc.code === RETRY_CODE
+        ? `Còn bản ghi khác liên quan tới chúng (Lookup, bản ghi con hoặc quan hệ khác trỏ tới chúng). Xóa hoặc gỡ các bản ghi liên quan đó trước rồi bấm "Xóa phần còn lại…".`
+        : `Kiểm tra quyền Delete của user trên ${sobject}.`;
       stopped ??= {
         reason: 'allFailing', sobject, nodeId, batches: fc.calls, records: fc.failed, message: fc.message,
-        text: `Đã dừng xóa: ${fc.calls} lời gọi xóa ${sobject} đầu tiên đều lỗi "${fc.message}". Kiểm tra quyền Delete của user trên ${sobject}. Chưa xóa bản ghi ${sobject} nào.`,
+        text: `Đã dừng xóa: ${fc.calls} lời gọi xóa ${sobject} đầu tiên đều lỗi "${fc.message}". ${hint} Chưa xóa bản ghi ${sobject} nào.`,
       };
     }
     progress();
@@ -165,12 +173,24 @@ export async function deleteRun({
   async function bulkDelete(sobject, nodeId, ids) {
     active = { nodeId, sobject, jobId: null, processed: 0, failed: 0, records: ids.length, state: 'Open' };
     let handle;
+    let opened;
     try {
       handle = client.bulkJob(target, { object: sobject, operation: 'delete' });
-      await handle.open();
+      opened = await handle.open();
     } catch {
       active = null;
       return false;
+    }
+    // Exactly the job asked for (N3): anything else is aborted before a single Id is uploaded.
+    if (opened?.operation !== 'delete' || opened?.object !== sobject) {
+      try {
+        await handle.abort();
+      } catch {
+        // nothing uploaded
+      }
+      stopped ??= { reason: 'bulkError', sobject, nodeId, jobId: handle.id, message: `Salesforce mở job Bulk ${handle.id} khác yêu cầu (${opened?.operation ?? '?'} ${opened?.object ?? '?'} thay vì delete ${sobject}), nên đã hủy job và dừng.` };
+      active = null;
+      return true;
     }
     active.jobId = handle.id;
     for (const id of ids) sent.add(id);

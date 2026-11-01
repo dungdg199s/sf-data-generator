@@ -69,3 +69,10 @@ test('no hand-written HTTP to Salesforce: the server never calls fetch / http.re
   // jsforce is imported in one place only.
   assert.deepEqual(where(files, /from\s+['"]jsforce['"]/), ['server/sf/client.js']);
 });
+
+test('N12: no raw jsforce connection leaves server/sf/client.js', async () => {
+  const files = await sources(['server', 'shared', 'client']);
+  assert.deepEqual(where(files, /\.connection\(|\bconnectionFor\b/), ['server/sf/client.js']);
+  const client = code(files.find((f) => f.file === 'server/sf/client.js').text);
+  assert.ok(!/\bconnection\s*:/.test(client), 'the client object has no `connection` getter');
+});

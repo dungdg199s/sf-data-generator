@@ -159,6 +159,7 @@ test('real jsforce: bulkJob refuses hardDelete / update / upsert / anything else
     assert.throws(() => attached.open(), /read-only/);
     assert.throws(() => attached.upload('Id\n1\n'), /read-only/);
     assert.throws(() => attached.close(), /read-only/);
+    assert.throws(() => attached.abort(), /read-only/, 'N3: an attached job cannot be aborted either');
     assert.equal(fake.requests.length, 0);
   } finally {
     await fake.close();

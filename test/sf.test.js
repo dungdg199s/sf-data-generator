@@ -593,6 +593,7 @@ function bulkClient(opts = {}) {
         async open() {
           job.log.push('open');
           if (opts.openError) throw opts.openError;
+          return { id: job.id, operation: opts.openOperation ?? operation, object: opts.openObject ?? object, state: 'Open' };
         },
         async upload(csv) {
           job.log.push('upload');
@@ -980,4 +981,36 @@ test('deleteRun: a step with bulkMinRecords Ids goes probe by destroy, then Bulk
   const res2 = await deleteRun({ client: refusing, history: x.h, hid: x.hid, target: 'dev', minBulk: 300, jobRecords: 100, bulkOptions: { sleep: tick } });
   assert.deepEqual(d2, [200, 200, 50]);
   assert.equal(res2.deleted, 450);
+});
+
+test('N2: a Bulk job check that fails transiently is retried twice before giving up', async () => {
+  const { waitForJob } = await import('../server/sf/bulk-job.js');
+  let calls = 0;
+  const flaky = (failures) => ({ check: async () => { if (++calls <= failures) throw new Error('ECONNRESET'); return { state: 'JobComplete', numberRecordsProcessed: 1, numberRecordsFailed: 0 }; } });
+  const sleeps = [];
+  const sleep = async (ms) => { sleeps.push(ms); };
+  assert.equal((await waitForJob(flaky(2), { sleep })).state, 'JobComplete');
+  assert.deepEqual(sleeps, [2000, 1000, 2000]);
+  calls = 0;
+  await assert.rejects(waitForJob(flaky(3), { sleep }), /ECONNRESET/);
+});
+
+test('N3: a job Salesforce opens for another sObject or operation is aborted before any upload; the run stops', async () => {
+  const client = bulkClient({ openObject: 'Account' });
+  const recs = accConRecords(300, 40);
+  const res = await insertAll(client, recs, { plan: conPlan(recs.length, 12000) });
+  assert.deepEqual(client.jobs[0].log, ['open', 'abort']);
+  assert.equal(res.stopped.reason, 'bulkError');
+  assert.match(res.stopped.message, /^Salesforce mở job Bulk 750\d+ khác yêu cầu \(insert Account thay vì insert Contact\), nên đã hủy job và dừng\.$/);
+  assert.equal(res.inserted + res.failed + res.notSent + res.bulkUnknown, recs.length);
+});
+
+test('N8: 3 destroy calls failing with DELETE_FAILED stop with a sentence about related records, not permissions', async () => {
+  const rows = Array.from({ length: 1000 }, (_, i) => ({ sobject: 'Account', nodeId: 'a', ref: `acc#${i}`, id: id18('001', i + 1) }));
+  const { h, hid } = await historyWith(rows, [{ nodeId: 'a', sobject: 'Account' }]);
+  const client = deleteClient({ errorFor: () => 'DELETE_FAILED' });
+  const res = await deleteRun({ client, history: h, hid, target: 'dev' });
+  assert.equal(res.stopped.reason, 'allFailing');
+  assert.match(res.stopped.text, /^Đã dừng xóa: 3 lời gọi xóa Account đầu tiên đều lỗi "DELETE_FAILED: DELETE_FAILED msg"\. Còn bản ghi khác liên quan tới chúng \(Lookup, bản ghi con hoặc quan hệ khác trỏ tới chúng\)\./);
+  assert.ok(!/quyền Delete/.test(res.stopped.text));
 });

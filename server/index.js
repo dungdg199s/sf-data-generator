@@ -153,6 +153,12 @@ export function createApp({
     };
   }
 
+  /** History must be writable (and this server its only writer, N6) for a delete or a forget. */
+  async function requireHistory(what) {
+    const st = await history.status({ retry: true });
+    if (!st.enabled) throw httpError(503, `Không ghi được Lịch sử (${st.reason}), nên không ${what} được. Kiểm tra quyền ghi thư mục ${st.dir} hoặc đặt SFDG_DATA_DIR.`);
+  }
+
   /**
    * Every check of a delete (design 0011 §8), before any header is sent and before any write call.
    * Throws the HTTP error of the first one that fails. → { target, rem }
@@ -161,6 +167,7 @@ export function createApp({
     const kind = history.activeKind(hid);
     if (kind === 'insert' || data.status === 'running') throw httpError(409, 'Lần insert này đang chạy. Bấm "Dừng", chờ nó dừng rồi mới xóa.');
     if (kind === 'delete') throw httpError(409, 'Đang xóa dữ liệu của lần insert này ở một tab khác. Chờ lần đó xong.');
+    if (kind) throw httpError(409, 'Lần insert này đang được quên ở một tab khác.');
     const confirm = body?.confirm;
     if (!confirm || typeof confirm !== 'object' || typeof confirm.username !== 'string' || !Number.isInteger(confirm.count)) {
       throw httpError(400, 'Thiếu xác nhận (org và số bản ghi). Chỉ xóa được từ hộp xác nhận của app.');
@@ -412,8 +419,9 @@ export function createApp({
       /^\/api\/history\/([^/]+)\/forget$/,
       async ([, raw]) => {
         const { hid, data } = await historyEntry(raw);
+        await requireHistory('quên lần insert này');
         if (history.activeKind(hid) || data.status === 'running') throw httpError(409, 'Lần insert này đang chạy. Bấm "Dừng", chờ nó dừng rồi mới quên.');
-        await history.forget(hid);
+        await history.forget(hid); // marks the entry active while it removes it, refuses an active one (N1)
         return { ok: true };
       },
     ],
@@ -422,6 +430,7 @@ export function createApp({
       /^\/api\/history\/([^/]+)\/delete$/,
       async ([, raw], body, _params, { req, res }) => {
         const { hid, data } = await historyEntry(raw);
+        await requireHistory('xóa');
         const checked = await checkDelete(hid, data, body);
         const { target } = checked;
         let { rem } = checked;
@@ -491,7 +500,7 @@ export function createApp({
       'GET',
       /^\/api\/orgs\/([^/]+)\/limits$/,
       async ([, raw]) => {
-        const org = decodeURIComponent(raw);
+        const org = orgParam(raw);
         const hit = limitsCache.get(org);
         if (hit && Date.now() - hit.at < LIMITS_CACHE_MS) return hit.value;
         let timer;
@@ -537,7 +546,7 @@ export function createApp({
       async ([, org], _body, params) => {
         // ?for=query: objects a Query step can read; default: objects a Record step can create.
         const forQuery = params.get('for') === 'query';
-        const r = await sfClient.describeGlobal(decodeURIComponent(org));
+        const r = await sfClient.describeGlobal(orgParam(org));
         return r.sobjects
           .filter((s) => (forQuery ? s.queryable : s.createable) && !s.deprecatedAndHidden)
           .map((s) => ({ name: s.name, label: s.label, custom: s.custom }))
@@ -547,12 +556,12 @@ export function createApp({
     [
       'GET',
       /^\/api\/orgs\/([^/]+)\/sobjects\/([A-Za-z0-9_]+)\/fields$/,
-      async ([, org, name]) => mapQueryFields(await sfClient.describe(decodeURIComponent(org), name)),
+      async ([, org, name]) => mapQueryFields(await sfClient.describe(orgParam(org), name)),
     ],
     [
       'GET',
       /^\/api\/orgs\/([^/]+)\/sobjects\/([A-Za-z0-9_]+)$/,
-      async ([, org, name]) => mapDescribe(await sfClient.describe(decodeURIComponent(org), name)),
+      async ([, org, name]) => mapDescribe(await sfClient.describe(orgParam(org), name)),
     ],
   ];
 
@@ -616,7 +625,7 @@ async function streamIdsCsv(res, history, hid, data, sobject) {
   for await (const r of history.ids(hid)) {
     if (closed) break;
     if (sobject && r.sobject !== sobject) continue;
-    lines.push([r.sobject, r.id, r.ref, r.nodeId, outcome.get(r.id) ?? 'inserted'].map(csvCell).join(','));
+    lines.push([r.sobject, r.id, r.ref, r.nodeId, outcome.get(r.id) ?? 'inserted'].map(idsCell).join(','));
     if (lines.length >= 1000) {
       await write(`${lines.join('\r\n')}\r\n`);
       lines = [];
@@ -671,6 +680,26 @@ async function streamExport(res, run, { format, sobject, name }) {
   }
   if (format === 'json') await write(n ? '\n]\n' : ']\n');
   res.end();
+}
+
+/** An org alias / username from a URL segment; a malformed escape is a 400, not a crash (N9). */
+function orgParam(raw) {
+  try {
+    const org = decodeURIComponent(raw);
+    if (org) return org;
+  } catch {
+    // fall through
+  }
+  throw httpError(400, 'Tên org trong đường dẫn không hợp lệ.');
+}
+
+/**
+ * A cell of the downloaded Id CSV: a value starting with = + - @ (or a tab / CR) is prefixed with '
+ * so a spreadsheet never runs it as a formula (N10).
+ */
+function idsCell(v) {
+  const s = String(v ?? '');
+  return csvCell(/^[=+\-@\t\r]/.test(s) ? `'${s}` : s);
 }
 
 function httpError(status, message) {

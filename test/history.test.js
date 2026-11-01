@@ -162,3 +162,40 @@ test('S4: pruning never removes an entry with records in an org while one with n
   const doomed = await h.prunePreview();
   assert.deepEqual(doomed.map((e) => [e.id, e.remaining, e.workflowName]), [[withRecords, 5, 'W1']]);
 });
+
+test('N1: forget refuses an entry in use; N5: crash leftovers are cleaned, an empty .json is listed as corrupt', async () => {
+  const dir = await tmp();
+  const h = createHistory({ dir, random: hex });
+  const hid = await h.create({ org: ORG, workflow: null, seed: 1, now: 1, steps: [], total: 0 });
+  const release = h.markActive(hid, 'delete');
+  await assert.rejects(h.forget(hid), (e) => e.status === 409 && /đang được dùng/.test(e.message));
+  release();
+  assert.equal(await h.forget(hid), true);
+  const root = path.join(dir, 'history');
+  await writeFile(path.join(root, 'h20260101T000000Z-aaaaaa.json.tmp-123456'), '{');
+  await writeFile(path.join(root, 'h20260101T000000Z-bbbbbb.ids.csv'), 'sobject,step,ref,id\n');
+  await writeFile(path.join(root, 'h20260101T000000Z-cccccc.json'), '');
+  const again = createHistory({ dir, random: hex });
+  const list = await again.list();
+  assert.deepEqual(list.map((e) => [e.id, e.status]), [['h20260101T000000Z-cccccc', 'corrupt']]);
+  assert.match(list[0].error, /^File h20260101T000000Z-cccccc\.json rỗng/);
+  const left = (await readdir(root)).filter((f) => !f.startsWith('.')).sort();
+  assert.deepEqual(left, ['h20260101T000000Z-cccccc.json']);
+});
+
+test('N6: a history directory locked by another live process is off, with a sentence naming it; a stale lock is taken over', async () => {
+  const dir = await tmp();
+  const root = path.join(dir, 'history');
+  const { mkdir } = await import('node:fs/promises');
+  await mkdir(root, { recursive: true });
+  await writeFile(path.join(root, '.lock'), String(process.ppid)); // the test runner: alive, not us
+  const h = createHistory({ dir, random: hex });
+  const s = await h.status();
+  assert.equal(s.enabled, false);
+  assert.equal(s.reason, `Một server sf-data-generator khác (pid ${process.ppid}) đang dùng thư mục Lịch sử ${root}. Dừng server đó, hoặc đặt SFDG_DATA_DIR khác cho server này`);
+  await assert.rejects(h.create({ org: ORG, workflow: null, seed: 1, now: 1, steps: [], total: 0 }), /đang dùng thư mục Lịch sử/);
+  await writeFile(path.join(root, '.lock'), '999999999'); // no such process
+  const h2 = createHistory({ dir, random: hex });
+  assert.equal((await h2.status()).enabled, true);
+  assert.equal(await readFile(path.join(root, '.lock'), 'utf8'), String(process.pid));
+});

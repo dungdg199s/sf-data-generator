@@ -332,9 +332,10 @@ export function createInserter(client, target, {
     active = { nodeId: st.nodeId, sobject: st.sobject, jobId: null, job: jobNo, jobs: Math.max(st.plannedJobs, jobNo), processed: 0, failed: 0, records: n, state: 'Open' };
     const { columns, csv, keys } = toBulkCsv(items.map((x) => x.obj));
     let handle;
+    let opened;
     try {
       handle = client.bulkJob(target, { object: st.sobject, operation: 'insert' });
-      await handle.open();
+      opened = await handle.open();
     } catch (e) {
       const code = e.cause?.errorCode ?? e.errorCode;
       if (code && !NO_FALLBACK_CODES.has(code)) return fallBack(st, items, e);
@@ -342,6 +343,18 @@ export function createInserter(client, target, {
       for (const x of items) fail(x.record, e.message);
       st.summary.failed += n;
       jobOutcome(st, 0, n, e.message);
+      progress();
+      return undefined;
+    }
+    // The job Salesforce opened must be exactly the one asked for (review of 0011, N3).
+    if (opened?.operation !== 'insert' || opened?.object !== st.sobject) {
+      try {
+        await handle.abort();
+      } catch {
+        // nothing was uploaded
+      }
+      notSent += n;
+      stopped ??= { reason: 'bulkError', sobject: st.sobject, nodeId: st.nodeId, jobId: handle.id, message: `Salesforce mở job Bulk ${handle.id} khác yêu cầu (${opened?.operation ?? '?'} ${opened?.object ?? '?'} thay vì insert ${st.sobject}), nên đã hủy job và dừng.`, records: n };
       progress();
       return undefined;
     }

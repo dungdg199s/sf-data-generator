@@ -108,10 +108,11 @@ test('a preview creates no history entry; forget removes the entry files; unknow
     assert.deepEqual((await (await s.get('/api/history')).json()).runs, []);
     const { events } = await s.insert(accCon(2, 2));
     const hid = events.at(-1).result.insert.historyId;
-    assert.equal((await readdir(path.join(s.dir, 'history'))).length, 2);
+    const entryFiles = async () => (await readdir(path.join(s.dir, 'history'))).filter((f) => !f.startsWith('.'));
+    assert.equal((await entryFiles()).length, 2);
     const f = await s.post(`/api/history/${hid}/forget`, {});
     assert.deepEqual([f.status, await f.json()], [200, { ok: true }]);
-    assert.deepEqual(await readdir(path.join(s.dir, 'history')), []);
+    assert.deepEqual(await entryFiles(), [], 'only the server lock (.lock) is left');
     for (const bad of [hid, '..%2F..%2Fetc%2Fpasswd', 'h20261028T103200Z-zzzzzz', '%E0%A4%A']) {
       const r = await s.get(`/api/history/${bad}`);
       assert.equal(r.status, 404, bad);
@@ -591,6 +592,19 @@ test('N11: an entry that vanishes during a delete stops it with a 404 sentence; 
     assert.match((await r.json()).error, /^Lần insert này không còn trong Lịch sử \(đã bị quên hoặc bị xóa khỏi thư mục trong lúc xóa\), nên đã dừng xóa\. Bản ghi chưa xóa vẫn còn trong org\. Đã xóa 200 bản ghi trước khi dừng\.$/);
     assert.equal(s.fake.requests.filter((x) => x.method === 'DELETE').length, 1, 'stopped after the call in flight');
     assert.ok(s.history.files(hid).every((f) => !existsSync(f)));
+  } finally {
+    await s.close();
+  }
+});
+
+test('N10: ids.csv prefixes cells a spreadsheet would run as a formula', async () => {
+  const s = await stack();
+  try {
+    const w = wf([record('-cmd', 'Account', 'acc', [{ name: 'Name', type: 'text' }])]);
+    const { events } = await s.insert(w);
+    const hid = events.at(-1).result.insert.historyId;
+    const lines = (await (await s.get(`/api/history/${hid}/ids.csv`)).text()).trim().split('\r\n');
+    assert.match(lines[1], /^Account,001\w+,acc#1,'-cmd,inserted$/);
   } finally {
     await s.close();
   }

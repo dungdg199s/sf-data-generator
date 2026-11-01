@@ -16,7 +16,8 @@
 // deleted (or empty) ones first, never a running one. Time is the server's Date.now (injectable):
 // determinism only applies to generators and the executor.
 
-import { mkdir, writeFile, rename, readFile, appendFile, readdir, stat, unlink, chmod } from 'node:fs/promises';
+import { mkdir, writeFile, rename, readFile, readdir, stat, unlink, chmod, open } from 'node:fs/promises';
+import { readFileSync, unlinkSync } from 'node:fs';
 import { parseCsv } from './sf/bulk-csv.js';
 import { randomBytes } from 'node:crypto';
 import os from 'node:os';
@@ -67,6 +68,38 @@ async function* lines(file) {
   for (const r of rows) if (!(r.length === 1 && r[0] === '')) yield r;
 }
 
+/** Writes (or appends) and flushes to disk before resolving (review of 0011, N5). */
+async function writeSynced(f, text, flag) {
+  const fh = await open(f, flag, FILE_MODE);
+  try {
+    await fh.writeFile(text);
+    await fh.datasync();
+  } finally {
+    await fh.close();
+  }
+}
+
+/** Another live process holds the lock? (signal 0 only checks the pid exists). */
+function alive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return e.code === 'EPERM';
+  }
+}
+
+const LOCKS = new Set(); // lock files this process created (removed on exit)
+process.once('exit', () => {
+  for (const f of LOCKS) {
+    try {
+      if (readFileSync(f, 'utf8').trim() === String(process.pid)) unlinkSync(f);
+    } catch {
+      // gone already
+    }
+  }
+});
+
 const stamp = (ms) => new Date(ms).toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
 
 /**
@@ -102,7 +135,7 @@ export function createHistory({ dir = defaultDataDir(), clock = () => Date.now()
 
   async function writeJson(hid, data) {
     const tmp = `${file(hid, '.json')}.tmp-${random()}`;
-    await writeFile(tmp, `${JSON.stringify(data, null, 1)}\n`, { mode: FILE_MODE });
+    await writeSynced(tmp, `${JSON.stringify(data, null, 1)}\n`, 'wx');
     await rename(tmp, file(hid, '.json'));
   }
 
@@ -128,12 +161,30 @@ export function createHistory({ dir = defaultDataDir(), clock = () => Date.now()
       const probe = path.join(root, `.probe-${random()}`);
       await writeFile(probe, '', { mode: FILE_MODE });
       await unlink(probe);
+      // One server per history directory (N6): two writers would interleave Ids and prune each other.
+      const other = await takeLock();
+      if (other) {
+        state.enabled = false;
+        state.reason = `Một server sf-data-generator khác (pid ${other}) đang dùng thư mục Lịch sử ${root}. Dừng server đó, hoặc đặt SFDG_DATA_DIR khác cho server này`;
+        return;
+      }
       state.enabled = true;
       state.reason = null;
     } catch (e) {
       state.enabled = false;
       state.reason = e.message;
       return;
+    }
+    // Leftovers of a crash (N5): temporary files, Id files whose entry never got its .json.
+    try {
+      const names = await readdir(root);
+      const entries = new Set(names.filter((f) => f.endsWith('.json')).map((f) => f.slice(0, -5)));
+      for (const f of names) {
+        const base = f.replace(/\.(json\.tmp-.*|ids\.csv|deleted\.csv)$/, '');
+        if (/\.json\.tmp-/.test(f) || (/\.(ids|deleted)\.csv$/.test(f) && isValidHid(base) && !entries.has(base))) await unlink(path.join(root, f)).catch(() => {});
+      }
+    } catch {
+      // best effort
     }
     // Entries a previous server left running were interrupted (server stopped mid-insert).
     for (const hid of await hids()) {
@@ -146,6 +197,25 @@ export function createHistory({ dir = defaultDataDir(), clock = () => Date.now()
   }
 
   const ready = () => (state.ready ??= init());
+
+  /** → null when this process holds the lock, else the pid of the live process that does. */
+  async function takeLock() {
+    const lock = path.join(root, '.lock');
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        await writeSynced(lock, String(process.pid), 'wx');
+        LOCKS.add(lock);
+        return null;
+      } catch (e) {
+        if (e.code !== 'EEXIST') throw e;
+        const pid = Number(await readFile(lock, 'utf8').catch(() => ''));
+        if (pid === process.pid) return null;
+        if (pid > 0 && alive(pid)) return pid;
+        await unlink(lock).catch(() => {}); // stale: its server is gone
+      }
+    }
+    return null;
+  }
 
   async function hids() {
     try {
@@ -264,7 +334,7 @@ export function createHistory({ dir = defaultDataDir(), clock = () => Date.now()
         warnings: [],
         deletion: { status: 'none', deleted: 0, gone: 0, lastAt: null, errorGroups: [] },
       };
-      await writeFile(file(hid, '.ids.csv'), IDS_HEADER, { mode: FILE_MODE, flag: 'wx' });
+      await writeSynced(file(hid, '.ids.csv'), IDS_HEADER, 'wx');
       await writeJson(hid, data);
       live.set(hid, 0);
       return hid;
@@ -281,7 +351,7 @@ export function createHistory({ dir = defaultDataDir(), clock = () => Date.now()
       }
       return serial(hid, async () => {
         await mustExist(hid);
-        await appendFile(file(hid, '.ids.csv'), text, { mode: FILE_MODE });
+        await writeSynced(file(hid, '.ids.csv'), text, 'a');
         if (live.has(hid)) live.set(hid, live.get(hid) + rows.length);
       });
     },
@@ -299,7 +369,7 @@ export function createHistory({ dir = defaultDataDir(), clock = () => Date.now()
         await mustExist(hid);
         const f = file(hid, '.deleted.csv');
         const fresh = await stat(f).then(() => false, () => true);
-        await appendFile(f, `${fresh ? DELETED_HEADER : ''}${text}`, { mode: FILE_MODE });
+        await writeSynced(f, `${fresh ? DELETED_HEADER : ''}${text}`, 'a');
       });
     },
 
@@ -375,7 +445,13 @@ export function createHistory({ dir = defaultDataDir(), clock = () => Date.now()
       const out = [];
       for (const hid of (await hids()).reverse()) {
         const d = await readJson(hid).catch(() => null);
-        if (!d) continue;
+        if (!d) {
+          // An empty or broken .json is shown, not dropped (N5): its Ids may still be in the org.
+          const size = await stat(file(hid, '.json')).then((x) => x.size, () => null);
+          if (size === null) continue;
+          out.push({ id: hid, status: 'corrupt', error: `File ${hid}.json ${size ? 'hỏng' : 'rỗng'}: không đọc được lần insert này. Id đã ghi (nếu có) vẫn ở ${hid}.ids.csv.` });
+          continue;
+        }
         const inserted = live.get(hid) ?? d.inserted ?? 0;
         const bySobject = {};
         for (const s of d.steps ?? []) bySobject[s.sobject] = (bySobject[s.sobject] ?? 0) + (s.inserted ?? 0);
@@ -389,9 +465,16 @@ export function createHistory({ dir = defaultDataDir(), clock = () => Date.now()
       return out;
     },
 
+    /** Removes the entry's files; refuses (409) while a run uses it (N1). */
     async forget(hid) {
       if (!(await api.read(hid))) return false;
-      await serial(hid, () => removeFiles(hid));
+      if (active.has(hid)) throw Object.assign(new Error('Lần insert này đang được dùng (insert, xóa hoặc quên đang chạy). Chờ việc đó xong rồi thử lại.'), { status: 409 });
+      active.set(hid, 'forget');
+      try {
+        await serial(hid, () => removeFiles(hid));
+      } finally {
+        active.delete(hid);
+      }
       return true;
     },
 
