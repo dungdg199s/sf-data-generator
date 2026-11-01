@@ -248,10 +248,20 @@ export async function deleteRun({
   }
 
   progress();
+  const skipped = []; // steps refused by the key-prefix check: nothing of them is sent
+  const prefixOf = new Map(); // sObject → keyPrefix (describe, read-only)
   for (const step of [...rem.steps].reverse()) {
     if (isStopped()) break;
-    const ids = step.ids.filter((id) => ID_RE.test(id)).reverse();
-    for (const id of step.ids) if (!ID_RE.test(id)) failOne(step.sobject, step.nodeId, id, 'Id không hợp lệ trong Lịch sử, không gửi.');
+    if (!step.ids.length) continue;
+    // Every Id of a step must be a record of that step's sObject: one 3-character key prefix, the
+    // one describe gives for the sObject. Anything else (edited or corrupted history file) ⇒ the
+    // whole step is left alone (review of 0011, B1).
+    const refusal = await checkPrefix(step);
+    if (refusal) {
+      skipped.push({ nodeId: step.nodeId, sobject: step.sobject, count: step.ids.length, reason: refusal });
+      continue;
+    }
+    const ids = [...step.ids].reverse();
     const useBulk = bulk !== 'off' && ids.length >= minBulk;
     let i = 0;
     let bulkOk = useBulk;
@@ -319,7 +329,27 @@ export async function deleteRun({
   })).catch((e) => {
     stopped ??= { reason: 'history', message: e.message };
   });
-  return { deleted, gone, failed, total, errorGroups, errorGroupsOther, bySobject, remaining, cancelled: cancelled && !stopped, stopped, bulkAborted, collected };
+  return { deleted, gone, failed, total, errorGroups, errorGroupsOther, bySobject, remaining, cancelled: cancelled && !stopped, stopped, bulkAborted, collected, skipped };
+
+  async function checkPrefix(step) {
+    const n = step.ids.length;
+    const label = `${n} bản ghi ${step.sobject} của bước "${step.nodeId}"`;
+    if (!step.ids.every((id) => ID_RE.test(id))) return `Không xóa ${label}: Lịch sử có Id không hợp lệ (file có thể đã bị sửa). Không gửi Id nào của bước này.`;
+    if (!prefixOf.has(step.sobject)) {
+      try {
+        const d = await client.describe(target, step.sobject);
+        prefixOf.set(step.sobject, typeof d?.keyPrefix === 'string' ? d.keyPrefix : null);
+      } catch (e) {
+        return `Không xóa ${label}: không đọc được describe của ${step.sobject} (${e.message}). Thử lại sau.`;
+      }
+    }
+    const keyPrefix = prefixOf.get(step.sobject);
+    const prefixes = new Set(step.ids.map((id) => id.slice(0, 3)));
+    if (!keyPrefix || prefixes.size !== 1 || !prefixes.has(keyPrefix)) {
+      return `Không xóa ${label}: Id trong Lịch sử không cùng tiền tố ${keyPrefix ?? '?'} của ${step.sobject} (${[...prefixes].slice(0, 3).join(', ')}), có thể file Lịch sử đã bị sửa. Không gửi Id nào của bước này.`;
+    }
+    return null;
+  }
 }
 
 /**

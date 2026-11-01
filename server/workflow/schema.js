@@ -13,6 +13,9 @@ import { migrateV1, describeReport, reportNeedsReview } from '../../shared/migra
 import { analyzeScope, referenceOptions, hasUnclosed, optionShown, numberVarPath, isVar, valueList } from '../../shared/scope.js';
 import { stepNames } from '../../shared/workflow-tree.js';
 
+/** Step ids (review of 0011, B1): no control characters, quotes, commas or spaces. */
+export const STEP_ID = /^[A-Za-z0-9_-]{1,64}$/;
+
 const API_NAME = /^[A-Za-z][A-Za-z0-9_]*$/;
 const ALIAS = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const RESERVED_ALIASES = new Set(['this']);
@@ -108,6 +111,10 @@ export function prepareWorkflow(wf) {
       if (!step || typeof step !== 'object' || step.id === undefined || step.id === null || step.id === '') {
         err('Có bước không có id.');
         continue;
+      }
+      // Ids end up in insert history and its CSV files (design 0011): letters, digits, _ and - only.
+      if (!STEP_ID.test(String(step.id))) {
+        err(`Id bước "${String(step.id).slice(0, 80).replace(/[\u0000-\u001f\u007f]/g, '?')}" không hợp lệ: chỉ dùng chữ không dấu, số, "_" hoặc "-", tối đa 64 ký tự. Đổi id của bước trong file workflow.`, step.id);
       }
       if (ids.has(step.id)) err(`Trùng id bước "${step.id}".`, step.id);
       ids.add(step.id);

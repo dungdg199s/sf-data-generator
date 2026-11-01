@@ -557,6 +557,9 @@ function bulkClient(opts = {}) {
         ? { success: false, errors: [{ statusCode: 'REQUIRED_FIELD_MISSING', message: 'Required fields are missing: [LastName]', fields: ['LastName'] }] }
         : { success: true, id: id(sobject) }));
     },
+    async describe(_t, sobject) {
+      return { name: sobject, keyPrefix: { Account: '001', Contact: '003' }[sobject] };
+    },
     bulkJob(_t, { object, operation }) {
       if (!['insert', 'delete'].includes(operation)) throw new Error('not allowed');
       const job = { id: `750${String(jobs.length + 1).padStart(15, '0')}`, object, operation, state: 'Open', csv: '', checks: 0, log: [], results: null };
@@ -844,6 +847,9 @@ function deleteClient({ errorFor = () => null } = {}) {
     },
     bulkJob() {
       throw new Error('no Bulk in this test');
+    },
+    async describe(_t, sobject) {
+      return { name: sobject, keyPrefix: { Account: '001', Contact: '003' }[sobject] };
     },
   };
 }

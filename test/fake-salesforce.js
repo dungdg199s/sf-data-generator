@@ -15,6 +15,7 @@
 //   GET    /jobs/ingest/:id/successfulResults         CSV, rows deliberately in REVERSE order
 //   GET    /jobs/ingest/:id/failedResults             CSV with sf__Error
 //   GET    /limits                                    DailyApiRequests, DailyBulkApiBatches
+//   GET    /sobjects/:name/describe                   { name, keyPrefix } (001 Account, 003 Contact, …)
 //
 // Behaviour hooks (all optional, set on `options` or later on `fake.options`):
 //   createError(fields, sobject)  → null | { statusCode, message, fields }   (Collections create and Bulk insert rows)
@@ -135,6 +136,8 @@ export async function startFakeSalesforce(options = {}) {
         if (req.method === 'DELETE' && path === '/composite/sobjects') {
           return json(200, String(url.searchParams.get('ids') ?? '').split(',').filter(Boolean).map(deleteOne));
         }
+        const desc = req.method === 'GET' && path.match(/^\/sobjects\/([A-Za-z0-9_]+)\/describe$/);
+        if (desc) return json(200, { name: desc[1], label: desc[1], keyPrefix: PREFIX[desc[1]] ?? 'a00', fields: [] });
         if (req.method === 'GET' && path === '/limits') {
           return json(200, fake.options.limits ?? { DailyApiRequests: { Max: 15000, Remaining: 14200 }, DailyBulkApiBatches: { Max: 15000, Remaining: 14980 } });
         }

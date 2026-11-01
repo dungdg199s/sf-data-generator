@@ -134,3 +134,12 @@ test('data directory: SFDG_DATA_DIR, else XDG / macOS / Windows defaults', () =>
   assert.equal(defaultDataDir({}, 'darwin', '/Users/me'), path.join('/Users/me', 'Library', 'Application Support', 'sf-data-generator'));
   assert.equal(defaultDataDir({ APPDATA: 'C:\\Users\\me\\AppData\\Roaming' }, 'win32', 'C:\\Users\\me'), path.join('C:\\Users\\me\\AppData\\Roaming', 'sf-data-generator'));
 });
+
+test('B1: a cell with a line break is never written (the append rejects, the file keeps its rows)', async () => {
+  const dir = await tmp();
+  const h = createHistory({ dir, random: hex });
+  const hid = await h.create({ org: ORG, workflow: null, seed: 1, now: 1, steps: [{ nodeId: 'c', sobject: 'Contact' }], total: 1 });
+  await assert.rejects(h.appendIds(hid, [{ sobject: 'Contact', nodeId: 'q\nAccount,s,r,001FOREIGN000000AAA\nz', ref: 'c#1', id: '003000000000001AAA' }]), /xuống dòng/);
+  await assert.rejects(h.appendIds(hid, [{ sobject: 'Contact', nodeId: 'c', ref: 'c#1\r', id: '003000000000001AAA' }]), /xuống dòng/);
+  assert.equal(await readFile(h.files(hid)[1], 'utf8'), 'sobject,step,ref,id\n');
+});

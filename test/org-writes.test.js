@@ -399,3 +399,85 @@ test('requests from another site get 403 on delete, ids.csv, history and limits;
     await s.close();
   }
 });
+
+// ---------- review of 0011, B1: nothing but the entry's own Ids can reach a delete ----------
+
+const { writeFile: writeRaw, appendFile: appendRaw } = await import('node:fs/promises');
+
+/** A history entry for `steps` whose ids.csv body is written raw (as an old or tampered file would be). */
+async function rawEntry(s, steps, body) {
+  const hid = await s.history.create({ org: { alias: 'dev', username: 'me@example.com', orgId: '00D000000000001AAA', instanceUrl: s.fake.url, kind: 'sandbox' }, workflow: null, seed: 1, now: 1, steps, total: 1 });
+  await writeRaw(s.history.files(hid)[1], `sobject,step,ref,id\n${body}`);
+  await s.history.finish(hid, { status: 'done', inserted: 1 });
+  return hid;
+}
+
+test('B1: a step id with a line break cannot forge an Id row: the workflow is refused (422) and a crafted file yields no foreign Id', async () => {
+  const s = await stack();
+  try {
+    const foreign = (await createSfClientFor(s).create('dev', 'Account', [{ Name: 'Real customer' }]))[0].id;
+    const evil = `q\nAccount,s,r,${foreign}\nz`;
+    const writes = s.fake.writes().length;
+    const res = await s.post('/api/run', { workflow: wf([record(evil, 'Contact', 'con', [{ name: 'LastName', type: 'text' }])]), target: { kind: 'org', org: 'dev' } });
+    assert.equal(res.status, 422);
+    const issue = (await res.json()).issues.find((i) => i.nodeId === evil);
+    assert.match(issue.message, /^Id bước ".*" không hợp lệ: chỉ dùng chữ không dấu, số, "_" hoặc "-", tối đa 64 ký tự\./);
+    assert.equal(s.fake.writes().length, writes);
+    // A history file written before the fix (cell quoted across lines): the parser keeps it one cell.
+    const contact = (await createSfClientFor(s).create('dev', 'Contact', [{ LastName: 'ours' }]))[0].id;
+    const hid = await rawEntry(s, [{ nodeId: evil, alias: 'con', sobject: 'Contact', records: 1 }], `Contact,"${evil}",con#1,${contact}\n`);
+    const rem = await s.history.remaining(hid);
+    assert.deepEqual(rem.steps.map((x) => x.ids), [[contact]]);
+    const before = s.fake.requests.length;
+    const out = await (await s.post(`/api/history/${hid}/delete`, { confirm: { username: 'me@example.com', count: 1 } })).json();
+    assert.equal(out.deleted, 1);
+    const sent = s.fake.requests.slice(before).filter((r) => r.method === 'DELETE').flatMap((r) => r.query.ids.split(','));
+    assert.deepEqual(sent, [contact]);
+    assert.ok(s.fake.alive().includes(foreign), 'the foreign record is untouched');
+  } finally {
+    await s.close();
+  }
+});
+
+test('B1: a corrupted ids.csv (unknown step, wrong sObject, garbage) only yields the rows of the entry\'s own steps', async () => {
+  const s = await stack();
+  try {
+    const [a, b] = (await createSfClientFor(s).create('dev', 'Contact', [{ LastName: 'a' }, { LastName: 'b' }])).map((r) => r.id);
+    const foreign = (await createSfClientFor(s).create('dev', 'Account', [{ Name: 'x' }]))[0].id;
+    const hid = await rawEntry(s, [{ nodeId: 'c', alias: 'con', sobject: 'Contact', records: 2 }], [
+      `Contact,c,con#1,${a}`,
+      `Account,c,con#2,${foreign}`, // wrong sObject for step c
+      `Account,other,acc#1,${foreign}`, // step not in the entry
+      'garbage line without commas',
+      `"Contact","c","con#2","${b}"`,
+      '',
+    ].join('\n'));
+    const rem = await s.history.remaining(hid);
+    assert.deepEqual([rem.steps[0].ids, rem.rejected], [[a, b], 3]);
+    const before = s.fake.requests.length;
+    const out = await (await s.post(`/api/history/${hid}/delete`, { confirm: { username: 'me@example.com', count: 2 } })).json();
+    assert.equal(out.deleted, 2);
+    assert.ok(!JSON.stringify(s.fake.requests.slice(before)).includes(foreign));
+    assert.ok(s.fake.alive().includes(foreign));
+  } finally {
+    await s.close();
+  }
+});
+
+test('B1: Ids whose key prefix is not the step sObject\'s (describe) are not sent at all; the step is reported', async () => {
+  const s = await stack();
+  try {
+    const foreign = (await createSfClientFor(s).create('dev', 'Account', [{ Name: 'x' }]))[0].id;
+    const ours = (await createSfClientFor(s).create('dev', 'Contact', [{ LastName: 'a' }]))[0].id;
+    const hid = await rawEntry(s, [{ nodeId: 'c', alias: 'con', sobject: 'Contact', records: 2 }], `Contact,c,con#1,${ours}\nContact,c,con#2,${foreign}\n`);
+    const writes = s.fake.writes().length;
+    const out = await (await s.post(`/api/history/${hid}/delete`, { confirm: { username: 'me@example.com', count: 2 } })).json();
+    assert.equal(s.fake.writes().length, writes, 'nothing of the step is sent, not even the good Id');
+    assert.deepEqual([out.deleted, out.remaining], [0, 2]);
+    assert.equal(out.skipped.length, 1);
+    assert.match(out.skipped[0].reason, /^Không xóa 2 bản ghi Contact của bước "c": Id trong Lịch sử không cùng tiền tố 003 của Contact/);
+    assert.deepEqual(s.fake.alive().sort(), [foreign, ours].sort());
+  } finally {
+    await s.close();
+  }
+});

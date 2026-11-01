@@ -17,8 +17,7 @@
 // determinism only applies to generators and the executor.
 
 import { mkdir, writeFile, rename, readFile, appendFile, readdir, stat, unlink, chmod } from 'node:fs/promises';
-import { createReadStream } from 'node:fs';
-import { createInterface } from 'node:readline';
+import { parseCsv } from './sf/bulk-csv.js';
 import { randomBytes } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
@@ -44,52 +43,28 @@ export function orgIdentity(org = {}) {
   return { alias: str(org.alias), username: str(org.username), orgId: str(org.orgId), instanceUrl: str(org.instanceUrl), kind: str(org.kind) ?? 'unknown' };
 }
 
+/**
+ * One cell of a history CSV. A line break can never be written (review of 0011, B1: a crafted
+ * step id with "\n" used to forge extra Id rows); quotes and commas are quoted as RFC 4180.
+ */
 function cell(v) {
   const s = String(v ?? '');
-  return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  if (/[\r\n]/.test(s)) throw new Error('Giá trị có xuống dòng không được ghi vào Lịch sử.');
+  return /[",]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
-/** One CSV line (as written by this module: no line breaks inside cells for Ids/refs) → cells. */
-function splitLine(line) {
-  const out = [];
-  let cur = '';
-  let q = false;
-  for (let i = 0; i < line.length; i++) {
-    const c = line[i];
-    if (q) {
-      if (c === '"' && line[i + 1] === '"') {
-        cur += '"';
-        i++;
-      } else if (c === '"') q = false;
-      else cur += c;
-    } else if (c === '"') q = true;
-    else if (c === ',') {
-      out.push(cur);
-      cur = '';
-    } else cur += c;
-  }
-  out.push(cur);
-  return out;
-}
-
+/** Rows of a history CSV (header skipped), read with a real RFC 4180 parser (quoted line breaks stay in their cell). */
 async function* lines(file) {
-  let stream;
+  let text;
   try {
-    stream = createReadStream(file, { encoding: 'utf8' });
-    const rl = createInterface({ input: stream, crlfDelay: Infinity });
-    let first = true;
-    for await (const line of rl) {
-      if (first) {
-        first = false;
-        continue; // header
-      }
-      if (line) yield splitLine(line);
-    }
+    text = await readFile(file, 'utf8');
   } catch (e) {
-    if (e.code !== 'ENOENT') throw e;
-  } finally {
-    stream?.destroy();
+    if (e.code === 'ENOENT') return;
+    throw e;
   }
+  const rows = parseCsv(text);
+  rows.shift();
+  for (const r of rows) if (!(r.length === 1 && r[0] === '')) yield r;
 }
 
 const stamp = (ms) => new Date(ms).toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
@@ -264,7 +239,12 @@ export function createHistory({ dir = defaultDataDir(), clock = () => Date.now()
     /** Ids of one call: [{ sobject, nodeId, ref, id }]. Resolves once on disk. */
     appendIds(hid, rows) {
       if (!rows.length) return Promise.resolve();
-      const text = rows.map((r) => `${cell(r.sobject)},${cell(r.nodeId)},${cell(r.ref)},${cell(r.id)}\n`).join('');
+      let text;
+      try {
+        text = rows.map((r) => `${cell(r.sobject)},${cell(r.nodeId)},${cell(r.ref)},${cell(r.id)}\n`).join('');
+      } catch (e) {
+        return Promise.reject(e);
+      }
       return serial(hid, async () => {
         await appendFile(file(hid, '.ids.csv'), text, { mode: FILE_MODE });
         if (live.has(hid)) live.set(hid, live.get(hid) + rows.length);
@@ -274,7 +254,12 @@ export function createHistory({ dir = defaultDataDir(), clock = () => Date.now()
     /** Delete outcomes: [{ id, outcome: 'deleted' | 'gone' }]. */
     appendDeleted(hid, rows) {
       if (!rows.length) return Promise.resolve();
-      const text = rows.map((r) => `${cell(r.id)},${cell(r.outcome)}\n`).join('');
+      let text;
+      try {
+        text = rows.map((r) => `${cell(r.id)},${cell(r.outcome)}\n`).join('');
+      } catch (e) {
+        return Promise.reject(e);
+      }
       return serial(hid, async () => {
         const f = file(hid, '.deleted.csv');
         const fresh = await stat(f).then(() => false, () => true);
@@ -321,26 +306,32 @@ export function createHistory({ dir = defaultDataDir(), clock = () => Date.now()
     },
 
     /**
-     * Ids still to delete, grouped by step in insert order (step order = `steps` of the entry, then
-     * any other step in first-seen order). → { steps: [{ nodeId, sobject, ids }], total, bySobject, inserted }
+     * Ids still to delete, grouped by step in the entry's step order (insert order). A row whose step
+     * is not one of the entry's steps, or whose sObject is not that step's sObject, is never
+     * returned (counted in `rejected`): only rows the inserter wrote for a known step can be deleted.
+     * → { steps: [{ nodeId, sobject, ids }], total, bySobject, inserted, rejected }
      */
     async remaining(hid) {
       const data = await api.read(hid);
       if (!data) return null;
       const done = await api.deletedMap(hid);
-      const byStep = new Map(data.steps.map((s) => [s.nodeId, { nodeId: s.nodeId, sobject: s.sobject, ids: [] }]));
+      const byStep = new Map((data.steps ?? []).map((s) => [s.nodeId, { nodeId: s.nodeId, sobject: s.sobject, ids: [] }]));
       let inserted = 0;
+      let rejected = 0;
       for await (const r of api.ids(hid)) {
+        const step = byStep.get(r.nodeId);
+        if (!step || step.sobject !== r.sobject || !r.id) {
+          rejected++;
+          continue;
+        }
         inserted++;
         if (done.has(r.id)) continue;
-        const key = r.nodeId || `\u0000${r.sobject}`;
-        if (!byStep.has(key)) byStep.set(key, { nodeId: r.nodeId || null, sobject: r.sobject, ids: [] });
-        byStep.get(key).ids.push(r.id);
+        step.ids.push(r.id);
       }
       const steps = [...byStep.values()];
       const bySobject = {};
       for (const s of steps) if (s.ids.length) bySobject[s.sobject] = (bySobject[s.sobject] ?? 0) + s.ids.length;
-      return { steps, total: steps.reduce((n, s) => n + s.ids.length, 0), bySobject, inserted };
+      return { steps, total: steps.reduce((n, s) => n + s.ids.length, 0), bySobject, inserted, rejected };
     },
 
     async list() {
