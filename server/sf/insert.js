@@ -422,29 +422,36 @@ export function createInserter(client, target, {
 
     let okText;
     let failText;
+    let readError = null;
     try {
       okText = await handle.successfulResults();
-      failText = await handle.failedResults();
     } catch (e) {
-      if (w.state !== 'Aborted' && w.state !== 'Failed') {
-        // A finished job whose results cannot be read: its records are in the org, Ids unknown.
-        job.idsUnknown = true;
-        bulkUnknown += n;
-        stopped ??= { reason: 'bulkError', sobject: st.sobject, nodeId: st.nodeId, jobId: job.jobId, message: e.message, records: n };
-        await onJob?.(job)?.catch?.(() => {});
-        return undefined;
+      readError = e;
+    }
+    if (okText !== undefined) {
+      try {
+        failText = await handle.failedResults();
+      } catch (e) {
+        readError = e;
       }
     }
 
-    if (okText === undefined && w.state === 'Aborted') {
-      // Dừng ngay and Salesforce kept no results: the processed records stay in the org, Ids unknown.
+    if (okText === undefined) {
+      // Review of 0011, S3: the Ids could not be read now. The job stays collectable
+      // (idsCollected false): a later delete of this run reads its results first.
       const processed = w.info.numberRecordsProcessed;
-      const nf = w.info.numberRecordsFailed;
-      job.idsUnknown = true;
-      bulkUnknown += Math.max(0, processed - nf);
-      notSent += n - processed;
-      bulkAborted = { jobId: job.jobId, sobject: st.sobject, nodeId: st.nodeId, processed, records: n, idsKnown: false };
+      if (w.state === 'Aborted') {
+        // Dừng ngay: processed records may be in the org (Ids unknown for now), the rest never was.
+        bulkUnknown += processed;
+        notSent += n - processed;
+        bulkAborted = { jobId: job.jobId, sobject: st.sobject, nodeId: st.nodeId, processed, records: n, idsKnown: false };
+      } else {
+        bulkUnknown += n;
+        stopped ??= { reason: 'bulkError', sobject: st.sobject, nodeId: st.nodeId, jobId: job.jobId, message: `Không đọc được kết quả của job Bulk ${job.jobId} (${st.sobject}): ${readError?.message}`, records: n };
+      }
+      active = null;
       await onJob?.(job)?.catch?.(() => {});
+      progress();
       return undefined;
     }
 
@@ -479,7 +486,14 @@ export function createInserter(client, target, {
     }
     let jobMessage = bad.length ? describeFailure({ errors: [parseBulkError(bad[0].sf__Error)] }, items[0].record).message : null;
     const accounted = created.length + bad.length;
-    if (w.state === 'Failed' && accounted < n) {
+    const failuresRead = failText !== undefined;
+    if (w.state === 'Aborted') {
+      // Accounting (review of 0011, N7): every row is inserted, failed, not sent or unknown.
+      const processed = Math.max(accounted, w.info.numberRecordsProcessed);
+      notSent += n - processed;
+      bulkUnknown += processed - accounted; // processed, but no result row was read for them
+      bulkAborted = { jobId: job.jobId, sobject: st.sobject, nodeId: st.nodeId, processed: w.info.numberRecordsProcessed, records: n, idsKnown: true };
+    } else if (w.state === 'Failed' && accounted < n) {
       // The whole job failed: rows Salesforce did not report are not inserted.
       jobMessage = `Job Bulk ${job.jobId} (${st.sobject}) thất bại: ${w.info.errorMessage ?? 'không rõ lỗi'}. Bản ghi của job này chưa được insert. Bỏ chọn "Dùng Bulk API 2.0" trong hộp xác nhận để gửi bằng sObject Collections.`;
       let left = n - accounted;
@@ -489,9 +503,11 @@ export function createInserter(client, target, {
         job.failed++;
         left--;
       }
-    } else if (w.state === 'Aborted') {
-      notSent += n - accounted;
-      bulkAborted = { jobId: job.jobId, sobject: st.sobject, nodeId: st.nodeId, processed: w.info.numberRecordsProcessed, records: n, idsKnown: true };
+    } else if (accounted < n) {
+      // JobComplete whose failedResults could not be read: those rows are not in the org, but which
+      // ones failed and why is unknown.
+      bulkUnknown += n - accounted;
+      if (!failuresRead) warnings.push(`Không đọc được danh sách lỗi của job Bulk ${job.jobId} (${st.sobject}): ${readError?.message}. ${n - accounted} bản ghi không có kết quả.`);
     }
     st.summary.failed += job.failed;
     job.idsCollected = true;

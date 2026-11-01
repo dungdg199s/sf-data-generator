@@ -93,6 +93,13 @@ export function createHistory({ dir = defaultDataDir(), clock = () => Date.now()
     return next;
   };
 
+  /** An append to an entry that vanished (forgotten, removed by hand) must not recreate its files. */
+  async function mustExist(hid) {
+    if (!(await stat(file(hid, '.json')).then(() => true, () => false))) {
+      throw Object.assign(new Error('Không tìm thấy lần insert này trong Lịch sử (có thể đã bị dọn vì vượt giới hạn lưu trữ).'), { status: 404 });
+    }
+  }
+
   async function writeJson(hid, data) {
     const tmp = `${file(hid, '.json')}.tmp-${random()}`;
     await writeFile(tmp, `${JSON.stringify(data, null, 1)}\n`, { mode: FILE_MODE });
@@ -246,6 +253,7 @@ export function createHistory({ dir = defaultDataDir(), clock = () => Date.now()
         return Promise.reject(e);
       }
       return serial(hid, async () => {
+        await mustExist(hid);
         await appendFile(file(hid, '.ids.csv'), text, { mode: FILE_MODE });
         if (live.has(hid)) live.set(hid, live.get(hid) + rows.length);
       });
@@ -261,6 +269,7 @@ export function createHistory({ dir = defaultDataDir(), clock = () => Date.now()
         return Promise.reject(e);
       }
       return serial(hid, async () => {
+        await mustExist(hid);
         const f = file(hid, '.deleted.csv');
         const fresh = await stat(f).then(() => false, () => true);
         await appendFile(f, `${fresh ? DELETED_HEADER : ''}${text}`, { mode: FILE_MODE });

@@ -20,7 +20,7 @@ import { createSfClient } from './sf/client.js';
 import { mapDescribe, mapQueryFields } from './sf/describe-map.js';
 import { createQueryCache, prefetchQueries } from './sf/query.js';
 import { createHistory, defaultDataDir, isValidHid } from './history.js';
-import { deleteRun } from './sf/delete.js';
+import { deleteRun, collectPendingJobs } from './sf/delete.js';
 
 const ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CLIENT_DIR = path.join(ROOT_DIR, 'client');
@@ -137,12 +137,10 @@ export function createApp({
     if (!was.username || confirm.username !== was.username) {
       throw httpError(409, `Xác nhận ghi org "${confirm.username}" nhưng lần insert này thuộc org "${was.username ?? '?'}". Mở lại hộp xác nhận.`);
     }
+    // Known Ids only here; Bulk jobs not collected yet are read after the org checks (S2).
     const rem = await history.remaining(hid);
-    const pending = (data.bulkJobs ?? []).some((j) => !j.idsCollected && !j.idsUnknown);
-    if (rem.total === 0 && !pending) throw httpError(409, 'Lần insert này không còn bản ghi nào để xóa.');
-    if (confirm.count !== rem.total) {
-      throw httpError(409, `Số bản ghi còn phải xóa đã đổi (còn ${rem.total}, hộp xác nhận ghi ${confirm.count}). Mở lại hộp xác nhận để xem số mới.`);
-    }
+    const pending = (data.bulkJobs ?? []).some((j) => !j.idsCollected);
+    if (!pending) countCheck(rem, confirm.count);
     const target = was.alias ?? was.username;
     const name = was.alias ?? was.username;
     let now;
@@ -164,7 +162,18 @@ export function createApp({
       const names = [was.alias, was.username].filter(Boolean).map((x) => x.toLowerCase());
       if (!typed || !names.includes(typed)) throw httpError(400, `Org "${name}" là production: gõ đúng tên org trong hộp xác nhận để xóa.`);
     }
-    return { target, rem };
+    return { target, rem, pending };
+  }
+
+  /** confirm.count must be exactly what this delete may remove (review of 0011, S2). */
+  function countCheck(rem, count, { added = 0, stillPending = [] } = {}) {
+    if (rem.total === 0) {
+      const waiting = stillPending.length ? ` Job Bulk ${stillPending.map((j) => j.jobId).join(', ')} chưa trả Id (đang chạy hoặc chưa có kết quả); thử lại sau.` : '';
+      throw httpError(409, `Lần insert này không còn bản ghi nào để xóa.${waiting}`);
+    }
+    if (count === rem.total) return;
+    if (added) throw Object.assign(httpError(409, `Số bản ghi cần xóa đã đổi thành ${rem.total} vì vừa lấy được Id từ job Bulk. Xác nhận lại.`), { body: { count: rem.total, collected: added } });
+    throw Object.assign(httpError(409, `Số bản ghi còn phải xóa đã đổi (còn ${rem.total}, hộp xác nhận ghi ${count}). Mở lại hộp xác nhận để xem số mới.`), { body: { count: rem.total } });
   }
 
   /** The history entry of a URL segment, or 404 (also for a malformed hid: no path traversal). */
@@ -348,7 +357,8 @@ export function createApp({
           workflowName: workflow?.name ?? '',
           ...(history.activeKind(hid) ? { active: history.activeKind(hid) } : {}),
           remaining: { total: rem.total, bySobject: rem.bySobject, steps: rem.steps.map((s) => ({ nodeId: s.nodeId, sobject: s.sobject, remaining: s.ids.length })) },
-          pendingBulkJobs: (data.bulkJobs ?? []).filter((j) => !j.idsCollected && !j.idsUnknown).map((j) => j.jobId),
+          // Bulk jobs whose Ids are not in the file yet: a delete reads them first and asks to confirm the new count.
+          pendingBulkJobs: (data.bulkJobs ?? []).filter((j) => !j.idsCollected).map((j) => ({ jobId: j.jobId, sobject: j.sobject, nodeId: j.nodeId, records: j.records, state: j.state })),
         };
       },
     ],
@@ -376,10 +386,26 @@ export function createApp({
       /^\/api\/history\/([^/]+)\/delete$/,
       async ([, raw], body, _params, { req, res }) => {
         const { hid, data } = await historyEntry(raw);
-        const { target, rem } = await checkDelete(hid, data, body);
+        const checked = await checkDelete(hid, data, body);
+        const { target } = checked;
+        let { rem } = checked;
         // Checked again right before marking: another request may have started meanwhile.
         if (history.activeKind(hid)) throw httpError(409, 'Đang xóa dữ liệu của lần insert này ở một tab khác. Chờ lần đó xong.');
         const release = history.markActive(hid, 'delete');
+        // S2: Bulk jobs whose Ids were never read are collected FIRST (read-only), then the count the
+        // user confirmed is compared with the new total; a difference ⇒ 409 and nothing deleted.
+        let collected = { added: 0, pending: [] };
+        try {
+          if (checked.pending) {
+            collected = await collectPendingJobs({ client: sfClient, history, hid, target });
+            rem = await history.remaining(hid);
+            if (!rem) throw httpError(404, HISTORY_MISSING);
+            countCheck(rem, body.confirm.count, { added: collected.added, stillPending: collected.pending });
+          }
+        } catch (e) {
+          release();
+          throw e;
+        }
         const handle = runs.open();
         const onClose = () => { if (!res.writableEnded) runs.cancel(handle.id); };
         res.on('close', onClose);
@@ -397,6 +423,7 @@ export function createApp({
         try {
           result = await deleteRun({
             client: sfClient, history, hid, target, bulk: body.bulk ?? 'auto', signal: handle.signal, forceSignal: handle.forceSignal, ...deleteOptions,
+            collected: collected.added, pendingBulkJobs: collected.pending,
             onProgress: (p) => {
               const t = Date.now();
               if (t - last < (runOptions.progressIntervalMs ?? 250)) return;
@@ -518,7 +545,7 @@ export function createApp({
       const status = e.status ?? 500;
       if (!e.status) console.error(e); // unexpected errors only; known ones (sf missing, 4xx) go to the client
       // 409 (org data changed) and Salesforce errors of a Query step name the step in `issues`.
-      return sendJson(res, status, e.issues ? { error: e.message, issues: e.issues } : { error: e.message });
+      return sendJson(res, status, { error: e.message, ...(e.issues ? { issues: e.issues } : {}), ...(e.body ?? {}) });
     }
   };
 }

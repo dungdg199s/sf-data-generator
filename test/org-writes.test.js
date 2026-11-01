@@ -345,12 +345,24 @@ test('an interrupted run whose Bulk job results were never read: delete reads th
     const hid = await s.history.create({ org: { alias: 'dev', username: 'me@example.com', orgId: '00D000000000001AAA', instanceUrl: s.fake.url, kind: 'sandbox' }, workflow: null, seed: 1, now: 1, steps: [{ nodeId: 'c', alias: 'con', sobject: 'Contact', mode: 'bulk', records: 3 }], total: 3 });
     await s.history.finish(hid, { status: 'interrupted', bulkJobs: [{ jobId: job.id, nodeId: 'c', sobject: 'Contact', records: 3, state: 'UploadComplete', idsCollected: false }] });
     const one = await (await s.get(`/api/history/${hid}`)).json();
-    assert.deepEqual([one.remaining.total, one.pendingBulkJobs], [0, [job.id]]);
+    assert.deepEqual([one.remaining.total, one.pendingBulkJobs.map((j) => j.jobId)], [0, [job.id]]);
+    // Still running in the org: nothing to delete yet, and nothing is sent.
+    const writes = s.fake.writes().length;
+    const running = await s.post(`/api/history/${hid}/delete`, { confirm: { username: 'me@example.com', count: 0 } });
+    assert.equal(running.status, 409);
+    assert.match((await running.json()).error, /^Lần insert này không còn bản ghi nào để xóa\. Job Bulk 7504x\w+ chưa trả Id/);
     s.fake.options.checksBeforeComplete = 0;
-    const res = await (await s.post(`/api/history/${hid}/delete`, { confirm: { username: 'me@example.com', count: 0 } })).json();
-    assert.deepEqual([res.collected, res.deleted, res.remaining], [3, 3, 0]);
+    // S2: the Ids are read first; the confirmed count (0) no longer matches ⇒ 409 with the new count, 0 deletes.
+    const first = await s.post(`/api/history/${hid}/delete`, { confirm: { username: 'me@example.com', count: 0 } });
+    assert.equal(first.status, 409);
+    assert.deepEqual(await first.json(), { error: 'Số bản ghi cần xóa đã đổi thành 3 vì vừa lấy được Id từ job Bulk. Xác nhận lại.', count: 3, collected: 3 });
+    assert.equal(s.fake.writes().length, writes);
+    assert.equal(s.fake.alive().length, 3);
+    const data = await s.history.read(hid);
+    assert.deepEqual([data.inserted, data.bulkJobs[0].idsCollected], [3, true], 'S4: inserted counts the collected Ids');
+    const res = await (await s.post(`/api/history/${hid}/delete`, { confirm: { username: 'me@example.com', count: 3 } })).json();
+    assert.deepEqual([res.deleted, res.remaining], [3, 0]);
     assert.deepEqual(s.fake.alive(), []);
-    assert.equal((await s.history.read(hid)).bulkJobs[0].idsCollected, true);
   } finally {
     await s.close();
   }
@@ -532,6 +544,47 @@ test('S5: an org whose identity cannot be read ⇒ the insert ends with an error
     assert.match(last.error, /^Không xác định được org "dev" \(sf CLI ghi org 00D000000000007XXX .*\), nên chưa ghi gì vào org\. Đăng nhập lại: sf org login web --alias dev rồi chạy lại\.$/);
     assert.equal(s.fake.writes().length, 0);
     assert.deepEqual((await (await s.get('/api/history')).json()).runs, []);
+  } finally {
+    await s.close();
+  }
+});
+
+test('N4: a Bulk job still running is reported in the delete result; the known Ids are deleted', async () => {
+  const s = await stack();
+  try {
+    const hid = await inserted(s);
+    const job = createSfClientFor(s).bulkJob('dev', { object: 'Contact', operation: 'insert' });
+    await job.open();
+    await job.upload('LastName\nA\n');
+    await job.close();
+    await s.history.update(hid, (d) => ({ bulkJobs: [{ jobId: job.id, nodeId: 'c', sobject: 'Contact', records: 1, state: 'UploadComplete', idsCollected: false }] }));
+    s.fake.options.checksBeforeComplete = 100;
+    const res = await (await s.post(`/api/history/${hid}/delete`, { confirm: await confirmOf(s, hid) })).json();
+    assert.equal(res.deleted, 15);
+    assert.deepEqual(res.pendingBulkJobs, [{ jobId: job.id, sobject: 'Contact', state: 'InProgress', reason: 'running' }]);
+  } finally {
+    await s.close();
+  }
+});
+
+test('N11: an entry that vanishes during a delete stops it with a 404 sentence; its files are not recreated', async () => {
+  const s = await stack();
+  try {
+    const hid = await inserted(s, accCon(3, 100)); // 303 records ⇒ more than one destroy call
+    const { unlinkSync, existsSync } = await import('node:fs');
+    let first = true;
+    s.fake.options.deleteError = () => {
+      if (first) {
+        first = false;
+        for (const f of s.history.files(hid)) if (existsSync(f)) unlinkSync(f);
+      }
+      return null;
+    };
+    const r = await s.post(`/api/history/${hid}/delete`, { confirm: await confirmOf(s, hid) });
+    assert.equal(r.status, 404);
+    assert.match((await r.json()).error, /^Lần insert này không còn trong Lịch sử \(đã bị quên hoặc bị xóa khỏi thư mục trong lúc xóa\), nên đã dừng xóa\. Bản ghi chưa xóa vẫn còn trong org\. Đã xóa 200 bản ghi trước khi dừng\.$/);
+    assert.equal(s.fake.requests.filter((x) => x.method === 'DELETE').length, 1, 'stopped after the call in flight');
+    assert.ok(s.history.files(hid).every((f) => !existsSync(f)));
   } finally {
     await s.close();
   }

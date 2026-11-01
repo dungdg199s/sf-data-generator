@@ -40,14 +40,19 @@ const GROUP_EXAMPLES = 3;
  * @param onProgress ({ deleted, gone, failed, total, bySobject, bulk? })
  * → { deleted, gone, failed, errorGroups, errorGroupsOther, bySobject, remaining, cancelled, stopped, bulkAborted, collected }
  */
+export const ENTRY_GONE = 'Lần insert này không còn trong Lịch sử (đã bị quên hoặc bị xóa khỏi thư mục trong lúc xóa), nên đã dừng xóa. Bản ghi chưa xóa vẫn còn trong org.';
+
 export async function deleteRun({
   client, history, hid, target, bulk = 'auto', signal, forceSignal, onProgress,
   bulkOptions = {}, failFast = FAIL_FAST_BATCHES, batchSize = BATCH_SIZE,
   minBulk = BULK_DEFAULTS.bulkMinRecords, jobRecords = BULK_DEFAULTS.bulkJobRecords,
+  collected = 0, pendingBulkJobs = [],
 }) {
+  // Pending Bulk jobs are collected by the caller BEFORE the confirmation count is compared (review
+  // of 0011, S2: confirm.count bounds what is deleted); here only what is already in the file.
   const entry = await history.read(hid);
-  const collected = await collectPendingJobs({ client, history, hid, target, entry });
-  const rem = await history.remaining(hid);
+  const rem = entry && await history.remaining(hid);
+  if (!rem) throw Object.assign(new Error(ENTRY_GONE), { status: 404 });
   const total = rem.total;
   const bySobject = {};
   for (const s of rem.steps) {
@@ -119,7 +124,7 @@ export async function deleteRun({
     try {
       await history.appendDeleted(hid, rows);
     } catch (e) {
-      stopped ??= { reason: 'history', message: e.message };
+      stopped ??= e.status === 404 ? { reason: 'entryGone', message: ENTRY_GONE } : { reason: 'history', message: e.message };
     }
     return { ok, bad, firstMessage };
   }
@@ -327,9 +332,16 @@ export async function deleteRun({
       ...(cancelled ? { cancelled: true } : {}),
     },
   })).catch((e) => {
-    stopped ??= { reason: 'history', message: e.message };
+    stopped ??= e.status === 404 ? { reason: 'entryGone', message: ENTRY_GONE } : { reason: 'history', message: e.message };
   });
-  return { deleted, gone, failed, total, errorGroups, errorGroupsOther, bySobject, remaining, cancelled: cancelled && !stopped, stopped, bulkAborted, collected, skipped };
+  if (stopped?.reason === 'entryGone') {
+    throw Object.assign(new Error(`${ENTRY_GONE} Đã xóa ${deleted} bản ghi trước khi dừng.`), { status: 404 });
+  }
+  return {
+    deleted, gone, failed, total, errorGroups, errorGroupsOther, bySobject, remaining, cancelled: cancelled && !stopped, stopped, bulkAborted, collected, skipped,
+    // Bulk insert jobs whose Ids could not be read yet (still running in the org, or no results): their records are not in this delete.
+    pendingBulkJobs,
+  };
 
   async function checkPrefix(step) {
     const n = step.ids.length;
@@ -353,24 +365,42 @@ export async function deleteRun({
 }
 
 /**
- * Bulk insert jobs of the entry whose results were never read (interrupted run): read their
- * successful results (read-only) and append the Ids to the history file. → number of Ids added.
+ * Bulk insert jobs of an entry whose results were never read (interrupted run, results not readable
+ * at the time): read their successful results (read-only: check + successfulResults) and append the
+ * Ids not yet in the file. Raises the entry's `inserted`. Called by the delete endpoint before it
+ * compares confirm.count (review of 0011, S2).
+ * → { added, pending: [{ jobId, sobject, state, reason }] }  pending: jobs still not collected
  */
-async function collectPendingJobs({ client, history, hid, target, entry }) {
+export async function collectPendingJobs({ client, history, hid, target }) {
+  const entry = await history.read(hid);
   let added = 0;
-  for (const job of entry?.bulkJobs ?? []) {
-    if (job.idsCollected || job.idsUnknown) continue;
+  const pending = [];
+  const jobs = (entry?.bulkJobs ?? []).filter((j) => !j.idsCollected);
+  if (!jobs.length) return { added, pending };
+  const known = new Set();
+  for await (const r of history.ids(hid)) known.add(r.id);
+  for (const job of jobs) {
+    let state = job.state ?? null;
     try {
       const handle = client.bulkJob(target, { jobId: job.jobId });
       const info = await handle.check();
-      if (!['JobComplete', 'Failed', 'Aborted'].includes(info.state)) continue;
-      const rows = parseResultCsv(await handle.successfulResults()).rows.filter((r) => r.sf__Id);
+      state = info.state;
+      if (!['JobComplete', 'Failed', 'Aborted'].includes(info.state)) {
+        pending.push({ jobId: job.jobId, sobject: job.sobject, state, reason: 'running' });
+        continue;
+      }
+      const rows = parseResultCsv(await handle.successfulResults()).rows.filter((r) => r.sf__Id && !known.has(r.sf__Id));
       await history.appendIds(hid, rows.map((r) => ({ sobject: job.sobject, nodeId: job.nodeId, ref: '', id: r.sf__Id })));
+      for (const r of rows) known.add(r.sf__Id);
       added += rows.length;
-      await history.update(hid, (d) => ({ bulkJobs: (d.bulkJobs ?? []).map((j) => (j.jobId === job.jobId ? { ...j, state: info.state, idsCollected: true } : j)) }));
-    } catch {
-      // Results not available (job purged, aborted without results): the Ids stay unknown.
+      await history.update(hid, (d) => ({
+        inserted: (d.inserted ?? 0) + rows.length,
+        bulkJobs: (d.bulkJobs ?? []).map((j) => (j.jobId === job.jobId ? { ...j, state: info.state, idsCollected: true, collectedLater: rows.length } : j)),
+      }));
+    } catch (e) {
+      // Results not available (job purged, aborted without results): the Ids stay unknown for now.
+      pending.push({ jobId: job.jobId, sobject: job.sobject, state, reason: e.message });
     }
   }
-  return added;
+  return { added, pending };
 }

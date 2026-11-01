@@ -805,7 +805,35 @@ test('Bulk: Dừng ngay aborts the job being processed, then reads its results w
   const res2 = await insertAll(client2, recs, { plan: conPlan(recs.length, 12000), signal: ctl2.signal, forceSignal: force2.signal });
   assert.deepEqual(res2.bulkAborted, { jobId: client2.jobs[0].id, sobject: 'Contact', nodeId: 'c', processed: 6200, records: 10000, idsKnown: false });
   assert.equal(res2.bulkUnknown, 6200);
-  assert.equal(res2.bulkJobs[0].idsUnknown, true);
+  // S3: the job stays collectable (a later delete reads its results), it is not marked unknown for good.
+  assert.deepEqual([res2.bulkJobs[0].idsCollected, res2.bulkJobs[0].idsUnknown], [false, undefined]);
+  // N7: every record is inserted, failed, not sent or unknown.
+  for (const r of [res, res2]) assert.equal(r.inserted + r.failed + r.notSent + r.bulkUnknown, recs.length);
+});
+
+test('Bulk S3: results that cannot be read leave the job collectable; successes read without failures are still recorded', async () => {
+  const recs = accConRecords(300, 40);
+  // successfulResults fails: stop with bulkError, nothing marked unknown for good.
+  const c1 = bulkClient();
+  const bulkJob1 = c1.bulkJob.bind(c1);
+  c1.bulkJob = (...a) => Object.assign(bulkJob1(...a), { successfulResults: async () => { throw new Error('Salesforce: socket hang up'); } });
+  const r1 = await insertAll(c1, recs, { plan: conPlan(recs.length, 12000) });
+  assert.equal(r1.stopped.reason, 'bulkError');
+  assert.match(r1.stopped.message, /^Không đọc được kết quả của job Bulk 750\d+ \(Contact\): Salesforce: socket hang up$/);
+  assert.deepEqual([r1.bulkJobs[0].idsCollected, r1.bulkJobs[0].idsUnknown], [false, undefined]);
+  assert.equal(r1.inserted + r1.failed + r1.notSent + r1.bulkUnknown, recs.length);
+  // failedResults fails: the successes are counted and saved, the rest is unknown with a warning.
+  const c2 = bulkClient({ rowFail: (f) => (f.LastName === 'L500' ? 'X:no: --' : null) });
+  const bulkJob2 = c2.bulkJob.bind(c2);
+  c2.bulkJob = (...a) => Object.assign(bulkJob2(...a), { failedResults: async () => { throw new Error('Salesforce: timeout'); } });
+  const saved = [];
+  const r2 = await insertAll(c2, recs, { plan: conPlan(recs.length, 12000), onInserted: async (rows) => { saved.push(...rows); } });
+  assert.equal(r2.bySobject.Contact.inserted, 11999);
+  assert.equal(r2.bulkUnknown, 1);
+  assert.equal(saved.length, 12299);
+  assert.ok(r2.bulkJobs.every((j) => j.idsCollected));
+  assert.match(r2.warnings[0], /^Không đọc được danh sách lỗi của job Bulk/);
+  assert.equal(r2.inserted + r2.failed + r2.notSent + r2.bulkUnknown, recs.length);
 });
 
 test('Bulk: a job not done after the timeout stops the run with bulkTimeout (job Id kept)', async () => {
