@@ -749,6 +749,23 @@ Reviewer tìm 1 lỗi chặn (B1) và 7 lỗi nên sửa (S1–S7) cùng các ni
 Ghi chú: khác thiết kế số 1 ở trên nay là quyết định của review (S7); số 6 (`idsUnknown`) đã bỏ: job không đọc được kết quả
 luôn thu lại được. Vẫn chưa sửa `CLAUDE.md` / `.claude/agents/implementer.md` (người điều phối làm).
 
+### Sửa sau review lần 2 phía server (2026-11-01)
+
+Không còn lỗi chặn; các mục còn lại, mỗi nhóm một commit (`npm test` xanh, 508 test; `test/stream.test.js` không sửa):
+
+| # | Commit | Sửa | Test |
+| --- | --- | --- | --- |
+| 1, 9 | `f84d07a` | Kết nối ghi được **ghim**: `whoami` trả `session`, inserter / `deleteRun` gửi mọi lời gọi ghi qua nó; `refreshFn` từ chối khi không biết org Id hoặc khác org/user (fail closed) ⇒ `stopped.reason: "orgChanged"`. Danh tính không còn gọi `conn.identity()` (gọi login.salesforce.com với token trong URL): tách org Id / user Id từ URL `identity` của REST root, username bằng `SELECT Username FROM User WHERE Id = …` | `org-writes.test.js`: đổi org của CLI giữa hai lô ⇒ org B nhận 0 request; làm mới bị từ chối ⇒ `orgChanged`, xóa không có dòng `gone`; không có request `/id/`, không token trong URL |
+| 2 | `f3c1e38` | Id bước phải là chuỗi; `migrateV1` đổi id (và cạnh) thành chuỗi; `byStep` / Lịch sử theo `String(nodeId)` | `workflow.test.js`, `migrate.test.js`, `history.test.js` |
+| 3 | `fc10674` | `rejected` trong `GET /api/history/:hid` (+ câu), kết quả xóa (`warnings`), và số "còn lại" của danh sách (đếm như lần xóa, có cache theo file) | `org-writes.test.js` |
+| 4, 5, 10, nit | `179cdc2` | Khóa: pid ghi vào file tạm rồi `link()`; khóa cũ đổi tên sang bên rồi kiểm lại; khóa rỗng < 5 s coi là đang giữ; câu 503 thêm "Nếu không còn server nào khác, xóa file …/.lock". File Id mồ côi có Id được giữ và hiện `corrupt`. Mục `corrupt` tính vào giới hạn, bị dọn đầu tiên sau 7 ngày. `fsync` thư mục sau rename. Test 503 cho xóa và quên | `history.test.js` (khóa rỗng, pid bị dùng lại, đua hai lần khởi tạo, file mồ côi, ân hạn), `org-writes.test.js` |
+| 6, 7, nit N3 | `a191690` | Job Bulk đã bị Salesforce xóa (404) ⇒ `idsLost` + câu hướng dẫn, không còn chờ / còn lại / chặn dọn; job chờ chỉ được đọc khi là `insert` đúng sObject (không phân biệt hoa thường) do user của phiên tạo; so `object` của job mở không phân biệt hoa thường | `org-writes.test.js`, `sf.test.js` |
+| 8 | `c488a38`, `c424203` | `STEP_ID` chung ở `shared/workflow-tree.js`, không bắt đầu bằng `-`; `nextId` giữ ≤ 64 ký tự; `normalizeStepIds` thuần (Record không alias giữ id cũ làm alias để tham chiếu còn đúng; id chỉ dùng trong trạng thái UI dựng lại khi mở); gọi ở `openWorkflow`, `openAsNew`, nhập file thư viện, dán | `workflow-tree.test.js`, `clipboard.test.js`, `library.test.js`, `workflow.test.js` |
+
+`prunePreview` cho hộp xác nhận Insert đã có từ `17472ba` (`prune` của `GET /api/history`), không làm lại. Tài liệu: phần
+org-connection.md của lượt này nằm trong commit `f5bc0f6` (cùng lúc với tài liệu UI); workflow-schema.md và mục này trong commit
+tài liệu riêng. Lưu ý cho UI: job không đọc được Id nằm ở `lostBulkJobs` (có `message`), không còn trong `pendingBulkJobs`.
+
 ### Phía giao diện (bước 9–10) và tài liệu (bước 11), 2026-11-01
 
 | Bước | Commit | Nội dung |
