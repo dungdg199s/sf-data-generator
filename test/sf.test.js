@@ -10,6 +10,7 @@ import { WorkflowError } from '../server/workflow/schema.js';
 import { wf, query, pick, record, loop } from './helpers.js';
 import { planInsert } from '../shared/insert-plan.js';
 import { parseCsv, bulkCell } from '../server/sf/bulk-csv.js';
+import { deleteRun } from '../server/sf/delete.js';
 
 test('listOrgs merges groups and de-duplicates by username', async () => {
   const run = async () => ({
@@ -583,7 +584,7 @@ function bulkClient(opts = {}) {
           job.results = data.map((cells) => {
             const fields = Object.fromEntries(header.map((h, i) => [h, cells[i]]));
             const err = opts.rowFail?.(fields, job);
-            return err ? { ok: false, cells, err } : { ok: true, cells, id: id(object) };
+            return err ? { ok: false, cells, err } : { ok: true, cells, id: operation === 'delete' ? fields.Id : id(object) };
           });
           job.state = 'UploadComplete';
         },
@@ -814,4 +815,116 @@ test('without a plan the inserter never opens a Bulk job (records and calls unch
   assert.equal(client.jobs.length, 0);
   assert.equal(res.inserted, recs.length);
   assert.deepEqual(res.bulk, []);
+});
+
+// ---------- design 0011 §7: deleteRun (in-memory client, history in a temporary directory) ----------
+
+async function historyWith(rows, steps) {
+  const { mkdtemp } = await import('node:fs/promises');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const { createHistory } = await import('../server/history.js');
+  const h = createHistory({ dir: await mkdtemp(path.join(os.tmpdir(), 'sfdg-del-')) });
+  const hid = await h.create({ org: { alias: 'dev', username: 'me@x.com' }, workflow: null, seed: 1, now: 1, steps, total: rows.length });
+  await h.appendIds(hid, rows);
+  await h.finish(hid, { status: 'done', inserted: rows.length });
+  return { h, hid };
+}
+
+function deleteClient({ errorFor = () => null } = {}) {
+  const calls = [];
+  return {
+    calls,
+    async destroy(_t, sobject, ids) {
+      calls.push({ sobject, ids: [...ids] });
+      return ids.map((id) => {
+        const code = errorFor(id, sobject, calls.length);
+        return code ? { id, success: false, errors: [{ statusCode: code, message: `${code} msg`, fields: [] }] } : { id, success: true, errors: [] };
+      });
+    },
+    bulkJob() {
+      throw new Error('no Bulk in this test');
+    },
+  };
+}
+
+const id18 = (p, i) => `${p}${String(i).padStart(15, '0')}`;
+
+test('deleteRun: children before parents, Ids of a step in reverse insert order, every outcome in the history file', async () => {
+  const rows = [];
+  for (let a = 1; a <= 3; a++) {
+    rows.push({ sobject: 'Account', nodeId: 'a', ref: `acc#${a}`, id: id18('001', a) });
+    for (let k = 1; k <= 2; k++) rows.push({ sobject: 'Contact', nodeId: 'c', ref: `con#${a}${k}`, id: id18('003', a * 10 + k) });
+  }
+  const { h, hid } = await historyWith(rows, [{ nodeId: 'a', sobject: 'Account' }, { nodeId: 'c', sobject: 'Contact' }]);
+  const client = deleteClient({ errorFor: (id) => (id === id18('003', 12) ? 'ENTITY_IS_DELETED' : null) });
+  const res = await deleteRun({ client, history: h, hid, target: 'dev', batchSize: 4 });
+  assert.deepEqual(client.calls.map((c) => [c.sobject, c.ids]), [
+    ['Contact', [id18('003', 32), id18('003', 31), id18('003', 22), id18('003', 21)]],
+    ['Contact', [id18('003', 12), id18('003', 11)]],
+    ['Account', [id18('001', 3), id18('001', 2), id18('001', 1)]],
+  ]);
+  assert.deepEqual([res.deleted, res.gone, res.failed, res.remaining], [8, 1, 0, 0]);
+  assert.deepEqual(res.bySobject, { Account: { deleted: 3, gone: 0, failed: 0, total: 3 }, Contact: { deleted: 5, gone: 1, failed: 0, total: 6 } });
+  const map = await h.deletedMap(hid);
+  assert.equal(map.size, 9);
+  assert.equal(map.get(id18('003', 12)), 'gone');
+  const data = await h.read(hid);
+  assert.deepEqual([data.deletion.status, data.deletion.deleted, data.deletion.gone], ['done', 8, 1]);
+  assert.equal((await h.remaining(hid)).total, 0);
+});
+
+test('deleteRun: 3 calls of an sObject failing completely (no Delete permission) stop it; nothing of the parents is sent', async () => {
+  const rows = [];
+  for (let i = 1; i <= 2; i++) rows.push({ sobject: 'Account', nodeId: 'a', ref: `acc#${i}`, id: id18('001', i) });
+  for (let i = 1; i <= 1000; i++) rows.push({ sobject: 'Contact', nodeId: 'c', ref: `con#${i}`, id: id18('003', i) });
+  const { h, hid } = await historyWith(rows, [{ nodeId: 'a', sobject: 'Account' }, { nodeId: 'c', sobject: 'Contact' }]);
+  const client = deleteClient({ errorFor: (_id, so) => (so === 'Contact' ? 'INSUFFICIENT_ACCESS_OR_READONLY' : null) });
+  const res = await deleteRun({ client, history: h, hid, target: 'dev' });
+  assert.equal(client.calls.length, 3);
+  assert.ok(client.calls.every((c) => c.sobject === 'Contact'));
+  assert.equal(res.stopped.reason, 'allFailing');
+  assert.equal(res.stopped.text, 'Đã dừng xóa: 3 lời gọi xóa Contact đầu tiên đều lỗi "INSUFFICIENT_ACCESS_OR_READONLY: INSUFFICIENT_ACCESS_OR_READONLY msg". Kiểm tra quyền Delete của user trên Contact. Chưa xóa bản ghi Contact nào.');
+  assert.deepEqual([res.deleted, res.failed, res.remaining], [0, 600, 1002]);
+  assert.equal(res.errorGroups.length, 1);
+  assert.equal((await h.read(hid)).deletion.status, 'partial');
+});
+
+test('deleteRun: DELETE_FAILED Ids get exactly one more try at the end; Dừng stops before the next call', async () => {
+  const rows = [1, 2, 3].map((i) => ({ sobject: 'Account', nodeId: 'a', ref: `acc#${i}`, id: id18('001', i) }));
+  const { h, hid } = await historyWith(rows, [{ nodeId: 'a', sobject: 'Account' }]);
+  let first = true;
+  const client = deleteClient({ errorFor: (id) => (id === id18('001', 2) && first ? (first = false, 'DELETE_FAILED') : null) });
+  const res = await deleteRun({ client, history: h, hid, target: 'dev' });
+  assert.deepEqual(client.calls.map((c) => c.ids.length), [3, 1]);
+  assert.deepEqual([res.deleted, res.failed], [3, 0]);
+
+  const many = Array.from({ length: 1000 }, (_, i) => ({ sobject: 'Account', nodeId: 'a', ref: `acc#${i}`, id: id18('001', i + 1) }));
+  const x = await historyWith(many, [{ nodeId: 'a', sobject: 'Account' }]);
+  const ctl = new AbortController();
+  const c2 = deleteClient({ errorFor: (_id, _so, n) => { if (n === 2) ctl.abort(); return null; } });
+  const res2 = await deleteRun({ client: c2, history: x.h, hid: x.hid, target: 'dev', signal: ctl.signal });
+  assert.equal(c2.calls.length, 2);
+  assert.deepEqual([res2.deleted, res2.remaining, res2.cancelled], [400, 600, true]);
+  assert.equal((await x.h.remaining(x.hid)).total, 600, '"Xóa phần còn lại…" picks up the rest');
+});
+
+test('deleteRun: a step with bulkMinRecords Ids goes probe by destroy, then Bulk delete jobs; Bulk refusing the job falls back to destroy', async () => {
+  const rows = Array.from({ length: 450 }, (_, i) => ({ sobject: 'Contact', nodeId: 'c', ref: '', id: id18('003', i + 1) }));
+  const { h, hid } = await historyWith(rows, [{ nodeId: 'c', sobject: 'Contact' }]);
+  const client = bulkClient();
+  const destroyed = [];
+  client.destroy = async (_t, _so, ids) => { destroyed.push(ids.length); return ids.map((id) => ({ id, success: true, errors: [] })); };
+  const res = await deleteRun({ client, history: h, hid, target: 'dev', minBulk: 300, jobRecords: 100, bulkOptions: { sleep: tick } });
+  assert.deepEqual(destroyed, [200]);
+  assert.deepEqual(client.jobs.map((j) => [j.operation, j.object, j.results.length]), [['delete', 'Contact', 100], ['delete', 'Contact', 100], ['delete', 'Contact', 50]]);
+  assert.equal(parseCsv(client.jobs[0].csv)[0][0], 'Id');
+  assert.deepEqual([res.deleted, res.remaining], [450, 0]);
+  const x = await historyWith(rows, [{ nodeId: 'c', sobject: 'Contact' }]);
+  const refusing = bulkClient({ openError: Object.assign(new Error('Salesforce: INVALIDENTITY'), { cause: { errorCode: 'INVALIDENTITY' } }) });
+  const d2 = [];
+  refusing.destroy = async (_t, _so, ids) => { d2.push(ids.length); return ids.map((id) => ({ id, success: true, errors: [] })); };
+  const res2 = await deleteRun({ client: refusing, history: x.h, hid: x.hid, target: 'dev', minBulk: 300, jobRecords: 100, bulkOptions: { sleep: tick } });
+  assert.deepEqual(d2, [200, 200, 50]);
+  assert.equal(res2.deleted, 450);
 });

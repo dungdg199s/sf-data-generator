@@ -20,6 +20,7 @@ import { createSfClient } from './sf/client.js';
 import { mapDescribe, mapQueryFields } from './sf/describe-map.js';
 import { createQueryCache, prefetchQueries } from './sf/query.js';
 import { createHistory, defaultDataDir, isValidHid } from './history.js';
+import { deleteRun } from './sf/delete.js';
 
 const ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CLIENT_DIR = path.join(ROOT_DIR, 'client');
@@ -90,6 +91,7 @@ export function orgKind(orgs, { alias, username }) {
 export function createApp({
   cli = createSfCli(), client, queryCache = createQueryCache(), runOptions = {}, allowedHosts = allowedHostsFor(null),
   history = createHistory({ dir: defaultDataDir(), maxRuns: LIMITS.historyMaxRuns, maxBytes: LIMITS.historyMaxBytes }),
+  deleteOptions = {},
 } = {}) {
   const sfClient = client ?? createSfClient({ cli });
   const runs = createRunRegistry();
@@ -109,6 +111,52 @@ export function createApp({
       instanceUrl: conn.instanceUrl ?? null,
       kind: orgs ? orgKind(orgs, { alias: target, username: conn.username }) : 'unknown',
     };
+  }
+
+  /**
+   * Every check of a delete (design 0011 §8), before any header is sent and before any write call.
+   * Throws the HTTP error of the first one that fails. → { target, rem }
+   */
+  async function checkDelete(hid, data, body) {
+    const kind = history.activeKind(hid);
+    if (kind === 'insert' || data.status === 'running') throw httpError(409, 'Lần insert này đang chạy. Bấm "Dừng", chờ nó dừng rồi mới xóa.');
+    if (kind === 'delete') throw httpError(409, 'Đang xóa dữ liệu của lần insert này ở một tab khác. Chờ lần đó xong.');
+    const confirm = body?.confirm;
+    if (!confirm || typeof confirm !== 'object' || typeof confirm.username !== 'string' || !Number.isInteger(confirm.count)) {
+      throw httpError(400, 'Thiếu xác nhận (org và số bản ghi). Chỉ xóa được từ hộp xác nhận của app.');
+    }
+    if (body.bulk !== undefined && body.bulk !== 'auto' && body.bulk !== 'off') throw httpError(400, 'bulk phải là "auto" hoặc "off".');
+    const was = data.org ?? {};
+    if (!was.username || confirm.username !== was.username) {
+      throw httpError(409, `Xác nhận ghi org "${confirm.username}" nhưng lần insert này thuộc org "${was.username ?? '?'}". Mở lại hộp xác nhận.`);
+    }
+    const rem = await history.remaining(hid);
+    const pending = (data.bulkJobs ?? []).some((j) => !j.idsCollected && !j.idsUnknown);
+    if (rem.total === 0 && !pending) throw httpError(409, 'Lần insert này không còn bản ghi nào để xóa.');
+    if (confirm.count !== rem.total) {
+      throw httpError(409, `Số bản ghi còn phải xóa đã đổi (còn ${rem.total}, hộp xác nhận ghi ${confirm.count}). Mở lại hộp xác nhận để xem số mới.`);
+    }
+    const target = was.alias ?? was.username;
+    const name = was.alias ?? was.username;
+    let now;
+    try {
+      now = await orgInfo(target);
+    } catch (e) {
+      throw httpError(502, `${e.message} Đăng nhập lại: sf org login web --alias ${name}`);
+    }
+    // The alias must still be the very org (and user) of the insert: a re-login into a refreshed
+    // sandbox keeps the alias but is another org.
+    const sameOrg = was.orgId && now.orgId ? was.orgId === now.orgId : Boolean(was.instanceUrl) && was.instanceUrl === now.instanceUrl;
+    if (!sameOrg || now.username !== was.username) {
+      throw httpError(409, `Org "${name}" bây giờ là org khác (${now.orgId ?? now.instanceUrl ?? '?'}, ${now.username ?? '?'}) so với lúc insert (${was.orgId ?? was.instanceUrl ?? '?'}, ${was.username}). Không xóa gì. Đăng nhập lại đúng org bằng sf org login web --alias ${name} rồi thử lại.`);
+    }
+    // Production (or a kind the CLI could not tell): the org name typed by hand.
+    if (now.kind !== 'sandbox' && now.kind !== 'scratch') {
+      const typed = typeof confirm.typedOrg === 'string' ? confirm.typedOrg.trim().toLowerCase() : '';
+      const names = [was.alias, was.username].filter(Boolean).map((x) => x.toLowerCase());
+      if (!typed || !names.includes(typed)) throw httpError(400, `Org "${name}" là production: gõ đúng tên org trong hộp xác nhận để xóa.`);
+    }
+    return { target, rem };
   }
 
   /** The history entry of a URL segment, or 404 (also for a malformed hid: no path traversal). */
@@ -313,6 +361,59 @@ export function createApp({
         if (history.activeKind(hid) || data.status === 'running') throw httpError(409, 'Lần insert này đang chạy. Bấm "Dừng", chờ nó dừng rồi mới quên.');
         await history.forget(hid);
         return { ok: true };
+      },
+    ],
+    [
+      'POST',
+      /^\/api\/history\/([^/]+)\/delete$/,
+      async ([, raw], body, _params, { req, res }) => {
+        const { hid, data } = await historyEntry(raw);
+        const { target, rem } = await checkDelete(hid, data, body);
+        // Checked again right before marking: another request may have started meanwhile.
+        if (history.activeKind(hid)) throw httpError(409, 'Đang xóa dữ liệu của lần insert này ở một tab khác. Chờ lần đó xong.');
+        const release = history.markActive(hid, 'delete');
+        const handle = runs.open();
+        const onClose = () => { if (!res.writableEnded) runs.cancel(handle.id); };
+        res.on('close', onClose);
+        const ndjson = String(req.headers.accept ?? '').includes(NDJSON);
+        const emit = (ev) => { if (ndjson && !res.destroyed) res.write(`${JSON.stringify(ev)}\n`); };
+        const bySobject = rem.bySobject;
+        if (ndjson) {
+          res.writeHead(200, { 'Content-Type': `${NDJSON}; charset=utf-8`, 'Cache-Control': 'no-cache', 'X-Content-Type-Options': 'nosniff' });
+          res.flushHeaders?.();
+        }
+        emit({ type: 'start', runId: handle.id, historyId: hid, total: rem.total, bySobject });
+        let result;
+        let failure = null;
+        let last = 0;
+        try {
+          result = await deleteRun({
+            client: sfClient, history, hid, target, bulk: body.bulk ?? 'auto', signal: handle.signal, forceSignal: handle.forceSignal, ...deleteOptions,
+            onProgress: (p) => {
+              const t = Date.now();
+              if (t - last < (runOptions.progressIntervalMs ?? 250)) return;
+              last = t;
+              emit({ type: 'progress', phase: 'delete', ...p });
+            },
+          });
+        } catch (e) {
+          failure = e;
+        } finally {
+          release();
+          handle.close();
+          res.off('close', onClose);
+        }
+        if (failure) {
+          if (!failure.status) console.error(failure);
+          if (!ndjson) throw failure;
+          emit({ type: 'error', error: failure.message });
+          res.end();
+        } else if (ndjson) {
+          emit({ type: 'done', result });
+          res.end();
+        } else sendJson(res, 200, result);
+        await invalidateAfterInsert(target);
+        return STREAMED;
       },
     ],
     [

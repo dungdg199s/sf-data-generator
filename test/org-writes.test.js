@@ -161,3 +161,193 @@ test('GET /api/orgs/:org/limits maps /limits (read-only, cached 60 s)', async ()
     await s.close();
   }
 });
+
+// ---------- delete (design 0011 §7–8) ----------
+
+/** Insert a workflow and return its history id and what the fake org holds. */
+async function inserted(s, workflow = accCon(3, 4)) {
+  const { events } = await s.insert(workflow);
+  const done = events.at(-1);
+  assert.equal(done.type, 'done', JSON.stringify(done));
+  return done.result.insert.historyId;
+}
+
+const confirmOf = async (s, hid, extra = {}) => {
+  const one = await (await s.get(`/api/history/${hid}`)).json();
+  return { username: one.org.username, count: one.remaining.total, ...extra };
+};
+
+test('every refused delete answers the right status and sentence, and the org receives 0 write requests', async () => {
+  const s = await stack();
+  try {
+    const hid = await inserted(s);
+    const writes = s.fake.writes().length;
+    const del = (body) => s.post(`/api/history/${hid}/delete`, body);
+    const expectRefused = async (body, status, message) => {
+      const r = await del(body);
+      assert.equal(r.status, status, JSON.stringify(body));
+      const j = await r.json();
+      if (message instanceof RegExp) assert.match(j.error, message);
+      else assert.equal(j.error, message);
+      assert.equal(s.fake.writes().length, writes, `no write for ${JSON.stringify(body)}`);
+    };
+    const good = await confirmOf(s, hid);
+    assert.deepEqual(good, { username: 'me@example.com', count: 15 });
+
+    await expectRefused({}, 400, 'Thiếu xác nhận (org và số bản ghi). Chỉ xóa được từ hộp xác nhận của app.');
+    await expectRefused({ confirm: { username: 'me@example.com' } }, 400, 'Thiếu xác nhận (org và số bản ghi). Chỉ xóa được từ hộp xác nhận của app.');
+    await expectRefused({ confirm: { ...good, username: 'other@example.com' } }, 409, 'Xác nhận ghi org "other@example.com" nhưng lần insert này thuộc org "me@example.com". Mở lại hộp xác nhận.');
+    await expectRefused({ confirm: { ...good, count: 200000 } }, 409, 'Số bản ghi còn phải xóa đã đổi (còn 15, hộp xác nhận ghi 200000). Mở lại hộp xác nhận để xem số mới.');
+    await expectRefused({ confirm: good, bulk: 'hard' }, 400, 'bulk phải là "auto" hoặc "off".');
+
+    // The insert is still running (another tab) / another delete of it is running.
+    const release = s.history.markActive(hid, 'insert');
+    await expectRefused({ confirm: good }, 409, 'Lần insert này đang chạy. Bấm "Dừng", chờ nó dừng rồi mới xóa.');
+    release();
+    const release2 = s.history.markActive(hid, 'delete');
+    await expectRefused({ confirm: good }, 409, 'Đang xóa dữ liệu của lần insert này ở một tab khác. Chờ lần đó xong.');
+    release2();
+
+    // The alias now points at another org (refreshed sandbox, re-login).
+    s.cli.orgId = '00D000000000002BBB';
+    await expectRefused({ confirm: good }, 409, 'Org "dev" bây giờ là org khác (00D000000000002BBB, me@example.com) so với lúc insert (00D000000000001AAA, me@example.com). Không xóa gì. Đăng nhập lại đúng org bằng sf org login web --alias dev rồi thử lại.');
+    s.cli.orgId = '00D000000000001AAA';
+    s.cli.username = 'me2@example.com';
+    await expectRefused({ confirm: good }, 409, /^Org "dev" bây giờ là org khác/);
+    s.cli.username = 'me@example.com';
+
+    // The org is not logged in any more.
+    const getConnection = s.cli.getConnection;
+    s.cli.getConnection = async () => { throw new Error('Org "dev" chưa đăng nhập hoặc token hết hạn.'); };
+    await expectRefused({ confirm: good }, 502, 'Org "dev" chưa đăng nhập hoặc token hết hạn. Đăng nhập lại: sf org login web --alias dev');
+    s.cli.getConnection = getConnection;
+
+    // Unknown / malformed history id.
+    const r = await s.post('/api/history/..%2Fx/delete', { confirm: good });
+    assert.equal(r.status, 404);
+    assert.equal(s.fake.writes().length, writes);
+  } finally {
+    await s.close();
+  }
+});
+
+test('production: typedOrg must be the alias or username (case and spaces ignored); unknown kind counts as production', async () => {
+  const s = await stack({ cli: { isSandbox: false } });
+  try {
+    const hid = await inserted(s);
+    const writes = s.fake.writes().length;
+    const good = await confirmOf(s, hid);
+    const msg = 'Org "dev" là production: gõ đúng tên org trong hộp xác nhận để xóa.';
+    for (const typedOrg of [undefined, '', 'de', 'prod', 42]) {
+      const r = await s.post(`/api/history/${hid}/delete`, { confirm: { ...good, typedOrg } });
+      assert.equal(r.status, 400, String(typedOrg));
+      assert.equal((await r.json()).error, msg);
+    }
+    // sf org list failing: kind unknown ⇒ production rules.
+    const listOrgs = s.cli.listOrgs;
+    s.cli.listOrgs = async () => { throw new Error('sf broke'); };
+    assert.equal((await s.post(`/api/history/${hid}/delete`, { confirm: good })).status, 400);
+    s.cli.listOrgs = listOrgs;
+    assert.equal(s.fake.writes().length, writes);
+    const ok = await s.post(`/api/history/${hid}/delete`, { confirm: { ...good, typedOrg: '  DEV ' } });
+    assert.equal(ok.status, 200);
+    assert.equal((await ok.json()).deleted, 15);
+  } finally {
+    await s.close();
+  }
+});
+
+test('insert then delete through real jsforce: the Ids deleted are exactly the Ids inserted (Collections and Bulk), never hardDelete; then nothing is left', async () => {
+  const s = await stack();
+  try {
+    // A record created by someone else in the same org must survive.
+    const foreign = (await createSfClientFor(s).create('dev', 'Account', [{ Name: 'Not ours' }]))[0].id;
+    const hid = await inserted(s, accCon(30, 400)); // 12 030 records, Contact by Bulk
+    const ours = new Set(s.fake.alive().filter((id) => id !== foreign));
+    assert.equal(ours.size, 12030);
+    const before = s.fake.requests.length;
+    const { events } = await s.ndjson(`/api/history/${hid}/delete`, { confirm: await confirmOf(s, hid) });
+    assert.deepEqual(events.map((e) => e.type).filter((t, i, a) => t !== a[i - 1]), ['start', 'progress', 'done']);
+    assert.deepEqual([events[0].total, events[0].bySobject], [12030, { Account: 30, Contact: 12000 }]);
+    const res = events.at(-1).result;
+    assert.deepEqual([res.deleted, res.gone, res.failed, res.remaining], [12030, 0, 0, 0]);
+    // Every Id sent for deletion, through DELETE /composite/sobjects or a delete job's CSV.
+    const reqs = s.fake.requests.slice(before);
+    const sentIds = [];
+    for (const r of reqs) {
+      if (r.method === 'DELETE') sentIds.push(...r.query.ids.split(','));
+      if (r.method === 'PUT') sentIds.push(...r.body.trim().split('\n').slice(1));
+    }
+    assert.equal(sentIds.length, 12030, 'each Id once');
+    assert.deepEqual(new Set(sentIds), ours);
+    assert.ok(!sentIds.includes(foreign));
+    const opened = reqs.filter((r) => r.method === 'POST' && r.path === '/jobs/ingest');
+    assert.ok(opened.length >= 1);
+    assert.ok(opened.every((r) => r.body.operation === 'delete'));
+    assert.ok(reqs.every((r) => r.method !== 'POST' || r.path === '/jobs/ingest'), 'no create during a delete');
+    assert.ok(!JSON.stringify(reqs).includes('hardDelete'));
+    // Children before parents: the last Contact Id goes before the first Account Id.
+    const firstAccount = reqs.findIndex((r) => r.method === 'DELETE' && r.query.ids.startsWith('001'));
+    const lastContact = reqs.findLastIndex((r) => (r.method === 'DELETE' && r.query.ids.startsWith('003')) || r.method === 'PUT');
+    assert.ok(firstAccount > lastContact);
+    assert.deepEqual(s.fake.alive(), [foreign]);
+
+    const csv = (await (await s.get(`/api/history/${hid}/ids.csv`)).text()).trim().split('\r\n').slice(1);
+    assert.ok(csv.every((l) => l.endsWith(',deleted')));
+    const list = (await (await s.get('/api/history')).json()).runs[0];
+    assert.deepEqual(list.deletion, { status: 'done', deleted: 12030, gone: 0, remaining: 0 });
+    const again = await s.post(`/api/history/${hid}/delete`, { confirm: { username: 'me@example.com', count: 0 } });
+    assert.deepEqual([again.status, (await again.json()).error], [409, 'Lần insert này không còn bản ghi nào để xóa.']);
+  } finally {
+    await s.close();
+  }
+});
+
+test('records deleted by hand meanwhile are "gone", not errors; a second delete only sends what is left', async () => {
+  const s = await stack();
+  try {
+    const hid = await inserted(s);
+    const [one, two] = s.fake.alive('Contact');
+    s.fake.records.get(one).deleted = true;
+    s.fake.options.deleteError = (id) => (id === two ? { statusCode: 'INSUFFICIENT_ACCESS_OR_READONLY', message: 'no access' } : null);
+    const r1 = await (await s.post(`/api/history/${hid}/delete`, { confirm: await confirmOf(s, hid) })).json();
+    assert.deepEqual([r1.deleted, r1.gone, r1.failed, r1.remaining], [13, 1, 1, 1]);
+    assert.deepEqual(r1.errorGroups.map((g) => [g.sobject, g.count, g.message]), [['Contact', 1, 'INSUFFICIENT_ACCESS_OR_READONLY: no access']]);
+    s.fake.options.deleteError = null;
+    const before = s.fake.requests.length;
+    const c = await confirmOf(s, hid);
+    assert.equal(c.count, 1);
+    const r2 = await (await s.post(`/api/history/${hid}/delete`, { confirm: c })).json();
+    assert.deepEqual([r2.deleted, r2.remaining], [1, 0]);
+    assert.deepEqual(s.fake.requests.slice(before).filter((r) => r.method === 'DELETE').map((r) => r.query.ids), [two]);
+  } finally {
+    await s.close();
+  }
+});
+
+const { createSfClient } = await import('../server/sf/client.js');
+function createSfClientFor(s) {
+  return createSfClient({ cli: s.cli });
+}
+
+test('an interrupted run whose Bulk job results were never read: delete reads them first (read-only), then deletes those Ids too', async () => {
+  const s = await stack();
+  try {
+    const client = createSfClientFor(s);
+    const job = client.bulkJob('dev', { object: 'Contact', operation: 'insert' });
+    await job.open();
+    await job.upload('LastName\nA\nB\nC\n');
+    await job.close();
+    const hid = await s.history.create({ org: { alias: 'dev', username: 'me@example.com', orgId: '00D000000000001AAA', instanceUrl: s.fake.url, kind: 'sandbox' }, workflow: null, seed: 1, now: 1, steps: [{ nodeId: 'c', alias: 'con', sobject: 'Contact', mode: 'bulk', records: 3 }], total: 3 });
+    await s.history.finish(hid, { status: 'interrupted', bulkJobs: [{ jobId: job.id, nodeId: 'c', sobject: 'Contact', records: 3, state: 'UploadComplete', idsCollected: false }] });
+    const one = await (await s.get(`/api/history/${hid}`)).json();
+    assert.deepEqual([one.remaining.total, one.pendingBulkJobs], [0, [job.id]]);
+    s.fake.options.checksBeforeComplete = 0;
+    const res = await (await s.post(`/api/history/${hid}/delete`, { confirm: { username: 'me@example.com', count: 0 } })).json();
+    assert.deepEqual([res.collected, res.deleted, res.remaining], [3, 3, 0]);
+    assert.deepEqual(s.fake.alive(), []);
+    assert.equal((await s.history.read(hid)).bulkJobs[0].idsCollected, true);
+  } finally {
+    await s.close();
+  }
+});
