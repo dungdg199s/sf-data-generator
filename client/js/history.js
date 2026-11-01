@@ -20,6 +20,12 @@ let last = null;
 let hooks = { startDelete: null, isRunning: () => false };
 let dialog = null;
 let view = null; // { filter, open: Set<hid>, details: Map<hid, entry | { error }>, note }
+let inFlight = false; // a delete request sent and not settled yet (final review S2)
+let confirmSeq = 0; // the last "Xóa…" clicked wins (N9)
+let ownerSeq = 0; // #modal owner token of the delete confirmation (S2)
+
+/** A delete was confirmed and its request has not settled: no other run, no second confirmation. */
+export const deleteInFlight = () => inFlight;
 
 /** The history the server reported last time (null: not read yet, or the server did not answer). */
 export const historyStatus = () => last;
@@ -35,7 +41,10 @@ export async function refreshHistory() {
 }
 
 /** Why Insert is locked while history is off (design 0011 §1, the warn-box and the button's title). */
-export const historyOffText = (st) => `Không ghi được Lịch sử vào ${st.dir}: ${st.reason}, nên không insert được (app phải ghi được Id để tải lại hay xóa dữ liệu). Đặt biến môi trường SFDG_DATA_DIR tới một thư mục ghi được rồi khởi động lại server.`;
+export const historyOffText = (st) => (st.locked
+  // Another server holds the directory: its sentence already says what to do (N11).
+  ? `Không dùng được Lịch sử: ${st.reason}. Tới khi đó không insert được (app phải ghi được Id để tải lại hay xóa dữ liệu).`
+  : `Không ghi được Lịch sử vào ${st.dir}: ${st.reason}, nên không insert được (app phải ghi được Id để tải lại hay xóa dữ liệu). Đặt biến môi trường SFDG_DATA_DIR tới một thư mục ghi được rồi khởi động lại server.`);
 
 /** "⤓ Id": the CSV of every Id of an insert (sobject,id,ref,step,status); the server names the file. */
 export function downloadIds(hid) {
@@ -93,14 +102,8 @@ function dataStatus(run) {
   return removed ? `Đã xóa một phần (còn ${fmt(left)})` : 'Còn trong org';
 }
 
-/** The sentence of `rejected` (rows of the Id file no step of the entry owns), whatever shape it comes in. */
-function rejectedText(x) {
-  const r = x?.rejected ?? x?.remaining?.rejected;
-  if (x?.rejectedMessage) return x.rejectedMessage;
-  if (r && typeof r === 'object') return r.message ?? (r.count ? `${fmt(r.count)} dòng của file Id không thuộc bước nào của lần insert này nên không bao giờ bị xóa.` : null);
-  if (typeof r === 'string') return r;
-  return r > 0 ? `${fmt(r)} dòng của file Id không thuộc bước nào của lần insert này (file có thể đã bị sửa) nên không bao giờ bị xóa.` : null;
-}
+/** The server's sentence for `rejected` (rows of the Id file no step of the entry owns), when there are any. */
+const rejectedText = (x) => (x?.rejected > 0 ? x.rejectedMessage : null);
 
 /** Pending jobs plus the ones whose Ids are lost for good (`lostBulkJobs`, each with the server's sentence). */
 export const bulkJobsOf = (x) => [...(x?.pendingBulkJobs ?? []), ...(x?.lostBulkJobs ?? []).map((j) => ({ ...j, idsLost: true }))];
@@ -108,7 +111,7 @@ export const bulkJobsOf = (x) => [...(x?.pendingBulkJobs ?? []), ...(x?.lostBulk
 /** Lines about Bulk jobs whose Ids are not in history yet (a delete reads them first), or never will be. */
 export function pendingLines(jobs) {
   return (jobs ?? []).map((j) => (j.idsLost
-    ? j.message ?? `Job Bulk ${j.jobId} (${j.sobject}): Salesforce không còn giữ kết quả, nên Id của các bản ghi này không lấy lại được và app không xóa được chúng. Xem job trong Setup → Bulk Data Load Jobs.`
+    ? j.message
     : `Job Bulk ${j.jobId} (${j.sobject}${j.records ? `, ${fmt(j.records)} bản ghi` : ''}${j.state ? `, ${j.state}` : ''}) chưa lấy Id: lần xóa lấy Id của nó trước rồi hỏi xác nhận lại nếu số bản ghi đổi.`));
 }
 
@@ -186,7 +189,15 @@ function runRow(run) {
         h('span', { class: 'hist-main hist-static' },
           h('span', { class: 'hist-when' }, hid),
           h('span', { class: 'hist-status warning-text', title: run.error ?? '' }, RUN_STATUS.corrupt)),
-        h('span', { class: 'hist-actions' })),
+        // Its Ids can still be downloaded, and the files forgotten (final review S4).
+        h('span', { class: 'hist-actions' },
+          run.hasIds ? h('button', { class: 'small', title: 'Tải các Id còn ghi trong file của lần này (CSV)', onclick: () => downloadIds(hid) }, ico('download'), 'Id') : null,
+          h('button', {
+            class: 'icon small hist-more',
+            'aria-label': `Thao tác khác với mục hỏng ${hid}`,
+            'aria-haspopup': 'menu',
+            onclick: (e) => openPopup(e.currentTarget, { title: hid, items: [{ label: 'Quên lần insert này', onSelect: () => askForget(run) }] }),
+          }, ico('more')))),
       h('p', { class: 'hint hist-detail-line' }, run.error ?? ''));
   }
   const left = remainingOf(run);
@@ -287,10 +298,13 @@ function detailView(run) {
 /** "Quên lần insert này" (a confirmation on top of the history dialog: nothing in the org changes). */
 function askForget(run) {
   const modal = document.getElementById('modal');
-  const left = remainingOf(run);
+  const left = run.status === 'corrupt' ? 0 : remainingOf(run);
+  labelModal(modal, 'forget-title');
   modal.replaceChildren(
-    h('h2', {}, 'Quên lần insert này?'),
-    h('p', {}, 'Xóa lần insert này khỏi Lịch sử? Chỉ xóa ghi chép trên máy này, không xóa gì trong org. Sau đó sẽ không tải Id hay xóa dữ liệu của lần insert này qua app được nữa.'),
+    h('h2', { id: 'forget-title' }, 'Quên lần insert này?'),
+    run.status === 'corrupt'
+      ? h('p', {}, `Xóa các file của mục hỏng ${run.id} khỏi máy này? Không xóa gì trong org. ${run.hasIds ? 'Danh sách Id trong file sẽ mất: bấm "⤓ Id" để tải về trước nếu còn cần.' : ''}`)
+      : h('p', {}, 'Xóa lần insert này khỏi Lịch sử? Chỉ xóa ghi chép trên máy này, không xóa gì trong org. Sau đó sẽ không tải Id hay xóa dữ liệu của lần insert này qua app được nữa.'),
     left ? h('div', { class: 'warn-box' }, `Lần này còn ${fmt(left)} bản ghi trong ${orgName(run.org)}.`) : '',
     h('div', { class: 'actions' },
       h('button', { onclick: () => modal.close() }, 'Hủy'),
@@ -300,7 +314,7 @@ function askForget(run) {
           modal.close();
           try {
             await api.forgetHistory(run.id);
-            if (view) view.note = { text: `Đã quên lần insert lúc ${shortWhen(run.startedAt)} (${run.workflowName || 'không tên'}).` };
+            if (view) view.note = { text: run.status === 'corrupt' ? `Đã xóa các file của mục ${run.id}.` : `Đã quên lần insert lúc ${shortWhen(run.startedAt)} (${run.workflowName || 'không tên'}).` };
           } catch (e) {
             if (view) view.note = { text: e.message, error: true };
           }
@@ -316,6 +330,12 @@ function askForget(run) {
 
 // ---------- delete confirmation (design 0011 §5) ----------
 
+/** Names the shared #modal by its heading while this dialog shows (N6); removed when it closes. */
+function labelModal(modal, id) {
+  modal.setAttribute('aria-labelledby', id);
+  modal.addEventListener('close', () => { if (modal.getAttribute('aria-labelledby') === id) modal.removeAttribute('aria-labelledby'); }, { once: true });
+}
+
 /** Says `text` where the user is looking: in the history dialog when it is open, else as a toast. */
 function tell(text, error = true) {
   if (view && dialog.open) {
@@ -330,14 +350,18 @@ function tell(text, error = true) {
  * on Hủy; the button names the count and is `.danger.solid`.
  */
 export async function confirmDelete(hid) {
-  if (hooks.isRunning()) return tell('Đang chạy. Bấm "Dừng" hoặc chờ lần chạy xong rồi mới xóa.');
+  if (hooks.isRunning() || inFlight) return tell('Đang chạy. Bấm "Dừng" hoặc chờ lần chạy xong rồi mới xóa.');
+  const seq = ++confirmSeq;
   let entry;
   let orgs;
   try {
     [entry, orgs] = await Promise.all([api.historyEntry(hid), api.orgs().catch(() => null)]);
   } catch (e) {
-    return tell(e.message);
+    if (seq === confirmSeq) tell(e.message);
+    return undefined;
   }
+  // Another "Xóa…" was clicked meanwhile (N9), or a delete started: the newer action wins.
+  if (seq !== confirmSeq || inFlight || hooks.isRunning()) return undefined;
   if (entry.status === 'running' || entry.active === 'insert') return tell('Lần insert này đang chạy. Bấm "Dừng", chờ nó dừng rồi mới xóa.');
   if (entry.active === 'delete') return tell('Đang xóa dữ liệu của lần insert này ở một tab khác. Chờ lần đó xong.');
   if (!entry.remaining?.total && !entry.pendingBulkJobs?.length) return tell('Lần insert này không còn bản ghi nào để xóa.');
@@ -346,36 +370,38 @@ export async function confirmDelete(hid) {
   // Kind as the sf CLI says now (not at insert time); no answer ⇒ unknown, treated as production.
   const listed = orgs ? orgs.find((o) => (was.username && o.username === was.username) || (was.alias && o.alias === was.alias)) : null;
   const missing = Boolean(orgs) && !listed;
-  const kind = !orgs ? 'unknown' : !listed ? was.kind ?? 'unknown' : listed.isScratch ? 'scratch' : listed.isSandbox ? 'sandbox' : 'production';
-  const mustType = kind !== 'sandbox' && kind !== 'scratch';
+  let kind = !orgs ? 'unknown' : !listed ? was.kind ?? 'unknown' : listed.isScratch ? 'scratch' : listed.isSandbox ? 'sandbox' : 'production';
+  let mustType = kind !== 'sandbox' && kind !== 'scratch';
   const names = [was.alias, was.username].filter(Boolean).map((x) => x.toLowerCase());
   const minBulk = state.meta?.limits?.bulkMinRecords ?? 10000;
   const modal = document.getElementById('modal');
+  const owner = String(++ownerSeq);
+  let title = null; // this dialog's heading: still in #modal ⇔ the dialog is still ours
+  const mine = () => modal.open && modal.dataset.owner === owner && Boolean(title?.isConnected);
   let bulk = 'auto';
   let refusal = null;
-  let sending = false;
+  let sending = null; // AbortController of the request in flight
   let typed = '';
 
-  const render = () => {
+  const render = (focus = null) => {
     const count = entry.remaining?.total ?? 0;
     const steps = entry.remaining?.steps ?? [];
     const partial = (entry.deletion?.deleted ?? 0) + (entry.deletion?.gone ?? 0) > 0;
     const order = [];
-    for (const s of [...steps].reverse()) {
-      if (!s.remaining) continue;
-      const o = order.find((x) => x.sobject === s.sobject);
-      if (o) o.n += s.remaining;
-      else order.push({ sobject: s.sobject, n: s.remaining });
+    for (const st of [...steps].reverse()) {
+      if (!st.remaining) continue;
+      const o = order.find((x) => x.sobject === st.sobject);
+      if (o) o.n += st.remaining;
+      else order.push({ sobject: st.sobject, n: st.remaining });
     }
-    const plan = planDelete({ steps, bulk, limits: state.meta?.limits });
-    const c = plan.apiCalls;
-    const canBulk = steps.some((s) => s.remaining >= minBulk);
-    const cascade = new Set((entry.steps ?? []).map((s) => s.sobject)).size > 1;
+    const c = planDelete({ steps, bulk, limits: state.meta?.limits }).apiCalls;
+    const canBulk = steps.some((st) => st.remaining >= minBulk);
+    const cascade = new Set((entry.steps ?? []).map((st) => st.sobject)).size > 1;
     const pending = entry.pendingBulkJobs ?? [];
     const okName = !mustType || names.includes(typed.trim().toLowerCase());
     const btn = h('button', {
       class: 'danger solid delete-ok',
-      disabled: missing || !okName || sending || (!count && !pending.length),
+      disabled: missing || !okName || Boolean(sending) || (!count && !pending.length),
       onclick: () => submit(count),
     }, sending ? 'Đang gửi…' : count || !pending.length ? `Xóa ${fmt(count)} bản ghi` : 'Lấy Id từ job Bulk rồi xác nhận');
     const input = mustType && !missing
@@ -385,69 +411,81 @@ export async function confirmDelete(hid) {
         value: typed,
         placeholder: was.alias ?? was.username ?? '',
         'aria-label': 'Gõ tên org để xác nhận xóa',
+        'aria-describedby': 'type-org-help',
         autocomplete: 'off',
         spellcheck: 'false',
+        disabled: Boolean(sending),
         oninput: (e) => {
           typed = e.target.value;
-          btn.disabled = missing || sending || !names.includes(typed.trim().toLowerCase()) || (!count && !pending.length);
+          btn.disabled = missing || Boolean(sending) || !names.includes(typed.trim().toLowerCase()) || (!count && !pending.length);
         },
       })
       : null;
+    title = h('h2', { id: 'delete-title' }, partial ? 'Xóa phần còn lại?' : 'Xóa dữ liệu đã insert?');
     modal.replaceChildren(...[
-      h('h2', {}, partial ? 'Xóa phần còn lại?' : 'Xóa dữ liệu đã insert?'),
+      title,
       h('p', {}, 'Org: ', h('b', {}, name), was.username && was.alias ? ` (${was.username})` : '', ` · ${KIND[kind] ?? kind}`),
       missing ? h('div', { class: 'warn-box org-missing' }, `Org "${name}" không còn đăng nhập trong sf CLI. Chạy sf org login web --alias ${name} rồi mở lại hộp này.`) : null,
       input
         ? h('div', { class: 'warn-box type-org-box' },
           h('div', {},
-            kind === 'production'
+            h('span', { id: 'type-org-help' }, kind === 'production'
               ? 'Org này là production (không phải sandbox hay scratch org). Gõ tên org để xác nhận: '
-              : 'Không biết org này là sandbox hay production (sf CLI không trả lời), nên coi như production. Gõ tên org để xác nhận: ',
+              : 'sf CLI không trả lời nên coi như production: gõ tên org để xác nhận. '),
             input))
         : null,
       refusal ? h('div', { class: 'warn-box delete-refused', role: 'alert' }, refusal) : null,
       h('p', { class: 'delete-count' }, `Sẽ xóa ${fmt(count)} bản ghi${partial ? ' còn lại' : ''} do lần insert lúc ${longWhen(entry.startedAt)} (workflow "${entry.workflowName || 'không tên'}") tạo ra:`),
       order.length ? h('p', {}, `${order.map((o) => `${o.sobject} ${fmt(o.n)}`).join(', ')}.${order.length > 1 ? ' Xóa bản ghi con trước, bản ghi cha sau.' : ''}`) : null,
-      ...pendingLines([...pending, ...(entry.lostBulkJobs ?? []).map((j) => ({ ...j, idsLost: true }))]).map((t) => h('p', { class: 'hint pending-jobs' }, t)),
+      ...pendingLines(bulkJobsOf(entry)).map((t) => h('p', { class: 'hint pending-jobs' }, t)),
       rejectedText(entry) ? h('p', { class: 'hint' }, rejectedText(entry)) : null,
       h('p', { class: 'hint' }, 'Chỉ xóa đúng các Id app đã ghi lúc insert, kể cả bản ghi đã bị sửa sau đó. Bản ghi đã bị xóa trước đó được bỏ qua.'),
       cascade ? h('p', { class: 'hint' }, 'Xóa bản ghi cha có thể làm Salesforce tự xóa bản ghi con của nó (ví dụ Contact, Opportunity của Account), kể cả bản ghi con không do app tạo.') : null,
       h('p', { class: 'hint' }, 'Bản ghi bị xóa vào Thùng rác của org (khôi phục được trong 15 ngày nếu Thùng rác chưa đầy).'),
       canBulk
         ? h('label', { class: 'check-line bulk-check' },
-          h('input', { type: 'checkbox', checked: bulk === 'auto', onchange: (e) => { bulk = e.target.checked ? 'auto' : 'off'; render(); } }),
+          h('input', { type: 'checkbox', checked: bulk === 'auto', disabled: Boolean(sending), onchange: (e) => { bulk = e.target.checked ? 'auto' : 'off'; render('.bulk-check input'); } }),
           `Dùng Bulk API 2.0 cho bước từ ${fmt(minBulk)} bản ghi`)
         : null,
       count ? h('p', { class: 'hint delete-calls' }, c.bulk
         ? `Khoảng ${fmt(c.total)} lời gọi API (sObject Collections ${fmt(c.collections)}, Bulk khoảng ${fmt(c.bulk)}), tính vào giới hạn API 24 giờ của org.`
         : `Khoảng ${fmt(c.total)} lời gọi API (200 bản ghi mỗi lời gọi), tính vào giới hạn API 24 giờ của org.`) : null,
-      h('p', { class: 'hint' }, 'Có thể bấm "Dừng" bất cứ lúc nào; bản ghi đã xóa nằm trong Thùng rác.'),
+      h('p', { class: 'hint' }, sending ? 'Đang kiểm tra org trước khi xóa. Bấm "Hủy" hoặc Esc để thôi: chưa bản ghi nào bị xóa.' : 'Có thể bấm "Dừng" bất cứ lúc nào; bản ghi đã xóa nằm trong Thùng rác.'),
       h('div', { class: 'actions' },
         h('button', { class: 'delete-cancel', onclick: () => modal.close() }, 'Hủy'),
         btn),
     ].filter(Boolean));
+    if (focus) modal.querySelector(focus)?.focus(); // N5: keep the keyboard user's place after a re-render
   };
 
   async function submit(count) {
-    if (sending) return;
-    sending = true;
+    if (sending || inFlight || !mine()) return;
+    sending = new AbortController();
+    inFlight = true;
     refusal = null;
     render();
     const body = { confirm: { username: was.username, count, ...(mustType ? { typedOrg: typed.trim() } : {}) }, bulk };
+    const ctrl = sending;
     try {
       await hooks.startDelete({
-        hid, body, org: name, total: count, bySobject: entry.remaining?.bySobject ?? {},
+        hid, body, org: name, total: count, bySobject: entry.remaining?.bySobject ?? {}, signal: ctrl.signal,
         onResponse: () => {
           // The delete runs: the results panel shows it (both dialogs out of the way).
-          modal.onclose = null;
-          modal.close();
+          if (mine()) {
+            modal.onclose = null;
+            modal.close();
+          }
           if (dialog.open) dialog.close();
         },
       });
     } catch (e) {
+      sending = null;
+      if (e.name === 'AbortError') {
+        toast('Đã hủy. Chưa xóa bản ghi nào.', 5000);
+        return;
+      }
       // Refused before anything was deleted. A new count (pending Bulk jobs read, or the history
       // changed): show it and ask again — never sent again by itself.
-      sending = false;
       if (e.status === 409 && Number.isInteger(e.body?.count)) {
         try {
           entry = await api.historyEntry(hid);
@@ -456,16 +494,26 @@ export async function confirmDelete(hid) {
         }
         entry.remaining = { ...(entry.remaining ?? {}), total: e.body.count };
       }
+      // The server wants the org name although no field was shown (the kind changed meanwhile; S3).
+      if (e.status === 400 && e.body?.needTypedOrg) {
+        mustType = true;
+        if (e.body.kind === 'production' || e.body.kind === 'unknown') kind = e.body.kind;
+      }
       refusal = e.message;
-      if (!modal.open) return;
-      render();
-      modal.querySelector('.delete-cancel')?.focus();
+      if (!mine()) return;
+      render(mustType && e.body?.needTypedOrg ? 'input.type-org' : '.delete-cancel');
+    } finally {
+      inFlight = false;
     }
   }
 
-  render();
   modal.onclose = null;
-  modal.showModal();
+  render();
+  modal.dataset.owner = owner;
+  labelModal(modal, 'delete-title');
+  // Hủy, Esc or anything closing the dialog while the request waits for the org check: drop it (S1).
+  modal.addEventListener('close', () => { if (modal.dataset.owner === owner) { delete modal.dataset.owner; sending?.abort(); } }, { once: true });
+  if (!modal.open) modal.showModal();
   modal.querySelector('.delete-cancel').focus();
   return undefined;
 }

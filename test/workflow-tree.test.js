@@ -687,3 +687,36 @@ test('normalizeStepIds rewrites invalid, numeric, leading "-", too long and dupl
   const clean = { version: 2, steps: [{ id: 'a', type: 'record', config: {} }] };
   assert.equal(normalizeStepIds(clean).workflow, clean, 'nothing to change: the same object');
 });
+
+test('final review N2: normalizeStepIds never duplicates a name nor loses a reference', () => {
+  const lookup = (ref) => ({ name: 'AccountId', type: 'lookup', options: { ref } });
+  const wf = {
+    version: 2,
+    steps: [
+      // Old id is not a usable alias ("my acc"): the Record gets one and references follow it.
+      { id: 'my acc', type: 'record', config: { sobject: 'Account', fields: [{ name: 'Name', type: 'text' }] } },
+      // Duplicate id "acc" of an alias-less Record: the first keeps the name, the second is named by its new id.
+      { id: 'acc', type: 'record', config: { sobject: 'Account', fields: [{ name: 'Name', type: 'text' }] } },
+      { id: 'acc', type: 'record', config: { sobject: 'Account', fields: [{ name: 'Name', type: 'text' }] } },
+      // Old id "7" (numeric) whose alias would start with a digit.
+      { id: 7, type: 'record', config: { sobject: 'Lead', fields: [{ name: 'LastName', type: 'text' }] } },
+      { id: 'con', type: 'record', config: { sobject: 'Contact', fields: [
+        { name: 'LastName', type: 'text', options: { mode: 'template', template: 'Of {{acc.Name}} / {{7.LastName}}' } },
+        lookup('my acc'),
+        { name: 'ReportsToId', type: 'lookup', options: { ref: 'acc' } },
+      ] } },
+    ],
+  };
+  const { workflow } = normalizeStepIds(wf);
+  const [a, b, c, d, con] = workflow.steps;
+  assert.deepEqual([a.id, a.config.alias], ['my_acc', 'my_acc']);
+  assert.deepEqual([b.id, b.config.alias], ['acc', undefined], 'the first "acc" keeps its id and name');
+  assert.deepEqual([c.id, c.config.alias], ['acc_2', undefined], 'no second step named "acc"');
+  assert.equal(d.config.alias, 'r_7');
+  assert.equal(con.config.fields[0].options.template, 'Of {{acc.Name}} / {{r_7.LastName}}');
+  assert.equal(con.config.fields[1].options.ref, 'my_acc');
+  assert.equal(con.config.fields[2].options.ref, 'acc', 'a reference to the kept "acc" stays');
+  assert.equal(wf.steps[4].config.fields[1].options.ref, 'my acc', 'pure');
+  const names = workflow.steps.map((s) => s.config.alias ?? s.id);
+  assert.equal(new Set(names).size, names.length);
+});

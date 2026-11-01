@@ -244,9 +244,15 @@ export const STEP_ID = /^[A-Za-z0-9_][A-Za-z0-9_-]{0,63}$/;
  * A workflow (or `{ steps }` from the clipboard) with every invalid step id rewritten (pure; the
  * input is not changed): non-string, characters outside STEP_ID, leading "-", too long, or a
  * duplicate. Other steps refer to steps by alias, never by id — except a Record without alias,
- * which is named by its id: when such an id changes, the old id becomes its alias if it is a usable
- * alias name, so references keep working. UI state keyed by id (collapsed frames, selection) is
- * rebuilt when a workflow is opened.
+ * which is named by its id. When such an id changes (final review of 0011, N2), no name is ever
+ * duplicated and no reference is lost:
+ * - the old id is a usable alias that no other step uses ⇒ it becomes the Record's alias (references
+ *   keep working);
+ * - the old id is not a usable alias ⇒ the Record gets a usable alias (its new id, or `r_<id>`), and
+ *   the Lookup refs and templates that pointed at the old id are rewritten to it;
+ * - the old id is another step's name (a duplicate id) ⇒ the references stay with that step, and this
+ *   one is named by its new id.
+ * UI state keyed by id (collapsed frames, selection) is rebuilt when a workflow is opened.
  * → { workflow, renamed: [{ from, to }] }  (`workflow` is the input itself when nothing changed)
  */
 export function normalizeStepIds(wf) {
@@ -277,19 +283,53 @@ export function normalizeStepIds(wf) {
     change.set(st, id);
   }
   if (!change.size) return { workflow: wf, renamed: [] };
+  // Names other steps can reference: aliases, and the id of every Record without alias that keeps its id.
+  const names = new Set();
+  for (const st of all) {
+    if (st.config?.alias) names.add(String(st.config.alias));
+    else if (st.type === 'record' && !change.has(st) && st.id !== undefined) names.add(String(st.id));
+  }
   const renamed = [];
+  const moves = []; // [from, to]: references to rewrite (the old id was not a usable alias)
   const copy = (list) => (Array.isArray(list) ? list.map((st) => {
     if (!st || typeof st !== 'object') return st;
     const out = { ...st };
     if (change.has(st)) {
       out.id = change.get(st);
       renamed.push({ from: st.id, to: out.id });
-      if (st.type === 'record' && !st.config?.alias && isAliasName(String(st.id))) out.config = { ...(st.config ?? {}), alias: String(st.id) };
+      if (st.type === 'record' && !st.config?.alias && st.id !== undefined && st.id !== null) {
+        const old = String(st.id);
+        if (isAliasName(old) && !names.has(old)) {
+          out.config = { ...(st.config ?? {}), alias: old };
+          names.add(old);
+        } else if (!isAliasName(old) && !names.has(old)) {
+          const want = isAliasName(out.id) ? out.id : `r_${out.id.replace(/-/g, '_')}`;
+          const name = names.has(want) ? nextName(want, names, '_') : want;
+          out.config = { ...(st.config ?? {}), alias: name };
+          names.add(name);
+          moves.push([old, name]);
+        }
+      }
     }
     if (st.slots && typeof st.slots === 'object') out.slots = Object.fromEntries(Object.entries(st.slots).map(([k, v]) => [k, copy(v)]));
     return out;
   }) : list);
-  return { workflow: { ...wf, steps: copy(wf.steps) }, renamed };
+  let steps = copy(wf.steps);
+  if (moves.length) {
+    steps = structuredClone(steps); // the rewrite below sets option values in place
+    for (const [from, to] of moves) renameRefs(steps, from, to);
+  }
+  return { workflow: { ...wf, steps }, renamed };
+}
+
+/** Lookup refs and template / path references whose head is `from` (any string) → `to`. */
+function renameRefs(steps, from, to) {
+  walkSteps(steps, (s) => {
+    for (const o of legacyReferenceOptions(s)) {
+      const [next, n] = renameInValue(o.mode, storedValue(o), from, to);
+      if (n) o.set(next);
+    }
+  });
 }
 
 /** A usable alias / loop variable name (same rule as server/workflow/schema.js). */
