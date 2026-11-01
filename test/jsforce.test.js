@@ -27,7 +27,8 @@ test('real jsforce: expired token is refreshed via the sf CLI and the call retri
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   try {
     const instanceUrl = `http://127.0.0.1:${server.address().port}`;
-    const cli = { getConnection: async (_t, { refresh = false } = {}) => ({ accessToken: refresh ? 'fresh' : 'stale', instanceUrl, apiVersion: '62.0' }) };
+    // The org Id must be known for a refresh to be accepted (fail closed, review 2 of 0011).
+    const cli = { getConnection: async (_t, { refresh = false } = {}) => ({ accessToken: refresh ? 'fresh' : 'stale', instanceUrl, apiVersion: '62.0', orgId: '00D000000000001AAA' }) };
     const res = await createSfClient({ cli }).create('dev', 'Contact', [{ LastName: 'A' }]);
     assert.equal(res[0].id, '003000000000001AAA');
     assert.deepEqual(seen.map((s) => s[2]), ['Bearer stale', 'Bearer fresh']);

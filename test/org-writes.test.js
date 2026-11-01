@@ -547,7 +547,10 @@ test('S1: history keeps the org Id and username Salesforce reports for the writi
     const hid = await inserted(s);
     const one = await (await s.get(`/api/history/${hid}`)).json();
     assert.deepEqual(one.org, { alias: 'dev', username: 'me@example.com', orgId: '00D000000000001AAA', instanceUrl: s.fake.url, kind: 'sandbox' });
-    assert.ok(s.fake.requests.some((r) => r.path.startsWith('/id/00D000000000001AAA/')), 'identity service asked');
+    // Review 2, item 9: the identity URL is parsed, never fetched; the username comes from one SOQL.
+    assert.ok(s.fake.requests.some((r) => r.path === '' && r.method === 'GET'), 'REST root read');
+    assert.ok(s.fake.requests.some((r) => r.path === '/query' && r.query.q === "SELECT Username FROM User WHERE Id = '005000000000001AAA'"));
+    assert.ok(!s.fake.requests.some((r) => r.path.startsWith('/id/') || 'oauth_token' in r.query), 'no identity fetch, no token in a URL');
   } finally {
     await s.close();
   }
@@ -620,5 +623,97 @@ test('N10: ids.csv prefixes cells a spreadsheet would run as a formula', async (
     assert.match(lines[1], /^Account,001\w+,acc#1,'-cmd,inserted$/);
   } finally {
     await s.close();
+  }
+});
+
+// ---------- review 2 of 0011, item 1: the writing connection is pinned for the whole run ----------
+
+/** Two fake orgs behind one alias; `point(B)` re-points the alias (CLI) like a re-login. */
+async function twoOrgs() {
+  const A = await startFakeSalesforce();
+  const B = await startFakeSalesforce({ identity: { orgId: '00D000000000002BBB' } });
+  let cur = A;
+  const cli = {
+    async listOrgs() {
+      return [{ alias: 'dev', username: 'me@example.com', instanceUrl: cur.url, isSandbox: true }];
+    },
+    async getConnection() {
+      return { accessToken: cur === A ? 'tokA' : 'tokB', instanceUrl: cur.url, apiVersion: '62.0', username: 'me@example.com', orgId: cur.identity.orgId };
+    },
+  };
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'sfdg-orgwrites-'));
+  dirs.push(dir);
+  const history = createHistory({ dir });
+  const app = http.createServer(createApp({ cli, history, runOptions: { progressIntervalMs: 0 } }));
+  await new Promise((r) => app.listen(0, '127.0.0.1', r));
+  const url = `http://127.0.0.1:${app.address().port}`;
+  const post = (p, body) => fetch(url + p, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then((r) => r.json());
+  return {
+    A, B, history, post,
+    point: (fake) => { cur = fake; },
+    close: async () => { app.close(); await A.close(); await B.close(); },
+  };
+}
+
+test('item 1: the alias re-pointed between two batches of an insert: the rest still goes to the org whoami checked, org B gets nothing', async () => {
+  const t = await twoOrgs();
+  try {
+    let first = true;
+    t.A.options.createError = () => { if (first) { first = false; t.point(t.B); } return null; };
+    const res = await t.post('/api/run', { workflow: accCon(3, 100), seed: 1, target: { kind: 'org', org: 'dev', bulk: 'off' } });
+    assert.equal(res.insert.inserted, 303);
+    assert.equal(t.A.alive().length, 303);
+    assert.equal(t.B.requests.length, 0, 'not a single request to org B');
+  } finally {
+    await t.close();
+  }
+});
+
+test('item 1: a refresh that lands on org B is refused: the insert stops with orgChanged, org B gets nothing', async () => {
+  const t = await twoOrgs();
+  try {
+    let first = true;
+    t.A.options.createError = () => {
+      if (first) {
+        first = false;
+        t.point(t.B);
+        t.A.options.expireOnce = new Set(['POST /composite/sobjects']); // A's token expires now
+      }
+      return null;
+    };
+    const res = await t.post('/api/run', { workflow: accCon(3, 100), seed: 1, target: { kind: 'org', org: 'dev', bulk: 'off' } });
+    assert.equal(res.insert.stopped.reason, 'orgChanged');
+    assert.match(res.insert.stopped.message, /^Org "dev" bây giờ là org khác \(00D000000000002BBB, me@example.com\) so với kết nối đang dùng \(00D000000000001AAA, me@example.com\)\. Không gửi tiếp\./);
+    assert.equal(res.insert.inserted, t.A.alive().length);
+    assert.equal(res.insert.inserted + res.insert.failed + res.insert.notSent, 303);
+    assert.equal(t.B.requests.length, 0);
+  } finally {
+    await t.close();
+  }
+});
+
+test('item 1: a delete whose alias moves to org B mid-run: no request to B and no "gone" row; with a refused refresh it stops (orgChanged)', async () => {
+  const t = await twoOrgs();
+  try {
+    const ins = await t.post('/api/run', { workflow: accCon(3, 100), seed: 1, target: { kind: 'org', org: 'dev', bulk: 'off' } });
+    const hid = ins.insert.historyId;
+    let first = true;
+    t.A.options.deleteError = () => {
+      if (first) {
+        first = false;
+        t.point(t.B);
+        t.A.options.expireOnce = new Set(['DELETE /composite/sobjects']);
+      }
+      return null;
+    };
+    const res = await t.post(`/api/history/${hid}/delete`, { confirm: { username: 'me@example.com', count: 303 } });
+    assert.equal(res.stopped.reason, 'orgChanged');
+    assert.deepEqual([res.deleted, res.gone, res.remaining], [200, 0, 103]);
+    assert.equal(t.B.requests.length, 0);
+    const outcomes = [...(await t.history.deletedMap(hid)).values()];
+    assert.deepEqual([outcomes.length, outcomes.every((o) => o === 'deleted')], [200, true]);
+    assert.equal(t.A.alive().length, 103);
+  } finally {
+    await t.close();
   }
 });

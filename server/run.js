@@ -227,7 +227,8 @@ export async function executeRun({
       // Design 0011: the Bulk job in flight (its processed records are already in `inserted`).
       ...(s.bulk ? { bulk: s.bulk } : {}),
     });
-    const inserter = createInserter(sfClient, target, {
+    // Writes go through the session whoami checked (pinned connection), the alias only without one.
+    const inserter = createInserter(sfClient, orgIdentity?.session ?? target, {
       ...insertOptions,
       keepId,
       signal,

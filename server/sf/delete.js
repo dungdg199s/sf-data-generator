@@ -24,6 +24,7 @@ import { errorPattern, BATCH_SIZE, FAIL_FAST_BATCHES, MAX_ERROR_GROUPS } from '.
 import { parseResultCsv, parseBulkError } from './bulk-csv.js';
 import { waitForJob } from './bulk-job.js';
 import { BULK_DEFAULTS } from '../../shared/insert-plan.js';
+import { isOrgChanged } from './client.js';
 
 export const GONE_CODES = new Set(['ENTITY_IS_DELETED', 'INVALID_CROSS_REFERENCE_KEY', 'NOT_FOUND']);
 const RETRY_CODE = 'DELETE_FAILED';
@@ -138,6 +139,14 @@ export async function deleteRun({
     try {
       results = await client.destroy(target, sobject, ids);
     } catch (e) {
+      if (isOrgChanged(e)) {
+        // The alias now points at another org (refresh refused): nothing was sent there, and no Id
+        // is recorded as deleted or gone; the run stops (review 2, item 1).
+        stopped ??= { reason: 'orgChanged', sobject, nodeId, message: e.message };
+        for (const id of ids) sent.delete(id);
+        progress();
+        return firstCalls.get(sobject) ?? { calls: 0 };
+      }
       results = ids.map(() => ({ success: false, errors: [{ message: e.message }] }));
     }
     const outcomes = ids.map((id, i) => {
@@ -177,8 +186,12 @@ export async function deleteRun({
     try {
       handle = client.bulkJob(target, { object: sobject, operation: 'delete' });
       opened = await handle.open();
-    } catch {
+    } catch (e) {
       active = null;
+      if (isOrgChanged(e)) {
+        stopped ??= { reason: 'orgChanged', sobject, nodeId, message: e.message };
+        return true;
+      }
       return false;
     }
     // Exactly the job asked for (N3): anything else is aborted before a single Id is uploaded.
@@ -208,6 +221,12 @@ export async function deleteRun({
       if (isStopped() || forceSignal?.aborted) return abortOpen();
       await handle.close();
     } catch (e) {
+      if (isOrgChanged(e)) {
+        // Never closed ⇒ never processed; nothing recorded.
+        stopped ??= { reason: 'orgChanged', sobject, nodeId, jobId: handle.id, message: e.message };
+        active = null;
+        return true;
+      }
       try {
         await handle.abort();
       } catch {
@@ -230,7 +249,7 @@ export async function deleteRun({
         },
       });
     } catch (e) {
-      stopped ??= { reason: 'bulkError', sobject, nodeId, jobId: handle.id, message: e.message };
+      stopped ??= { reason: isOrgChanged(e) ? 'orgChanged' : 'bulkError', sobject, nodeId, jobId: handle.id, message: e.message };
       active = null;
       return true;
     }
@@ -246,7 +265,7 @@ export async function deleteRun({
       badRows = parseResultCsv(await handle.failedResults()).rows;
     } catch (e) {
       if (w.state === 'Aborted') bulkAborted = { jobId: handle.id, sobject, nodeId, processed: w.info.numberRecordsProcessed, records: ids.length, idsKnown: false };
-      else stopped ??= { reason: 'bulkError', sobject, nodeId, jobId: handle.id, message: e.message };
+      else stopped ??= { reason: isOrgChanged(e) ? 'orgChanged' : 'bulkError', sobject, nodeId, jobId: handle.id, message: e.message };
       active = null;
       return true;
     }
@@ -323,6 +342,11 @@ export async function deleteRun({
     try {
       results = await client.destroy(target, so, part.map((x) => x.id));
     } catch (e) {
+      if (isOrgChanged(e)) {
+        stopped ??= { reason: 'orgChanged', sobject: so, message: e.message };
+        r -= part.length;
+        break;
+      }
       results = part.map(() => ({ success: false, errors: [{ message: e.message }] }));
     }
     await settle(so, part[0].nodeId, part.map((x, k) => {

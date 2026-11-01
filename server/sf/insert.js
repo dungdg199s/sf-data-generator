@@ -40,6 +40,7 @@
 import { toBulkCsv, parseResultCsv, parseBulkError, rowKey } from './bulk-csv.js';
 import { waitForJob } from './bulk-job.js';
 import { BULK_DEFAULTS } from '../../shared/insert-plan.js';
+import { isOrgChanged } from './client.js';
 
 export const BATCH_SIZE = 200; // sObject Collections limit
 export const BULK_JOB_RECORDS = BULK_DEFAULTS.bulkJobRecords;
@@ -220,6 +221,15 @@ export function createInserter(client, target, {
       try {
         results = await client.create(target, sobject, objs);
       } catch (e) {
+        if (isOrgChanged(e)) {
+          // The org behind the alias changed (refresh refused, review 2 item 1): nothing of this call
+          // was written; the run stops for good.
+          stopped ??= { reason: 'orgChanged', sobject, message: e.message };
+          for (const r of chunk) settle(r, null);
+          notSent += chunk.length;
+          progress();
+          return;
+        }
         results = chunk.map(() => ({ success: false, errors: [{ message: e.message }] }));
       }
       let ok = 0;
@@ -337,6 +347,12 @@ export function createInserter(client, target, {
       handle = client.bulkJob(target, { object: st.sobject, operation: 'insert' });
       opened = await handle.open();
     } catch (e) {
+      if (isOrgChanged(e)) {
+        stopped ??= { reason: 'orgChanged', sobject: st.sobject, nodeId: st.nodeId, message: e.message };
+        notSent += n;
+        progress();
+        return undefined;
+      }
       const code = e.cause?.errorCode ?? e.errorCode;
       if (code && !NO_FALLBACK_CODES.has(code)) return fallBack(st, items, e);
       // Limits, network…: like a failed Collections call (every record failed, counts toward bulkFailing).
@@ -387,6 +403,16 @@ export function createInserter(client, target, {
       if (isCancelled() || forceSignal?.aborted) return abortOpen();
       await handle.close();
     } catch (e) {
+      if (isOrgChanged(e)) {
+        // Upload or close refused: the job was never closed, so Salesforce processes nothing of it.
+        job.state = 'Open';
+        job.idsCollected = true;
+        notSent += n;
+        stopped ??= { reason: 'orgChanged', sobject: st.sobject, nodeId: st.nodeId, jobId: job.jobId, message: e.message };
+        await onJob?.(job)?.catch?.(() => {});
+        progress();
+        return undefined;
+      }
       try {
         await handle.abort();
       } catch {
@@ -420,7 +446,7 @@ export function createInserter(client, target, {
       // Checking failed (network, session): the job may still run in the org.
       job.state = 'Unknown';
       bulkUnknown += n;
-      stopped ??= { reason: 'bulkError', sobject: st.sobject, nodeId: st.nodeId, jobId: job.jobId, message: e.message, records: n };
+      stopped ??= { reason: isOrgChanged(e) ? 'orgChanged' : 'bulkError', sobject: st.sobject, nodeId: st.nodeId, jobId: job.jobId, message: e.message, records: n };
       await onJob?.(job)?.catch?.(() => {});
       return undefined;
     }
@@ -460,7 +486,7 @@ export function createInserter(client, target, {
         bulkAborted = { jobId: job.jobId, sobject: st.sobject, nodeId: st.nodeId, processed, records: n, idsKnown: false };
       } else {
         bulkUnknown += n;
-        stopped ??= { reason: 'bulkError', sobject: st.sobject, nodeId: st.nodeId, jobId: job.jobId, message: `Không đọc được kết quả của job Bulk ${job.jobId} (${st.sobject}): ${readError?.message}`, records: n };
+        stopped ??= { reason: isOrgChanged(readError) ? 'orgChanged' : 'bulkError', sobject: st.sobject, nodeId: st.nodeId, jobId: job.jobId, message: `Không đọc được kết quả của job Bulk ${job.jobId} (${st.sobject}): ${readError?.message}`, records: n };
       }
       active = null;
       await onJob?.(job)?.catch?.(() => {});

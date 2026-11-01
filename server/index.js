@@ -150,6 +150,9 @@ export function createApp({
       orgId: who.orgId,
       instanceUrl: who.instanceUrl ?? null,
       kind: orgs ? orgKind(orgs, { alias: target, username: who.username }) : 'unknown',
+      // The connection whoami checked: every write of this run goes through it (review 2, item 1).
+      // Never stored (server/history.js keeps the identity keys only).
+      session: who.session ?? null,
     };
   }
 
@@ -202,7 +205,7 @@ export function createApp({
       const names = [was.alias, was.username].filter(Boolean).map((x) => x.toLowerCase());
       if (!typed || !names.includes(typed)) throw httpError(400, `Org "${name}" là production: gõ đúng tên org trong hộp xác nhận để xóa.`);
     }
-    return { target, rem, pending };
+    return { target, rem, pending, session: now.session ?? target };
   }
 
   /** confirm.count must be exactly what this delete may remove (review of 0011, S2). */
@@ -437,7 +440,7 @@ export function createApp({
         const { hid, data } = await historyEntry(raw);
         await requireHistory('xóa');
         const checked = await checkDelete(hid, data, body);
-        const { target } = checked;
+        const { target, session } = checked;
         let { rem } = checked;
         // Checked again right before marking: another request may have started meanwhile.
         if (history.activeKind(hid)) throw httpError(409, 'Đang xóa dữ liệu của lần insert này ở một tab khác. Chờ lần đó xong.');
@@ -447,7 +450,7 @@ export function createApp({
         let collected = { added: 0, pending: [] };
         try {
           if (checked.pending) {
-            collected = await collectPendingJobs({ client: sfClient, history, hid, target });
+            collected = await collectPendingJobs({ client: sfClient, history, hid, target: session });
             rem = await history.remaining(hid);
             if (!rem) throw httpError(404, HISTORY_MISSING);
             countCheck(rem, body.confirm.count, { added: collected.added, stillPending: collected.pending });
@@ -472,7 +475,7 @@ export function createApp({
         let last = 0;
         try {
           result = await deleteRun({
-            client: sfClient, history, hid, target, bulk: body.bulk ?? 'auto', signal: handle.signal, forceSignal: handle.forceSignal, ...deleteOptions,
+            client: sfClient, history, hid, target: session, bulk: body.bulk ?? 'auto', signal: handle.signal, forceSignal: handle.forceSignal, ...deleteOptions,
             collected: collected.added, pendingBulkJobs: collected.pending,
             onProgress: (p) => {
               const t = Date.now();

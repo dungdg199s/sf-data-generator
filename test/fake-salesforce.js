@@ -16,7 +16,8 @@
 //   GET    /jobs/ingest/:id/failedResults             CSV with sf__Error
 //   GET    /limits                                    DailyApiRequests, DailyBulkApiBatches
 //   GET    /sobjects/:name/describe                   { name, keyPrefix } (001 Account, 003 Contact, …)
-//   GET    /services/data/v62.0, /id/:org/:user       identity service (fake.identity: orgId, username)
+//   GET    /services/data/v62.0                       REST root with the `identity` URL (fake.identity: orgId, userId, username)
+//   GET    /query?q=SELECT Username FROM User WHERE Id = '…'   the whoami query (nothing else)
 //
 // Behaviour hooks (all optional, set on `options` or later on `fake.options`):
 //   createError(fields, sobject)  → null | { statusCode, message, fields }   (Collections create and Bulk insert rows)
@@ -43,7 +44,7 @@ export async function startFakeSalesforce(options = {}) {
     url: null,
     version: '62.0',
     /** Who every token of this fake is (identity service); change it to "re-point" the org. */
-    identity: { orgId: '00D000000000001AAA', username: 'me@example.com', ...(options.identity ?? {}) },
+    identity: { orgId: '00D000000000001AAA', userId: '005000000000001AAA', username: 'me@example.com', ...(options.identity ?? {}) },
     /** Write requests (POST / PUT / PATCH / DELETE) seen so far. */
     writes() {
       return this.requests.filter((r) => ['POST', 'PUT', 'PATCH', 'DELETE'].includes(r.method));
@@ -139,10 +140,16 @@ export async function startFakeSalesforce(options = {}) {
         if (req.method === 'DELETE' && path === '/composite/sobjects') {
           return json(200, String(url.searchParams.get('ids') ?? '').split(',').filter(Boolean).map(deleteOne));
         }
-        // Identity service (jsforce conn.identity()): base URL → identity URL → who the token is.
-        if (req.method === 'GET' && path === '') return json(200, { identity: `${fake.url}/id/${fake.identity.orgId}/005000000000001AAA` });
-        if (req.method === 'GET' && path.startsWith('/id/')) {
-          return json(200, { id: `${fake.url}${path}`, organization_id: fake.identity.orgId, user_id: '005000000000001AAA', username: fake.identity.username });
+        // REST root: its `identity` URL names the org and user (the app parses it, never fetches it:
+        // on a real org it points at login.salesforce.com).
+        if (req.method === 'GET' && path === '') {
+          return json(200, { identity: `https://login.salesforce.com/id/${fake.identity.orgId}/${fake.identity.userId}`, sobjects: `${base}/sobjects` });
+        }
+        if (req.method === 'GET' && path === '/query') {
+          const m = String(url.searchParams.get('q') ?? '').match(/^SELECT Username FROM User WHERE Id = '(\w+)'$/);
+          if (!m) return json(400, [{ errorCode: 'MALFORMED_QUERY', message: 'fake: only the whoami query' }]);
+          const rec = m[1] === fake.identity.userId ? [{ attributes: { type: 'User' }, Username: fake.identity.username }] : [];
+          return json(200, { totalSize: rec.length, done: true, records: rec });
         }
         const desc = req.method === 'GET' && path.match(/^\/sobjects\/([A-Za-z0-9_]+)\/describe$/);
         if (desc) return json(200, { name: desc[1], label: desc[1], keyPrefix: PREFIX[desc[1]] ?? 'a00', fields: [] });

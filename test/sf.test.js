@@ -170,7 +170,7 @@ test('sf client builds one jsforce connection per org from the sf CLI token', as
   const cli = {
     async getConnection(target, { refresh = false } = {}) {
       lookups.push([target, refresh]);
-      return { accessToken: refresh ? 'fresh' : 'tok', instanceUrl: 'https://x.my.salesforce.com', apiVersion: '62.0' };
+      return { accessToken: refresh ? 'fresh' : 'tok', instanceUrl: 'https://x.my.salesforce.com', apiVersion: '62.0', orgId: '00DA' };
     },
   };
   const { made, createConnection } = fakeJsforce();
