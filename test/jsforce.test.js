@@ -214,3 +214,35 @@ test('real jsforce: limits reads /limits; Salesforce errors of a job are 502 wit
     await fake.close();
   }
 });
+
+test('real jsforce: Bulk inserter (Account 300 + Contact 12 000) against the fake: probe, 2 jobs, every created Id reaches onInserted', async () => {
+  const { createInserter } = await import('../server/sf/insert.js');
+  const { planInsert } = await import('../shared/insert-plan.js');
+  const fake = await startFakeSalesforce();
+  try {
+    const client = createSfClient({ cli: fakeCli(fake) });
+    const recs = [];
+    let c = 0;
+    for (let a = 1; a <= 300; a++) {
+      recs.push({ ref: `acc#${a}`, sobject: 'Account', alias: 'acc', nodeId: 'a', fields: { Name: `Acme, "${a}"` } });
+      for (let k = 0; k < 40; k++) recs.push({ ref: `con#${++c}`, sobject: 'Contact', alias: 'con', nodeId: 'c', fields: { LastName: `L${c}`, Description: c % 7 ? null : 'two\nlines; a|b', AccountId: { $ref: `acc#${a}` } } });
+    }
+    const plan = planInsert({ steps: [{ nodeId: 'a', alias: 'acc', sobject: 'Account', records: 300 }, { nodeId: 'c', alias: 'con', sobject: 'Contact', records: 12000 }], referenced: new Set(['acc']) });
+    const saved = [];
+    const ins = createInserter(client, 'dev', { plan, keepId: (r) => r.startsWith('acc#'), onInserted: async (rows) => { saved.push(...rows); }, bulkOptions: { sleep: () => new Promise((r) => setImmediate(r)) } });
+    for (const r of recs) await ins.push(r);
+    const res = await ins.end();
+    assert.equal(res.inserted, 12300);
+    assert.equal(fake.jobs.size, 2);
+    assert.deepEqual([...fake.jobs.values()].map((j) => [j.operation, j.state, j.results.length]), [['insert', 'JobComplete', 10000], ['insert', 'JobComplete', 1800]]);
+    assert.deepEqual(new Set(saved.map((r) => r.id)), new Set(fake.alive()));
+    // Contacts point at the Accounts' real Ids; multi-line values with ; and | survive both ways.
+    const accIds = new Set(fake.alive('Account'));
+    const contacts = [...fake.records.values()].filter((r) => r.sobject === 'Contact');
+    assert.ok(contacts.every((r) => accIds.has(r.fields.AccountId)));
+    assert.equal(contacts.filter((r) => r.fields.Description === 'two\nlines; a|b').length, Math.floor(12000 / 7));
+    assert.ok(fake.writes().every((w) => !(w.path.startsWith('/jobs/ingest') && w.method === 'POST' && w.body.operation !== 'insert')));
+  } finally {
+    await fake.close();
+  }
+});
