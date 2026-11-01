@@ -17,6 +17,7 @@
 
 import { loopMinIterations, pickMaySkip } from '../../shared/scope.js';
 import { QUERY_DEFAULTS } from '../../shared/soql.js';
+import { BULK_DEFAULTS } from '../../shared/insert-plan.js';
 
 export const LIMITS = {
   maxRecordsDefault: 50000,
@@ -35,6 +36,14 @@ export const LIMITS = {
   queryTimeoutMs: 30000,
   queryTotalMs: 120000, // all Query steps of one run together, well under the HTTP timeouts
   queryCacheTtlMs: 600000,
+  // Org writes (design 0011): a Record step of at least bulkMinRecords leaf records goes through
+  // Bulk API 2.0 in jobs of bulkJobRecords rows, each followed for at most bulkJobTimeoutMs; insert
+  // history keeps at most historyMaxRuns runs / historyMaxBytes on disk.
+  bulkMinRecords: BULK_DEFAULTS.bulkMinRecords,
+  bulkJobRecords: BULK_DEFAULTS.bulkJobRecords,
+  bulkJobTimeoutMs: BULK_DEFAULTS.bulkJobTimeoutMs,
+  historyMaxRuns: 100,
+  historyMaxBytes: 256 * 1024 * 1024,
 };
 
 /**

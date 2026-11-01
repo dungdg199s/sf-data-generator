@@ -1,7 +1,13 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { createApp } from '../server/index.js';
+import { mkdtempSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
+// Insert history (design 0011) of every app in this file goes to a throwaway directory, never ~.
+process.env.SFDG_DATA_DIR = mkdtempSync(path.join(os.tmpdir(), 'sfdg-server-test-'));
+const { createApp } = await import('../server/index.js');
 import { wf, record, loop, query, pick } from './helpers.js';
 import { V1_SAMPLES } from './fixtures/v1-samples.js';
 import { W, rec, E } from './fixtures/v1-cases.js';
@@ -544,7 +550,7 @@ test('error groups are bounded: Ids in messages are masked, at most 100 groups, 
   const { url, close } = await appWith({ create: async (_t, _s, recs) => recs.map((_, i) => (i === 0 ? { success: true, id: `003${++n}` }
     : { success: false, errors: [{ statusCode: 'DUPLICATE_VALUE', message: `duplicate value found: Email duplicates value on record with id: 003000000${String(++n).padStart(6, '0')}`, fields: [] }] })) });
   try {
-    const res = await fetch(`${url}/api/run`, { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson' }, body: JSON.stringify({ workflow: wf([record('c', 'Contact', 'con', [{ name: 'LastName', type: 'text', options: {} }], { count: 40000 })]), seed: 1, target: { kind: 'org', org: 'dev' } }) });
+    const res = await fetch(`${url}/api/run`, { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson' }, body: JSON.stringify({ workflow: wf([record('c', 'Contact', 'con', [{ name: 'LastName', type: 'text', options: {} }], { count: 40000 })]), seed: 1, target: { kind: 'org', org: 'dev', bulk: 'off' } }) });
     const last = (await res.text()).trim().split('\n').at(-1);
     const ins = JSON.parse(last).result.insert;
     assert.equal(ins.errorsTotal, 39800);
@@ -696,4 +702,27 @@ test('a now outside what a Date holds is a 400 for /api/run, /api/export and /ap
     assert.equal(fs.status, 400);
     assert.equal((await fs.json()).error, 'Tham số now không hợp lệ.');
   }
+});
+
+// ---------- design 0011 ----------
+
+test('GET /api/meta serves the Bulk and history limits; target.bulk other than auto/off is a 400 before anything runs', async () => {
+  const meta = await (await fetch(base + '/api/meta')).json();
+  assert.deepEqual(
+    [meta.limits.bulkMinRecords, meta.limits.bulkJobRecords, meta.limits.bulkJobTimeoutMs, meta.limits.historyMaxRuns, meta.limits.historyMaxBytes],
+    [10000, 10000, 1800000, 100, 268435456],
+  );
+  const before = inserted.length;
+  const res = await post('/api/run', { workflow: wf([record('a', 'Account', 'acc', [{ name: 'Name', type: 'text' }])]), target: { kind: 'org', org: 'dev', bulk: 'x' } });
+  assert.equal(res.status, 400);
+  assert.equal((await res.json()).error, 'target.bulk phải là "auto" hoặc "off".');
+  assert.equal(inserted.length, before);
+  const ok = await post('/api/run', { workflow: wf([record('a', 'Account', 'acc', [{ name: 'Name', type: 'text' }])]), target: { kind: 'org', org: 'dev', bulk: 'off' } });
+  assert.equal(ok.status, 200);
+  assert.match((await ok.json()).insert.historyId, /^h\d{8}T\d{6}Z-[0-9a-f]{6}$/, 'JSON mode records history too');
+});
+
+test('POST /api/runs/:id/cancel accepts { force: true } (Dừng ngay); unknown runs are still a 404', async () => {
+  const res = await post('/api/runs/rnope/cancel', { force: true });
+  assert.equal(res.status, 404);
 });
