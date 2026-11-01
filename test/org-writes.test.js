@@ -491,8 +491,15 @@ test('B1: a corrupted ids.csv (unknown step, wrong sObject, garbage) only yields
     const rem = await s.history.remaining(hid);
     assert.deepEqual([rem.steps[0].ids, rem.rejected], [[a, b], 3]);
     const before = s.fake.requests.length;
+    // Review 2, item 3: the rejected rows are shown before and after the delete, with the same count in the list.
+    const one = await (await s.get(`/api/history/${hid}`)).json();
+    const sentence = '3 dòng trong file Id không thuộc bước nào của lần insert này (file có thể đã bị sửa), không xóa.';
+    assert.deepEqual([one.rejected, one.rejectedMessage, one.remaining.total], [3, sentence, 2]);
+    const listed = (await (await s.get('/api/history')).json()).runs.find((r) => r.id === hid);
+    assert.deepEqual([listed.rejected, listed.deletion.remaining], [3, 2]);
     const out = await (await s.post(`/api/history/${hid}/delete`, { confirm: { username: 'me@example.com', count: 2 } })).json();
     assert.equal(out.deleted, 2);
+    assert.deepEqual([out.rejected, out.warnings], [3, [sentence]]);
     assert.ok(!JSON.stringify(s.fake.requests.slice(before)).includes(foreign));
     assert.ok(s.fake.alive().includes(foreign));
   } finally {

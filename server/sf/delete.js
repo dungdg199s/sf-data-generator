@@ -383,6 +383,9 @@ export async function deleteRun({
   }
   return {
     deleted, gone, failed, total, errorGroups, errorGroupsOther, bySobject, remaining, cancelled: cancelled && !stopped, stopped, bulkAborted, collected, skipped,
+    // Rows of the Id file that belong to no step of this insert: never sent (review 2, item 3).
+    rejected: rem.rejected,
+    warnings: rem.rejected ? [`${rem.rejected} dòng trong file Id không thuộc bước nào của lần insert này (file có thể đã bị sửa), không xóa.`] : [],
     // Bulk insert jobs whose Ids could not be read yet (still running in the org, or no results): their records are not in this delete.
     pendingBulkJobs,
   };

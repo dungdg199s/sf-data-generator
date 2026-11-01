@@ -270,8 +270,23 @@ export function createHistory({ dir = defaultDataDir(), clock = () => Date.now()
   function remainingOf(data) {
     const inserted = live.get(data.id) ?? data.inserted ?? 0;
     const left = Math.max(0, inserted - (data.deletion?.deleted ?? 0) - (data.deletion?.gone ?? 0));
-    const pending = (data.bulkJobs ?? []).filter((j) => !j.idsCollected).reduce((n, j) => n + (j.records ?? 1), 0);
-    return left + pending;
+    return left + pendingRecords(data);
+  }
+
+  /** Records of Bulk jobs whose Ids are still to be read (not lost for good). */
+  function pendingRecords(data) {
+    return (data.bulkJobs ?? []).filter((j) => !j.idsCollected && !j.idsLost).reduce((n, j) => n + (j.records ?? 1), 0);
+  }
+
+  // remaining() of finished entries, reused while their files do not change (list() of 100 entries).
+  const remainingCache = new Map(); // hid → { sig, value }
+  async function cachedRemaining(hid) {
+    const sig = (await Promise.all(['.json', '.ids.csv', '.deleted.csv'].map((ext) => stat(file(hid, ext)).then((x) => `${x.size}:${x.mtimeMs}`, () => '-')))).join('|');
+    const hit = remainingCache.get(hid);
+    if (hit?.sig === sig) return hit.value;
+    const value = await api.remaining(hid);
+    remainingCache.set(hid, { sig, value: value && { total: value.total, rejected: value.rejected } });
+    return remainingCache.get(hid).value;
   }
 
   const api = {
@@ -455,10 +470,22 @@ export function createHistory({ dir = defaultDataDir(), clock = () => Date.now()
         const inserted = live.get(hid) ?? d.inserted ?? 0;
         const bySobject = {};
         for (const s of d.steps ?? []) bySobject[s.sobject] = (bySobject[s.sobject] ?? 0) + (s.inserted ?? 0);
+        // The same filtered count a delete uses (rows of unknown steps are not deletable, review 2
+        // item 3); a running insert uses its live counter.
+        let remaining = remainingOf({ ...d, inserted });
+        let rejected = 0;
+        if (!live.has(hid)) {
+          const c = await cachedRemaining(hid, d).catch(() => null);
+          if (c) {
+            remaining = c.total + pendingRecords(d);
+            rejected = c.rejected;
+          }
+        }
         out.push({
           id: d.id, status: d.status, startedAt: d.startedAt, finishedAt: d.finishedAt, org: d.org, workflowName: d.workflow?.name ?? '',
           seed: d.seed, total: d.total, inserted, failed: d.failed, notSent: d.notSent, bySobject,
-          deletion: { status: d.deletion?.status ?? 'none', deleted: d.deletion?.deleted ?? 0, gone: d.deletion?.gone ?? 0, remaining: remainingOf({ ...d, inserted }) },
+          deletion: { status: d.deletion?.status ?? 'none', deleted: d.deletion?.deleted ?? 0, gone: d.deletion?.gone ?? 0, remaining },
+          ...(rejected ? { rejected } : {}),
           ...(active.has(hid) ? { active: active.get(hid) } : {}),
         });
       }

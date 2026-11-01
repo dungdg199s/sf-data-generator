@@ -110,6 +110,8 @@ export function allowedHostsFor(bindHost) {
 
 /** The sentence of an insert refused because history cannot be written (S7; also server/run.js). */
 export const historyOffMessage = ({ reason, dir }) => `Không ghi được Lịch sử (${reason}), nên chưa ghi gì vào org. Kiểm tra quyền ghi thư mục ${dir} hoặc đặt SFDG_DATA_DIR.`;
+/** Review 2, item 3: rows of an Id file that a delete never touches. */
+export const rejectedMessage = (n) => `${n} dòng trong file Id không thuộc bước nào của lần insert này (file có thể đã bị sửa), không xóa.`;
 const HISTORY_MISSING = 'Không tìm thấy lần insert này trong Lịch sử (có thể đã bị dọn vì vượt giới hạn lưu trữ).';
 const LIMITS_CACHE_MS = 60000;
 const LIMITS_TIMEOUT_MS = 3000;
@@ -408,6 +410,9 @@ export function createApp({
           workflowName: workflow?.name ?? '',
           ...(history.activeKind(hid) ? { active: history.activeKind(hid) } : {}),
           remaining: { total: rem.total, bySobject: rem.bySobject, steps: rem.steps.map((s) => ({ nodeId: s.nodeId, sobject: s.sobject, remaining: s.ids.length })) },
+          // Rows of the Id file that belong to no step of this insert (edited file): never deleted (review 2, item 3).
+          rejected: rem.rejected,
+          ...(rem.rejected ? { rejectedMessage: rejectedMessage(rem.rejected) } : {}),
           // Bulk jobs whose Ids are not in the file yet: a delete reads them first and asks to confirm the new count.
           pendingBulkJobs: (data.bulkJobs ?? []).filter((j) => !j.idsCollected).map((j) => ({ jobId: j.jobId, sobject: j.sobject, nodeId: j.nodeId, records: j.records, state: j.state })),
         };
