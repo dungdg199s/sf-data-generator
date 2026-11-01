@@ -20,12 +20,14 @@ import { api } from './api.js';
 import { openPopup, closePopup, popupAnchor } from './popup.js';
 import { reveal } from './ops.js';
 import { clampResults, resultsKeyStep, shouldCollapse, parseRatio, toRatio, resultsAria, RESULTS_MIN } from './sizing.js';
+import { downloadIds, historyStatus } from './history.js';
 
 const QUERY_TAB = 'q:'; // activeTab of a Query tab: `q:<stepId>`
 const ERRORS_TAB = '__errors';
 let activeTab = null;
 let unwatchTabs = null; // watchOverflow of the current tab row
 let panel, body, summary, progressBar, stopBtn, dlJson, dlCsv, dlMenu, toggle;
+let stopTitle = ''; // the tooltip of Dừng in index.html (Dừng ngay has its own)
 let onRefresh = null;
 let onGoTo = null;
 let busyDownload = false;
@@ -46,6 +48,7 @@ export function initResults({ onRefresh: refresh, onGoTo: goTo } = {}) {
   summary = document.getElementById('results-summary');
   progressBar = document.getElementById('run-progress');
   stopBtn = document.getElementById('btn-stop');
+  stopTitle = stopBtn.title;
   dlJson = document.getElementById('btn-dl-json');
   dlCsv = document.getElementById('btn-dl-csv');
   dlMenu = document.getElementById('btn-dl-menu');
@@ -243,8 +246,11 @@ async function exportFile(format, sobject) {
   }
 }
 
-/** Header while a run goes on: summary nodes, progress (value/max, or indeterminate), Dừng. */
-export function showProgress({ parts, value, max, onStop, stopping = false }) {
+/**
+ * Header while a run goes on: summary nodes, progress (value/max, or indeterminate), Dừng.
+ * stopLabel / stopTitle: "Dừng ngay" while a stop waits for a Bulk job (design 0011 §2).
+ */
+export function showProgress({ parts, value, max, onStop, stopping = false, stopLabel = 'Dừng', stopTitle: title = stopTitle }) {
   setOpen(true);
   summary.replaceChildren(...parts);
   progressBar.hidden = false;
@@ -257,6 +263,8 @@ export function showProgress({ parts, value, max, onStop, stopping = false }) {
   stopBtn.hidden = false;
   stopBtn.disabled = stopping || !onStop;
   stopBtn.onclick = onStop ?? null;
+  if (stopBtn.textContent !== stopLabel) stopBtn.textContent = stopLabel;
+  stopBtn.title = title;
 }
 
 /** Back to the idle header (download buttons instead of Dừng). */
@@ -266,15 +274,24 @@ export function endProgress() {
   progressBar.hidden = true;
   stopBtn.hidden = true;
   stopBtn.onclick = null;
+  stopBtn.textContent = 'Dừng';
+  stopBtn.title = stopTitle;
   dlJson.hidden = dlCsv.hidden = dlMenu.hidden = false;
   updateButtons();
   if (hadFocus) document.getElementById('btn-preview').focus();
 }
 
-/** One-off status text in the header (errors, lost connection). */
-export function showRunning(text) {
+/** One-off status text in the header (errors, lost connection); `extra`: nodes after it (the links of an insert). */
+export function showRunning(text, ...extra) {
   setOpen(true);
-  summary.textContent = text;
+  summary.replaceChildren(text, ...extra.flat().filter(Boolean));
+}
+
+/** "⤓ Id" (and "Lịch sử") of an insert that has a history entry; [] without one (design 0011 §3). */
+export function insertLinks(ins) {
+  const hid = ins?.historyId && historyStatus()?.enabled !== false ? ins.historyId : null;
+  if (!hid) return [];
+  return [' · ', h('button', { class: 'link ids-link', title: 'Tải mọi Id đã insert của lần chạy này (CSV)', onclick: () => downloadIds(hid) }, ico('download'), 'Id')];
 }
 
 /** Chips `<sObject> n` (or `n/total` when totals are given). */
@@ -329,8 +346,10 @@ function updateButtons() {
 
 function insertSummary(ins) {
   if (!ins) return '';
-  const note = ins.stopped?.reason === 'allFailing' ? ' · đã dừng vì lỗi hàng loạt' : ins.cancelled ? ' · đã dừng' : '';
-  return h('span', {}, ' · ', h('span', { class: 'ok' }, `insert ${fmt(ins.inserted)}`), ins.failed ? h('span', { class: 'err' }, ` · lỗi ${fmt(ins.failed)}`) : '', note);
+  const reason = ins.stopped?.reason;
+  const note = reason === 'allFailing' || reason === 'bulkFailing' ? ' · đã dừng vì lỗi hàng loạt' : ins.stopped || ins.cancelled ? ' · đã dừng' : '';
+  // Design 0011 §3: the Ids of this insert, from history (no history ⇒ no link).
+  return h('span', {}, ' · ', h('span', { class: 'ok' }, `insert ${fmt(ins.inserted)}`), ins.failed ? h('span', { class: 'err' }, ` · lỗi ${fmt(ins.failed)}`) : '', note, insertLinks(ins));
 }
 
 function render() {

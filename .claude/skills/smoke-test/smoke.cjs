@@ -94,8 +94,13 @@ try {
  */
 async function startServer() {
   const { createApp, allowedHostsFor } = await import(pathToFileURL(path.join(root, 'server/index.js')).href);
+  const { createHistory } = await import(pathToFileURL(path.join(root, 'server/history.js')).href);
   const noCli = async () => { throw Object.assign(new Error('smoke: không dùng sf CLI'), { status: 503 }); };
-  const server = http.createServer(createApp({ cli: { listOrgs: noCli, getConnection: noCli }, allowedHosts: allowedHostsFor('127.0.0.1') }));
+  // Insert history (design 0011) in a temporary directory: the UI reads GET /api/history once an org is
+  // selected, and the smoke must never touch the user's data directory.
+  historyDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sfdg-smoke-'));
+  const history = createHistory({ dir: historyDir });
+  const server = http.createServer(createApp({ cli: { listOrgs: noCli, getConnection: noCli }, allowedHosts: allowedHostsFor('127.0.0.1'), history }));
   await new Promise((res, rej) => server.once('error', rej).listen(0, '127.0.0.1', res));
   return server;
 }
@@ -144,6 +149,7 @@ function noFixedWaits() {
 }
 let browser;
 let base;
+let historyDir = null;
 
 /** A fresh context (empty storage) and page; page errors are reported with `label`. */
 async function newPage(label, ctxOpts = {}) {
@@ -2098,6 +2104,135 @@ async function flowCanvas() {
   await m.context().close();
 }
 
+// ---------- 20. insert history, Bulk and delete (design 0011, its smoke flows 16a–16d) ----------
+
+const HIST_HID = 'h20261028T103200Z-a1b2c3';
+const HIST_ORGS = [{ alias: 'dev-sb', username: 'me@example.com', isSandbox: true, isScratch: false, connectedStatus: 'Connected' }];
+
+/**
+ * A page with org `dev-sb` selected and every org / history / run call answered by the route (never the
+ * server's sf CLI, never an org): /api/orgs, /api/orgs/<org>/limits (50 API calls left), other org calls 404,
+ * previews of "Account + Contact" answered with 5 Account + 12 000 Contact. Inserts are answered in the page
+ * (a fetch wrapper that holds the stream, flow 20a); any insert reaching the route is aborted and reported.
+ */
+async function historyPage(label, { orgs = HIST_ORGS, viewport } = {}) {
+  const page = await newPage(label, viewport ? { viewport } : {});
+  await page.addInitScript((org) => { if (!localStorage.getItem('smoke.org')) { localStorage.setItem('sfdg.org', org); localStorage.setItem('smoke.org', '1'); } }, orgs[0].alias);
+  await page.route('**/api/orgs', (r) => r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(orgs) }));
+  await page.route('**/api/orgs/**', (r) => (/\/limits$/.test(r.request().url())
+    ? r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ api: { max: 15000, remaining: 50 }, bulkBatches: { max: 15000, remaining: 14980 } }) })
+    : r.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ error: 'smoke: org giả lập' }) })));
+  await page.route('**/api/run', (r) => {
+    const body = r.request().postDataJSON();
+    if (body?.target) { errors.push(`[${label}] an insert reached the network`); return r.abort(); }
+    const result = {
+      runId: 'rprev', seed: 11, now: Date.parse('2026-10-28T10:30:00Z'), warnings: [], records: [], samples: {},
+      stats: { total: 12005, bySobject: { Account: 5, Contact: 12000 }, byStep: { loopAcc: { runs: 1, records: 12005 }, acc: { runs: 5, records: 5 }, loopCon: { runs: 5, records: 12000 }, con: { runs: 12000, records: 12000 } }, durationMs: 3, previewRows: 200, truncated: true },
+    };
+    return r.fulfill({ status: 200, contentType: 'application/x-ndjson', body: `${JSON.stringify({ type: 'start', runId: 'rprev', seed: 11, now: result.now, warnings: [] })}\n${JSON.stringify({ type: 'done', result })}\n` });
+  });
+  return page;
+}
+
+/** In the page: inserts answer a held NDJSON stream; Dừng / Dừng ngay (cancel) push the next events. */
+function holdInserts(page) {
+  return page.evaluate(() => {
+    const real = window.fetch;
+    const enc = new TextEncoder();
+    window.smokeCancels = [];
+    window.fetch = async (url, init) => {
+      const body = init?.body ? JSON.parse(init.body) : null;
+      if (url === '/api/run' && body?.target) {
+        window.smokeInsertBody = body;
+        let ctrl;
+        const stream = new ReadableStream({ start(c) { ctrl = c; } });
+        window.smokeSend = (ev) => ctrl.enqueue(enc.encode(`${JSON.stringify(ev)}\n`));
+        window.smokeClose = () => ctrl.close();
+        const by = (a, c) => ({ Account: { inserted: a, failed: 0, total: 5 }, Contact: { inserted: c, failed: 0, total: 12000 } });
+        window.smokeSend({ type: 'start', runId: 'rins', seed: body.seed, now: body.now, warnings: [] });
+        window.smokeSend({ type: 'plan', total: 12005, bySobject: { Account: 5, Contact: 12000 }, apiCalls: 26, historyId: 'h20261028T103200Z-a1b2c3', steps: [] });
+        window.smokeSend({ type: 'progress', phase: 'insert', inserted: 2205, failed: 0, total: 12005, bySobject: by(5, 2200), byStep: {}, bulk: { nodeId: 'con', sobject: 'Contact', jobId: '7504x00000AbCdE', job: 1, jobs: 2, processed: 2000, failed: 0, records: 10000, state: 'InProgress' } });
+        return new Response(stream, { status: 200, headers: { 'Content-Type': 'application/x-ndjson' } });
+      }
+      if (/^\/api\/runs\/[^/]+\/cancel$/.test(url)) {
+        window.smokeCancels.push(body);
+        queueMicrotask(() => {
+          if (!body?.force) {
+            window.smokeSend({ type: 'progress', phase: 'stopping', waitingBulk: { jobId: '7504x00000AbCdE', sobject: 'Contact', nodeId: 'con', processed: 6200, records: 10000 } });
+            return;
+          }
+          const result = {
+            runId: 'rins', seed: 11, now: Date.parse('2026-10-28T10:30:00Z'), warnings: [], records: [], samples: {},
+            stats: { total: 12005, bySobject: { Account: 5, Contact: 12000 }, byStep: {}, durationMs: 3, previewRows: 200, truncated: true },
+            insert: {
+              inserted: 6405, failed: 0, errorsTotal: 0, errors: [], errorGroups: [], errorGroupsOther: null, total: 12005, notSent: 5600, cancelled: true, stopped: null, ids: {},
+              bySobject: { Account: { inserted: 5, failed: 0 }, Contact: { inserted: 6400, failed: 0 } }, byStep: {}, historyId: 'h20261028T103200Z-a1b2c3',
+              bulkAborted: { jobId: '7504x00000AbCdE', sobject: 'Contact', nodeId: 'con', processed: 6200, records: 10000, idsKnown: true },
+            },
+          };
+          window.smokeSend({ type: 'done', result });
+          window.smokeClose();
+        });
+        return new Response('{"ok":true}', { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      return real(url, init);
+    };
+  });
+}
+
+/** 20a: the insert confirmation (Bulk, API calls, limits, history), Bulk progress, Dừng ngay, ⤓ Id. */
+async function flowHistory() {
+  const page = await historyPage('history');
+  await page.goto(base);
+  await page.click('#sample-items .palette-item:has-text("Account + Contact")');
+  await page.waitForSelector('.step-card[data-id="con"]');
+  await page.waitForFunction(() => !document.getElementById('btn-insert').disabled);
+  await page.click('#btn-insert');
+  await page.waitForSelector('dialog[open] .bulk-check');
+  const dlg = () => page.textContent('dialog[open]');
+  check(await page.isChecked('dialog[open] .bulk-check input'), '20a: the Bulk checkbox is not checked by default');
+  check((await page.evaluate(() => document.activeElement?.textContent)) === 'Hủy', '20a: the insert confirmation does not focus Hủy');
+  let text = await dlg();
+  check(/con \(Contact\) 12 000: 200 bản ghi đầu gửi thử bằng sObject Collections, phần còn lại 2 job Bulk\./.test(text), `20a: no Bulk step line (${text})`);
+  check(/Khoảng 26 lời gọi API \(sObject Collections 2, Bulk khoảng 24\)/.test(text), `20a: API calls with Bulk (${text})`);
+  check(/Dùng Bulk API 2\.0 cho bước từ 10 000 bản ghi/.test(text) && /Lịch sử trên máy này/.test(text), `20a: Bulk label / history line (${text})`);
+  await page.waitForFunction(() => /Org còn 50\/15 000 lời gọi API/.test(document.querySelector('dialog[open] .insert-limits')?.textContent ?? ''), null, { timeout: 3000 }).catch(() => errors.push('20a: no org API limit line'));
+  check(!(await page.$('dialog[open] .limits-warn')), '20a: limits warning while the estimate fits');
+  await page.uncheck('dialog[open] .bulk-check input');
+  text = await dlg();
+  check(/Khoảng 61 lời gọi API \(200 bản ghi mỗi lời gọi\)/.test(text), `20a: API calls without Bulk (${text})`);
+  check(await page.isVisible('dialog[open] .limits-warn') && await page.$('dialog[open] .bulk-steps.off'), '20a: no limits warn-box (or Bulk lines not muted) once Bulk is off');
+  if (outDir) await page.screenshot({ path: path.join(outDir, 'smoke-1440-insert-bulk.png') });
+  await holdInserts(page);
+  await page.evaluate(() => {
+    window.smokeSummary = [];
+    new MutationObserver(() => window.smokeSummary.push(document.getElementById('results-summary').textContent)).observe(document.getElementById('results-summary'), { subtree: true, childList: true, characterData: true });
+  });
+  await page.click('dialog[open] .actions button.danger.solid');
+  await page.waitForFunction(() => window.smokeSummary.some((t) => /Bulk: Contact job 1\/2/.test(t)), null, { timeout: 3000 }).catch(() => errors.push('20a: no "Bulk: Contact job 1/2" in the progress summary'));
+  check((await page.evaluate(() => window.smokeInsertBody?.target?.bulk)) === 'off', '20a: the insert did not send target.bulk "off"');
+  await page.click('#btn-stop');
+  await page.waitForFunction(() => document.getElementById('btn-stop').textContent === 'Dừng ngay' && !document.getElementById('btn-stop').disabled, null, { timeout: 3000 }).catch(() => {});
+  const waiting = await page.evaluate(() => ({ summary: document.getElementById('results-summary').textContent, title: document.getElementById('btn-stop').title, label: document.getElementById('btn-stop').textContent }));
+  check(waiting.label === 'Dừng ngay' && /Đang chờ job Bulk Contact đang chạy xong \(6 200\/10 000\) rồi dừng…/.test(waiting.summary) && /Hủy job Bulk đang chạy/.test(waiting.title), `20a: waiting for the Bulk job (${JSON.stringify(waiting)})`);
+  await page.click('#btn-stop');
+  await page.waitForFunction(() => document.getElementById('btn-stop').hidden && !document.getElementById('btn-preview').disabled, null, { timeout: 3000 }).catch(() => errors.push('20a: the run did not end after Dừng ngay'));
+  check(JSON.stringify(await page.evaluate(() => window.smokeCancels)) === '[{},{"force":true}]', `20a: cancel requests ${JSON.stringify(await page.evaluate(() => window.smokeCancels))}`);
+  check(await toastIs(page, /Đã hủy job Bulk Contact\. Salesforce đã xử lý 6 200\/10 000 bản ghi của job; Id của chúng đã ghi vào Lịch sử\./), '20a: no Dừng ngay sentence in the toast');
+  check(await page.isVisible('#results-summary .ids-link'), '20a: no ⤓ Id link in the summary');
+  await page.route('**/api/history/*/ids.csv', (r) => r.fulfill({ status: 200, headers: { 'Content-Type': 'text/csv', 'Content-Disposition': 'attachment; filename="Account_Contact-20261028-1032-ids.csv"' }, body: 'sobject,id,ref,step,status\r\n' }));
+  const [dl] = await Promise.all([page.waitForEvent('download', { timeout: 3000 }).catch(() => null), page.click('#results-summary .ids-link')]);
+  check(dl?.suggestedFilename() === 'Account_Contact-20261028-1032-ids.csv', `20a: ⤓ Id download ${dl?.suggestedFilename()}`);
+  // No history ⇒ no insert (review S7): Insert is locked with the reason and how to fix it, also said in a toast.
+  await page.route('**/api/history', (r) => r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ enabled: false, reason: 'EACCES: permission denied', dir: '/smoke/history', maxRuns: 100, runs: [], prune: [] }) }));
+  await page.click('#btn-orgs');
+  await page.waitForFunction(() => document.getElementById('btn-insert').disabled, null, { timeout: 3000 }).catch(() => {});
+  const off = await page.evaluate(() => ({ disabled: document.getElementById('btn-insert').disabled, title: document.getElementById('btn-insert').title }));
+  check(off.disabled && /Không ghi được Lịch sử vào \/smoke\/history: EACCES.*SFDG_DATA_DIR/.test(off.title), `20a: Insert with history off ${JSON.stringify(off)}`);
+  check(await toastIs(page, /nên không insert được/), '20a: no toast saying history is off');
+  await page.context().close();
+}
+
 (async () => {
   // A Playwright error outside a flow's promise (e.g. in an event handler) fails the run.
   process.on('uncaughtException', (e) => { console.error('SMOKE FAILED\n' + e); process.exit(1); });
@@ -2113,7 +2248,7 @@ async function flowCanvas() {
     check(orgs.status === 503 && /smoke:/.test((await orgs.json()).error), 'the smoke server is not using the sf CLI stub');
     // Independent flows, one context each, in parallel. A flow that throws (timed-out wait) is
     // reported and the others still finish.
-    let flows = { flowEditing, flowPicker, flowFiles, flowDark, flowLayoutWide, flowLayoutNarrow, flowEach, flowCanvas, flowProductivity, flowLibrary, flowMinimap, flowVarsLoops };
+    let flows = { flowEditing, flowPicker, flowFiles, flowDark, flowLayoutWide, flowLayoutNarrow, flowEach, flowCanvas, flowProductivity, flowLibrary, flowMinimap, flowVarsLoops, flowHistory };
     // SMOKE_ONLY=flowCanvas,flowEach runs only those flows (while working on one area).
     const only = process.env.SMOKE_ONLY?.split(',').filter(Boolean);
     if (only?.length) flows = Object.fromEntries(Object.entries(flows).filter(([n]) => only.includes(n)));
@@ -2132,6 +2267,7 @@ async function flowCanvas() {
     server?.closeAllConnections();
     server?.close();
     await browser?.close();
+    if (historyDir) fs.rmSync(historyDir, { recursive: true, force: true });
   }
   const ms = Date.now() - t0;
   const budget = smokeBudgetMs();
