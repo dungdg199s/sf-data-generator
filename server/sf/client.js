@@ -7,6 +7,11 @@
 
 import { Connection } from 'jsforce';
 
+/** Bulk API 2.0 operations the app may run (design 0011): never hardDelete, update or upsert. */
+export const BULK_OPERATIONS = Object.freeze(['insert', 'delete']);
+/** sObject Collections limit for one create / destroy call. */
+const MAX_COLLECTION = 200;
+
 export function createSfClient({ cli, createConnection = (options) => new Connection(options) }) {
   const connections = new Map(); // target -> Promise<Connection>
 
@@ -70,6 +75,66 @@ export function createSfClient({ cli, createConnection = (options) => new Connec
       Promise.resolve(conn.query(soql, { autoFetch: true, maxFetch })),
       timeoutMs,
     )),
+    /**
+     * Delete records (design 0011, only server/sf/delete.js calls it): sObject Collections DELETE,
+     * allOrNone false (Salesforce's default: jsforce only adds the parameter for `true`), at most
+     * 200 Ids. Records go to the Recycle Bin. → one SaveResult per Id, in order.
+     */
+    destroy: (target, sobject, ids) => {
+      if (!Array.isArray(ids) || ids.length > MAX_COLLECTION) throw new Error(`destroy: at most ${MAX_COLLECTION} Ids per call.`);
+      return call(target, (conn) => conn.sobject(sobject).destroy(ids, { allOrNone: false }));
+    },
+    /** Org limits (`/limits`, read-only): { DailyApiRequests: { Max, Remaining }, DailyBulkApiBatches, … }. */
+    limits: (target) => call(target, (conn) => conn.limits()),
+    /**
+     * A Bulk API 2.0 ingest job (design 0011). `operation` must be 'insert' or 'delete': anything
+     * else (hardDelete, update, upsert…) throws here, before any request. `{ jobId }` instead
+     * attaches to an existing job for reading only (check / results). Every method goes through
+     * `call` (502 on Salesforce errors, token refresh).
+     * → { id, open(), upload(csv), close(), check() → { state, numberRecordsProcessed,
+     *     numberRecordsFailed, errorMessage }, abort(), successfulResults() → CSV text,
+     *     failedResults() → CSV text }
+     * Results are returned as raw CSV: jsforce's own parser splits cells on `;`, `|`, tab… too,
+     * which would break values containing them; server/sf/bulk-csv.js parses them.
+     */
+    bulkJob: (target, { object, operation, jobId } = {}) => {
+      const existing = typeof jobId === 'string' && jobId;
+      if (!existing && !BULK_OPERATIONS.includes(operation)) {
+        throw new Error(`bulkJob: operation "${operation}" is not allowed (only ${BULK_OPERATIONS.join(', ')}).`);
+      }
+      if (!existing && !(typeof object === 'string' && /^[A-Za-z][A-Za-z0-9_]*$/.test(object))) throw new Error('bulkJob: invalid sObject name.');
+      let job = null;
+      const withJob = (fn) => call(target, (conn) => {
+        job ??= existing
+          ? conn.bulk2.job('ingest', { id: jobId })
+          : conn.bulk2.createJob({ object, operation, lineEnding: 'LF', columnDelimiter: 'COMMA', contentType: 'CSV' });
+        return fn(job);
+      });
+      const writable = (fn) => (...args) => {
+        if (existing) throw new Error('bulkJob: a job attached by id is read-only.');
+        return fn(...args);
+      };
+      return {
+        get id() {
+          return existing || job?.id || null;
+        },
+        open: writable(() => withJob((j) => j.open())),
+        upload: writable((csv) => withJob((j) => j.uploadData(String(csv)))),
+        close: writable(() => withJob((j) => j.close())),
+        abort: () => withJob((j) => j.abort()),
+        check: () => withJob(async (j) => {
+          const info = await j.check();
+          return {
+            state: info.state,
+            numberRecordsProcessed: Number(info.numberRecordsProcessed ?? 0),
+            numberRecordsFailed: Number(info.numberRecordsFailed ?? 0),
+            errorMessage: info.errorMessage ?? null,
+          };
+        }),
+        successfulResults: () => withJob(async (j) => String((await j.getSuccessfulResults(true)) ?? '')),
+        failedResults: () => withJob(async (j) => String((await j.getFailedResults(true)) ?? '')),
+      };
+    },
   };
 }
 

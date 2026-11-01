@@ -29,6 +29,15 @@ test('missing sf binary gives an actionable message', async () => {
   await assert.rejects(createSfCli({ run }).listOrgs(), /Chưa cài Salesforce CLI/);
 });
 
+test('getConnection returns the org Id (`id` of sf org display) and never more than the connection keys (0011)', async () => {
+  const run = async (_cmd, args) => ({
+    stdout: JSON.stringify({ status: 0, result: { id: '00D000000000001AAA', accessToken: 'tok', instanceUrl: 'https://acme.my.salesforce.com/', apiVersion: '62.0', username: 'me@x.com', alias: 'dev', clientId: 'PlatformCLI' } }),
+    args,
+  });
+  const conn = await createSfCli({ run }).getConnection('dev');
+  assert.deepEqual(conn, { accessToken: 'tok', instanceUrl: 'https://acme.my.salesforce.com', apiVersion: '62.0', username: 'me@x.com', orgId: '00D000000000001AAA' });
+});
+
 test('toSObject resolves refs, drops nulls, splits geolocation', () => {
   const ids = new Map([['acc#1', '001000000000001AAA']]);
   const out = toSObject({ sobject: 'Contact', fields: { AccountId: { $ref: 'acc#1' }, Email: null, Loc__c: { latitude: 1, longitude: 2 } } }, ids);

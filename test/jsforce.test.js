@@ -109,3 +109,108 @@ test('real jsforce: windowed insert maps SaveResults back to refs across windows
     server.close();
   }
 });
+
+// ---------- design 0011: Bulk API 2.0, destroy, limits (fake Salesforce on localhost) ----------
+
+const { startFakeSalesforce, fakeCli } = await import('./fake-salesforce.js');
+
+test('real jsforce: a Bulk 2.0 insert job runs open → upload → close → check → results, in order, with the CSV as sent', async () => {
+  const fake = await startFakeSalesforce();
+  try {
+    const client = createSfClient({ cli: fakeCli(fake) });
+    const job = client.bulkJob('dev', { object: 'Contact', operation: 'insert' });
+    const info = await job.open();
+    assert.equal(info.state, 'Open');
+    assert.match(job.id, /^7504x/);
+    const csv = 'LastName,Description\nA,"x, ""y"""\nB,\n';
+    await job.upload(csv);
+    await job.close();
+    assert.equal((await job.check()).state, 'InProgress');
+    const done = await job.check();
+    assert.deepEqual([done.state, done.numberRecordsProcessed, done.numberRecordsFailed], ['JobComplete', 2, 0]);
+    const ok = await job.successfulResults();
+    assert.match(ok, /^"?sf__Id"?,"?sf__Created"?,LastName,Description\n/);
+    assert.equal(ok.trim().split('\n').length, 3);
+    assert.equal(await job.failedResults(), 'sf__Id,sf__Error,LastName,Description\n');
+    const seq = fake.requests.map((r) => `${r.method} ${r.path.replace(job.id, ':id')}`);
+    assert.deepEqual(seq, [
+      'POST /jobs/ingest', 'PUT /jobs/ingest/:id/batches', 'PATCH /jobs/ingest/:id', 'GET /jobs/ingest/:id', 'GET /jobs/ingest/:id',
+      'GET /jobs/ingest/:id/successfulResults', 'GET /jobs/ingest/:id/failedResults',
+    ]);
+    assert.deepEqual(fake.requests[0].body, { object: 'Contact', operation: 'insert', lineEnding: 'LF', columnDelimiter: 'COMMA', contentType: 'CSV' });
+    assert.equal(fake.requests[1].body, csv, 'the CSV reaches Salesforce byte for byte');
+    assert.deepEqual(fake.requests[2].body, { state: 'UploadComplete' });
+    assert.deepEqual([...fake.records.values()].map((r) => r.fields), [{ LastName: 'A', Description: 'x, "y"' }, { LastName: 'B', Description: '' }]);
+  } finally {
+    await fake.close();
+  }
+});
+
+test('real jsforce: bulkJob refuses hardDelete / update / upsert / anything else before any request', async () => {
+  const fake = await startFakeSalesforce();
+  try {
+    const client = createSfClient({ cli: fakeCli(fake) });
+    for (const operation of ['hardDelete', 'update', 'upsert', 'query', undefined, 'HARDDELETE']) {
+      assert.throws(() => client.bulkJob('dev', { object: 'Contact', operation }), /not allowed/);
+    }
+    assert.throws(() => client.bulkJob('dev', { object: '../x', operation: 'insert' }), /invalid sObject/);
+    // A job attached by id is read-only: no open / upload / close.
+    const attached = client.bulkJob('dev', { jobId: '7504x0000000001AAA' });
+    assert.throws(() => attached.open(), /read-only/);
+    assert.throws(() => attached.upload('Id\n1\n'), /read-only/);
+    assert.throws(() => attached.close(), /read-only/);
+    assert.equal(fake.requests.length, 0);
+  } finally {
+    await fake.close();
+  }
+});
+
+test('real jsforce: destroy sends DELETE /composite/sobjects with exactly the Ids (no allOrNone=true); more than 200 Ids throw', async () => {
+  const fake = await startFakeSalesforce();
+  try {
+    const client = createSfClient({ cli: fakeCli(fake) });
+    const created = await client.create('dev', 'Account', [{ Name: 'A' }, { Name: 'B' }]);
+    const ids = created.map((r) => r.id);
+    const res = await client.destroy('dev', 'Account', [ids[1], ids[0], '001000000000999AAA']);
+    assert.deepEqual(res.map((r) => r.success), [true, true, false]);
+    assert.equal(res[2].errors[0].statusCode, 'ENTITY_IS_DELETED');
+    const del = fake.requests.find((r) => r.method === 'DELETE');
+    assert.equal(del.path, '/composite/sobjects');
+    assert.equal(del.query.ids, `${ids[1]},${ids[0]},001000000000999AAA`);
+    assert.notEqual(del.query.allOrNone, 'true');
+    assert.deepEqual(fake.alive(), []);
+    assert.throws(() => client.destroy('dev', 'Account', Array.from({ length: 201 }, (_, i) => `001${i}`)), /at most 200/);
+    assert.equal(fake.writes().length, 2);
+  } finally {
+    await fake.close();
+  }
+});
+
+test('real jsforce: 401 INVALID_SESSION_ID on POST /jobs/ingest refreshes the token via the CLI and retries', async () => {
+  const fake = await startFakeSalesforce({ expireOnce: new Set(['POST /jobs/ingest']) });
+  try {
+    const client = createSfClient({ cli: fakeCli(fake) });
+    const job = client.bulkJob('dev', { object: 'Contact', operation: 'delete' });
+    await job.open();
+    assert.deepEqual(fake.requests.map((r) => [r.method, r.path, r.auth]), [
+      ['POST', '/jobs/ingest', 'Bearer SECRET-TOKEN-123'],
+      ['POST', '/jobs/ingest', 'Bearer SECRET-TOKEN-123-fresh'],
+    ]);
+    assert.equal(fake.jobs.size, 1);
+  } finally {
+    await fake.close();
+  }
+});
+
+test('real jsforce: limits reads /limits; Salesforce errors of a job are 502 with the code', async () => {
+  const fake = await startFakeSalesforce({ openJobError: () => ({ errorCode: 'INVALIDENTITY', message: 'Entity is not supported by the Bulk API' }) });
+  try {
+    const client = createSfClient({ cli: fakeCli(fake) });
+    const l = await client.limits('dev');
+    assert.deepEqual(l.DailyApiRequests, { Max: 15000, Remaining: 14200 });
+    const job = client.bulkJob('dev', { object: 'Contact__x', operation: 'insert' });
+    await assert.rejects(job.open(), (e) => e.status === 502 && e.cause?.errorCode === 'INVALIDENTITY' && /INVALIDENTITY/.test(e.message));
+  } finally {
+    await fake.close();
+  }
+});
