@@ -98,6 +98,7 @@
     <div class="results-head">
       <button id="btn-results-toggle" class="link" aria-expanded="false" aria-controls="results-body">Kết quả <span class="ico caret" data-ico="chevron-up" aria-hidden="true"></span></button>
       <div id="results-summary" class="summary" aria-live="polite">Chưa chạy.</div>
+      <button id="btn-history" class="hist-btn" title="Lịch sử insert: tải Id hoặc xóa dữ liệu đã insert" aria-label="Lịch sử insert" aria-haspopup="dialog"><span class="ico" data-ico="history" aria-hidden="true"></span><span class="hist-lbl">Lịch sử</span></button>
       <button id="btn-dl-json" disabled>Tải JSON</button>
       <button id="btn-dl-csv" disabled>Tải CSV (tab hiện tại)</button>
       <button id="btn-dl-menu" class="dl-menu" disabled aria-haspopup="menu" aria-expanded="false" title="Tải JSON hoặc CSV của tab hiện tại"><span class="ico" data-ico="download" aria-hidden="true"></span>Tải</button>
@@ -108,6 +109,7 @@
   </section>
 
   <dialog id="modal"></dialog>
+  <dialog id="history-dialog" class="history" aria-labelledby="history-title"></dialog>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <div id="sel-live" class="sr-only" aria-live="polite"></div>
   <div id="save-status" class="sr-only" role="status"></div>

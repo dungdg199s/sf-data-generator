@@ -20,13 +20,14 @@ import { api } from './api.js';
 import { openPopup, closePopup, popupAnchor } from './popup.js';
 import { reveal } from './ops.js';
 import { clampResults, resultsKeyStep, shouldCollapse, parseRatio, toRatio, resultsAria, RESULTS_MIN } from './sizing.js';
-import { downloadIds, historyStatus } from './history.js';
+import { downloadIds, historyStatus, openHistory } from './history.js';
 
 const QUERY_TAB = 'q:'; // activeTab of a Query tab: `q:<stepId>`
 const ERRORS_TAB = '__errors';
+const DELETE_ERRORS_TAB = '__delete-errors'; // design 0011 §6: "Lỗi xóa (n)"
 let activeTab = null;
 let unwatchTabs = null; // watchOverflow of the current tab row
-let panel, body, summary, progressBar, stopBtn, dlJson, dlCsv, dlMenu, toggle;
+let panel, body, summary, progressBar, stopBtn, dlJson, dlCsv, dlMenu, toggle, histBtn;
 let stopTitle = ''; // the tooltip of Dừng in index.html (Dừng ngay has its own)
 let onRefresh = null;
 let onGoTo = null;
@@ -52,6 +53,8 @@ export function initResults({ onRefresh: refresh, onGoTo: goTo } = {}) {
   dlJson = document.getElementById('btn-dl-json');
   dlCsv = document.getElementById('btn-dl-csv');
   dlMenu = document.getElementById('btn-dl-menu');
+  histBtn = document.getElementById('btn-history');
+  histBtn.onclick = () => openHistory();
   toggle = document.getElementById('btn-results-toggle');
   toggle.onclick = () => setOpen(panel.classList.contains('collapsed'));
   dlMenu.onclick = () => (popupAnchor() === dlMenu ? closePopup() : openDownloadMenu());
@@ -258,7 +261,7 @@ export function showProgress({ parts, value, max, onStop, stopping = false, stop
     progressBar.max = max;
     progressBar.value = Math.min(value ?? 0, max);
   } else progressBar.removeAttribute('value');
-  dlJson.hidden = dlCsv.hidden = dlMenu.hidden = true;
+  dlJson.hidden = dlCsv.hidden = dlMenu.hidden = histBtn.hidden = true;
   if (popupAnchor() === dlMenu) closePopup();
   stopBtn.hidden = false;
   stopBtn.disabled = stopping || !onStop;
@@ -276,7 +279,7 @@ export function endProgress() {
   stopBtn.onclick = null;
   stopBtn.textContent = 'Dừng';
   stopBtn.title = stopTitle;
-  dlJson.hidden = dlCsv.hidden = dlMenu.hidden = false;
+  dlJson.hidden = dlCsv.hidden = dlMenu.hidden = histBtn.hidden = false;
   updateButtons();
   if (hadFocus) document.getElementById('btn-preview').focus();
 }
@@ -291,7 +294,20 @@ export function showRunning(text, ...extra) {
 export function insertLinks(ins) {
   const hid = ins?.historyId && historyStatus()?.enabled !== false ? ins.historyId : null;
   if (!hid) return [];
-  return [' · ', h('button', { class: 'link ids-link', title: 'Tải mọi Id đã insert của lần chạy này (CSV)', onclick: () => downloadIds(hid) }, ico('download'), 'Id')];
+  return [
+    ' · ', h('button', { class: 'link ids-link', title: 'Tải mọi Id đã insert của lần chạy này (CSV)', onclick: () => downloadIds(hid) }, ico('download'), 'Id'),
+    ' ', h('button', { class: 'link hist-link', title: 'Mở Lịch sử insert ở chi tiết lần này (tải Id, xóa dữ liệu)', onclick: () => openHistory({ hid }) }, 'Lịch sử'),
+  ];
+}
+
+/** Summary of the last delete (design 0011 §6): counts, then "Lịch sử". */
+function deleteSummary(d) {
+  if (!d) return ''; // replaceChildren would print "null"
+  const r = d.result;
+  return h('span', { class: 'delete-summary' }, ' · xóa khỏi ', d.org, ': ', h('span', { class: 'ok' }, `đã xóa ${fmt(r.deleted)}`),
+    r.gone ? ` · đã không còn ${fmt(r.gone)}` : '', r.failed ? h('span', { class: 'err' }, ` · lỗi ${fmt(r.failed)}`) : '',
+    r.remaining ? ` · còn ${fmt(r.remaining)}` : '',
+    ' · ', h('button', { class: 'link hist-link', title: 'Mở Lịch sử insert ở chi tiết lần này', onclick: () => openHistory({ hid: d.hid }) }, 'Lịch sử'));
 }
 
 /** Chips `<sObject> n` (or `n/total` when totals are given). */
@@ -354,12 +370,21 @@ function insertSummary(ins) {
 
 function render() {
   const r = state.result;
+  const del = state.deleteResult;
   updateButtons();
   if (!r) {
-    summary.textContent = 'Chưa chạy.';
     unwatchTabs?.();
     unwatchTabs = null;
-    body.replaceChildren();
+    if (!del) {
+      summary.textContent = 'Chưa chạy.';
+      body.replaceChildren();
+      return;
+    }
+    // A delete from history without a run in this session: its summary and its error groups only.
+    setOpen(true);
+    summary.replaceChildren(deleteSummary(del));
+    activeTab = DELETE_ERRORS_TAB;
+    body.replaceChildren(...(del.result.failed ? [h('div', { class: 'tabs' }, deleteTab(del)), errorGroupsView(del.result, { kind: 'delete' })] : []));
     return;
   }
   setOpen(true);
@@ -373,12 +398,14 @@ function render() {
     r.cancelled && !r.insert ? ' · đã dừng' : '',
     ...querySummary(r.queries),
     insertSummary(r.insert),
+    deleteSummary(del),
   );
 
   const sobjects = Object.keys(r.stats.bySobject);
   const queryTabs = (r.queries ?? []).map((q) => `${QUERY_TAB}${q.nodeId}`);
   const errorsTotal = r.insert?.errorsTotal ?? r.insert?.errors?.length ?? 0;
-  if (!sobjects.includes(activeTab) && !queryTabs.includes(activeTab) && !(activeTab === ERRORS_TAB && errorsTotal)) activeTab = sobjects[0] ?? queryTabs[0] ?? null;
+  const deleteFailed = del?.result?.failed ?? 0;
+  if (!sobjects.includes(activeTab) && !queryTabs.includes(activeTab) && !(activeTab === ERRORS_TAB && errorsTotal) && !(activeTab === DELETE_ERRORS_TAB && deleteFailed)) activeTab = sobjects[0] ?? queryTabs[0] ?? null;
   const tabs = h(
     'div',
     { class: 'tabs' },
@@ -388,10 +415,12 @@ function render() {
       return h('button', { class: `tab-query${key === activeTab ? ' active' : ''}`, 'data-query': q.nodeId, 'data-type': 'query', title: 'Bản ghi đọc từ org (chỉ để xem, không insert)', onclick: () => { activeTab = key; render(); } }, `${q.alias} · ${q.sobject} (${q.count})`); // the Query icon is drawn by ::before
     }),
     errorsTotal ? h('button', { class: `tab-issues${activeTab === ERRORS_TAB ? ' active' : ''}`, onclick: () => { activeTab = ERRORS_TAB; render(); } }, `Lỗi insert (${fmt(errorsTotal)})`) : null,
+    deleteFailed ? deleteTab(del) : null,
   );
   const q = activeQuery();
   let content;
   if (activeTab === ERRORS_TAB) content = errorGroupsView(r.insert);
+  else if (activeTab === DELETE_ERRORS_TAB) content = errorGroupsView(del.result, { kind: 'delete' });
   else if (q) {
     const when = q.fetchedAt ? new Date(q.fetchedAt).toLocaleTimeString('vi-VN') : '';
     content = h('div', {},
@@ -444,8 +473,23 @@ function dataTable(records, ids, total) {
 
 const DETAIL_ROWS = 200; // rows of "Chi tiết từng bản ghi" drawn (the server sends at most 1 000)
 
-/** Insert failures grouped by (sObject, step, field, message pattern); a row selects the step / field. */
-function errorGroupsView(ins) {
+/** Tab "Lỗi xóa (n)" of the last delete (same look as "Lỗi insert"). */
+function deleteTab(del) {
+  return h('button', { class: `tab-issues tab-delete-errors${activeTab === DELETE_ERRORS_TAB ? ' active' : ''}`, onclick: () => { activeTab = DELETE_ERRORS_TAB; render(); } }, `Lỗi xóa (${fmt(del.result.failed)})`);
+}
+
+/** After a delete with failures: its tab opens. */
+export function showDeleteErrors() {
+  if (!state.deleteResult?.result?.failed) return;
+  activeTab = DELETE_ERRORS_TAB;
+  render();
+}
+
+/**
+ * Insert (or delete, kind 'delete') failures grouped by (sObject, step, field, message pattern); a
+ * row selects the step / field. Delete groups give example Ids instead of refs.
+ */
+function errorGroupsView(ins, { kind = 'insert' } = {}) {
   const groups = ins?.errorGroups ?? [];
   const other = ins?.errorGroupsOther;
   const errors = ins?.errors ?? [];
@@ -458,7 +502,7 @@ function errorGroupsView(ins) {
   const total = ins?.errorsTotal ?? errors.length;
   return h('div', {},
     h('table', { class: 'data error-groups' },
-      h('thead', {}, h('tr', {}, h('th', {}, 'sObject'), h('th', {}, 'Bước'), h('th', {}, 'Lỗi'), h('th', {}, 'Số bản ghi'), h('th', {}, 'Ví dụ'))),
+      h('thead', {}, h('tr', {}, h('th', {}, 'sObject'), h('th', {}, 'Bước'), h('th', {}, 'Lỗi'), h('th', {}, 'Số bản ghi'), h('th', {}, kind === 'delete' ? 'Ví dụ (Id)' : 'Ví dụ'))),
       h('tbody', {},
         groups.map((g) => h('tr', {
           class: g.nodeId ? 'clickable' : '',
@@ -478,7 +522,7 @@ function errorGroupsView(ins) {
         h('td', {}, stepName(g.nodeId)),
         h('td', { class: 'err wrap' }, g.message),
         h('td', { class: 'num' }, fmt(g.count)),
-        h('td', {}, g.refs.join(', ')))),
+        h('td', {}, (g.refs ?? g.ids ?? []).join(', ')))),
         other ? h('tr', { class: 'other-groups' }, h('td', { colspan: '3', class: 'wrap' }, `… và ${fmt(other.groups)} nhóm lỗi khác`), h('td', { class: 'num' }, fmt(other.count)), h('td', {})) : null)),
     shown.length
       ? h('details', { class: 'error-details' },

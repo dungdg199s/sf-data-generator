@@ -365,6 +365,7 @@
   --ico-check: url("data:image/svg+xml,%3Csvg%20xmlns%3D'http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg'%20viewBox%3D'0%200%2024%2024'%20fill%3D'none'%20stroke%3D'black'%20stroke-width%3D'2'%20stroke-linecap%3D'round'%20stroke-linejoin%3D'round'%3E%3Cpath%20d%3D'M5%2012.5l4.5%204.5L19%207'%2F%3E%3C%2Fsvg%3E");
   --ico-minimap: url("data:image/svg+xml,%3Csvg%20xmlns%3D'http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg'%20viewBox%3D'0%200%2024%2024'%20fill%3D'none'%20stroke%3D'black'%20stroke-width%3D'2'%20stroke-linecap%3D'round'%20stroke-linejoin%3D'round'%3E%3Crect%20x%3D'3'%20y%3D'5'%20width%3D'18'%20height%3D'14'%20rx%3D'2'%2F%3E%3Crect%20x%3D'11'%20y%3D'11'%20width%3D'6'%20height%3D'5'%20rx%3D'1'%2F%3E%3C%2Fsvg%3E");
   --ico-folder: url("data:image/svg+xml,%3Csvg%20xmlns%3D'http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg'%20viewBox%3D'0%200%2024%2024'%20fill%3D'none'%20stroke%3D'black'%20stroke-width%3D'2'%20stroke-linecap%3D'round'%20stroke-linejoin%3D'round'%3E%3Cpath%20d%3D'M3%207a2%202%200%200%201%202-2h4l2%202h8a2%202%200%200%201%202%202v8a2%202%200%200%201-2%202H5a2%202%200%200%201-2-2z'%2F%3E%3C%2Fsvg%3E");
+  --ico-history: url("data:image/svg+xml,%3Csvg%20xmlns%3D'http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg'%20viewBox%3D'0%200%2024%2024'%20fill%3D'none'%20stroke%3D'black'%20stroke-width%3D'2'%20stroke-linecap%3D'round'%20stroke-linejoin%3D'round'%3E%3Cpath%20d%3D'M3%2012a9%209%200%201%200%202.64-6.36L3%208'%2F%3E%3Cpath%20d%3D'M3%203v5h5'%2F%3E%3Cpath%20d%3D'M12%207v5l3%202'%2F%3E%3C%2Fsvg%3E");
 }
 /* ===== end tokens ===== */
 /* Components (docs/ui-design-system.md §6). Only semantic tokens below this line: no colour literals
@@ -437,6 +438,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .ico[data-ico="check"] { --ico: var(--ico-check); }
 .ico[data-ico="minimap"] { --ico: var(--ico-minimap); }
 .ico[data-ico="folder"] { --ico: var(--ico-folder); }
+.ico[data-ico="history"] { --ico: var(--ico-history); }
 
 /* ---------- buttons (§6.2) ---------- */
 button {
@@ -1330,6 +1332,70 @@ body.select-mode .process::after { content: ''; display: block; height: calc(56p
 .bulk-steps { margin: var(--space-1) 0 var(--space-2); padding-left: var(--space-6); font-size: var(--text-sm); }
 .bulk-steps.off { color: var(--color-text-muted); }
 .bulk-steps.off li { text-decoration: line-through; text-decoration-color: var(--color-text-muted); }
+
+/* ---------- insert history and delete (design 0011 §4–§6) ---------- */
+.warning-text { color: var(--color-warning-text); }
+button.small { min-height: var(--control-h-sm); padding: 0 var(--space-2); font-size: var(--text-sm); }
+button.icon.small { min-width: var(--control-h-sm); padding: 0 var(--space-1); }
+/* Results header: a ghost button left of "Tải JSON"; ≤ 720 px a 32 px icon button. */
+.results-head .hist-btn { background: transparent; border-color: transparent; }
+.results-head .hist-btn:hover:not(:disabled) { background: var(--color-surface-hover); }
+.results-head .hist-btn[hidden] { display: none; }
+dialog.history {
+  width: min(960px, calc(100vw - 2 * var(--space-4))); max-width: none; max-height: 80dvh;
+  padding: var(--space-4) var(--space-6) var(--space-6); overflow: hidden; flex-direction: column;
+}
+dialog.history[open] { display: flex; }
+.hist-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
+.hist-head h2 { margin: 0; }
+.hist-close { background: transparent; border-color: transparent; }
+.hist-where { font-size: var(--text-xs); color: var(--color-text-muted); margin: var(--space-1) 0 var(--space-2); overflow-wrap: anywhere; }
+.hist-note { font-size: var(--text-sm); margin: var(--space-1) 0; }
+.hist-filter { font-size: var(--text-sm); }
+.hist-table { flex: 1; min-height: 0; overflow: auto; border-top: 1px solid var(--color-border); margin-top: var(--space-2); }
+.hist-cols, .hist-main {
+  display: grid; grid-template-columns: 7.5em minmax(5em, 0.8fr) minmax(7em, 1.2fr) minmax(7em, 1fr) minmax(11em, 1.6fr);
+  gap: var(--space-2); align-items: center; text-align: left;
+}
+.hist-cols {
+  position: sticky; top: 0; z-index: 1; background: var(--color-surface-raised); padding: var(--space-1) var(--space-2);
+  font-size: var(--text-xs); font-weight: var(--weight-semibold); color: var(--color-text-muted); border-bottom: 1px solid var(--color-border);
+  grid-template-columns: 7.5em minmax(5em, 0.8fr) minmax(7em, 1.2fr) minmax(7em, 1fr) minmax(11em, 1.6fr) 15em;
+}
+.hist-list { list-style: none; margin: 0; padding: 0; }
+.hist-run { border-bottom: 1px solid var(--color-border); }
+.hist-row { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-1) var(--space-2) var(--space-1) 0; }
+.hist-main {
+  flex: 1; min-width: 0; background: transparent; border-color: transparent; font-weight: var(--weight-regular);
+  font-size: var(--text-sm); font-variant-numeric: tabular-nums; padding: var(--space-1) var(--space-2); justify-content: stretch;
+}
+.hist-main > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hist-main .ico { width: var(--icon-sm); height: var(--icon-sm); vertical-align: -2px; margin-right: var(--space-1); }
+.hist-run.open .hist-main { background: var(--color-surface-sunken); }
+.hist-static { display: flex; }
+.hist-actions { flex: none; display: flex; justify-content: flex-end; gap: var(--space-1); width: 15em; }
+.hist-actions .ico { width: var(--icon-sm); height: var(--icon-sm); }
+.hist-detail { padding: var(--space-1) var(--space-3) var(--space-3) var(--space-6); font-size: var(--text-sm); }
+.hist-detail p, .hist-detail ul { margin: var(--space-1) 0; }
+.hist-detail ul { padding-left: var(--space-4); }
+.hist-detail-line { margin: 0 0 var(--space-2) var(--space-2); }
+.type-org { display: block; margin-top: var(--space-2); width: min(100%, 320px); }
+@media (max-width: 720px) {
+  /* Full screen; each run is two lines, then its buttons. */
+  dialog.history { width: 100vw; height: 100dvh; max-height: 100dvh; border-radius: 0; padding: var(--space-3); }
+  .results-head .hist-btn { width: var(--control-h-md); min-width: var(--control-h-md); padding: 0; }
+  .results-head .hist-btn .hist-lbl { display: none; }
+  .hist-cols { display: none; }
+  .hist-row { flex-wrap: wrap; padding-right: var(--space-1); }
+  .hist-main { flex-basis: 100%; grid-template-columns: auto auto 1fr; grid-template-areas: "when org status" "wf wf count"; row-gap: 0; }
+  .hist-main .hist-when { grid-area: when; }
+  .hist-main .hist-org { grid-area: org; }
+  .hist-main .hist-status { grid-area: status; text-align: right; }
+  .hist-main .hist-wf { grid-area: wf; }
+  .hist-main .hist-count { grid-area: count; text-align: right; }
+  .hist-actions { width: auto; flex: 1; }
+  .hist-detail { padding-left: var(--space-3); }
+}
 
 /* ---------- workflow library dialog (design 0012 A) ---------- */
 .lib-list { list-style: none; margin: var(--space-2) 0; padding: 0; display: grid; gap: var(--space-1); max-height: 60vh; overflow: auto; }

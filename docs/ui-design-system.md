@@ -212,6 +212,7 @@ trên lưới 24 (cùng nét 2 px, đầu tròn):
 | `pin` | đinh ghim | `📌` | "giữ seed" |
 | `minimap` | khung có ô nhỏ bên trong | — | Bật/tắt minimap Sơ đồ |
 | `folder` | thư mục | `⇪` | "Mở file JSON…" (menu thư viện; thêm khi làm 0014, vì menu của 0012 có ký tự này) |
+| `history` | đồng hồ có mũi tên vòng ngược (`M3 12a9 9 0 1 0 2.64-6.36L3 8`, `M3 3v5h5`, kim `M12 7v5l3 2`) | — | Nút `Lịch sử` ở đầu panel kết quả (≤ 720 px chỉ còn icon, `aria-label="Lịch sử insert"`), mục `Lịch sử insert` của menu ⋯ ([0011](design/0011-thao-tac-du-lieu-org.md)) |
 | (có sẵn) `off`, `info`, `error`, `warning` | | `⊘ ◉`, `ⓘ`, `✕` ô Id lỗi, `▲` | Tắt/bật bước (cả hai trạng thái), hộp thông tin, ô Id insert lỗi trong bảng, `Chưa lưu` / `Tab khác đã sửa` và tag `quá giới hạn` |
 
 **Cỡ.** `--icon-xs` 12 px cạnh chữ 12 px (chip, badge, nhãn làn, tag, ô bảng), `--icon-sm` 14 px cạnh chữ 13 px (link ở

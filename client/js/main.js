@@ -15,7 +15,7 @@ import { initViews, focusSelected, openAddMenuAtDefault, paletteDragStart, palet
 import { openStepMenu } from './menus.js';
 import * as ops from './ops.js';
 import { initInspector, openField, openSheet, closeSheet, clearDescribeCache } from './inspector.js';
-import { initResults, showRunning, showProgress, endProgress, sobjectChips, insertLinks } from './results.js';
+import { initResults, showRunning, showProgress, endProgress, sobjectChips, insertLinks, showDeleteErrors } from './results.js';
 import { initIssues, renderIssues, expandIssues, goToNextIssue } from './issues.js';
 import { openPopup, closePopup, popupAnchor } from './popup.js';
 import { SAMPLES } from './samples.js';
@@ -25,7 +25,7 @@ import { initSelectBar, exitSelectMode } from './select-bar.js';
 import {
   initLibrary, openAsNew, importLibraryFile, openLibraryMenu, setLibraryLocked, libraryReady,
 } from './library-ui.js';
-import { historyStatus, refreshHistory, historyOffText } from './history.js';
+import { historyStatus, refreshHistory, historyOffText, initHistory, openHistory, confirmDelete, historyChanged } from './history.js';
 
 const $ = (id) => document.getElementById(id);
 const ORG_KEY = 'sfdg.org';
@@ -50,6 +50,7 @@ async function boot() {
   initSelection();
   initSelectBar();
   initResults({ onRefresh: () => run(false, { refresh: true }), onGoTo: goToIssue });
+  initHistory({ startDelete: deleteRun, isRunning: () => Boolean(running) });
   // --topbar-h (design 0014 §3): the sheet's tall snap stops under the top bar, which wraps to two rows.
   new ResizeObserver(([entry]) => document.documentElement.style.setProperty('--topbar-h', `${Math.round(entry.target.offsetHeight)}px`)).observe(document.querySelector('.topbar'));
   watchOverflow(document.querySelector('.palette')); // ≤ 900 px the palette is a row that scrolls sideways (0014 §4)
@@ -231,6 +232,9 @@ function updateSeedChip() {
   chip.title = `Seed cố định: ${v}. Chạm để sửa.`;
 }
 
+/** "Lịch sử insert" in the ⋯ menu (group Chạy): the same dialog as the results panel's button. */
+const HISTORY_ITEM = () => ({ label: 'Lịch sử insert', icon: 'history', onSelect: () => openHistory() });
+
 const THEMES = [['system', 'Theo hệ thống'], ['light', 'Sáng'], ['dark', 'Tối']];
 
 /**
@@ -266,8 +270,9 @@ function openMoreMenu({ fromChip = false } = {}) {
         },
       },
       { label: 'Tải lại danh sách org', onSelect: click('btn-orgs') },
+      HISTORY_ITEM(),
     );
-  }
+  } else items.push({ group: 'Chạy' }, HISTORY_ITEM()); // the menu exists ≤ 900 px (design 0011 §4)
   if (noViewTools()) {
     // The Quy trình | Sơ đồ switch lives in the hidden "Thu gọn / Mở tất cả" row (design 0003).
     items.push({ group: 'Chế độ xem' }, ...VIEWS.map((v) => ({ label: v.label, checked: state.view === v.value, onSelect: () => setView(v.value) })));
@@ -707,6 +712,7 @@ function liveCards(info) {
 /** Shows a finished run and remembers what produced it (downloads regenerate from this snapshot). */
 function acceptResult(result, workflow) {
   state.result = result;
+  state.deleteResult = null; // a new run replaces the last delete's summary and tab
   state.resultRun = {
     workflow,
     seed: result.seed,
@@ -815,7 +821,10 @@ async function insertRun(base, { bulk = 'auto' } = {}) {
     if (ins.inserted) state.lastInserts = [...state.lastInserts, { key: runKey(workflow, result.seed), org }].slice(-20);
     const msg = insertEndMessage(ins, { org, total });
     if (ins.stopped || ins.cancelled) showRunning(msg.text, insertLinks(ins));
-    toast(msg.text, msg.long ? 12000 : 6000);
+    // Design 0011 §3: every ending with records in the org offers to delete them (≥ 10 s).
+    const offer = deleteOffer(ins.historyId, ins.inserted);
+    toast(msg.text, offer ? Math.max(10000, msg.long ? 12000 : 0) : msg.long ? 12000 : 6000, offer);
+    historyChanged();
     const s = ins.stopped;
     if ((s?.reason === 'allFailing' || s?.reason === 'bulkFailing') && s.nodeId && stepById(s.nodeId)) {
       goToIssue({ nodeId: s.nodeId, field: ins.errorGroups?.find((g) => g.nodeId === s.nodeId)?.field });
@@ -828,19 +837,129 @@ async function insertRun(base, { bulk = 'auto' } = {}) {
     } else if (e.lost && r.phase === 'insert') {
       const msg = `Mất kết nối với server khi đang insert. Đã insert ít nhất ${fmt(r.inserted)} bản ghi (theo tiến độ cuối). Kiểm tra org trước khi chạy lại để tránh trùng.${r.historyId ? ' Xem Lịch sử để biết chính xác đã insert bao nhiêu khi server chạy xong.' : ''}`;
       showRunning(msg);
-      toast(msg, 12000);
+      toast(msg, 12000, deleteOffer(r.historyId, r.inserted));
     } else {
       if (e.insert?.inserted) e.message += ` Đã insert ${fmt(e.insert.inserted)} bản ghi trước khi lỗi; ${STILL_THERE}`;
       // 503: history cannot be written (S7): Insert locks with the server's reason.
       if (e.status === 503) refreshHistory().then(updateInsertButton);
       runFailed(e);
+      const offer = deleteOffer(e.insert?.historyId ?? r.historyId, e.insert?.inserted);
+      if (offer) toast(e.message, 12000, offer);
     }
+    if (r.historyId) historyChanged();
   } finally {
     liveCards(null);
     window.removeEventListener('beforeunload', leaveGuard);
     setRunning(null);
     endProgress();
   }
+}
+
+/** The toast button "Xóa dữ liệu này…" of an insert that left records in the org, or null. */
+const deleteOffer = (hid, inserted) => (hid && inserted > 0 ? { label: 'Xóa dữ liệu này…', onClick: () => confirmDelete(hid) } : null);
+
+/**
+ * Deletes the records of history entry `hid` (design 0011 §6), in the results panel like an insert:
+ * progress, Dừng (Dừng ngay while a Bulk job is processed), summary, toast, "Lỗi xóa" tab. Called by
+ * the delete confirmation (history.js): a refusal before the stream starts is thrown back to it.
+ */
+async function deleteRun({ hid, body, org, total, bySobject, onResponse }) {
+  if (running) throw new Error('Đang chạy. Bấm "Dừng" hoặc chờ lần chạy xong rồi mới xóa.');
+  // Children first: the chips follow the delete order (reverse insert order).
+  const order = Object.keys(bySobject ?? {}).reverse();
+  const r = { delete: true, controller: new AbortController(), deleted: 0, gone: 0, failed: 0, total, bySobject: {}, start: Date.now(), bulk: null };
+  r.render = () => {
+    if (r.stopping && r.bulk && r.bulk.state !== 'Open' && r.bulk.jobId) r.waitingBulk = r.bulk; // a stop waits for the Bulk job
+    const stopping = stoppingView(r);
+    const done = r.deleted + r.gone + r.failed;
+    if (stopping) {
+      showProgress({ parts: stopping.parts, value: done, max: total || 1, ...stopping.stop });
+      return;
+    }
+    const pct = total ? Math.floor((done / total) * 100) : 100;
+    let eta = '';
+    if (done >= 3 * BATCH && done < total) {
+      const min = ((total - done) * ((Date.now() - r.start) / done)) / 60000;
+      eta = min < 1 ? ' · còn dưới 1 phút' : ` · còn khoảng ${Math.round(min)} phút`;
+    }
+    const job = r.bulk ? ` · Bulk: ${r.bulk.sobject}` : '';
+    const chips = order.map((so) => {
+      const c = r.bySobject[so] ?? {};
+      return h('span', { class: 'chip' }, `${so} ${fmt((c.deleted ?? 0) + (c.gone ?? 0))}/${fmt(c.total ?? bySobject[so])}`);
+    });
+    showProgress({ parts: [`Đang xóa khỏi ${org}: ${fmt(r.deleted + r.gone)}/${fmt(total)} (${pct} %) · lỗi ${fmt(r.failed)}${job}${eta} `, ...chips], value: done, max: total || 1, onStop: stopRun });
+  };
+  let streaming = false;
+  try {
+    const result = await api.deleteStream(hid, body, {
+      signal: r.controller.signal,
+      onResponse: () => {
+        streaming = true;
+        r.responded = true;
+        onResponse?.();
+        if (window.matchMedia('(max-width: 900px)').matches) closeSheet();
+        setRunning(r);
+        r.render();
+        window.addEventListener('beforeunload', leaveGuard);
+      },
+      onEvent: (ev) => {
+        if (ev.type === 'start') started(r, ev);
+        else if (ev.type === 'progress') {
+          Object.assign(r, { deleted: ev.deleted, gone: ev.gone, failed: ev.failed, bySobject: ev.bySobject ?? {}, bulk: ev.bulk ?? null });
+          r.render();
+        }
+      },
+    });
+    state.deleteResult = { result, org, hid };
+    emit('run', 'result');
+    const msg = deleteEndMessage(result, { org, total });
+    if (result.stopped || result.cancelled || result.failed || msg.extra) showRunning(msg.text);
+    toast(msg.text, msg.long ? 15000 : 8000);
+    if (result.failed && !result.stopped && !result.cancelled) showDeleteErrors();
+  } catch (e) {
+    if (!streaming) throw e; // refused before anything was deleted: the confirmation says it
+    const text = e.lost
+      ? `Mất kết nối với server khi đang xóa. Đã xóa ít nhất ${fmt(r.deleted)} bản ghi (theo tiến độ cuối). Xem Lịch sử để biết chính xác đã xóa bao nhiêu khi server chạy xong.`
+      : `Lỗi khi xóa: ${e.message} Đã xóa ${fmt(r.deleted)} bản ghi trước đó; phần còn lại xóa được bằng "Xóa phần còn lại…" trong Lịch sử.`;
+    showRunning(text);
+    toast(text, 12000);
+  } finally {
+    if (streaming) {
+      window.removeEventListener('beforeunload', leaveGuard);
+      setRunning(null);
+      endProgress();
+      historyChanged();
+    }
+  }
+}
+
+/** The sentence after a delete (design 0011 §6, §7). → { text, long, extra } */
+function deleteEndMessage(res, { org }) {
+  const extra = [];
+  if (res.collected) extra.push(`Đã lấy thêm ${fmt(res.collected)} Id từ job Bulk chưa lấy kết quả.`);
+  for (const sk of res.skipped ?? []) extra.push(sk.reason ?? `Không xóa ${fmt(sk.count)} bản ghi ${sk.sobject} của bước "${sk.nodeId}".`);
+  for (const j of res.pendingBulkJobs ?? []) {
+    extra.push(j.idsLost
+      ? j.message ?? `Job Bulk ${j.jobId} (${j.sobject}): Salesforce không còn giữ kết quả, nên app không xóa được các bản ghi của job này. Xem Setup → Bulk Data Load Jobs.`
+      : `Job Bulk ${j.jobId} (${j.sobject}) chưa trả Id${j.state ? ` (${j.state})` : ''}; bản ghi của job này chưa bị xóa. Bấm "Xóa phần còn lại…" trong Lịch sử khi job xong.`);
+  }
+  // The server's own sentences (rows of the Id file no step owns, …) come first.
+  for (const w of res.warnings ?? []) extra.push(typeof w === 'string' ? w : w.message);
+  if (res.warnings?.length) { /* rejected is said by the server's warning */ } else if (res.rejectedMessage || typeof res.rejected === 'string' || res.rejected?.message) extra.push(res.rejectedMessage ?? res.rejected?.message ?? res.rejected);
+  else if (res.rejected > 0) extra.push(`${fmt(res.rejected)} dòng của file Id không thuộc bước nào của lần insert này nên không bị xóa.`);
+  if (res.bulkAborted) {
+    const b = res.bulkAborted;
+    extra.push(`Đã hủy job Bulk xóa ${b.sobject}: Salesforce đã xử lý ${fmt(b.processed)}/${fmt(b.records)} Id của job${b.idsKnown ? '' : '; xem kết quả của job trong Setup → Bulk Data Load Jobs'}.`);
+  }
+  const s = res.stopped;
+  const removed = res.deleted + res.gone;
+  let text;
+  if (s) text = s.text ?? `Đã dừng xóa: ${s.message ?? s.reason}. Đã xóa ${fmt(res.deleted)} bản ghi; phần còn lại xóa được bằng "Xóa phần còn lại…" trong Lịch sử.`;
+  else if (res.cancelled) text = `Đã dừng. Đã xóa ${fmt(removed)}/${fmt(res.total)} bản ghi khỏi ${org}; ${fmt(res.remaining)} bản ghi còn lại xóa được bằng "Xóa phần còn lại…" trong Lịch sử.`;
+  else if (res.failed) text = `Đã xóa ${fmt(res.deleted)} bản ghi; ${fmt(res.failed)} bản ghi không xóa được. Xem nhóm lỗi trong tab "Lỗi xóa" hoặc trong Lịch sử, sửa rồi bấm "Xóa phần còn lại…".`;
+  else text = `Đã xóa ${fmt(res.deleted)} bản ghi khỏi ${org} (vào Thùng rác).${res.gone ? ` ${fmt(res.gone)} bản ghi đã không còn trong org.` : ''}`;
+  if (extra.length) text += ` ${extra.join(' ')}`;
+  return { text, long: Boolean(s || res.cancelled || res.failed || extra.length), extra: extra.length > 0 };
 }
 
 /** Tail of every stop with records in the org (design 0011 §3). */
