@@ -143,3 +143,22 @@ test('B1: a cell with a line break is never written (the append rejects, the fil
   await assert.rejects(h.appendIds(hid, [{ sobject: 'Contact', nodeId: 'c', ref: 'c#1\r', id: '003000000000001AAA' }]), /xuống dòng/);
   assert.equal(await readFile(h.files(hid)[1], 'utf8'), 'sobject,step,ref,id\n');
 });
+
+test('S4: pruning never removes an entry with records in an org while one with none is left (collected Bulk Ids count); prunePreview names it', async () => {
+  const dir = await tmp();
+  let t = Date.parse('2026-01-01T00:00:00Z');
+  const h = createHistory({ dir, clock: () => (t += 1000), random: hex, maxRuns: 2 });
+  const withRecords = await h.create({ org: ORG, workflow: { name: 'W1', steps: [] }, seed: 1, now: 1, steps: [], total: 1 });
+  // Finished with 0 known Ids but a Bulk job whose Ids were collected later (inserted raised to 5).
+  await h.finish(withRecords, { status: 'interrupted', inserted: 0, bulkJobs: [{ jobId: 'J1', records: 5, idsCollected: false }] });
+  const empty = await h.create({ org: ORG, workflow: null, seed: 1, now: 1, steps: [], total: 0 });
+  await h.finish(empty, { status: 'done', inserted: 0 });
+  assert.deepEqual(await h.prunePreview(), [], 'the empty newer entry goes first');
+  await h.create({ org: ORG, workflow: null, seed: 1, now: 1, steps: [], total: 0 });
+  const ids = (await h.list()).map((e) => e.id);
+  assert.ok(ids.includes(withRecords));
+  assert.ok(!ids.includes(empty));
+  await h.update(withRecords, { inserted: 5, bulkJobs: [{ jobId: 'J1', records: 5, idsCollected: true }] });
+  const doomed = await h.prunePreview();
+  assert.deepEqual(doomed.map((e) => [e.id, e.remaining, e.workflowName]), [[withRecords, 5, 'W1']]);
+});

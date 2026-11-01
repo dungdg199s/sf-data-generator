@@ -418,3 +418,12 @@ test('run registry: cancel aborts the run signal; force (Dừng ngay) aborts the
   assert.ok(runs.cancel(b.id, { force: true }));
   assert.deepEqual([b.signal.aborted, b.forceSignal.aborted], [true, true]);
 });
+
+test('S4: the plan event warns when this insert prunes a history entry that still has records in an org', async () => {
+  const history = memoryHistory();
+  history.prunePreview = async () => [{ id: 'hOLD', startedAt: '2026-10-01T08:00:00.000Z', org: { alias: 'uat' }, workflowName: 'Acc', remaining: 1200 }];
+  const { events } = await drive({ run: createRun(accCon(2), { seed: 1, now: NOW }), target: 'dev', sfClient: fakeClient(), history, org: { alias: 'dev' } });
+  const plan = events.find((e) => e.type === 'plan');
+  assert.deepEqual(plan.warnings.map((w) => [w.code, w.historyId]), [['historyPruned', 'hOLD']]);
+  assert.equal(plan.warnings[0].message, 'Lịch sử đã đầy nên lần insert này bỏ ghi chép của lần insert lúc 2026-10-01T08:00:00.000Z vào org "uat" (workflow "Acc"), còn 1200 bản ghi trong org: sau đó không tải Id hay xóa dữ liệu của lần đó qua app được nữa.');
+});

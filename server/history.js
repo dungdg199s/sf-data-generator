@@ -166,34 +166,56 @@ export function createHistory({ dir = defaultDataDir(), clock = () => Date.now()
     live.delete(hid);
   }
 
-  /** Room for one more entry: oldest fully deleted / empty entries first, never a running one. */
-  async function prune() {
+  /**
+   * Entries to remove to make room for one more: every entry with nothing left in an org (remaining
+   * 0, no Bulk job still to collect) goes before ANY entry that still has records in an org (review
+   * of 0011, S4); oldest first in each group; never a running or active one.
+   * → [{ hid, data, size, remaining }]
+   */
+  async function pruneCandidates() {
     const all = [];
     for (const hid of await hids()) {
       const data = await readJson(hid).catch(() => null);
-      all.push({ hid, data, size: await sizeOf(hid) });
+      all.push({ hid, data, size: await sizeOf(hid), remaining: data ? remainingOf(data) : 0 });
     }
     let count = all.length;
     let bytes = all.reduce((s, e) => s + e.size, 0);
-    const removable = (e) => !active.has(e.hid) && e.data?.status !== 'running';
-    const empty = (e) => !e.data || remainingOf(e.data) === 0;
-    const order = [...all.filter((e) => removable(e) && empty(e)), ...all.filter((e) => removable(e) && !empty(e))];
+    const removable = (e) => !active.has(e.hid) && e.data?.status !== 'running' && e.data !== null;
+    const order = [...all.filter((e) => removable(e) && e.remaining === 0), ...all.filter((e) => removable(e) && e.remaining > 0)];
+    const out = [];
     for (const e of order) {
       if (count + 1 <= maxRuns && bytes <= maxBytes) break;
-      await removeFiles(e.hid);
+      out.push(e);
       count--;
       bytes -= e.size;
     }
+    return out;
   }
 
+  async function prune() {
+    for (const e of await pruneCandidates()) await removeFiles(e.hid);
+  }
+
+  /** Records an entry may still have in its org (Bulk jobs not collected yet count as at least one). */
   function remainingOf(data) {
     const inserted = live.get(data.id) ?? data.inserted ?? 0;
-    return Math.max(0, inserted - (data.deletion?.deleted ?? 0) - (data.deletion?.gone ?? 0));
+    const left = Math.max(0, inserted - (data.deletion?.deleted ?? 0) - (data.deletion?.gone ?? 0));
+    const pending = (data.bulkJobs ?? []).filter((j) => !j.idsCollected).reduce((n, j) => n + (j.records ?? 1), 0);
+    return left + pending;
   }
 
   const api = {
     get dir() {
       return root;
+    },
+    /**
+     * What creating one more entry would prune (S4): entries that still have records in an org are
+     * returned so the insert can warn. → [{ id, startedAt, org, remaining }]
+     */
+    async prunePreview() {
+      await ready();
+      if (!state.enabled) return [];
+      return (await pruneCandidates()).filter((e) => e.remaining > 0).map((e) => ({ id: e.hid, startedAt: e.data.startedAt, org: e.data.org, workflowName: e.data.workflow?.name ?? '', remaining: e.remaining }));
     },
     async status() {
       await ready();

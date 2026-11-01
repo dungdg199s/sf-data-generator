@@ -178,8 +178,16 @@ export async function executeRun({
   // History entry before the first write; no entry ⇒ nothing is written (design 0011 §5).
   let hid = null;
   let releaseHistory = () => {};
+  let historyWarnings = [];
   if (history) {
     try {
+      // S4: a full history drops the oldest entries; one that still has records in an org is named.
+      const doomed = await history.prunePreview?.() ?? [];
+      historyWarnings = doomed.map((e) => ({
+        code: 'historyPruned',
+        historyId: e.id,
+        message: `Lịch sử đã đầy nên lần insert này bỏ ghi chép của lần insert lúc ${e.startedAt} vào org "${e.org?.alias ?? e.org?.username ?? '?'}"${e.workflowName ? ` (workflow "${e.workflowName}")` : ''}, còn ${e.remaining} bản ghi trong org: sau đó không tải Id hay xóa dữ liệu của lần đó qua app được nữa.`,
+      }));
       hid = await history.create({ org: orgIdentity ?? { alias: target }, workflow, seed: run.seed, now: run.now, bulk, steps: plan.steps, total });
       releaseHistory = history.markActive(hid, 'insert');
     } catch (e) {
@@ -196,6 +204,7 @@ export async function executeRun({
     apiCallsBy: { collections: plan.apiCalls.collections, bulk: plan.apiCalls.bulk },
     steps: plan.steps.map(({ nodeId, sobject, mode, probe, jobs }) => ({ nodeId, sobject, mode, probe, jobs })),
     ...(hid ? { historyId: hid } : {}),
+    ...(historyWarnings.length ? { warnings: historyWarnings } : {}),
   });
   const previewRefs = new Set(kept.map((r) => r.ref));
   const keepId = collect ? () => true : (ref) => previewRefs.has(ref) || run.referencedAliases.has(aliasOf(ref));
