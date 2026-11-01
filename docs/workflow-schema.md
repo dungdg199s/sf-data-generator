@@ -344,7 +344,9 @@ Câu thông báo đúng như bảng "Thông báo lỗi" của [0005](design/0005
 
 ## Kết quả `/api/run`
 
-Request: `{ "workflow": {…}, "seed": 42, "now": 1761552000000, "target": { "kind": "org", "org": "dev-sb" } }`.
+Request: `{ "workflow": {…}, "seed": 42, "now": 1761552000000, "target": { "kind": "org", "org": "dev-sb", "bulk": "auto" } }`.
+`target.bulk` ([0011](design/0011-thao-tac-du-lieu-org.md), tùy chọn): `"auto"` (mặc định) hoặc `"off"` (không dùng Bulk API
+2.0 cho lần chạy này); giá trị khác ⇒ 400 `target.bulk phải là "auto" hoặc "off".`
 `now` (mili giây, tùy chọn; thiếu thì là giờ hiện tại) là "hôm nay" của field ngày tương đối (`today`, `-1y`). **Cùng
 `seed` và `now` ⇒ cùng dữ liệu.** `now` không phải số hữu hạn, hoặc ngoài ±8.64e15 (giới hạn của `Date`) ⇒ 400 `Tham số now
 không hợp lệ.` (cả `/api/export` và `/api/field-samples`; `createRun` cũng ném lỗi này với `status: 400`).
@@ -381,7 +383,8 @@ Hai cách nhận kết quả ([0004](design/0004-streaming-execution.md)):
     "inserted": 17, "failed": 0, "errorsTotal": 0, "errors": [], "errorGroups": [],
     "ids": { "acc#1": "001..." }, "bySobject": { "Account": { "inserted": 5, "failed": 0 } },
     "byStep": { "acc": { "inserted": 5, "failed": 0 }, "con": { "inserted": 12, "failed": 0 } },
-    "total": 17, "notSent": 0, "cancelled": false, "stopped": null
+    "total": 17, "notSent": 0, "cancelled": false, "stopped": null,
+    "historyId": "h20261028T103200Z-a1b2c3", "bulk": [], "bulkJobs": [], "bulkAborted": null, "bulkUnknown": 0, "warnings": []
   }
 }
 ```
@@ -391,8 +394,10 @@ Các sự kiện NDJSON:
 ```json
 {"type":"start","runId":"r7f3k2a9","seed":42,"now":1761552000000,"warnings":[],"queries":[]}
 {"type":"progress","phase":"generate","generated":120000,"bySobject":{"Account":24000,"Contact":96000},"byStep":{…}}
-{"type":"plan","total":200000,"bySobject":{"Account":40000,"Contact":160000},"apiCalls":1000}
+{"type":"plan","total":200000,"bySobject":{"Account":40000,"Contact":160000},"apiCalls":393,"apiCallsBy":{"collections":201,"bulk":192},"steps":[{"nodeId":"acc","sobject":"Account","mode":"collections","probe":0,"jobs":0},{"nodeId":"con","sobject":"Contact","mode":"bulk","probe":200,"jobs":16}],"historyId":"h20261028T103200Z-a1b2c3"}
 {"type":"progress","phase":"insert","inserted":12400,"failed":3,"total":200000,"bySobject":{"Account":{"inserted":2480,"failed":0,"total":40000},"Contact":{"inserted":9920,"failed":3,"total":160000}},"byStep":{"acc":{"inserted":2480,"failed":0},"con":{"inserted":9920,"failed":3}}}
+{"type":"progress","phase":"insert","inserted":82400,…,"bulk":{"nodeId":"con","sobject":"Contact","jobId":"7504x00000AbCdE","job":6,"jobs":16,"processed":2400,"failed":0,"records":10000,"state":"InProgress"}}
+{"type":"progress","phase":"stopping","waitingBulk":{"jobId":"7504x00000AbCdE","sobject":"Contact","nodeId":"con","processed":6200,"records":10000}}
 {"type":"done","result":{ …cùng hình dạng như JSON một cục… }}
 {"type":"error","error":"Lỗi khi sinh dữ liệu, chưa ghi bản ghi nào vào org: …","issues":[{"message":"…","nodeId":"acc","field":"fields.AccountNumber"}],"insert":null}
 ```
@@ -400,8 +405,12 @@ Các sự kiện NDJSON:
 - `start` luôn là dòng đầu; `runId` dùng cho `POST /api/runs/:runId/cancel`. `queries` như bên dưới (0006).
 - `progress` (`generate`) mỗi 1 000 bản ghi, tối đa 4 lần/giây; khi insert, đây là **lượt chạy thử**: sinh hết một lượt
   chỉ để đếm, nên lỗi sinh dữ liệu dừng lần chạy trước khi ghi bản ghi đầu tiên vào org.
-- `plan` (chỉ khi insert): tổng chính xác và số lời gọi API ước tính `Σ ceil(n_sObject / 200)`; sau đó là `progress`
-  (`insert`) sau các lô, rồi `done`.
+- `plan` (chỉ khi insert): tổng chính xác; `steps` theo `planInsert` (`shared/insert-plan.js`, 0011): mỗi bước Record
+  `{ nodeId, sobject, mode: "collections" | "bulk", probe, jobs }` theo thứ tự bản ghi đầu tiên của bước; `apiCalls` (tổng ước
+  tính: bước Collections `ceil(n / 200)`, bước Bulk `1 + jobs × 12`) và `apiCallsBy`; `historyId` của mục Lịch sử vừa tạo.
+  Không tạo được mục Lịch sử ⇒ không có `plan`, sự kiện `error` với `insert: null`. Sau đó là `progress` (`insert`) sau các lô
+  và mỗi lần kiểm tra job Bulk (`bulk`: job đang chạy; `inserted` đã gồm `processed − failed` của nó, số tạm), `progress`
+  (`stopping`, `waitingBulk`) khi Dừng đang chờ job Bulk xong, rồi `done`.
 - `progress` (`insert`) và `insert` của kết quả có `byStep: { "<nodeId>": { inserted, failed } }`
   ([0012](design/0012-nang-suat-soan-thao.md) D): đếm theo bước Record sinh ra bản ghi (`nodeId` của bản ghi), chỉ bước đã có bản
   ghi gửi đi hoặc bị bỏ; `failed` gồm cả bản ghi con "Bỏ qua vì bản ghi cha lỗi." (tính cho bước của bản ghi con). Tổng
@@ -422,7 +431,15 @@ Các sự kiện NDJSON:
   nên dòng `done` luôn nhỏ.
 - `insert.cancelled`: dừng bằng tay (Dừng hoặc đóng kết nối) trước khi gửi hết; lô đang gửi luôn được chờ xong nên
   `inserted` chính xác. `insert.stopped: { reason: "allFailing", sobject, nodeId, message, batches, records }`: 3 lô đầu của
-  một sObject lỗi 100 % nên app tự dừng. `notSent`: số bản ghi chưa gửi. Bản ghi đã insert **không** tự xóa.
+  một sObject lỗi 100 % nên app tự dừng. Từ 0011 `reason` còn có `"bulkFailing"` (`jobs`, `records`: 2 job Bulk liên tiếp của
+  một bước lỗi 100 %), `"bulkTimeout"` / `"bulkError"` (`jobId`), `"history"` (không ghi được Id vào Lịch sử: dừng sau lời gọi
+  đang gửi). `notSent`: số bản ghi chưa gửi. Bản ghi đã insert **không** tự xóa; xóa được qua Lịch sử.
+- 0011: `insert.historyId` (cả chế độ JSON một cục); `insert.bulk: [{ nodeId, sobject, jobs, records, inserted, failed,
+  fallback? }]` (bước Bulk; `inserted`/`failed` gồm cả lô thử); `bulkJobs: [{ jobId, nodeId, sobject, records, state,
+  idsCollected, idsUnknown?, inserted, failed }]`; `bulkAborted: { jobId, sobject, nodeId, processed, records, idsKnown }` khi
+  Dừng ngay hủy một job; `bulkUnknown`: bản ghi có thể đã vào org mà không biết Id (job hết giờ, hủy không trả kết quả);
+  `warnings` (ví dụ bước chuyển sang Collections vì Bulk không nhận sObject, cũng nối vào `result.warnings`). Lỗi của dòng Bulk
+  có thể không có `ref` (`null`) mà có `bulkJobId`.
 
 ### Chặn yêu cầu từ trang web khác
 
@@ -434,7 +451,37 @@ application/json` (không thì 415). curl và script không gửi `Origin` nên 
 ### `POST /api/runs/:runId/cancel`
 
 Dừng lần chạy sau lô đang gửi. Trả `{ "ok": true }`; lần chạy đã xong hoặc không tồn tại ⇒ 404 `Lần chạy này đã kết thúc.`
-Đóng kết nối của `/api/run` (đóng tab) cũng dừng lần chạy.
+Đóng kết nối của `/api/run` (đóng tab) cũng dừng lần chạy. Body `{ "force": true }` (0011, Dừng ngay): như trên và hủy luôn job
+Bulk đang được xử lý. Cũng dừng được lần xóa (`runId` trong sự kiện `start` của `/api/history/:hid/delete`).
+
+### Lịch sử insert và xóa (0011)
+
+Xem [org-connection.md](org-connection.md#lịch-sử-insert-0011). Mọi endpoint qua cùng kiểm tra chặn trang web khác.
+
+| Endpoint | Trả về |
+| --- | --- |
+| `GET /api/orgs/:org/limits` | `{ "api": { "max": 15000, "remaining": 14200 }, "bulkBatches": { "max": 15000, "remaining": 14980 } }` (cache 60 s; quá 3 s ⇒ 504) |
+| `GET /api/history` | `{ "enabled": true, "dir": "…/history", "maxRuns": 100, "runs": [{ id, status, startedAt, finishedAt, org, workflowName, seed, total, inserted, failed, notSent, bySobject, deletion: { status, deleted, gone, remaining }, active? }] }`, mới nhất trước. Tắt: `{ "enabled": false, "reason": "…", "dir": "…", "runs": [] }` |
+| `GET /api/history/:hid` | Nội dung `<hid>.json` bỏ `workflow`, thêm `workflowName`, `remaining: { total, bySobject, steps: [{ nodeId, sobject, remaining }] }`, `pendingBulkJobs` (mã job chưa lấy kết quả), `active?` |
+| `GET /api/history/:hid/ids.csv[?sobject=Contact]` | CSV `sobject,id,ref,step,status` (`status` = `inserted` \| `deleted` \| `gone`), `Content-Disposition: attachment; filename="<workflow>-<yyyyMMdd-HHmm>-ids.csv"` |
+| `POST /api/history/:hid/forget` | `{ "ok": true }`; xóa file của mục, không đụng org; 409 khi đang chạy |
+| `POST /api/history/:hid/delete` | Body `{ "confirm": { "username": "me@example.com", "count": 200000, "typedOrg": "dev-prod" }, "bulk": "auto" }`. NDJSON khi `Accept: application/x-ndjson`: `start { runId, historyId, total, bySobject }`, `progress { phase: "delete", deleted, gone, failed, total, bySobject, bulk? }`, `done { result }`, `error`; không có header đó thì JSON một cục là `result`. `result`: `{ deleted, gone, failed, total, errorGroups, errorGroupsOther, bySobject, remaining, cancelled, stopped, bulkAborted, collected }` |
+
+`hid` không tồn tại hoặc sai định dạng ⇒ 404 `Không tìm thấy lần insert này trong Lịch sử (có thể đã bị dọn vì vượt giới hạn
+lưu trữ).` Các lỗi kiểm tra trước của `delete` (JSON thường, trước khi gửi header, org không nhận request ghi nào):
+
+| Khi | HTTP |
+| --- | --- |
+| Lần insert đang chạy | 409 `Lần insert này đang chạy. Bấm "Dừng", chờ nó dừng rồi mới xóa.` |
+| Đang xóa ở tab khác | 409 `Đang xóa dữ liệu của lần insert này ở một tab khác. Chờ lần đó xong.` |
+| Thiếu `confirm` (hoặc `username` không phải chuỗi, `count` không phải số nguyên) | 400 `Thiếu xác nhận (org và số bản ghi). Chỉ xóa được từ hộp xác nhận của app.` |
+| `bulk` khác `auto`/`off` | 400 `bulk phải là "auto" hoặc "off".` |
+| `confirm.username` khác lúc insert | 409 `Xác nhận ghi org "<username>" nhưng lần insert này thuộc org "<username lúc insert>". Mở lại hộp xác nhận.` |
+| Không còn gì để xóa | 409 `Lần insert này không còn bản ghi nào để xóa.` |
+| `confirm.count` khác số còn lại | 409 `Số bản ghi còn phải xóa đã đổi (còn n, hộp xác nhận ghi m). Mở lại hộp xác nhận để xem số mới.` |
+| Không lấy được org từ sf CLI | 502 câu của CLI + ` Đăng nhập lại: sf org login web --alias <alias>` |
+| Org khác lúc insert (org Id, hoặc instance URL khi thiếu org Id, hoặc username) | 409 `Org "<alias>" bây giờ là org khác (…) so với lúc insert (…). Không xóa gì. Đăng nhập lại đúng org bằng sf org login web --alias <alias> rồi thử lại.` |
+| Production / không biết loại mà `typedOrg` sai hoặc thiếu | 400 `Org "<alias>" là production: gõ đúng tên org trong hộp xác nhận để xóa.` |
 
 ### `POST /api/field-samples`
 

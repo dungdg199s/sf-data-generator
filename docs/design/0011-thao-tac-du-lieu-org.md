@@ -1,6 +1,6 @@
 # 0011 — Thao tác dữ liệu trên org: Bulk API 2.0, lịch sử insert, xóa dữ liệu đã insert
 
-- **Trạng thái:** Đã duyệt (người dùng giao chọn theo phương án đề xuất; xem [Đã chốt](#đã-chốt))
+- **Trạng thái:** Đang làm (xong phía server: bước 0–8; còn UI bước 9–10 và tài liệu UI của bước 11)
 - **Ngày:** 2026-10-28
 - **Liên quan:** [0002](0002-jsforce-api.md) (jsforce, sf CLI chỉ lấy token), [0004](0004-streaming-execution.md) (insert theo
   cửa sổ, Dừng, nhóm lỗi; câu hỏi mở 6 và 7), [0006](0006-query-pick-nodes.md) (Query chỉ đọc, cache, dấu vân tay),
@@ -670,4 +670,64 @@ Người dùng giao chọn theo phương án đề xuất; planner chốt như s
 
 ## Đã làm
 
-(Chưa làm. Cập nhật khi code xong: commit, chỗ khác thiết kế và lý do, số đo Bulk thật nếu có.)
+### Phía server (bước 0–8), 2026-11-01
+
+Mỗi bước một commit, `npm test` xanh sau từng commit (406 → 464 test), `test/stream.test.js` không sửa và hash vàng giữ nguyên:
+
+| Bước | Commit | Nội dung | Test |
+| --- | --- | --- | --- |
+| 0 | `1c6feae` | `test/fake-salesforce.js`: Salesforce giả (REST create/destroy, Bulk 2.0 ingest, `/limits`), đếm request ghi, kết quả thành công đảo thứ tự; không import jsforce | dùng ở bước 1, 4, 6–8 |
+| 1 | `7bcffc2` | `client.bulkJob` (chỉ `insert`/`delete`; `{ jobId }` gắn job có sẵn chỉ đọc), `client.destroy` (≤ 200 Id), `client.limits`; `cli.getConnection` trả `orgId` | `jsforce.test.js` (vòng đời job, CSV đúng từng byte, `hardDelete`/`update`/`upsert` throw trước mọi request, `destroy`, refresh 401 ở `POST /jobs/ingest`), `sf.test.js` |
+| 2 | `59747b9` | `shared/insert-plan.js`: `planInsert`, thêm `planDelete` (cho hộp xác nhận xóa) | `insert-plan.test.js` (393 lời gọi, Chọn bản ghi, < 10 000, `off`, 242 lời gọi xóa) |
+| 3 | `49a200f` | `server/sf/bulk-csv.js`; `describeFailure` của `insert.js` được export để lỗi Bulk ra cùng câu / nhóm | `bulk-csv.test.js` |
+| 4 | `7691610` | Inserter có Bulk; `server/sf/bulk-job.js` (theo dõi job có backoff, Dừng ngay) | `sf.test.js` (client giả: lô thử, 2 job, Id Account thật trong CSV, kết quả đảo thứ tự, `allFailing` không mở job, `Failed`, `bulkFailing`, chuyển về Collections, Dừng lúc `InProgress`/`Open`, Dừng ngay có/không có kết quả, timeout, ghi Id lỗi), `jsforce.test.js` (cùng kịch bản qua jsforce thật) |
+| 5 | `dba40c9` | `server/history.js` | `history.test.js` (thư mục tạm: dọn mục đã xóa hết trước, không dọn `running`, `interrupted`, `hid` `../x`, file `0600`/thư mục `0700`, quét `SECRET-TOKEN-123`/`accessToken`/`Authorization`/dòng Query, thư mục không ghi được) |
+| 6 | `54d89e3` | `run.js` (plan theo bước, mục Lịch sử trước `plan`, Id mỗi lời gọi, `progress.bulk`, `stopping`, `historyId`), `index.js` (`target.bulk`, `/api/history…`, `ids.csv`, `forget`, `/api/orgs/:org/limits`, `cancel` có `force`), `LIMITS` | `run.test.js`, `server.test.js`, `org-writes.test.js` (mới) |
+| 7 | `b28cb95` | `server/sf/delete.js` + `POST /api/history/:hid/delete` | `sf.test.js` (con trước cha, ngược trong bước, `gone`, 3 lời gọi lỗi quyền ⇒ dừng, thử lại `DELETE_FAILED`, Dừng, Bulk delete và chuyển về `destroy`), `org-writes.test.js` (mọi trường hợp từ chối đúng mã/câu và **0 request ghi**; insert rồi xóa qua jsforce thật: tập Id xóa **bằng đúng** tập Id đã insert, bản ghi lạ không bị đụng, không `hardDelete`; `gone`; job chưa lấy kết quả) |
+| 8 | `216c130` | Khóa an toàn | `safety.test.js` (quét mã nguồn), `org-writes.test.js` (403 cho trang khác / Host lạ ở delete, `ids.csv`, `/api/history…`, `/limits`, `forget`; 415 cho `text/plain`, form, multipart; org không nhận request ghi) |
+
+**Khác thiết kế và lý do:**
+
+1. **Lịch sử tắt ⇒ không insert được.** Thiết kế cho insert chạy tiếp khi Lịch sử tắt (warn-box "Lần insert này sẽ không tải Id hay
+   xóa lại được qua app"). Đã làm chặt hơn: `history.create` thử mở lại thư mục một lần rồi báo lỗi, lần chạy kết thúc `error`,
+   `insert: null` với câu "Không ghi được Lịch sử (…), nên chưa ghi gì vào org…", vì yêu cầu an toàn "không ghi được Lịch sử thì
+   không bắt đầu insert" (không có bản ghi nào trong org mà app không biết Id). **UI bước 9** cần đổi câu của warn-box Lịch sử tắt
+   thành "… nên không insert được. Đặt SFDG_DATA_DIR …" và khóa nút Insert.
+2. **Xóa còn so cả username hiện tại** của alias với username lúc insert (thiết kế chỉ so `orgId`, hoặc instance URL + username khi
+   thiếu `orgId`): cùng org nhưng user khác cũng bị từ chối (409, câu "org khác"). An toàn hơn, chỉ tốn một lần đăng nhập lại.
+3. **`client.bulkJob` trả kết quả là CSV thô** (`successfulResults()`/`failedResults()` → chuỗi), `bulk-csv.js` tự đọc: parser CSV
+   của jsforce 3.12 coi `;`, `|`, tab, `` ` ``, `^` đều là dấu phân cách, nên giá trị có `;` (multipicklist) bị tách sai.
+4. **`destroy` không gửi `allOrNone=false`** trên URL: jsforce chỉ thêm tham số khi `true`, và mặc định của Salesforce là `false`
+   (cùng ý nghĩa). Test kiểm không có `allOrNone=true`.
+5. **File mới `server/sf/bulk-job.js`** (theo dõi job, Dừng ngay) dùng chung cho insert và xóa; nó chỉ nhận handle job, không gọi
+   `client.bulkJob`.
+6. **Lý do dừng thêm:** `bulkTimeout` (thiết kế ghi "done (lỗi)") và `bulkError` (không kiểm tra được job / không đọc được kết quả
+   của job đã xong). `insert.bulkUnknown` đếm bản ghi có thể đã vào org mà không biết Id (job hết giờ, Dừng ngay mà Salesforce không
+   trả kết quả); các bản ghi đó không cộng vào `inserted`.
+7. **Lô thử** là lời gọi Collections đầu tiên của bước (thường đủ 200, vì một cửa sổ có nhiều bản ghi của bước); bản ghi cùng cửa
+   sổ sau lời gọi thành công đi Bulk. **Chuyển về Collections** khi tạo job lỗi với bất kỳ mã lỗi Salesforce nào trừ
+   `REQUEST_LIMIT_EXCEEDED`, `INVALID_SESSION_ID`, `SERVER_UNAVAILABLE`, `UNKNOWN_EXCEPTION` và lỗi mạng (không có mã).
+   Mỗi bước Bulk giữ một bộ đệm đang đầy (thiết kế: tối đa 2 bộ đệm tổng), có giới hạn theo số bước của workflow.
+8. **Xóa:** ngưỡng Bulk theo **bước** (§7.2) chứ không theo sObject (bảng §5 của UI); `planDelete` cũng theo bước. Kết quả
+   `stopped` của tự dừng xóa có thêm `text` (câu đầy đủ của bảng thông báo); `result.collected` = số Id lấy thêm từ job chưa lấy
+   kết quả.
+9. **API:** `GET /api/history/:hid` thêm `workflowName`, `remaining.steps`, `active`; `GET /api/history` có `notSent`, `active`;
+   `/limits` quá 3 s ⇒ 504; `forget` khi đang chạy: `… rồi mới quên.`; chế độ JSON một cục: không tạo được Lịch sử ⇒ 500 với câu
+   trên.
+10. **Lịch sử khởi tạo lười** (lần dùng đầu tiên, không phải lúc server khởi động): đổi `running` → `interrupted` vẫn xảy ra trước
+    mọi đọc/ghi của tiến trình mới; nhờ vậy smoke và test không đụng tới thư mục nhà.
+11. **Test ở file mới `test/org-writes.test.js`** (thay vì `server.test.js`) cho các kịch bản cần jsforce thật + Salesforce giả
+    qua `createApp`: file phải xóa biến proxy trước khi import jsforce, còn `server.test.js` import `server/index.js` tĩnh.
+    `server.test.js` đặt `SFDG_DATA_DIR` vào thư mục tạm.
+12. **Không sửa** `CLAUDE.md` và `.claude/agents/implementer.md` (hàng "Org writes": thêm `history.js`, `delete.js`) trong lượt này:
+    đây là file cấu hình agent/dự án, để người dùng sửa (bước 11).
+
+**Đối chiếu với 0012–0014 (không có mâu thuẫn thật):** `byStep` của 0012 D vẫn đúng với Bulk (lô thử và kết quả job cộng vào bước
+của job; lỗi Bulk có `nodeId`); `isValidNow` / `FILTER_CACHE_POSITIONS` của 0013 và ETag / `/api/field-samples` không bị đụng.
+Hai test cũ được sửa vì hành vi mới đúng thiết kế: `plan` có thêm `apiCallsBy`/`steps` (run.test.js), và test nhóm lỗi 40 000
+Contact (server.test.js) gửi `target.bulk: "off"` vì bước 40 000 bản ghi lá nay được lập kế hoạch Bulk mà client giả của test
+không có `bulkJob`.
+
+Chưa làm: UI bước 9–10 (hộp xác nhận, tiến độ Bulk, Dừng ngay, hộp Lịch sử, hộp xóa, smoke 16), tài liệu UI
+(`ui-design-system.md`), `CLAUDE.md`, `.claude/agents/implementer.md`, `.claude/skills/smoke-test/SKILL.md`; số đo Bulk thật
+(chưa chạy trên org thật nào).

@@ -11,7 +11,10 @@ Trình duyệt (client/)                         Server Node.js (server/)
 │ state.workflow (JSON)    │ ────────────────► │ workflow/schema.js            │
 │                          │  POST /api/run    │ run.js ◄─ workflow/executor.js│
 │ Kết quả, tiến độ, Dừng   │ ◄── NDJSON ────── │   └─► sf/insert.js (nếu org)  │
+│                          │                   │        ├─ Bulk API 2.0 (lá)   │
+│                          │                   │        └─► history.js (Id)    │
 │ Tải CSV / JSON           │  POST /api/export │ (sinh lại từ seed + now)      │
+│ Lịch sử, xóa (0011)      │  /api/history…    │ history.js ─► sf/delete.js    │
 └──────────────────────────┘                   │ sf/cli.js ─► `sf` CLI máy local│
                                                │ sf/client.js ─► jsforce ─► SF  │
                                                └───────────────────────────────┘
@@ -39,7 +42,10 @@ Trình duyệt (client/)                         Server Node.js (server/)
      ├─ lượt 1: sink xem trước   đếm theo sObject + 200 dòng đầu mỗi sObject (lượt chạy thử khi target là org:
      │                           lỗi sinh dữ liệu dừng lần chạy trước khi ghi bản ghi đầu tiên)
      ├─ lượt 2 (chỉ khi insert): records() mới, cùng seed + now ⇒ đúng chuỗi của lượt 1
+     │        ├─ planInsert (shared/insert-plan.js) → bước nào đi Bulk; mục Lịch sử (history.js) trước lời gọi ghi đầu
      │        └─► sf/insert.js createInserter: cửa sổ 2 000 → wave → lô ≤ 200 → jsforce (allOrNone false)
+     │                 bước Bulk: lô thử Collections → CSV (sf/bulk-csv.js) → job 10 000, một job mỗi lúc
+     │                 mọi Id → history.appendIds (chờ ghi xong trước lời gọi ghi tiếp)
      └─ emit(sự kiện) ──► NDJSON ──► trình duyệt (start, progress, plan, done | error)
 
    POST /api/export ── createRun → records() → CSV (một sObject) / JSON, ghi thẳng ra response (xử lý drain)
@@ -56,7 +62,8 @@ Trình duyệt (client/)                         Server Node.js (server/)
 | `server/generators/` | Mỗi kiểu field Salesforce một generator, tự khai báo option | Registry trong `index.js`; xử lý chung `nullRatio`/`unique` |
 | `server/workflow/` | Danh mục loại bước, validate, chạy workflow; `samples.js`: vài giá trị của một field cho `POST /api/field-samples` (0012 E) | Executor là generator đồng bộ, thuần: không I/O, không timer, không gọi org; dữ liệu Query được đọc trước ở `server/sf/query.js` và truyền vào. Nhận cả v1 (chuyển sang v2 trước) |
 | `server/run.js` | Driver của một lần chạy ([0004](design/0004-streaming-execution.md)): lượt xem trước / chạy thử, lượt insert, sự kiện tiến độ (insert: theo sObject và theo bước, `byStep` của 0012 D), sổ `runId` → `AbortController` để Dừng | Nơi duy nhất có thời gian trôi: nhường event loop, throttle tiến độ, chờ inserter |
-| `server/sf/` | sf CLI (chỉ lấy token), jsforce connection, map describe → field, đọc trước Query (cache, dấu vân tay), insert theo cửa sổ | Không lưu credential; token và dòng đã đọc chỉ giữ trong bộ nhớ |
+| `server/sf/` | sf CLI (chỉ lấy token, org Id), jsforce connection (`create`, `destroy`, `bulkJob` chỉ `insert`/`delete`, `limits`), map describe → field, đọc trước Query (cache, dấu vân tay), insert theo cửa sổ (`insert.js`, có Bulk API 2.0 từ [0011](design/0011-thao-tac-du-lieu-org.md)), CSV của job Bulk (`bulk-csv.js`), chờ job (`bulk-job.js`), xóa dữ liệu của một lần insert (`delete.js`) | Không lưu credential; token và dòng đã đọc chỉ giữ trong bộ nhớ. Chỉ `client.js` gọi API ghi của jsforce; chỉ `insert.js`/`delete.js` gọi `client.create`/`destroy`/`bulkJob` (`test/safety.test.js`) |
+| `server/history.js` | Lịch sử insert ([0011](design/0011-thao-tac-du-lieu-org.md) §5): file trong `<dataDir>/history/` (`SFDG_DATA_DIR` hoặc thư mục dữ liệu theo hệ điều hành; `0700`/`0600`), một `.json` + `.ids.csv` + `.deleted.csv` mỗi lần insert; `interrupted` khi khởi động; dọn theo `historyMaxRuns`/`historyMaxBytes` | Không bao giờ lưu token hay dòng Query; không ghi được ⇒ insert không bắt đầu |
 | `server/random.js` | PRNG có seed (mulberry32) | Cùng workflow + seed ⇒ cùng dữ liệu |
 
 ## Module dùng chung (`shared/`)
@@ -71,6 +78,7 @@ thư mục này ở `/shared/…` với cùng cách chặn path traversal như `
 | `shared/soql.js` | SOQL của bước Query ([0006](design/0006-query-pick-nodes.md)): dựng câu từ builder, đọc danh sách field / sObject của SOQL tự viết, kiểm tra chỉ đọc (`checkSoql`, `checkBuilder`), dòng mẫu khi chưa chọn org |
 | `shared/each-wrap.js` | "Bọc trong Lặp qua từng bản ghi" ([0012](design/0012-nang-suat-soan-thao.md) C): `eachWrapPlan` (pool cho Lặp `each` mới, Lookup nên nối lại), `applyEachRewire` (nút [Đổi], chỉ khi Lặp còn nguyên và Lookup còn trong nó) |
 | `shared/estimate.js` | `estimateSteps(wf, catalog, { queryCounts })` ([0012](design/0012-nang-suat-soan-thao.md) H): ước tính số bản ghi mỗi bước sinh ra trước khi chạy (`{ records, min, max, exact }`, khung: tổng bên trong, Lặp thêm `iterations`) và tổng; đọc ý nghĩa `count`/`min`/`max`/`mode` của Lặp, `kind`/`probability` của Rẽ nhánh, số dòng tối đa của Query theo `maxFetchFor` (hoặc số dòng lần đọc gần nhất); một lượt O(số bước), bước tắt bỏ qua |
+| `shared/insert-plan.js` | `planInsert` / `planDelete` ([0011](design/0011-thao-tac-du-lieu-org.md) §1): bước Record nào đi Bulk API 2.0 (≥ `bulkMinRecords`, không Lookup trỏ tới, `bulk !== 'off'`) và số lời gọi API ước tính; cùng hàm cho sự kiện `plan` và hộp xác nhận |
 | `shared/scope.js` | `analyzeScope(wf, catalog)` ([0005](design/0005-variable-picker.md)): nguồn biến, biến dùng được ở từng bước (`always`/`last`/`maybe`) và lý do bị ẩn (`after`/`otherBranch`/`outsideLoop`/`shadowed`/`disabled`), mọi tham chiếu đã phân giải (kèm `valueType`); `refChoices` cho ô "Bản ghi cha"; regex token `{{…}}` (`TEMPLATE_TOKEN_SOURCE`); `poolUsage` ([0004](design/0004-streaming-execution.md)): pool nào phải giữ bản ghi đầy đủ, alias nào cần giữ Id khi insert. Từ [0013](design/0013-mo-rong-bien-va-lap.md): `optionShown` (`showIf` bắc cầu), `numberVarPath`/`isVar` (option `vars: 'number'`), `valueList` (Lặp `values`), nguồn `$run` từ `catalog.globals`, `numericSampleFields` (field Query dùng như số, cho dòng mẫu) |
 
 Thứ tự slot được truyền vào qua tham số `slotKeys(type)`: server lấy từ `nodeTypeMap`, client lấy từ `state.meta`.
@@ -135,12 +143,19 @@ Thứ tự slot được truyền vào qua tham số `slotKeys(type)`: server l�
 | `queryTimeoutMs` | 30 000 | Thời gian tối đa của một query |
 | `queryTotalMs` | 120 000 | Thời gian tối đa của cả lần đọc trước (mọi bước Query), dưới mọi timeout HTTP |
 | `queryCacheTtlMs` | 600 000 | Thời gian dùng lại dòng đã đọc (10 phút); cache tối đa 50 mục |
+| `bulkMinRecords` | 10 000 | Bước Record (lá) từ số bản ghi này đi Bulk API 2.0 ([0011](design/0011-thao-tac-du-lieu-org.md)); xóa: bước còn từ số Id này |
+| `bulkJobRecords` | 10 000 | Số dòng mỗi job Bulk |
+| `bulkJobTimeoutMs` | 1 800 000 | Thời gian theo dõi tối đa một job Bulk (30 phút) |
+| `historyMaxRuns` | 100 | Số lần insert tối đa giữ trong Lịch sử |
+| `historyMaxBytes` | 268 435 456 | Dung lượng tối đa của Lịch sử (256 MB) |
 
 Migration v1 cũng giới hạn số bước nhân bản (`2 × số node + 50`) để workflow hiểm hóc không làm treo trình duyệt.
 
 Hằng nội bộ của lần chạy (không đưa ra meta): cửa sổ insert 2 000 bản ghi, dừng sớm sau 3 lô đầu lỗi 100 % của một
 sObject, tối đa 1 000 lỗi chi tiết trong kết quả (nhóm lỗi luôn đếm đủ), tiến độ mỗi 250 ms, nhường event loop mỗi
-1 000 bản ghi (`server/sf/insert.js`, `server/run.js`).
+1 000 bản ghi (`server/sf/insert.js`, `server/run.js`). Từ 0011: theo dõi job Bulk mỗi 2 s × 1,5 tới 15 s
+(`server/sf/bulk-job.js`), một job Bulk mỗi lúc (một bộ đệm đang đầy cho mỗi bước Bulk), ước tính 12 lời gọi mỗi job, lô xóa 200,
+dừng sớm Bulk sau 2 job liên tiếp lỗi 100 %, cache `/limits` 60 s và timeout 3 s.
 
 ## Client
 
