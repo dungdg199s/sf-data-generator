@@ -96,7 +96,7 @@ export async function startFakeSalesforce(options = {}) {
     const processed = job.results ? (job.state === 'Aborted' ? job.kept : job.results.length) : 0;
     const failed = job.results ? job.results.slice(0, processed).filter((r) => !r.ok).length : 0;
     return {
-      id: job.id, operation: job.operation, object: job.object, state: job.state,
+      id: job.id, operation: job.operation, object: job.object, state: job.state, createdById: job.createdById,
       numberRecordsProcessed: processed, numberRecordsFailed: failed,
       ...(job.errorMessage ? { errorMessage: job.errorMessage } : {}),
     };
@@ -160,7 +160,7 @@ export async function startFakeSalesforce(options = {}) {
           const err = fake.options.openJobError?.(body);
           if (err) return json(err.status ?? 400, [{ errorCode: err.errorCode, message: err.message }]);
           if (!['insert', 'delete'].includes(body.operation)) return json(400, [{ errorCode: 'INVALIDJOB', message: `fake: operation ${body.operation} refused` }]);
-          const job = { id: `7504x${String(++jobSeq).padStart(10, '0')}AAA`, object: body.object, operation: body.operation, state: 'Open', csv: '', checks: 0 };
+          const job = { id: `7504x${String(++jobSeq).padStart(10, '0')}AAA`, object: body.object, operation: body.operation, state: 'Open', csv: '', checks: 0, createdById: fake.identity.userId };
           fake.jobs.set(job.id, job);
           return json(200, jobInfo(job));
         }

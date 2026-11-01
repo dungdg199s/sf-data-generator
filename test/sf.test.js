@@ -1014,3 +1014,11 @@ test('N8: 3 destroy calls failing with DELETE_FAILED stop with a sentence about 
   assert.match(res.stopped.text, /^Đã dừng xóa: 3 lời gọi xóa Account đầu tiên đều lỗi "DELETE_FAILED: DELETE_FAILED msg"\. Còn bản ghi khác liên quan tới chúng \(Lookup, bản ghi con hoặc quan hệ khác trỏ tới chúng\)\./);
   assert.ok(!/quyền Delete/.test(res.stopped.text));
 });
+
+test('N3: the opened job object is compared case-insensitively', async () => {
+  const client = bulkClient({ openObject: 'CONTACT' });
+  const recs = accConRecords(300, 40);
+  const res = await insertAll(client, recs, { plan: conPlan(recs.length, 12000) });
+  assert.equal(res.stopped, null);
+  assert.equal(res.inserted, recs.length);
+});

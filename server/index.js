@@ -184,7 +184,7 @@ export function createApp({
     }
     // Known Ids only here; Bulk jobs not collected yet are read after the org checks (S2).
     const rem = await history.remaining(hid);
-    const pending = (data.bulkJobs ?? []).some((j) => !j.idsCollected);
+    const pending = (data.bulkJobs ?? []).some((j) => !j.idsCollected && !j.idsLost);
     if (!pending) countCheck(rem, confirm.count);
     const target = was.alias ?? was.username;
     const name = was.alias ?? was.username;
@@ -414,7 +414,9 @@ export function createApp({
           rejected: rem.rejected,
           ...(rem.rejected ? { rejectedMessage: rejectedMessage(rem.rejected) } : {}),
           // Bulk jobs whose Ids are not in the file yet: a delete reads them first and asks to confirm the new count.
-          pendingBulkJobs: (data.bulkJobs ?? []).filter((j) => !j.idsCollected).map((j) => ({ jobId: j.jobId, sobject: j.sobject, nodeId: j.nodeId, records: j.records, state: j.state })),
+          pendingBulkJobs: (data.bulkJobs ?? []).filter((j) => !j.idsCollected && !j.idsLost).map((j) => ({ jobId: j.jobId, sobject: j.sobject, nodeId: j.nodeId, records: j.records, state: j.state })),
+          // Jobs whose Ids can no longer be read (results purged, or not this user's insert job): what to do instead.
+          lostBulkJobs: (data.bulkJobs ?? []).filter((j) => j.idsLost).map((j) => ({ jobId: j.jobId, sobject: j.sobject, records: j.records, message: j.idsLostMessage })),
         };
       },
     ],
@@ -452,7 +454,7 @@ export function createApp({
         const release = history.markActive(hid, 'delete');
         // S2: Bulk jobs whose Ids were never read are collected FIRST (read-only), then the count the
         // user confirmed is compared with the new total; a difference ⇒ 409 and nothing deleted.
-        let collected = { added: 0, pending: [] };
+        let collected = { added: 0, pending: [], lost: [] };
         try {
           if (checked.pending) {
             collected = await collectPendingJobs({ client: sfClient, history, hid, target: session });
@@ -481,7 +483,7 @@ export function createApp({
         try {
           result = await deleteRun({
             client: sfClient, history, hid, target: session, bulk: body.bulk ?? 'auto', signal: handle.signal, forceSignal: handle.forceSignal, ...deleteOptions,
-            collected: collected.added, pendingBulkJobs: collected.pending,
+            collected: collected.added, pendingBulkJobs: collected.pending, lostBulkJobs: collected.lost ?? [],
             onProgress: (p) => {
               const t = Date.now();
               if (t - last < (runOptions.progressIntervalMs ?? 250)) return;

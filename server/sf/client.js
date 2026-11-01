@@ -211,6 +211,10 @@ export function createSfClient({ cli, createConnection = (options) => new Connec
             numberRecordsProcessed: Number(info.numberRecordsProcessed ?? 0),
             numberRecordsFailed: Number(info.numberRecordsFailed ?? 0),
             errorMessage: info.errorMessage ?? null,
+            // What the job is and who made it (an attached job is checked before its Ids are used).
+            operation: info.operation ?? null,
+            object: info.object ?? null,
+            createdById: info.createdById ?? null,
           };
         }),
         successfulResults: () => withJob(async (j) => String((await j.getSuccessfulResults(true)) ?? '')),

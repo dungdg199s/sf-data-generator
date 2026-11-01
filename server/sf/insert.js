@@ -364,7 +364,7 @@ export function createInserter(client, target, {
       return undefined;
     }
     // The job Salesforce opened must be exactly the one asked for (review of 0011, N3).
-    if (opened?.operation !== 'insert' || opened?.object !== st.sobject) {
+    if (opened?.operation !== 'insert' || String(opened?.object ?? '').toLowerCase() !== st.sobject.toLowerCase()) {
       try {
         await handle.abort();
       } catch {

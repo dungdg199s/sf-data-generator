@@ -47,7 +47,7 @@ export async function deleteRun({
   client, history, hid, target, bulk = 'auto', signal, forceSignal, onProgress,
   bulkOptions = {}, failFast = FAIL_FAST_BATCHES, batchSize = BATCH_SIZE,
   minBulk = BULK_DEFAULTS.bulkMinRecords, jobRecords = BULK_DEFAULTS.bulkJobRecords,
-  collected = 0, pendingBulkJobs = [],
+  collected = 0, pendingBulkJobs = [], lostBulkJobs = [],
 }) {
   // Pending Bulk jobs are collected by the caller BEFORE the confirmation count is compared (review
   // of 0011, S2: confirm.count bounds what is deleted); here only what is already in the file.
@@ -195,7 +195,7 @@ export async function deleteRun({
       return false;
     }
     // Exactly the job asked for (N3): anything else is aborted before a single Id is uploaded.
-    if (opened?.operation !== 'delete' || opened?.object !== sobject) {
+    if (opened?.operation !== 'delete' || String(opened?.object ?? '').toLowerCase() !== sobject.toLowerCase()) {
       try {
         await handle.abort();
       } catch {
@@ -388,6 +388,8 @@ export async function deleteRun({
     warnings: rem.rejected ? [`${rem.rejected} dòng trong file Id không thuộc bước nào của lần insert này (file có thể đã bị sửa), không xóa.`] : [],
     // Bulk insert jobs whose Ids could not be read yet (still running in the org, or no results): their records are not in this delete.
     pendingBulkJobs,
+    // Bulk insert jobs whose Ids can no longer be read (review 2, item 6): records not in this delete.
+    lostBulkJobs,
   };
 
   async function checkPrefix(step) {
@@ -411,32 +413,73 @@ export async function deleteRun({
   }
 }
 
+/** Salesforce no longer has the job or its results (purged after about 7 days). */
+const isNotFound = (e) => e?.cause?.errorCode === 'NOT_FOUND' || e?.cause?.statusCode === 404 || /NOT_FOUND|\b404\b/.test(String(e?.message));
+
 /**
  * Bulk insert jobs of an entry whose results were never read (interrupted run, results not readable
  * at the time): read their successful results (read-only: check + successfulResults) and append the
  * Ids not yet in the file. Raises the entry's `inserted`. Called by the delete endpoint before it
  * compares confirm.count (review of 0011, S2).
- * → { added, pending: [{ jobId, sobject, state, reason }] }  pending: jobs still not collected
+ *
+ * A job is only used if Salesforce says it is an `insert` of the step's sObject made by the user of
+ * the session (review 2, item 7); otherwise, or when the job or its results are gone (404), it is
+ * marked `idsLost` with a sentence telling the user where to look, and no longer counts as pending.
+ * `target` should be the whoami session (its userId is checked).
+ * → { added, pending: [{ jobId, sobject, state, reason }], lost: [{ jobId, sobject, message }] }
  */
 export async function collectPendingJobs({ client, history, hid, target }) {
   const entry = await history.read(hid);
   let added = 0;
   const pending = [];
-  const jobs = (entry?.bulkJobs ?? []).filter((j) => !j.idsCollected);
-  if (!jobs.length) return { added, pending };
+  const lost = [];
+  const jobs = (entry?.bulkJobs ?? []).filter((j) => !j.idsCollected && !j.idsLost);
+  if (!jobs.length) return { added, pending, lost };
   const known = new Set();
   for await (const r of history.ids(hid)) known.add(r.id);
+  const userId = target && typeof target === 'object' ? target.userId : null;
+  const markLost = async (job, message) => {
+    lost.push({ jobId: job.jobId, sobject: job.sobject, message });
+    await history.update(hid, (d) => ({ bulkJobs: (d.bulkJobs ?? []).map((j) => (j.jobId === job.jobId ? { ...j, idsLost: true, idsLostMessage: message } : j)) }));
+  };
+  const goneMessage = (job) => `Id của job ${job.jobId} (${job.sobject}) không còn đọc được (Salesforce xóa kết quả sau 7 ngày); tìm bản ghi trong Setup → Bulk Data Load Jobs hoặc theo CreatedDate, rồi xóa bằng tay nếu cần.`;
   for (const job of jobs) {
     let state = job.state ?? null;
     try {
       const handle = client.bulkJob(target, { jobId: job.jobId });
-      const info = await handle.check();
+      let info;
+      try {
+        info = await handle.check();
+      } catch (e) {
+        if (isNotFound(e)) {
+          await markLost(job, goneMessage(job));
+          continue;
+        }
+        throw e;
+      }
       state = info.state;
+      const mismatch = info.operation !== 'insert'
+        || String(info.object ?? '').toLowerCase() !== String(job.sobject ?? '').toLowerCase()
+        || (userId && info.createdById !== userId);
+      if (mismatch) {
+        await markLost(job, `Job ${job.jobId} không phải job insert ${job.sobject} của user đang đăng nhập (Salesforce ghi ${info.operation ?? '?'} ${info.object ?? '?'}, tạo bởi ${info.createdById ?? '?'}), nên app không dùng Id của nó. Kiểm tra trong Setup → Bulk Data Load Jobs.`);
+        continue;
+      }
       if (!['JobComplete', 'Failed', 'Aborted'].includes(info.state)) {
         pending.push({ jobId: job.jobId, sobject: job.sobject, state, reason: 'running' });
         continue;
       }
-      const rows = parseResultCsv(await handle.successfulResults()).rows.filter((r) => r.sf__Id && !known.has(r.sf__Id));
+      let text;
+      try {
+        text = await handle.successfulResults();
+      } catch (e) {
+        if (isNotFound(e)) {
+          await markLost(job, goneMessage(job));
+          continue;
+        }
+        throw e;
+      }
+      const rows = parseResultCsv(text).rows.filter((r) => r.sf__Id && !known.has(r.sf__Id));
       await history.appendIds(hid, rows.map((r) => ({ sobject: job.sobject, nodeId: job.nodeId, ref: '', id: r.sf__Id })));
       for (const r of rows) known.add(r.sf__Id);
       added += rows.length;
@@ -445,9 +488,9 @@ export async function collectPendingJobs({ client, history, hid, target }) {
         bulkJobs: (d.bulkJobs ?? []).map((j) => (j.jobId === job.jobId ? { ...j, state: info.state, idsCollected: true, collectedLater: rows.length } : j)),
       }));
     } catch (e) {
-      // Results not available (job purged, aborted without results): the Ids stay unknown for now.
+      // Not available right now (network…): the job stays pending.
       pending.push({ jobId: job.jobId, sobject: job.sobject, state, reason: e.message });
     }
   }
-  return { added, pending };
+  return { added, pending, lost };
 }

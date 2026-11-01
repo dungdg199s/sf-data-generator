@@ -754,3 +754,70 @@ test('item 10: with history off (another live server holds the lock) delete and 
     await s.close();
   }
 });
+
+// ---------- review 2 of 0011, items 6 and 7: pending Bulk jobs that cannot or must not be read ----------
+
+async function entryWithJob(s, jobId, extra = {}) {
+  const hid = await s.history.create({ org: { alias: 'dev', username: 'me@example.com', orgId: '00D000000000001AAA', instanceUrl: s.fake.url, kind: 'sandbox' }, workflow: null, seed: 1, now: 1, steps: [{ nodeId: 'c', alias: 'con', sobject: 'Contact', mode: 'bulk', records: 3 }], total: 3 });
+  await s.history.finish(hid, { status: 'interrupted', inserted: 0, bulkJobs: [{ jobId, nodeId: 'c', sobject: 'Contact', records: 3, state: 'UploadComplete', idsCollected: false, ...extra }] });
+  return hid;
+}
+
+test('item 6: a job whose results are gone (404) is marked idsLost with what to do; it stops counting as pending or remaining', async () => {
+  const s = await stack();
+  try {
+    const hid = await entryWithJob(s, '7504x0000000999AAA'); // unknown to the fake ⇒ 404
+    assert.equal((await (await s.get('/api/history')).json()).runs.find((r) => r.id === hid).deletion.remaining, 3, 'pending counts until read');
+    const r = await s.post(`/api/history/${hid}/delete`, { confirm: { username: 'me@example.com', count: 0 } });
+    assert.equal(r.status, 409);
+    assert.equal((await r.json()).error, 'Lần insert này không còn bản ghi nào để xóa.');
+    const one = await (await s.get(`/api/history/${hid}`)).json();
+    assert.deepEqual(one.pendingBulkJobs, []);
+    assert.equal(one.lostBulkJobs.length, 1);
+    assert.equal(one.lostBulkJobs[0].message, 'Id của job 7504x0000000999AAA (Contact) không còn đọc được (Salesforce xóa kết quả sau 7 ngày); tìm bản ghi trong Setup → Bulk Data Load Jobs hoặc theo CreatedDate, rồi xóa bằng tay nếu cần.');
+    assert.equal((await (await s.get('/api/history')).json()).runs.find((r2) => r2.id === hid).deletion.remaining, 0);
+    assert.deepEqual(await s.history.prunePreview(), []);
+    assert.equal(s.fake.writes().length, 0);
+  } finally {
+    await s.close();
+  }
+});
+
+test('item 7: a pending job that is not an insert of the step sObject by this user is never read; marked idsLost', async () => {
+  const s = await stack();
+  try {
+    const client = createSfClientFor(s);
+    const mk = async (object, operation) => {
+      const job = client.bulkJob('dev', { object, operation });
+      await job.open();
+      await job.upload(operation === 'insert' ? 'LastName\nA\n' : 'Id\n003000000000001AAA\n');
+      await job.close();
+      return job.id;
+    };
+    s.fake.options.checksBeforeComplete = 0;
+    const cases = [
+      [await mk('Account', 'insert'), /không phải job insert Contact .*Salesforce ghi insert Account/],
+      [await mk('Contact', 'delete'), /Salesforce ghi delete Contact/],
+      [await mk('Contact', 'insert'), /tạo bởi 005000000000009OTH/],
+    ];
+    s.fake.jobs.get(cases[2][0]).createdById = '005000000000009OTH';
+    for (const [jobId, re] of cases) {
+      const hid = await entryWithJob(s, jobId);
+      const before = s.fake.requests.length;
+      const r = await s.post(`/api/history/${hid}/delete`, { confirm: { username: 'me@example.com', count: 0 } });
+      assert.equal(r.status, 409);
+      const one = await (await s.get(`/api/history/${hid}`)).json();
+      assert.match(one.lostBulkJobs[0].message, re);
+      assert.ok(!s.fake.requests.slice(before).some((q) => q.path.endsWith('/successfulResults')), 'results never read');
+      assert.equal((await s.history.remaining(hid)).total, 0);
+    }
+    // Same object in other letter case is accepted (N3 nit).
+    const ok = await mk('Contact', 'insert');
+    s.fake.jobs.get(ok).object = 'contact';
+    const hid = await entryWithJob(s, ok);
+    const r = await s.post(`/api/history/${hid}/delete`, { confirm: { username: 'me@example.com', count: 0 } });
+    assert.equal((await r.json()).count, 1);
+  } finally {
+    await s.close();
+  }
+});
