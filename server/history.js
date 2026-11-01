@@ -322,7 +322,7 @@ export function createHistory({ dir = defaultDataDir(), clock = () => Date.now()
         seed,
         now,
         bulk,
-        steps: steps.map((s) => ({ nodeId: s.nodeId, alias: s.alias ?? null, sobject: s.sobject, mode: s.mode ?? 'collections', total: s.records ?? s.total ?? 0, inserted: 0, failed: 0 })),
+        steps: steps.map((s) => ({ nodeId: String(s.nodeId), alias: s.alias ?? null, sobject: s.sobject, mode: s.mode ?? 'collections', total: s.records ?? s.total ?? 0, inserted: 0, failed: 0 })),
         total,
         inserted: 0,
         failed: 0,
@@ -421,7 +421,7 @@ export function createHistory({ dir = defaultDataDir(), clock = () => Date.now()
       const data = await api.read(hid);
       if (!data) return null;
       const done = await api.deletedMap(hid);
-      const byStep = new Map((data.steps ?? []).map((s) => [s.nodeId, { nodeId: s.nodeId, sobject: s.sobject, ids: [] }]));
+      const byStep = new Map((data.steps ?? []).map((s) => [String(s.nodeId), { nodeId: String(s.nodeId), sobject: s.sobject, ids: [] }]));
       let inserted = 0;
       let rejected = 0;
       for await (const r of api.ids(hid)) {

@@ -62,7 +62,9 @@ export function migrateV1(wf, { maxDepth = DEFAULT_MAX_DEPTH, fieldTypes } = {})
   const report = emptyReport();
   if (!wf || typeof wf !== 'object' || wf.version !== 1) return { workflow: wf, report };
 
-  const nodeList = (Array.isArray(wf.nodes) ? wf.nodes : []).filter((n) => n && typeof n === 'object' && n.id !== undefined && n.id !== null);
+  // Ids become strings (review 2 of 0011): a v2 step id must be a string; edges follow.
+  const str = (v) => (v === undefined || v === null ? v : String(v));
+  const nodeList = (Array.isArray(wf.nodes) ? wf.nodes : []).filter((n) => n && typeof n === 'object' && n.id !== undefined && n.id !== null).map((n) => ({ ...n, id: String(n.id) }));
   const nodes = new Map();
   for (const n of nodeList) {
     // Same id twice: the v1 executor (new Map(nodes)) used the last one.
@@ -72,7 +74,7 @@ export function migrateV1(wf, { maxDepth = DEFAULT_MAX_DEPTH, fieldTypes } = {})
 
   // 1. Normalise edges.
   const out = new Map(); // id -> { port: { to, index } }
-  const edges = Array.isArray(wf.edges) ? wf.edges : [];
+  const edges = (Array.isArray(wf.edges) ? wf.edges : []).map((e) => (e && typeof e === 'object' ? { ...e, from: str(e.from), to: str(e.to) } : e));
   edges.forEach((e, index) => {
     if (!e || !nodes.has(e.from) || !nodes.has(e.to)) {
       report.droppedEdges.push({ from: e?.from, fromPort: e?.fromPort ?? 'next', to: e?.to, reason: 'missing' });

@@ -199,3 +199,11 @@ test('N6: a history directory locked by another live process is off, with a sent
   assert.equal((await h2.status()).enabled, true);
   assert.equal(await readFile(path.join(root, '.lock'), 'utf8'), String(process.pid));
 });
+
+test('item 2: a numeric nodeId still matches its rows (keys are String(nodeId))', async () => {
+  const h = createHistory({ dir: await tmp(), random: hex });
+  const hid = await h.create({ org: ORG, workflow: null, seed: 1, now: 1, steps: [{ nodeId: 5, alias: 'acc', sobject: 'Account', records: 1 }], total: 1 });
+  await h.appendIds(hid, [{ sobject: 'Account', nodeId: 5, ref: 'acc#1', id: '001000000000001AAA' }]);
+  const rem = await h.remaining(hid);
+  assert.deepEqual([rem.total, rem.rejected, rem.steps[0].nodeId], [1, 0, '5']);
+});

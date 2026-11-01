@@ -1345,3 +1345,8 @@ test('step ids are letters, digits, _ and - only (review of 0011, B1): the issue
     assert.ok(errors.some((e) => e.nodeId === id && /^Id bước ".*" không hợp lệ/.test(e.message)), JSON.stringify(id));
   }
 });
+
+test('a numeric step id is refused (review 2 of 0011, item 2); the issue names the step', () => {
+  const errors = validateWorkflow(wf([record(5, 'Account', 'acc')])).errors;
+  assert.ok(errors.some((e) => e.nodeId === 5 && e.message === 'Id bước 5 phải là chuỗi (ví dụ "acc"), không phải number. Đổi id của bước trong file workflow.'));
+});

@@ -113,7 +113,9 @@ export function prepareWorkflow(wf) {
         continue;
       }
       // Ids end up in insert history and its CSV files (design 0011): letters, digits, _ and - only.
-      if (!STEP_ID.test(String(step.id))) {
+      if (typeof step.id !== 'string') {
+        err(`Id bước ${JSON.stringify(step.id)?.slice(0, 40)} phải là chuỗi (ví dụ "acc"), không phải ${typeof step.id}. Đổi id của bước trong file workflow.`, step.id);
+      } else if (!STEP_ID.test(step.id)) {
         err(`Id bước "${String(step.id).slice(0, 80).replace(/[\u0000-\u001f\u007f]/g, '?')}" không hợp lệ: chỉ dùng chữ không dấu, số, "_" hoặc "-", tối đa 64 ký tự. Đổi id của bước trong file workflow.`, step.id);
       }
       if (ids.has(step.id)) err(`Trùng id bước "${step.id}".`, step.id);

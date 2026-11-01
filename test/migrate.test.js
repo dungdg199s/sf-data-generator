@@ -234,3 +234,21 @@ test('migration equivalence: a duplicated tail generates the same values (only n
   assert.deepEqual(strip(actual), strip(expected));
   assert.equal(actual.at(-1).nodeId, 'c_2');
 });
+
+test('migrateV1 turns numeric node ids (and the edges to them) into string step ids (review 2 of 0011)', () => {
+  const v1 = {
+    version: 1,
+    nodes: [
+      { id: 1, type: 'start' },
+      { id: 2, type: 'record', config: { sobject: 'Account', alias: 'acc', count: 1, fields: [{ name: 'Name', type: 'text' }] } },
+      { id: 3, type: 'record', config: { sobject: 'Contact', alias: 'con', count: 1, fields: [{ name: 'LastName', type: 'text' }] } },
+    ],
+    edges: [{ from: 1, to: 2 }, { from: 2, to: 3 }],
+  };
+  const { workflow } = migrateV1(v1);
+  const ids = [];
+  const walk = (l) => { for (const s of l) { ids.push(s.id); for (const c of Object.values(s.slots ?? {})) walk(c); } };
+  walk(workflow.steps);
+  assert.deepEqual(ids, ['2', '3']);
+  assert.deepEqual(validateWorkflow(workflow).errors, []);
+});

@@ -166,7 +166,8 @@ export function createInserter(client, target, {
   let collectionsLock = Promise.resolve(); // Collections calls stay sequential (a fallback runs from a job)
 
   const counts = (sobject) => (bySobject[sobject] ??= { inserted: 0, failed: 0 });
-  const stepCounts = (record) => (record.nodeId ? (byStep[record.nodeId] ??= { inserted: 0, failed: 0 }) : { inserted: 0, failed: 0 });
+  // Keyed by String(nodeId) (review 2): the same key as the history file, whatever the id's type.
+  const stepCounts = (record) => (record.nodeId !== undefined && record.nodeId !== null && record.nodeId !== '' ? (byStep[String(record.nodeId)] ??= { inserted: 0, failed: 0 }) : { inserted: 0, failed: 0 });
   const progress = () => onBatch?.({
     inserted: inserted + (active ? Math.max(0, active.processed - active.failed) : 0),
     failed: errorsTotal,
@@ -507,7 +508,7 @@ export function createInserter(client, target, {
       if (!row.sf__Id) continue;
       inserted++;
       counts(st.sobject).inserted++;
-      (byStep[st.nodeId] ??= { inserted: 0, failed: 0 }).inserted++;
+      (byStep[String(st.nodeId)] ??= { inserted: 0, failed: 0 }).inserted++;
       created.push({ sobject: st.sobject, nodeId: st.nodeId, ref: '', id: row.sf__Id });
       const match = byKey.get(rowKey(columns.map((c) => row[c])));
       if (match?.length === 1) settled.add(match[0]);
