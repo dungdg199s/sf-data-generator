@@ -13,8 +13,9 @@ import { migrateV1, describeReport, reportNeedsReview } from '../../shared/migra
 import { analyzeScope, referenceOptions, hasUnclosed, optionShown, numberVarPath, isVar, valueList } from '../../shared/scope.js';
 import { stepNames } from '../../shared/workflow-tree.js';
 
-/** Step ids (review of 0011, B1): no control characters, quotes, commas or spaces. */
-export const STEP_ID = /^[A-Za-z0-9_-]{1,64}$/;
+/** Step ids (review of 0011, B1; review 2: no leading "-"): the shared rule, also used by the client. */
+export { STEP_ID } from '../../shared/workflow-tree.js';
+import { STEP_ID } from '../../shared/workflow-tree.js';
 
 const API_NAME = /^[A-Za-z][A-Za-z0-9_]*$/;
 const ALIAS = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -116,7 +117,7 @@ export function prepareWorkflow(wf) {
       if (typeof step.id !== 'string') {
         err(`Id bước ${JSON.stringify(step.id)?.slice(0, 40)} phải là chuỗi (ví dụ "acc"), không phải ${typeof step.id}. Đổi id của bước trong file workflow.`, step.id);
       } else if (!STEP_ID.test(step.id)) {
-        err(`Id bước "${String(step.id).slice(0, 80).replace(/[\u0000-\u001f\u007f]/g, '?')}" không hợp lệ: chỉ dùng chữ không dấu, số, "_" hoặc "-", tối đa 64 ký tự. Đổi id của bước trong file workflow.`, step.id);
+        err(`Id bước "${String(step.id).slice(0, 80).replace(/[\u0000-\u001f\u007f]/g, '?')}" không hợp lệ: chỉ dùng chữ không dấu, số, "_" hoặc "-" (không bắt đầu bằng "-"), tối đa 64 ký tự. Đổi id của bước trong file workflow, hoặc mở file trong app để tự sửa.`, step.id);
       }
       if (ids.has(step.id)) err(`Trùng id bước "${step.id}".`, step.id);
       ids.add(step.id);

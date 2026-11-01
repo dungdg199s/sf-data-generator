@@ -457,7 +457,7 @@ test('B1: a step id with a line break cannot forge an Id row: the workflow is re
     const res = await s.post('/api/run', { workflow: wf([record(evil, 'Contact', 'con', [{ name: 'LastName', type: 'text' }])]), target: { kind: 'org', org: 'dev' } });
     assert.equal(res.status, 422);
     const issue = (await res.json()).issues.find((i) => i.nodeId === evil);
-    assert.match(issue.message, /^Id bước ".*" không hợp lệ: chỉ dùng chữ không dấu, số, "_" hoặc "-", tối đa 64 ký tự\./);
+    assert.match(issue.message, /^Id bước ".*" không hợp lệ: chỉ dùng chữ không dấu, số, "_" hoặc "-" \(không bắt đầu bằng "-"\), tối đa 64 ký tự\./);
     assert.equal(s.fake.writes().length, writes);
     // A history file written before the fix (cell quoted across lines): the parser keeps it one cell.
     const contact = (await createSfClientFor(s).create('dev', 'Contact', [{ LastName: 'ours' }]))[0].id;
@@ -623,11 +623,10 @@ test('N11: an entry that vanishes during a delete stops it with a 404 sentence; 
 test('N10: ids.csv prefixes cells a spreadsheet would run as a formula', async () => {
   const s = await stack();
   try {
-    const w = wf([record('-cmd', 'Account', 'acc', [{ name: 'Name', type: 'text' }])]);
-    const { events } = await s.insert(w);
-    const hid = events.at(-1).result.insert.historyId;
+    // A step id can no longer start with "-" (review 2, item 8): an old or edited file still can.
+    const hid = await rawEntry(s, [{ nodeId: '=cmd', alias: 'acc', sobject: 'Account', records: 1 }], 'Account,=cmd,@ref,001000000000001AAA\n');
     const lines = (await (await s.get(`/api/history/${hid}/ids.csv`)).text()).trim().split('\r\n');
-    assert.match(lines[1], /^Account,001\w+,acc#1,'-cmd,inserted$/);
+    assert.equal(lines[1], "Account,001000000000001AAA,'@ref,'=cmd,inserted");
   } finally {
     await s.close();
   }

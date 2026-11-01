@@ -1340,7 +1340,7 @@ test('{{run.seed}} under an alias "run" says the alias hides the run variable (r
 test('step ids are letters, digits, _ and - only (review of 0011, B1): the issue names the step', () => {
   const v = validateWorkflow;
   for (const id of ['a', 'acc_2', 's1abc-x', 'A'.repeat(64)]) assert.equal(v(wf([record(id, 'Account', 'acc')])).errors.length, 0, id);
-  for (const id of ['q\nAccount', 'a,b', 'a"b', 'a b', 'A'.repeat(65), 'x\u0000']) {
+  for (const id of ['q\nAccount', 'a,b', 'a"b', 'a b', 'A'.repeat(65), 'x\u0000', '-cmd']) {
     const errors = v(wf([record(id, 'Account', 'acc')])).errors;
     assert.ok(errors.some((e) => e.nodeId === id && /^Id bước ".*" không hợp lệ/.test(e.message)), JSON.stringify(id));
   }

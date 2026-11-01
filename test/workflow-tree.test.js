@@ -643,3 +643,47 @@ test('setStepAlias on a loop does not rename its own count variable from an oute
   assert.equal(inner.config.count, '{{o.index}}');
   assert.equal(inner.slots.body[0].config.fields[0].options.template, '{{k.index}}');
 });
+
+// ---------- review 2 of 0011, item 8: step ids the server accepts ----------
+
+import { normalizeStepIds, nextId as nextStepId, STEP_ID } from '../shared/workflow-tree.js';
+import { validateWorkflow as validateIds } from '../server/workflow/schema.js';
+
+test('nextId keeps ids within 64 characters, cutting the base and never the number', () => {
+  const long = 'a'.repeat(64);
+  const id = nextStepId(long, new Set([long]));
+  assert.equal(id, `${'a'.repeat(62)}_2`);
+  assert.ok(STEP_ID.test(id));
+  assert.equal(nextStepId(`${'b'.repeat(70)}_9`, new Set()).length, 64);
+});
+
+test('normalizeStepIds rewrites invalid, numeric, leading "-", too long and duplicate ids; a Record without alias keeps its name', () => {
+  const wf = {
+    version: 2,
+    steps: [
+      { id: 5, type: 'record', config: { sobject: 'Account', alias: 'acc', fields: [{ name: 'Name', type: 'text' }] } },
+      { id: 'my acc', type: 'loop', config: { count: 1 }, slots: { body: [
+        { id: '-x', type: 'record', config: { sobject: 'Contact', fields: [{ name: 'LastName', type: 'text' }] } },
+        { id: 'ok', type: 'record', config: { sobject: 'Contact', alias: 'c2', fields: [{ name: 'LastName', type: 'text' }] } },
+      ] } },
+      { id: 'ok', type: 'record', config: { sobject: 'Lead', alias: 'l', fields: [{ name: 'LastName', type: 'text' }] } },
+      { id: `rec_${'z'.repeat(70)}`, type: 'record', config: { sobject: 'Task', fields: [{ name: 'Subject', type: 'text' }] } },
+      { id: 'parent', type: 'record', config: { sobject: 'Contact', fields: [{ name: 'LastName', type: 'text' }, { name: 'AccountId', type: 'lookup', options: { ref: `rec_${'z'.repeat(70)}` } }] } },
+    ],
+  };
+  const before = JSON.stringify(wf);
+  const { workflow, renamed } = normalizeStepIds(wf);
+  assert.equal(JSON.stringify(wf), before, 'pure: the input is not changed');
+  assert.deepEqual(renamed.map((r) => r.from), [5, 'my acc', '-x', 'ok', `rec_${'z'.repeat(70)}`]);
+  const ids = [];
+  const walk = (l) => { for (const s of l) { ids.push(s.id); for (const c of Object.values(s.slots ?? {})) walk(c); } };
+  walk(workflow.steps);
+  assert.deepEqual(ids.slice(0, 5), ['5', 'my_acc', 'x', 'ok', 'ok_2']);
+  assert.ok(ids.every((id) => STEP_ID.test(id)));
+  assert.equal(new Set(ids).size, ids.length);
+  // The long alias-less Record keeps its old id as alias, so the Lookup to it still resolves.
+  assert.equal(workflow.steps[3].config.alias, `rec_${'z'.repeat(70)}`);
+  assert.deepEqual(validateIds(workflow).errors.filter((e) => /Id bước/.test(e.message)), []);
+  const clean = { version: 2, steps: [{ id: 'a', type: 'record', config: {} }] };
+  assert.equal(normalizeStepIds(clean).workflow, clean, 'nothing to change: the same object');
+});

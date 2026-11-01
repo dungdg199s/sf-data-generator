@@ -226,9 +226,70 @@ export function nextName(name, taken, sep = '') {
 export function nextId(id, taken) {
   const base = String(id).replace(/_\d+$/, '');
   for (let i = 2; ; i++) {
-    const candidate = `${base}_${i}`;
+    // Stays within STEP_ID's 64 characters (review 2 of 0011): the base is cut, never the number.
+    const suffix = `_${i}`;
+    const candidate = `${base.slice(0, STEP_ID_MAX - suffix.length)}${suffix}`;
     if (!taken.has(candidate)) return candidate;
   }
+}
+
+/**
+ * Step ids (design 0011 review): letters, digits, "_" and "-", not starting with "-", at most 64
+ * characters. The server refuses others (server/workflow/schema.js uses this very rule).
+ */
+export const STEP_ID_MAX = 64;
+export const STEP_ID = /^[A-Za-z0-9_][A-Za-z0-9_-]{0,63}$/;
+
+/**
+ * A workflow (or `{ steps }` from the clipboard) with every invalid step id rewritten (pure; the
+ * input is not changed): non-string, characters outside STEP_ID, leading "-", too long, or a
+ * duplicate. Other steps refer to steps by alias, never by id — except a Record without alias,
+ * which is named by its id: when such an id changes, the old id becomes its alias if it is a usable
+ * alias name, so references keep working. UI state keyed by id (collapsed frames, selection) is
+ * rebuilt when a workflow is opened.
+ * → { workflow, renamed: [{ from, to }] }  (`workflow` is the input itself when nothing changed)
+ */
+export function normalizeStepIds(wf) {
+  if (!wf || typeof wf !== 'object' || !Array.isArray(wf.steps)) return { workflow: wf, renamed: [] };
+  const all = [];
+  const walk = (list) => {
+    for (const st of Array.isArray(list) ? list : []) {
+      if (!st || typeof st !== 'object') continue;
+      all.push(st);
+      for (const children of Object.values(st.slots ?? {})) walk(children);
+    }
+  };
+  walk(wf.steps);
+  const taken = new Set(all.filter((st) => typeof st.id === 'string' && STEP_ID.test(st.id)).map((st) => st.id));
+  const seen = new Set();
+  const change = new Map(); // step object → new id
+  for (const st of all) {
+    const ok = typeof st.id === 'string' && STEP_ID.test(st.id) && !seen.has(st.id);
+    if (ok) {
+      seen.add(st.id);
+      continue;
+    }
+    let base = String(st.id ?? '').replace(/[^A-Za-z0-9_-]+/g, '_').replace(/^-+/, '').slice(0, STEP_ID_MAX) || 's';
+    if (!STEP_ID.test(base)) base = 's';
+    const id = taken.has(base) || seen.has(base) ? nextId(base, new Set([...taken, ...seen])) : base;
+    taken.add(id);
+    seen.add(id);
+    change.set(st, id);
+  }
+  if (!change.size) return { workflow: wf, renamed: [] };
+  const renamed = [];
+  const copy = (list) => (Array.isArray(list) ? list.map((st) => {
+    if (!st || typeof st !== 'object') return st;
+    const out = { ...st };
+    if (change.has(st)) {
+      out.id = change.get(st);
+      renamed.push({ from: st.id, to: out.id });
+      if (st.type === 'record' && !st.config?.alias && isAliasName(String(st.id))) out.config = { ...(st.config ?? {}), alias: String(st.id) };
+    }
+    if (st.slots && typeof st.slots === 'object') out.slots = Object.fromEntries(Object.entries(st.slots).map(([k, v]) => [k, copy(v)]));
+    return out;
+  }) : list);
+  return { workflow: { ...wf, steps: copy(wf.steps) }, renamed };
 }
 
 /** A usable alias / loop variable name (same rule as server/workflow/schema.js). */
