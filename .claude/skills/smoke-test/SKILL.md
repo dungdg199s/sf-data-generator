@@ -13,23 +13,30 @@ node .claude/skills/smoke-test/smoke.cjs /path/to/screenshot-dir   # dir optiona
 
 It runs the app **in its own process** (`createApp` from `server/index.js` on port 0, so it dies with the smoke on
 Ctrl+C or kill and a stale server on a busy port can never answer instead) with a **stub sf CLI** that fails like a machine
-without `sf` (503 `smoke: …`, checked at start), so no flow can reach a real org. It drives headless Chromium through these
+without `sf` (503 `smoke: …`, checked at start), so no flow can reach a real org. Its insert history (design 0011) lives in a
+temporary directory (`createHistory({ dir })`, removed at the end): the UI reads `GET /api/history` once an org is selected, and
+the smoke never touches the user's data directory. It drives headless Chromium through these
 flows
 (failed checks are collected and reported together; a timed-out wait aborts that flow, the others finish).
 
 **Speed (since design 0009).** The flows are grouped into seven independent functions that run **in parallel**, each in
 its own browser context (so storage, routes and dialogs never leak between them): `flowEditing` (1–5), `flowPicker`
-(5b), `flowFiles` (5c–10), `flowDark` (12), `flowLayoutWide` and `flowLayoutNarrow` (11, 13), `flowEach` (14), `flowCanvas` (15). The browser launches
+(5b), `flowFiles` (5c–10), `flowDark` (12), `flowLayoutWide` and `flowLayoutNarrow` (11, 13), `flowEach` (14), `flowCanvas` (15), `flowProductivity` (16), `flowLibrary` (17), `flowMinimap` (18), `flowVarsLoops` (19), `flowHistory` and `flowHistoryProd` (20). The browser launches
 while the server starts; a fresh context starts with empty storage, so no `localStorage.clear()` + reload; storage a flow
 needs before its first load is written by `addInitScript` (once, guarded by a marker key, so reloads keep it); layout
 checks resize one page (`setViewportSize`) instead of opening a context per width; waits for the sheet or toast
 transition use `document.getAnimations()` instead of fixed timeouts. A run went from ~10 s (sequential) to ~5.5 s with
 flow 13 added. When you add a flow, put it in the function it depends on, or in a new function if it needs nothing from
-the others; never add a fixed `waitForTimeout`.
+the others; never add a fixed `waitForTimeout`: the smoke fails at start if its own source contains one (`noFixedWaits`).
+Every context is created with `reducedMotion: 'reduce'` (the app honours it), so no transition has to finish before a check.
+A flow that needs another workflow mid-way opens it through `#file-input` (`setInputFiles` with a buffer) rather than writing
+storage and reloading (one app boot less; flow 5b).
 
 1. **Wide (1440 px), light scheme.** Loads the "Account + Contact" sample. Every step, the Start card
    and every palette item carries `data-type` and an icon tile (`.ico-tile .ico`) and no inline `--c`;
-   `client/js/store.js` no longer contains `NODE_COLORS` (design doc 0008).
+   `client/js/store.js` no longer contains `NODE_COLORS` (design doc 0008). Icons (design 0014 §1): with `acc` selected
+   (inspector head and field cards drawn), every visible `button` without text has an `aria-label`, every `.ico` has a
+   `data-ico` unless it is inside an `.ico-tile`, and every icon directly in a non-link button is 16 px wide.
 2. **Editing.** The "+" inside the inner loop body opens the menu (every row has `data-type` and an icon)
    and adds a Record after `con`, which becomes selected; Alt+↑ moves it above `con`; Delete removes it
    and Ctrl+Z restores it in place.
@@ -61,16 +68,21 @@ the others; never add a fixed `waitForTimeout`.
    `aria-controls` only while it is open. Typing `Lead` into "Trỏ tới sObject" of `AccountId` refreshes "Bản ghi cha".
    Then a seeded workflow checks branch "Giá trị" (path mode): switching a root branch to "So sánh giá trị" fills
    `acc.Name` (not the invalid `loop.index`); tabbing into and out of an empty "Giá trị" neither opens the picker nor
-   inserts; clicking it opens the list and Tab without typing inserts nothing; ↓ then Tab inserts.
+   inserts; clicking it opens the list and Tab without typing inserts nothing; ↓ then Tab inserts. Design 0014 §6: the template
+   field and the path field have `aria-keyshortcuts` with `Alt+ArrowDown`, and Alt+ArrowDown opens the picker in both (in the
+   template field with the search focused; Esc closes it).
 5c. **Query → Chọn bản ghi → Record without an org (design doc 0006).** The "Contact cho Account có sẵn" sample
-   shows "chưa chọn org" on the Query card; Ctrl+Enter generates 10 Contacts from 5 sample rows, with a "↓ accs ·
+   shows "chưa chọn org" on the Query card; Ctrl+Enter generates 10 Contacts from 5 sample rows, with an "accs ·
    Account (5)" tab, "accs: 5 bản ghi mẫu" in the summary and a warning on the Query card. With the Query selected,
    "Chọn bản ghi" in the palette fills "Chọn từ pool" = `accs` and alias `acc…`; `{{` typed in WHERE outlines it red.
    The first `/api/validate` (of the workflow before the sample) is held until after the preview: when it lands, the
    Query warning stays (stale responses are dropped). Editing the name and putting it back (a validation of the same
    workflow) also keeps the run's warning.
-6. **v1 autosave.** A `sfdg.workflow.v1` autosave is migrated on load (toast), `sfdg.workflow.v2` is
-   written and the v1 key is left untouched.
+6. **v1 autosave.** A `sfdg.workflow.v1` autosave is migrated on load (toast) into the first entry of the workflow
+   library (design 0012 A); `sfdg.workflow.v2` is **not** written and the v1 key is left untouched. Then a valid
+   `sfdg.workflow.v2` (storage cleared, reload) becomes the library's entry "Đang soạn" with the "đưa vào Thư viện" toast,
+   and the v2 key stays byte for byte. Since 0012 A every flow reads the autosaved workflow with `smokeSaved()` (an init
+   script: the library entry of `sessionStorage['sfdg.activeId']`), not from `sfdg.workflow.v2`.
 7. **Malformed v2 autosave.** The sample is shown with a recovery toast and a "Tải bản lưu" button; the
    broken autosave is neither overwritten nor lost (`sfdg.workflow.v2.broken` keeps a copy).
 8. **Malformed v2 file.** Opening it is refused with a toast naming the bad entry (`steps[1]`); the
@@ -93,7 +105,7 @@ the others; never add a fixed `waitForTimeout`.
     reads "Insert N bản ghi"; "Hủy" closes it. Any `/api/run` request with a `target` is aborted
     and fails the run, so the smoke test never writes to an org. Then, with a canned preview of the Query sample that
     read the (mocked) org, the confirmation lists "Đọc từ org, không ghi: Account 2 (accs, đọc lúc …)" and says the
-    rows are re-read only after 10 minutes or with "⟳ Đọc lại" (no over-promise, no "null"). The canned preview is
+    rows are re-read only after 10 minutes or with "bấm Đọc lại rồi Insert" (no over-promise, no "null"; the ⟳ glyph is an icon since 0014). The canned preview is
     an NDJSON stream (`start`, `done`) like the real `/api/run`. Then inserts are answered by the route mock itself (they
     never reach the server or an org): after an insert, a second Insert previews afresh (seed empty); with seed 7 the
     second confirmation warns "Seed 7 đã dùng cho lần insert trước…"; the "Lỗi insert" tab has role=button group rows
@@ -113,20 +125,34 @@ the others; never add a fixed `waitForTimeout`.
     - **13b top bar**: ≤ 50 px (one row) at 1440 and 1280, ≤ 90 px at 1024, 390 and 360; no horizontal overflow; `#org-select`,
       Xem trước and Insert inside the viewport at every width; the theme select is 32 px wide, `title` "Giao diện: Theo
       hệ thống", its `option` colour is not transparent (`smoke-390-topbar.png`).
-    - **13c ⋯ menu at 390 × 844**: Mới, Mở…, Lưu, a Seed field, Account + Contact, Tối (radio, "Theo hệ thống" checked);
+    - **13c ⋯ menu at 390 × 844**: Mới, Thư viện…, Mở file JSON…, Lưu (0012 A: `Mở…` left the top bar), a Seed field, Account + Contact, Tối (radio, "Theo hệ thống" checked);
       typing 42 sets `#seed` and shows the chip "Seed 42"; the chip reopens the menu on the Seed field; Mẫu "Lead theo xác
-      suất" then "Account + Contact" replace the workflow. At 800 px the menu only has the Mẫu group. Esc in the menu opened
-      from the chip returns focus to the chip; Tab and Shift+Tab close the menu onto ⋯. Inside `role=menu` there is no
+      suất" then "Account + Contact" open (each a new library entry). Esc in the menu opened
+      from the chip returns focus to the chip; at 800 px the groups are Chạy (only `Lịch sử insert`, 0011) and Mẫu; Tab and Shift+Tab close the menu onto ⋯. Inside `role=menu` there is no
       text or input outside a group, a menu item or `aria-hidden` text.
     - **13d sheet at 390 × 844**: tapping `con` leaves its bottom ≤ the sheet top and ≥ 190 px of canvas above the sheet;
       "‹ Xong" by keyboard closes it, makes it inert and focuses the `con` card; Ctrl+Enter in the alias field closes the
       sheet, `con` stays selected, the table is above the sheet's top, focus left the sheet and typing "ZZ" changes
       nothing; tapping `con` reopens it; scrolled to the bottom, "‹ Xong" is still inside the sheet; a toast (F8 with
       nothing to go to) ends above the sheet; at 844 × 390 there are ≥ 60 px of canvas above the sheet and "Thu gọn tất
-      cả" is in the ⋯ menu. With the issues workflow, tapping an issue row (390 × 844: `task`; 844 × 390: `opp`) leaves the
+      cả" is in the ⋯ menu. With the issues workflow (opened through `#file-input`, then a reload: the tab reopens its library
+      entry), tapping an issue row (390 × 844: `task`; 844 × 390: `opp`) leaves the
       card fully between the palette and the sheet.
-    - **13e results header**: ≤ 50 px after Xem trước at 390 px with `aria-expanded="true"`; "⤓ Tải" opens "Tải JSON" and
-      "Tải CSV (tab hiện tại)"; at 1440 px the two buttons show and "⤓ Tải" does not.
+      Design 0014 §3 (two snaps), with `con` selected at 390 × 844: Enter on `.sheet-grip` puts the sheet's top at the top
+      bar's bottom (± 1 px) with `aria-expanded="true"`, a toast (F8) ends above it; Enter again goes back to the middle snap
+      with `con` above it; a mouse drag on `.sheet-head` up 200 px gives the tall snap; back at the middle snap (Enter), down 400 px
+      closes it (inert, focus on `con`; from the middle snap so the result does not depend on the drag's speed); tapping `con` reopens it at the middle snap; at 844 × 390 the tall snap is 301 px. Design 0014 §7: at the end, the
+      "Contact cho Account có sẵn" sample (⋯ → Mẫu) previewed without an org: no `.step-card` has `scrollWidth >
+      clientWidth` and every ⋯ is inside the screen.
+    - **13e results header**: ≤ 50 px after Xem trước at 390 px with `aria-expanded="true"`; "Tải" opens "Tải JSON" and
+      "Tải CSV (tab hiện tại)"; at 1440 px the two buttons show and "Tải" does not. Design 0014 §4: at 390 px
+      `#results-summary` and `.palette` get `data-overflow="end"`, a vertical mouse wheel over the summary scrolls it sideways,
+      scrolled to the end it is `"start"`; at 1440 px `.palette` has no `data-overflow`.
+    - **Results panel height (design 0014 §2)**, at the end of `flowLayoutWide` (1440 × 900, `con` selected, panel opened):
+      Shift+Tab from `Kết quả` reaches the `role=separator` handle; ↑ × 3 adds 48 px (and `aria-valuetext` reads `Cao n px
+      (p % màn hình)`); Home gives 160 px; End leaves the main area 240 px high, the issues bar ≤ 25 % of the middle column and
+      `con` in view; from the minimum a mouse drag up 100 px gives 260 px, still 260 px after a reload; Enter collapses the panel
+      and focuses `Kết quả`.
 
 14. **Lặp "Mỗi bản ghi trong pool" (design 0010), `flowEach`, own context.** The "Contact cho mỗi Account có sẵn"
     sample: the loop card shows `acc` and "Mỗi bản ghi trong accs → acc · {{loop.index}}"; Ctrl+Enter (no org, 5 sample
@@ -156,11 +182,122 @@ the others; never add a fixed `waitForTimeout`.
     not under the zoom bar, its ⋯ is 32 px; ⋯ → "Quy trình" there leaves `sfdg.view` = `canvas` (landscape phone = phone).
     `SMOKE_ONLY=flowCanvas` (comma list) runs only the named flows.
 
-It also fails on any page error or a run over 12 s (typically ~5.5–6.5 s since the flows run in parallel, flow 14 included, ~7–8.5 s with flow 15 on a 4-CPU machine; ~10 s before;
-~7–8 s with two CPU-bound processes running alongside).
+18. **Sơ đồ minimap (design 0014 §5), `flowMinimap`, own context (parallel).** A 1 000-step workflow (250 Lặp, each with a
+    Record and a Rẽ nhánh holding a Record) and `sfdg.view` = `canvas` are written by `addInitScript` before the first load.
+    The minimap shows with 1–16 `<path>`; a click at 75 % of its overview track makes the cards around 75 % of the diagram's
+    width; a step card is panned level with the minimap, then End selects the last step: its card stays level, inside the
+    viewport and not under the minimap (fails if `showRect` ignores it). Screenshots `smoke-1440-minimap.png` and
+    `smoke-1440-minimap-dark.png`. `#btn-minimap` hides it (`aria-pressed="false"`), still hidden after a reload
+    (`sfdg.minimap` = `0`), and shows it again; at 800 px with the sheet open it is `visibility: hidden`; at 390 px the button
+    and the map are not displayed; a one-step workflow opened through `#file-input` has no minimap.
+
+19. **Variables and loops (design 0013 đợt C), `flowVarsLoops`, own context (parallel).** A saved workflow (`addInitScript`):
+    Query `accs` and `cons`, Record `opp` (Currency `Amount`), Lặp `lf` (3 × Lead `lead`), Lặp each `accs` → `acc` holding Lặp
+    each `cons` → `con` (`lc`), Rẽ nhánh `br` (`opp.Amount` > ``), Lặp `lv`. "Số lần lặp" of `lf` is a text box
+    (`inputmode="numeric"`) holding `3`; its `{x}` lists `accs.$count`, `opp.Amount`, `run.seed` but not `opp.Name` nor `run.now`,
+    the "Lần chạy" group (`run · Lần chạy`) last, the line "Chỉ hiện biến kiểu Số và field đọc từ org (chưa biết kiểu)." and
+    "Không dùng được ở đây (n)" (steps below `lf`);
+    `accs.$count` makes the box `{{accs.$count}}` with a chip, the saved `count` that string and the card `{{accs.$count}} lần ·
+    {{k.index}}`; `lead` has an `≈` estimate chip. Ctrl+Enter (no org, 5 sample rows): `lf` chip `5 lần lặp` (waits for `.stat:not(.est):not(.live)`, then for `seed n` in the summary), `lead` `5 bản ghi`;
+    Alt+↓ in the count box opens the picker and `run.seed`'s sample is the seed of `#results-summary`. On `lc`, "Lọc" →
+    "Chỉ bản ghi thỏa điều kiện" fills `AccountId` / `{{acc.Id}}` with the toast "Đã điền điều kiện AccountId = {{acc.Id}} (bản
+    ghi con của "acc"). Sửa nếu cần." and "Lọc" keeps the focus (filled in place); "Lặp theo" → fixed hides `filter`…`limit`; two ↶ (mode, then filter) leave no filter
+    and no filled field. Xáo trộn + Tối đa 2: card `Mỗi bản ghi trong cons → con · xáo trộn · tối đa 2 · {{loop2.index}}`, a
+    preview gives `10 lần lặp`. `lv` → "Mỗi giá trị trong danh sách": the textarea is `.invalid`, has the placeholder
+    `Hot\nWarm\nCold` and the valuesEmpty line, the card reads `Danh sách trống · nhập giá trị`; `Công ty A, chi nhánh B⏎Hot`
+    saves two values (`split: 'lines'`); `Hot⏎Warm⏎Cold` gives `3 giá trị: Hot, Warm, Cold · {{v.value}}`. `br`'s "So với" `{x}`,
+    typing `Amount`, Enter ⇒ `{{opp.Amount}}`, card `opp.Amount > {{opp.Amount}}`. Card texts are waited for (≤ 2 s), not read
+    right after the edit. (Numbered 19: 15 is the Sơ đồ flow; the design called it "luồng 15".)
+
+16. **Editor productivity (design 0012), `flowProductivity`, own context (one page: G, then F1, I, C, H, D, E in that order).** G: a saved workflow (`addInitScript`) with a Task
+    Record that has a `Name` field and a Contact whose template reads `{{task.Name}}`: the Task card has the warning badge, its
+    Name field shows "Task không ghi được field Name nên insert sẽ lỗi. Đổi thành Subject…" with the button "Đổi thành Subject"; the
+    button clears the warning, the field becomes `Subject` with the preset's list options and the template becomes
+    `{{task.Subject}}`. A Record from the palette starts with `Name`; filling its sObject with `Task` turns the list into
+    `Subject` at once while focus stays in the sObject field. The context has a mocked org `dev` (`/api/orgs` and its
+    `sobjects` / describe answered by the route, never the sf CLI): switched to `Event`, the preset stays and the describe's only
+    required field is appended (`Subject,ActivityDateTime,DurationInMinutes,Type__c`, toast "Đã thêm field bắt buộc…"); switched
+    to `Invoice__c` (auto-number Name), the list becomes empty with an "auto-number" toast and focus stays in sObject. F1: the "Contact cho Account có sẵn" sample, `con`'s Title template set
+    to `Ngành {{acc.Industry}}`: the field shows the button `Thêm Industry vào SELECT của "accs"`; clicking it clears the card's
+    error, the Query's fields become `Id, Name, Industry` and the toast says "Đã thêm Industry vào Query "accs". Bấm Xem trước để
+    đọc lại." I: hovering the chip `[acc · Industry]` gives the card `acc` `.is-ref-target`, leaving it clears it; focusing the
+    Lookup chip `AccountId · Lookup → acc` on `con`'s card (after "Hiện các field") does the same and its title has
+    `Nguồn: Chọn bản ghi "acc"`; blur clears it. C: ⋯ on `con` → "Bọc trong Lặp qua từng bản ghi" wraps it in a selected Lặp `each` over `accs` (con refers to the pick
+    `acc` of `accs`) with the record `acc2`; the toast "Đổi Lookup AccountId (con) sang bản ghi đang lặp "acc2"?" [Đổi] sets the
+    Lookup to `acc2`, mode `current`. H: before any run `con` (Lặp 10 × each row of `accs`, unread: LIMIT 200) shows the
+    estimate chip `≈ 2.000 bản ghi` (title "khoảng 0–2.000"), the Start card ends with `≈ 2.000 bản ghi · ≤ 50.000`, and a limit of
+    1 000 adds the `.tag-est-over` tag ("quá giới hạn 1.000 mỗi lần chạy"). Flow 15 waits for `.stat:not(.est)` after Ctrl+Enter
+    (the estimate chip is there before the run); flow 14 picks "Lặp qua từng bản ghi" by exact label (not "Bọc trong Lặp qua…").
+    D: the "Account + Contact" sample inserted into the mocked org `dev`: the insert `/api/run` (with a `target`) is answered by
+    the route with NDJSON (`start`, `plan`, `progress` insert with `byStep`, `done`), never by the server or an org; the preview
+    before the confirmation goes to the server. A MutationObserver on `#process` records the texts the chips take: `con` shows
+    `insert 0/N` then `insert 4/N` and the tag `lỗi 3`; after the run the tag stays (aria-label "3 bản ghi của bước này insert lỗi.
+    Bấm để xem nhóm lỗi."), `acc` has none, and clicking it opens "Lỗi insert" with the `con` group row `.current` and focused.
+    E: ⚙ of the picklist `Industry` on `acc` shows `Ví dụ: "…" · "…" · "…"` (title mentions seed 1) from `/api/field-samples`;
+    weights `0, 0, 0, 1` turn it into `Ví dụ: "Healthcare" · "Healthcare" · "Healthcare"` once the server answers (waits on the
+    response, no fixed wait); `con`'s Title (reads `{{acc.Industry}}`) shows a "Lần xem trước…" line instead.
+
+17. **Multi-select, copy / paste and the workflow library (design 0012 B, A), `flowLibrary`, own context** (a new parallel
+    flow rather than more steps in flow 16, the critical path; ~7.5 s of a ~10.5 s run on 4 CPUs). B, on "Account + Contact": click `acc`, Shift+click `loopCon` ⇒
+    the inspector says "2 bước đã chọn", `#process` has `aria-multiselectable="true"`, both cards `aria-selected="true"`;
+    "Bọc trong Lặp" there wraps both (in order) in a new Lặp, one ↶ undoes it; click `acc`, Shift+↓ selects `acc, loopCon`,
+    Ctrl+C ("Đã sao chép 2 bước.") then Ctrl+V pastes them after the selection ("Đã dán 2 bước. Đổi tên alias: acc → acc2,
+    con → con2.") and selects the copies; Ctrl+/ turns both off. At 390 px: ⋯ on `acc` → "Chọn nhiều bước" shows `.select-bar`
+    (sheet closed), a tap on `con` makes it "2 đã chọn", Xong leaves (only `acc` stays selected). A: one entry at start;
+    ▾ opens "Thư viện" (`aria-expanded`), "＋ Workflow mới" adds a second entry; Ctrl+V there pastes the `acc` copied before
+    with its alias kept ("Đã dán 1 bước."); Ctrl+O → the first entry shows it exactly as saved and Ctrl+Z changes nothing; the
+    "Lead theo xác suất" Mẫu opens as a third entry and the first entry's stored JSON is unchanged; "Quản lý thư viện…" → Xóa
+    removes "Workflow mới" and the dialog's own "Hoàn tác" brings it back; at 390 px the row's ⋯ (a popup inside the modal
+    dialog, 0012 review) deletes it. F2: `/api/orgs` and the `dev` org's `sobjects` / describes are answered by the route (never
+    the sf CLI); with "Account + Contact" and org `dev`, `con` shows "Thiếu 1 field bắt buộc của Contact trong dev: Region__c.",
+    "Chọn…" opens Import with "Bắt buộc, chưa có (1)" first and Region__c checked, "Thêm 1 field" adds `Region__c` (picklist,
+    toast) and hides the hint, ↶ brings both back, "Bỏ qua" keeps it hidden when `con` is selected again.
+
+20. **Insert history, Bulk and delete (design 0011; the design calls them smoke 16a–16d, renumbered because 16 is
+    `flowProductivity`), `flowHistory` and `flowHistoryProd`, own contexts (parallel).** Every org, history and delete call is
+    answered by `page.route` (`/api/orgs`, `/api/orgs/<org>/limits` with 50 API calls left, other org calls 404, `/api/history…`),
+    previews of "Account + Contact" are a canned 5 Account + 12 000 Contact, and inserts are answered **in the page** by a `fetch`
+    wrapper holding the NDJSON stream (an insert reaching the network is aborted and fails the flow): nothing reaches the sf CLI or
+    an org.
+    - **20a** (`dev-sb` sandbox): Insert ⇒ the confirmation focuses Hủy, has the Bulk checkbox checked, the line `con (Contact) 12 000:
+      200 bản ghi đầu…, phần còn lại 2 job Bulk.`, `Khoảng 26 lời gọi API (sObject Collections 2, Bulk khoảng 24)`, the history line and
+      (after `/limits`) `Org còn 50/15 000 lời gọi API`; unchecking gives `Khoảng 61 lời gọi API`, muted step lines and the limits
+      `.warn-box`. The insert sends `target.bulk: "off"`; the summary shows `Bulk: Contact job 1/2`; Dừng (cancel `{}`) gets a `stopping`
+      event ⇒ **Dừng ngay** with its tooltip and `Đang chờ job Bulk Contact đang chạy xong (6 200/10 000) rồi dừng…`; Dừng ngay sends
+      `{ force: true }` and the toast says the job was aborted and its Ids written. The summary has `⤓ Id` (downloads the server-named
+      `Account_Contact-20261028-1032-ids.csv`) and `Lịch sử`, no `null`. The history line is waited for (it comes after the dialog
+      opens, final review N8).
+    - **20b**: the toast's `Xóa dữ liệu này…` opens the delete confirmation (focus on Hủy, `Xóa 12 005 bản ghi` `.danger.solid`, kind
+      sandbox, children first, Thùng rác); the first `POST …/delete` gets a 400 `needTypedOrg` (kind unknown) ⇒ the name field shows
+      with the "sf CLI không trả lời…" sentence and `dev-sb` is typed; the next gets a 409 with `count: 12105`: the refusal shows, the button reads
+      `Xóa 12 105 bản ghi` and nothing is resent until it is clicked again; the second answers NDJSON with 2 failures ⇒ `Lỗi xóa (2)`
+      tab and toast. Requests: `confirm.username` `me@example.com`, `count` 12 005, 12 005 then 12 105, `typedOrg` from the second on. Then `GET /api/history`
+      answers `enabled: false` and ⟳ (orgs) locks Insert with the reason (`SFDG_DATA_DIR`) and a toast.
+    - **20c / 20d** (`dev-prod` production): the history dialog (results header button) has the org filter checked and focused, hides
+      the `uat` run until unchecked, `Bị gián đoạn` has its title, a row opens its details; `⋯ → Quên lần insert này` asks first (secondary
+      button, `còn 1 200 bản ghi trong dev-prod`) and forgets once; a `corrupt` entry has `⤓ Id` and `⋯ → Quên` ("mục hỏng"). Before the
+      real delete, Esc while the button reads `Đang gửi…` (a held request) drops the request and toasts "Đã hủy. Chưa xóa bản ghi nào.";
+      the dialog has `aria-labelledby="delete-title"` and the name field `aria-describedby="type-org-help"`. `Xóa khỏi org…` on a production run: Hủy focused, button locked until
+      ` DEV-PROD ` is typed (`dev-pro` keeps it locked); the request carries `typedOrg: "DEV-PROD"`. At 390 px the header button is a
+      32 px icon (`aria-label="Lịch sử insert"`) and the dialog fills the screen with no horizontal scroll (`smoke-390-history.png`,
+      `smoke-390-history-dark.png`).
+
+It also fails on any page error or a run over the **time budget**: `SMOKE_BUDGET_MS` when set, else
+`20 000 × max(1, 4 / os.availableParallelism())` ms (20 s on 4 or more CPUs, 40 s on 2). The flows run in parallel and are
+CPU-bound, so the cap scales with the CPUs; it is there to catch fixed waits and runaway flows, not to benchmark. The run prints
+`flows: <name> <ms>, …` (longest first) and `duration=… (budget …)`, to see which flow is the critical path. History: the cap was
+12 s until the 0012 review, then 15 s until the 0014 review (raised to 20 s: a slower 4-CPU sandbox ran 0014 at
+12.4–14.3 s with no fixed waits, and 0013/0011 add flows; the `waitForTimeout(` ban is the real guard); with flow 16 complete a 4-CPU sandbox measured 11.3–11.9 s (10.5–12.3 s for the commit before
+0012 C/I/H/D/E), ~9.5–10 s once reduced motion and the flow 5b file-open went in. A second context for flow 16 made it slower,
+not faster. Design 0014 (flow 18 in parallel, checks in flows 1, 5b, 11, 13): 11.1–11.6 s for the same machine that ran
+the commit before it in 9.5–10.0 s. Design 0013 đợt C (flow 19 in parallel, ~9–10 s on its own track): 12.8–14.1 s on a
+4-CPU sandbox that ran the commit before it in 13.4 s. Design 0011 UI (flows 20, two parallel contexts of ~5–9 s, off the
+critical path): 9.7, 9.7 and 14.7 s on a 4-CPU sandbox (the commit before it: 9.0 s).
 Screenshots (only when a directory is given): `smoke-1440.png`, `smoke-390.png`, `smoke-390-sheet.png`,
 `smoke-390-dark.png`, `smoke-390-topbar.png`, `smoke-1280-issues.png`, `smoke-1440-dark.png`, `smoke-1440-dark-insert.png`,
-`smoke-1440-canvas.png`, `smoke-1440-canvas-dark.png`, `smoke-390-canvas.png`.
+`smoke-1440-canvas.png`, `smoke-1440-canvas-dark.png`, `smoke-390-canvas.png`, `smoke-1440-minimap.png`,
+`smoke-1440-minimap-dark.png`, `smoke-1440-insert-bulk.png`, `smoke-1440-history.png`, `smoke-390-history.png`,
+`smoke-390-history-dark.png`.
 Requires Playwright with Chromium (`require('playwright')`); exit code 2 means it is not installed.
 
 Extend the script when you add a UI flow worth guarding (keep it fast: see "Speed" above).

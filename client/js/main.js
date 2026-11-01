@@ -2,22 +2,30 @@
 // narrow screens, design 0009), shortcuts, live validation (issues bar: issues.js) and runs.
 
 import { api } from './api.js';
-import { h, toast, download, icoTile } from './dom.js';
+import { h, toast, download, icoTile, watchOverflow } from './dom.js';
 import {
-  state, emit, subscribe, updateWorkflow, replaceWorkflow, emptyWorkflow, loadPersisted, loadLegacy, persist,
-  undo, redo, select, stepById, runKey, saveCollapsed, backupBrokenAutosave, slotKeys,
+  state, emit, subscribe, updateWorkflow, emptyWorkflow,
+  undo, redo, select, stepById, runKey, saveCollapsed, slotKeys,
 } from './store.js';
 import { migrateV1, describeReport, reportIsEmpty } from '/shared/migrate-v1.js';
 import { malformedSteps, allSteps } from '/shared/workflow-tree.js';
-import { initViews, focusSelected, openAddMenuAtDefault, paletteDragStart, paletteDragEnd, toggleView, setView, VIEWS } from './views.js';
+import { poolUsage } from '/shared/scope.js';
+import { planInsert } from '/shared/insert-plan.js';
+import { initViews, focusSelected, openAddMenuAtDefault, paletteDragStart, paletteDragEnd, toggleView, setView, VIEWS, paintRunInfo } from './views.js';
 import { openStepMenu } from './menus.js';
 import * as ops from './ops.js';
-import { initInspector, openField, openSheet, closeSheet } from './inspector.js';
-import { initResults, showRunning, showProgress, endProgress, sobjectChips } from './results.js';
+import { initInspector, openField, openSheet, closeSheet, clearDescribeCache } from './inspector.js';
+import { initResults, showRunning, showProgress, endProgress, sobjectChips, insertLinks, showDeleteErrors } from './results.js';
 import { initIssues, renderIssues, expandIssues, goToNextIssue } from './issues.js';
 import { openPopup, closePopup, popupAnchor } from './popup.js';
 import { SAMPLES } from './samples.js';
 import { stepAlias } from './summary.js';
+import { initSelection, selectedIds, isMulti, collapseToPrimary, selectAllInSequence, inSelectMode } from './selection.js';
+import { initSelectBar, exitSelectMode } from './select-bar.js';
+import {
+  initLibrary, openAsNew, importLibraryFile, openLibraryMenu, setLibraryLocked, libraryReady,
+} from './library-ui.js';
+import { historyStatus, refreshHistory, historyOffText, initHistory, openHistory, confirmDelete, historyChanged, bulkJobsOf, deleteInFlight } from './history.js';
 
 const $ = (id) => document.getElementById(id);
 const ORG_KEY = 'sfdg.org';
@@ -29,17 +37,28 @@ async function boot() {
     document.body.replaceChildren(h('p', { style: { padding: '20px' } }, `Không kết nối được server: ${e.message}`));
     return;
   }
-  const afterBoot = loadInitialWorkflow();
+  // The workflow library (design 0012 A); on the first run it is made from the old autosave.
+  const afterBoot = initLibrary({
+    migrateV1: (v1) => migrateV1(v1, migrateOptions()),
+    onMigrated: (report, raw, name) => announceMigration(report, raw, { name, autosave: true }),
+  });
   saveCollapsed();
 
   renderPalette();
   initViews();
   initInspector();
+  initSelection();
+  initSelectBar();
   initResults({ onRefresh: () => run(false, { refresh: true }), onGoTo: goToIssue });
+  initHistory({ startDelete: deleteRun, isRunning: () => Boolean(running) || deleteInFlight() });
+  // --topbar-h (design 0014 §3): the sheet's tall snap stops under the top bar, which wraps to two rows.
+  new ResizeObserver(([entry]) => document.documentElement.style.setProperty('--topbar-h', `${Math.round(entry.target.offsetHeight)}px`)).observe(document.querySelector('.topbar'));
+  watchOverflow(document.querySelector('.palette')); // ≤ 900 px the palette is a row that scrolls sideways (0014 §4)
   initIssues({ onGoTo: goToIssue });
   firstRender();
   wireToolbar();
   wireShortcuts();
+  wireClipboard();
   wireValidation();
   loadOrgs();
   afterBoot?.();
@@ -60,9 +79,20 @@ function firstRender() {
   } catch (e) {
     console.error(e);
     const json = JSON.stringify(state.workflow);
-    const key = backupBrokenAutosave(json);
-    state.workflow = structuredClone(SAMPLES[0].workflow); // not persisted: the autosave stays as it was
-    state.selection = null;
+    let key = null;
+    if (libraryReady()) {
+      // The broken entry stays in the library as it is; the sample opens as a new entry.
+      openAsNew(structuredClone(SAMPLES[0].workflow));
+    } else {
+      try {
+        if (localStorage.getItem('sfdg.workflow.v2.broken') === null) localStorage.setItem('sfdg.workflow.v2.broken', json);
+        key = 'sfdg.workflow.v2.broken';
+      } catch {
+        key = null;
+      }
+      state.workflow = structuredClone(SAMPLES[0].workflow); // not persisted: the autosave stays as it was
+      state.selection = null;
+    }
     emit('app', 'all');
     toast(
       `Không hiển thị được workflow lưu tự động (${e.message}). Đang mở mẫu "${SAMPLES[0].label}"; bản lưu cũ chưa bị ghi đè${key ? ` và có bản sao trong trình duyệt (${key})` : ''}. Bấm "Tải bản lưu" để lấy file JSON, sửa rồi Mở lại.`,
@@ -70,29 +100,6 @@ function firstRender() {
       { label: 'Tải bản lưu', onClick: () => download('workflow-autosave.json', json) },
     );
   }
-}
-
-/** v2 autosave → old v1 autosave (migrated, original kept) → first sample. */
-function loadInitialWorkflow() {
-  const saved = loadPersisted();
-  if (saved?.version === 2 && Array.isArray(saved.steps)) {
-    state.workflow = saved;
-    return null;
-  }
-  const legacy = loadLegacy();
-  if (legacy?.workflow?.version === 1 && Array.isArray(legacy.workflow.nodes)) {
-    try {
-      const { workflow, report } = migrateV1(legacy.workflow, migrateOptions());
-      state.workflow = workflow;
-      persist(); // writes sfdg.workflow.v2 only; sfdg.workflow.v1 stays as it was
-      return () => announceMigration(report, legacy.raw, { name: workflow.name, autosave: true });
-    } catch (e) {
-      console.error(e);
-      toast(`Không chuyển được workflow cũ trong trình duyệt (${e.message}). Bản cũ vẫn được giữ nguyên.`, 6000);
-    }
-  }
-  state.workflow = structuredClone(SAMPLES[0].workflow);
-  return null;
 }
 
 /** Toast when nothing changed; otherwise the report dialog with "Tải bản gốc (v1)". */
@@ -159,14 +166,9 @@ function renderPalette() {
   );
 }
 
-/** Mẫu (palette, or the "⋯" menu on narrow screens): asks before replacing a non-empty workflow. */
+/** Mẫu (palette, or the "⋯" menu on narrow screens): a new entry of the library (design 0012 A). */
 function loadSample(s) {
-  if (!confirmDiscard()) return;
-  replaceWorkflow(structuredClone(s.workflow));
-}
-
-function confirmDiscard() {
-  return !state.workflow.steps?.length || confirm('Thay workflow hiện tại? (Vẫn có thể hoàn tác bằng Ctrl+Z)');
+  openAsNew(structuredClone(s.workflow));
 }
 
 function wireToolbar() {
@@ -177,12 +179,8 @@ function wireToolbar() {
     if (source !== 'toolbar') name.value = state.workflow.name ?? '';
   });
 
-  $('btn-new').onclick = () => {
-    if (!confirmDiscard()) return;
-    replaceWorkflow(emptyWorkflow());
-  };
+  $('btn-new').onclick = () => openAsNew(emptyWorkflow());
   $('btn-save').onclick = saveFile;
-  $('btn-open').onclick = () => $('file-input').click();
   $('file-input').onchange = async (e) => {
     const file = e.target.files[0];
     e.target.value = '';
@@ -196,17 +194,22 @@ function wireToolbar() {
       toast('Không mở được file: không phải JSON hợp lệ.', 5000);
       return;
     }
+    if (importLibraryFile(wf)) return; // "Tải tất cả (JSON)" of the library: every workflow added
     openWorkflowObject(wf, raw, file.name);
   };
   $('btn-undo').onclick = () => undo() || toast('Không còn gì để hoàn tác.');
   $('btn-redo').onclick = () => redo() || toast('Không còn gì để làm lại.');
   $('btn-preview').onclick = () => run(false);
   $('btn-insert').onclick = () => run(true);
-  $('btn-orgs').onclick = () => loadOrgs(true);
+  $('btn-orgs').onclick = () => {
+    clearDescribeCache(); // ⟳: describes (the "Thiếu field bắt buộc" hint, 0012 F2) are read again
+    loadOrgs(true);
+  };
   $('org-select').onchange = (e) => {
     state.org = e.target.value;
     try { localStorage.setItem(ORG_KEY, state.org); } catch { /* optional */ }
     updateInsertButton();
+    checkHistory();
     emit('toolbar', 'all'); // inspector re-renders so "Import từ org" enables
   };
   updateInsertButton();
@@ -229,6 +232,9 @@ function updateSeedChip() {
   chip.title = `Seed cố định: ${v}. Chạm để sửa.`;
 }
 
+/** "Lịch sử insert" in the ⋯ menu (group Chạy): the same dialog as the results panel's button. */
+const HISTORY_ITEM = () => ({ label: 'Lịch sử insert', icon: 'history', onSelect: () => openHistory() });
+
 const THEMES = [['system', 'Theo hệ thống'], ['light', 'Sáng'], ['dark', 'Tối']];
 
 /**
@@ -244,8 +250,9 @@ function openMoreMenu({ fromChip = false } = {}) {
   if (phone()) {
     items.push(
       { group: 'Workflow' },
-      { label: 'Mới', onSelect: click('btn-new') },
-      { label: 'Mở…', onSelect: click('btn-open') },
+      { label: 'Mới', onSelect: click('btn-new'), disabled: $('btn-new').disabled, title: $('btn-new').disabled ? $('btn-new').title : undefined },
+      { label: 'Thư viện…', kbd: 'Ctrl+O', onSelect: () => openLibraryMenu() },
+      { label: 'Mở file JSON…', onSelect: click('file-input'), disabled: $('btn-new').disabled, title: $('btn-new').disabled ? $('btn-new').title : undefined },
       { label: 'Lưu', kbd: 'Ctrl+S', onSelect: click('btn-save') },
       { group: 'Chạy' },
       {
@@ -263,8 +270,9 @@ function openMoreMenu({ fromChip = false } = {}) {
         },
       },
       { label: 'Tải lại danh sách org', onSelect: click('btn-orgs') },
+      HISTORY_ITEM(),
     );
-  }
+  } else items.push({ group: 'Chạy' }, HISTORY_ITEM()); // the menu exists ≤ 900 px (design 0011 §4)
   if (noViewTools()) {
     // The Quy trình | Sơ đồ switch lives in the hidden "Thu gọn / Mở tất cả" row (design 0003).
     items.push({ group: 'Chế độ xem' }, ...VIEWS.map((v) => ({ label: v.label, checked: state.view === v.value, onSelect: () => setView(v.value) })));
@@ -290,7 +298,7 @@ function openMoreMenu({ fromChip = false } = {}) {
   openPopup(anchor, { title: 'Mẫu và thao tác khác', items, focus: fromChip ? 'seed' : null, onClose: () => btn.setAttribute('aria-expanded', 'false') });
 }
 
-function openWorkflowObject(wf, raw, fileName) {
+async function openWorkflowObject(wf, raw, fileName) {
   if (!wf || typeof wf !== 'object' || Array.isArray(wf)) return toast('Không mở được file: không phải file workflow.', 5000);
   if (wf.version === 1) {
     if (!Array.isArray(wf.nodes)) return toast('Không mở được file: không phải file workflow (thiếu "nodes").', 5000);
@@ -300,7 +308,7 @@ function openWorkflowObject(wf, raw, fileName) {
     } catch (e) {
       return toast(`Không chuyển được file version 1: ${e.message}`, 6000);
     }
-    replaceWorkflow(migrated.workflow);
+    if (!(await openAsNew(migrated.workflow))) return undefined;
     announceMigration(migrated.report, raw, { name: migrated.workflow.name ?? fileName, autosave: false });
     return undefined;
   }
@@ -314,7 +322,7 @@ function openWorkflowObject(wf, raw, fileName) {
   }
   const bad = malformedSteps(wf);
   if (bad) return toast(`Không mở được file: ${bad}. Sửa file JSON rồi mở lại.`, 6000);
-  replaceWorkflow(wf);
+  if (!(await openAsNew(wf))) return undefined;
   toast(`Đã mở "${wf.name ?? fileName}".`);
   return undefined;
 }
@@ -325,12 +333,39 @@ function saveFile() {
 
 function updateInsertButton() {
   const btn = $('btn-insert');
-  btn.disabled = !state.org || Boolean(running);
-  btn.title = state.org ? `Sinh dữ liệu và insert vào ${state.org}` : 'Chọn org trước';
+  // No history ⇒ no insert (design 0011, review S7): the server would refuse it (503) anyway.
+  const st = historyStatus();
+  const off = Boolean(st && !st.enabled);
+  btn.disabled = !state.org || Boolean(running) || off;
+  btn.title = !state.org ? 'Chọn org trước' : off ? historyOffText(st) : `Sinh dữ liệu và insert vào ${state.org}`;
+}
+
+let toldHistoryOff = false;
+/**
+ * With an org selected: asks the server whether it can keep the insert history (Insert is locked
+ * when it cannot; a disabled button's tooltip is easy to miss, so the sentence is also a toast, once).
+ */
+async function checkHistory() {
+  if (!state.org) return;
+  const st = await refreshHistory();
+  updateInsertButton();
+  if (st && !st.enabled && state.org && !toldHistoryOff) {
+    toldHistoryOff = true;
+    toast(historyOffText(st), 15000);
+  }
 }
 
 function wireShortcuts() {
   window.addEventListener('keydown', (e) => {
+    if (!e.defaultPrevented && (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'o') {
+      // Ctrl+O: the library popup from anywhere — an input, an open popup (toggles) — never the
+      // browser's file dialog. Not while a dialog is open (the popup would be behind it).
+      e.preventDefault();
+      if (document.querySelector('dialog[open]')) return;
+      if (popupAnchor() === $('btn-library')) closePopup(true);
+      else openLibraryMenu();
+      return;
+    }
     if (e.defaultPrevented || document.querySelector('dialog[open]') || e.target.closest('.popup')) return;
     const typing = e.target.closest('input, textarea, select, [contenteditable]');
     const mod = e.ctrlKey || e.metaKey;
@@ -361,14 +396,19 @@ function wireShortcuts() {
       e.preventDefault();
       redo();
     } else if (mod && key === 'd') {
+      // One-step keys act on the whole selection (design 0012 B).
       e.preventDefault();
-      if (sel) ops.duplicateStep(sel);
+      if (sel) ops.duplicateSelection();
     } else if (mod && (e.key === '/' || e.code === 'Slash')) {
       e.preventDefault();
-      if (sel) ops.toggleDisabled(sel);
+      if (sel) ops.toggleSelectionDisabled();
+    } else if (mod && key === 'a' && e.target.closest('#process, #canvas')) {
+      // Ctrl+A in the tree: every step of the primary step's sequence.
+      e.preventDefault();
+      selectAllInSequence();
     } else if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
       e.preventDefault();
-      if (sel) ops.moveBy(sel, e.key === 'ArrowUp' ? -1 : 1);
+      if (sel) ops.moveSelectionBy(e.key === 'ArrowUp' ? -1 : 1);
     } else if (!mod && !e.altKey && e.key === '/') {
       e.preventDefault();
       openAddMenuAtDefault();
@@ -379,7 +419,7 @@ function wireShortcuts() {
     } else if (e.key === 'Delete' || e.key === 'Backspace') {
       if (!sel) return;
       e.preventDefault();
-      ops.deleteStep(sel);
+      ops.deleteSelection();
     } else if (e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10')) {
       const card = sel && document.querySelector(`.step-card[data-id="${CSS.escape(sel)}"] .menu-btn`);
       if (card) {
@@ -387,8 +427,40 @@ function wireShortcuts() {
         openStepMenu(card, sel);
       }
     } else if (e.key === 'Escape') {
-      select(null);
+      // Two steps: several selected ⇒ keep the primary one; then ⇒ nothing selected.
+      if (inSelectMode()) exitSelectMode();
+      else if (isMulti()) collapseToPrimary();
+      else select(null);
     }
+  });
+}
+
+/**
+ * Copy / cut / paste of steps (design 0012 B) through the document's clipboard events, so they
+ * work without clipboard permissions and outside a secure context (HOST on a LAN address). Inputs
+ * keep their own copy / paste; text the user selected on the page is copied as text.
+ */
+function wireClipboard() {
+  const typing = () => document.activeElement?.closest?.('input, textarea, select, [contenteditable]');
+  const blocked = () => document.querySelector('dialog[open]') || typing();
+  const onCopy = (cut) => (e) => {
+    if (blocked() || !selectedIds().length || document.getSelection()?.toString()) return;
+    const clip = ops.selectionClipboard();
+    if (!clip) return;
+    e.preventDefault();
+    e.clipboardData.setData('text/plain', clip.text);
+    if (cut) ops.removeCut();
+    else toast(`Đã sao chép ${clip.count} bước.`);
+  };
+  document.addEventListener('copy', onCopy(false));
+  document.addEventListener('cut', onCopy(true));
+  document.addEventListener('paste', (e) => {
+    if (blocked()) return;
+    const text = e.clipboardData?.getData('text/plain') ?? '';
+    // Text that is not steps is only answered when focus is in the tree (a paste meant for it).
+    const inTree = Boolean(document.activeElement?.closest?.('#process, #canvas'));
+    e.preventDefault();
+    ops.pasteText(text, { quiet: !inTree });
   });
 }
 
@@ -480,6 +552,7 @@ function matchingPreview(seed) {
 
 function setRunning(r) {
   running = r;
+  setLibraryLocked(Boolean(r)); // no switching workflows while a run is on (design 0012 A)
   $('btn-preview').disabled = Boolean(r);
   if (r) $('btn-insert').disabled = true;
   else updateInsertButton();
@@ -506,6 +579,42 @@ async function stopRun() {
   }
 }
 
+/**
+ * Dừng ngay (design 0011 §3): a stop is waiting for the Bulk job being processed; abort it.
+ * Salesforce keeps what it processed; the server tries to read those Ids into history.
+ */
+async function forceStop() {
+  const r = running;
+  if (!r?.runId || r.forcing) return;
+  r.forcing = true;
+  r.render?.();
+  try {
+    await api.cancelRun(r.runId, { force: true });
+  } catch (e) {
+    if (e.status === 404) return; // the run just ended; its last event says what happened
+    // 403 on a server bound to every address (the message says why) and the like: still waiting.
+    r.forcing = false;
+    r.render?.();
+    toast(e.message, 10000);
+  }
+}
+
+const FORCE_TITLE = 'Hủy job Bulk đang chạy. Bản ghi Salesforce đã xử lý vẫn ở lại trong org; app cố lấy Id của chúng để ghi vào Lịch sử.';
+
+/** Summary text and Dừng / Dừng ngay while a stop is under way (insert and delete). → { parts, stop } | null */
+function stoppingView(r) {
+  if (r.forcing) return { parts: ['Đang hủy job Bulk…'], stop: { stopping: true, stopLabel: 'Dừng ngay', stopTitle: FORCE_TITLE } };
+  if (r.stopping && r.waitingBulk) {
+    const w = r.waitingBulk;
+    return {
+      parts: [`Đang chờ job Bulk ${w.sobject} đang chạy xong (${fmt(w.processed)}/${fmt(w.records)}) rồi dừng…`],
+      stop: { stopping: false, onStop: forceStop, stopLabel: 'Dừng ngay', stopTitle: FORCE_TITLE },
+    };
+  }
+  if (r.stopping) return { parts: ['Đang dừng sau lô hiện tại…'], stop: { stopping: true } };
+  return null;
+}
+
 /** `start` event: the run has an id; a Dừng pressed before it is sent now. */
 function started(r, ev) {
   r.runId = ev.runId;
@@ -524,7 +633,7 @@ const leaveGuard = (e) => {
  * preview's Query fingerprints so the server refuses (409) if the org data changed.
  */
 async function run(insert, { refresh = false } = {}) {
-  if (running) {
+  if (running || deleteInFlight()) {
     toast('Đang chạy. Bấm "Dừng" nếu muốn chạy lại.');
     return;
   }
@@ -541,8 +650,9 @@ async function run(insert, { refresh = false } = {}) {
     base = state.result;
   }
   const org = state.orgs.find((o) => (o.alias ?? o.username) === state.org);
-  if (!(await confirmInsert(org, base))) return;
-  await insertRun(base);
+  const choice = await confirmInsert(org, base);
+  if (!choice) return;
+  await insertRun(base, choice);
 }
 
 /** Streams a preview into the results panel. → true when it finished (not stopped, no error). */
@@ -567,9 +677,11 @@ async function preview({ seed, refresh = false, auto = false }) {
           r.generated = ev.generated;
           r.bySobject = ev.bySobject;
           r.render();
+          liveCards({ phase: 'generate', byStep: ev.byStep ?? {} });
         }
       },
     });
+    liveCards(null);
     acceptResult(result, workflow);
     if (result.cancelled) toast('Đã dừng xem trước.');
     return !result.cancelled;
@@ -581,14 +693,26 @@ async function preview({ seed, refresh = false, auto = false }) {
     runFailed(e);
     return false;
   } finally {
+    liveCards(null);
     setRunning(null);
     endProgress();
   }
 }
 
+/**
+ * Live counts on the cards (design 0012 D): `info` = state.runLive (see run-cards.js), null once
+ * the run ended. Only the chips and tags are patched.
+ */
+function liveCards(info) {
+  if (!info && !state.runLive) return;
+  state.runLive = info;
+  paintRunInfo();
+}
+
 /** Shows a finished run and remembers what produced it (downloads regenerate from this snapshot). */
 function acceptResult(result, workflow) {
   state.result = result;
+  state.deleteResult = null; // a new run replaces the last delete's summary and tab
   state.resultRun = {
     workflow,
     seed: result.seed,
@@ -624,15 +748,19 @@ function runFailed(e) {
 const bySobjectText = (counts) => Object.entries(counts ?? {}).filter(([, v]) => (v?.inserted ?? v) > 0).map(([s, v]) => `${s} ${fmt(v?.inserted ?? v)}`).join(', ');
 
 /** Inserts with the seed and `now` of `base` (the confirmed preview): progress, Dừng, summary. */
-async function insertRun(base) {
+async function insertRun(base, { bulk = 'auto' } = {}) {
   const total = base.stats.total;
   const org = state.org;
-  const r = { insert: true, controller: new AbortController(), phase: 'generate', generated: 0, inserted: 0, failed: 0, bySobject: {}, insertStart: 0 };
+  const r = { insert: true, controller: new AbortController(), phase: 'generate', generated: 0, inserted: 0, failed: 0, bySobject: {}, insertStart: 0, bulk: null, historyId: null };
   r.render = () => {
     let parts;
     let value;
-    if (r.stopping) parts = ['Đang dừng sau lô hiện tại…'];
-    else if (r.phase === 'generate') {
+    const stopping = stoppingView(r);
+    if (stopping) {
+      showProgress({ parts: stopping.parts, value: r.inserted + r.failed, max: total || 1, ...stopping.stop });
+      return;
+    }
+    if (r.phase === 'generate') {
       parts = [`Đang kiểm tra dữ liệu trước khi ghi… ${fmt(r.generated)}/${fmt(total)}`];
       value = r.generated;
     } else {
@@ -645,10 +773,12 @@ async function insertRun(base) {
         const min = ((total - done) * perRecord) / 60000;
         eta = min < 1 ? ' · còn dưới 1 phút' : ` · còn khoảng ${Math.round(min)} phút`;
       }
-      parts = [`Đang insert vào ${org}: ${fmt(done)}/${fmt(total)} (${pct} %)${r.failed ? ` · lỗi ${fmt(r.failed)}` : ''}${eta} `, ...sobjectChips(r.bySobject, base.stats.bySobject)];
+      // Design 0011 §2: the Bulk job in flight, after the errors.
+      const job = r.bulk ? ` · Bulk: ${r.bulk.sobject} job ${r.bulk.job ?? '?'}/${r.bulk.jobs ?? '?'}` : '';
+      parts = [`Đang insert vào ${org}: ${fmt(done)}/${fmt(total)} (${pct} %)${r.failed ? ` · lỗi ${fmt(r.failed)}` : ''}${job}${eta} `, ...sobjectChips(r.bySobject, base.stats.bySobject)];
       value = done;
     }
-    showProgress({ parts, value, max: total || 1, onStop: stopRun, stopping: r.stopping });
+    showProgress({ parts, value, max: total || 1, onStop: stopRun });
   };
   setRunning(r);
   r.render();
@@ -657,7 +787,7 @@ async function insertRun(base) {
   const preview = state.resultRun;
   try {
     const result = await api.runStream({
-      workflow, seed: base.seed, now: base.now, target: { kind: 'org', org }, expectQueries: preview?.expectQueries,
+      workflow, seed: base.seed, now: base.now, target: { kind: 'org', org, bulk }, expectQueries: preview?.expectQueries,
     }, {
       signal: r.controller.signal,
       onResponse: () => { r.responded = true; },
@@ -666,34 +796,39 @@ async function insertRun(base) {
         else if (ev.type === 'plan') {
           r.phase = 'insert';
           r.insertStart = Date.now();
-        } else if (ev.type === 'progress' && ev.phase === 'generate') r.generated = ev.generated;
-        else if (ev.type === 'progress' && ev.phase === 'insert') {
+          r.historyId = ev.historyId ?? null;
+          // A full history drops an older insert that still has records in an org (review S4).
+          const pruned = (ev.warnings ?? []).filter((w) => w.code === 'historyPruned');
+          // The server writes the time as ISO: shown as local `HH:mm dd/MM` (N4).
+          if (pruned.length) toast(pruned.map((w) => w.message.replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z/g, (iso) => whenText(iso))).join(' '), 15000);
+          liveCards({ phase: 'insert', base, insertByStep: {} });
+        } else if (ev.type === 'progress' && ev.phase === 'generate') {
+          r.generated = ev.generated;
+          liveCards({ phase: 'generate', byStep: ev.byStep ?? {} });
+        } else if (ev.type === 'progress' && ev.phase === 'insert') {
           r.phase = 'insert';
-          Object.assign(r, { inserted: ev.inserted, failed: ev.failed, bySobject: ev.bySobject });
+          Object.assign(r, { inserted: ev.inserted, failed: ev.failed, bySobject: ev.bySobject, bulk: ev.bulk ?? null });
+          liveCards({ phase: 'insert', base, insertByStep: ev.byStep ?? {} });
+        } else if (ev.type === 'progress' && ev.phase === 'stopping') {
+          r.waitingBulk = ev.waitingBulk ?? null;
         }
         if (ev.type !== 'start') r.render();
       },
     });
+    liveCards(null);
     acceptResult(result, workflow);
     const ins = result.insert;
     // A later Insert with the same seed would create the same data again: the confirmation says so.
-    if (ins.inserted) state.lastInsert = { key: runKey(workflow, result.seed), org };
-    const where = bySobjectText(ins.bySobject);
-    if (ins.stopped?.reason === 'allFailing') {
-      const s = ins.stopped;
-      const step = s.nodeId ? stepById(s.nodeId) : null;
-      const msg = `Đã dừng insert: ${s.batches} lô ${s.sobject} đầu tiên (${fmt(s.records)} bản ghi) đều lỗi "${s.message}". Sửa bước "${step ? stepAlias(step) || s.nodeId : s.nodeId}" rồi chạy lại.${ins.inserted ? ` Đã insert ${where}, các bản ghi này vẫn còn trong org.` : ' Chưa ghi bản ghi nào vào org.'}`;
-      showRunning(msg);
-      toast(msg, 12000);
-      if (step) goToIssue({ nodeId: s.nodeId, field: ins.errorGroups?.find((g) => g.nodeId === s.nodeId)?.field });
-    } else if (ins.cancelled) {
-      const msg = ins.inserted
-        ? `Đã dừng. Đã insert ${fmt(ins.inserted)}/${fmt(total)} bản ghi vào ${org} (${where}). Các bản ghi này vẫn còn trong org.`
-        : 'Đã dừng. Chưa ghi bản ghi nào vào org.';
-      showRunning(msg);
-      toast(msg, 10000);
-    } else {
-      toast(ins.failed ? `Insert ${fmt(ins.inserted)}, lỗi ${fmt(ins.failed)}. Xem tab "Lỗi insert".` : `Đã insert ${fmt(ins.inserted)} bản ghi vào ${org}.`, 6000);
+    if (ins.inserted) state.lastInserts = [...state.lastInserts, { key: runKey(workflow, result.seed), org }].slice(-20);
+    const msg = insertEndMessage(ins, { org, total });
+    if (ins.stopped || ins.cancelled) showRunning(msg.text, insertLinks(ins));
+    // Design 0011 §3: every ending with records in the org offers to delete them (≥ 10 s).
+    const offer = deleteOffer(ins.historyId, ins.inserted);
+    toast(msg.text, offer ? Math.max(10000, msg.long ? 12000 : 0) : msg.long ? 12000 : 6000, offer);
+    historyChanged();
+    const s = ins.stopped;
+    if ((s?.reason === 'allFailing' || s?.reason === 'bulkFailing') && s.nodeId && stepById(s.nodeId)) {
+      goToIssue({ nodeId: s.nodeId, field: ins.errorGroups?.find((g) => g.nodeId === s.nodeId)?.field });
     }
   } catch (e) {
     if (e.name === 'AbortError') {
@@ -701,32 +836,259 @@ async function insertRun(base) {
       showRunning('Đã dừng. Chưa ghi bản ghi nào vào org.');
       toast('Đã dừng. Chưa ghi bản ghi nào vào org.', 6000);
     } else if (e.lost && r.phase === 'insert') {
-      const msg = `Mất kết nối với server khi đang insert. Đã insert ít nhất ${fmt(r.inserted)} bản ghi (theo tiến độ cuối). Kiểm tra org trước khi chạy lại để tránh trùng.`;
+      const msg = `Mất kết nối với server khi đang insert. Đã insert ít nhất ${fmt(r.inserted)} bản ghi (theo tiến độ cuối). Kiểm tra org trước khi chạy lại để tránh trùng.${r.historyId ? ' Xem Lịch sử để biết chính xác đã insert bao nhiêu khi server chạy xong.' : ''}`;
       showRunning(msg);
-      toast(msg, 12000);
+      toast(msg, 12000, deleteOffer(r.historyId, r.inserted));
     } else {
-      if (e.insert?.inserted) e.message += ` Đã insert ${fmt(e.insert.inserted)} bản ghi trước khi lỗi; các bản ghi này vẫn còn trong org.`;
+      if (e.insert?.inserted) e.message += ` Đã insert ${fmt(e.insert.inserted)} bản ghi trước khi lỗi; ${STILL_THERE}`;
+      // 503: history cannot be written (S7): Insert locks with the server's reason.
+      if (e.status === 503) refreshHistory().then(updateInsertButton);
       runFailed(e);
+      const offer = deleteOffer(e.insert?.historyId ?? r.historyId, e.insert?.inserted);
+      if (offer) toast(e.message, 12000, offer);
     }
+    if (r.historyId) historyChanged();
   } finally {
+    liveCards(null);
     window.removeEventListener('beforeunload', leaveGuard);
     setRunning(null);
     endProgress();
   }
 }
 
-const hhmm = (iso) => (iso ? new Date(iso).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : '?');
+/** The toast button "Xóa dữ liệu này…" of an insert that left records in the org, or null. */
+const deleteOffer = (hid, inserted) => (hid && inserted > 0 ? { label: 'Xóa dữ liệu này…', onClick: () => confirmDelete(hid) } : null);
 
-/** Always shows the record count of `previewed` (the preview the insert repeats, same seed + now). */
-function confirmInsert(org, previewed) {
+/**
+ * Deletes the records of history entry `hid` (design 0011 §6), in the results panel like an insert:
+ * progress, Dừng (Dừng ngay while a Bulk job is processed), summary, toast, "Lỗi xóa" tab. Called by
+ * the delete confirmation (history.js): a refusal before the stream starts is thrown back to it.
+ */
+async function deleteRun({ hid, body, org, total, bySobject, onResponse, signal }) {
+  if (running) throw new Error('Đang chạy. Bấm "Dừng" hoặc chờ lần chạy xong rồi mới xóa.');
+  // Children first: the chips follow the delete order (reverse insert order).
+  const order = Object.keys(bySobject ?? {}).reverse();
+  const r = { delete: true, controller: new AbortController(), deleted: 0, gone: 0, failed: 0, total, bySobject: {}, start: Date.now(), bulk: null };
+  r.render = () => {
+    if (r.stopping && r.bulk && r.bulk.state !== 'Open' && r.bulk.jobId) r.waitingBulk = r.bulk; // a stop waits for the Bulk job
+    const stopping = stoppingView(r);
+    const done = r.deleted + r.gone + r.failed;
+    if (stopping) {
+      showProgress({ parts: stopping.parts, value: done, max: total || 1, ...stopping.stop });
+      return;
+    }
+    const pct = total ? Math.floor((done / total) * 100) : 100;
+    let eta = '';
+    if (done >= 3 * BATCH && done < total) {
+      const min = ((total - done) * ((Date.now() - r.start) / done)) / 60000;
+      eta = min < 1 ? ' · còn dưới 1 phút' : ` · còn khoảng ${Math.round(min)} phút`;
+    }
+    const job = r.bulk ? ` · Bulk: ${r.bulk.sobject}` : '';
+    const chips = order.map((so) => {
+      const c = r.bySobject[so] ?? {};
+      return h('span', { class: 'chip' }, `${so} ${fmt((c.deleted ?? 0) + (c.gone ?? 0))}/${fmt(c.total ?? bySobject[so])}`);
+    });
+    showProgress({ parts: [`Đang xóa khỏi ${org}: ${fmt(r.deleted + r.gone)}/${fmt(total)} (${pct} %) · lỗi ${fmt(r.failed)}${job}${eta} `, ...chips], value: done, max: total || 1, onStop: stopRun });
+  };
+  let streaming = false;
+  // Hủy / Esc in the confirmation while the server still checks the org: the request is dropped
+  // before any header, and the server deletes nothing (final review S1).
+  signal?.addEventListener('abort', () => { if (!streaming) r.controller.abort(); }, { once: true });
+  try {
+    const result = await api.deleteStream(hid, body, {
+      signal: r.controller.signal,
+      onResponse: () => {
+        streaming = true;
+        r.responded = true;
+        onResponse?.();
+        if (window.matchMedia('(max-width: 900px)').matches) closeSheet();
+        setRunning(r);
+        r.render();
+        window.addEventListener('beforeunload', leaveGuard);
+      },
+      onEvent: (ev) => {
+        if (ev.type === 'start') started(r, ev);
+        else if (ev.type === 'progress') {
+          Object.assign(r, { deleted: ev.deleted, gone: ev.gone, failed: ev.failed, bySobject: ev.bySobject ?? {}, bulk: ev.bulk ?? null });
+          r.render();
+        }
+      },
+    });
+    state.deleteResult = { result, org, hid };
+    emit('run', 'result');
+    const msg = deleteEndMessage(result, { org, total });
+    if (result.stopped || result.cancelled || result.failed || msg.extra) showRunning(msg.text);
+    toast(msg.text, msg.long ? 15000 : 8000);
+    if (result.failed && !result.stopped && !result.cancelled) showDeleteErrors();
+  } catch (e) {
+    if (!streaming) throw e; // refused before anything was deleted: the confirmation says it
+    const text = e.lost
+      ? `Mất kết nối với server khi đang xóa. Đã xóa ít nhất ${fmt(r.deleted)} bản ghi (theo tiến độ cuối). Xem Lịch sử để biết chính xác đã xóa bao nhiêu khi server chạy xong.`
+      : `Lỗi khi xóa: ${e.message} Đã xóa ${fmt(r.deleted)} bản ghi trước đó; phần còn lại xóa được bằng "Xóa phần còn lại…" trong Lịch sử.`;
+    showRunning(text);
+    toast(text, 12000);
+  } finally {
+    if (streaming) {
+      window.removeEventListener('beforeunload', leaveGuard);
+      setRunning(null);
+      endProgress();
+      historyChanged();
+    }
+  }
+}
+
+/** The sentence after a delete (design 0011 §6, §7). → { text, long, extra } */
+function deleteEndMessage(res, { org }) {
+  const extra = [];
+  if (res.collected) extra.push(`Đã lấy thêm ${fmt(res.collected)} Id từ job Bulk chưa lấy kết quả.`);
+  for (const sk of res.skipped ?? []) extra.push(sk.reason ?? `Không xóa ${fmt(sk.count)} bản ghi ${sk.sobject} của bước "${sk.nodeId}".`);
+  for (const j of bulkJobsOf(res)) {
+    extra.push(j.idsLost
+      ? j.message
+      : `Job Bulk ${j.jobId} (${j.sobject}) chưa trả Id${j.state ? ` (${j.state})` : ''}; bản ghi của job này chưa bị xóa. Bấm "Xóa phần còn lại…" trong Lịch sử khi job xong.`);
+  }
+  // The server's own sentences (rows of the Id file no step owns: `rejected`) come first.
+  for (const w of res.warnings ?? []) extra.push(w);
+  if (res.bulkAborted) {
+    const b = res.bulkAborted;
+    extra.push(`Đã hủy job Bulk xóa ${b.sobject}: Salesforce đã xử lý ${fmt(b.processed)}/${fmt(b.records)} Id của job${b.idsKnown ? '' : '; xem kết quả của job trong Setup → Bulk Data Load Jobs'}.`);
+  }
+  const s = res.stopped;
+  const removed = res.deleted + res.gone;
+  let text;
+  if (s) text = s.text ?? `Đã dừng xóa: ${s.message ?? s.reason}. Đã xóa ${fmt(res.deleted)} bản ghi; phần còn lại xóa được bằng "Xóa phần còn lại…" trong Lịch sử.`;
+  else if (res.cancelled) text = `Đã dừng. Đã xóa ${fmt(removed)}/${fmt(res.total)} bản ghi khỏi ${org}; ${fmt(res.remaining)} bản ghi còn lại xóa được bằng "Xóa phần còn lại…" trong Lịch sử.`;
+  else if (res.failed) text = `Đã xóa ${fmt(res.deleted)} bản ghi; ${fmt(res.failed)} bản ghi không xóa được. Xem nhóm lỗi trong tab "Lỗi xóa" hoặc trong Lịch sử, sửa rồi bấm "Xóa phần còn lại…".`;
+  else text = `Đã xóa ${fmt(res.deleted)} bản ghi khỏi ${org} (vào Thùng rác).${res.gone ? ` ${fmt(res.gone)} bản ghi đã không còn trong org.` : ''}`;
+  if (extra.length) text += ` ${extra.join(' ')}`;
+  return { text, long: Boolean(s || res.cancelled || res.failed || extra.length), extra: extra.length > 0 };
+}
+
+/** Tail of every stop with records in the org (design 0011 §3). */
+const STILL_THERE = 'các bản ghi này vẫn còn trong org; xóa được bằng nút "Xóa dữ liệu này…" hoặc trong Lịch sử.';
+
+/** The sentence after an insert (toast, and the summary when it stopped). → { text, long } */
+function insertEndMessage(ins, { org, total }) {
+  const where = bySobjectText(ins.bySobject);
+  const s = ins.stopped;
+  const stepName = (id) => {
+    const step = id ? stepById(id) : null;
+    return step ? stepAlias(step) || id : id ?? '';
+  };
+  const written = ins.inserted ? ` Đã insert ${where}; ${STILL_THERE}` : ' Chưa ghi bản ghi nào vào org.';
+  const extra = [];
+  if (ins.bulkAborted) {
+    const b = ins.bulkAborted;
+    extra.push(b.idsKnown
+      ? `Đã hủy job Bulk ${b.sobject}. Salesforce đã xử lý ${fmt(b.processed)}/${fmt(b.records)} bản ghi của job; Id của chúng đã ghi vào Lịch sử.`
+      : `Đã hủy job Bulk ${b.sobject}. Salesforce đã xử lý ${fmt(b.processed)}/${fmt(b.records)} bản ghi của job nhưng chưa trả Id của chúng; khi xóa dữ liệu của lần insert này, app lấy lại Id từ job ${b.jobId} trước. Xem job trong Setup → Bulk Data Load Jobs.`);
+  }
+  if (ins.bulkUnknown) extra.push(`${fmt(ins.bulkUnknown)} bản ghi của job Bulk chưa biết kết quả (có thể đã vào org); Lịch sử giữ mã job để lấy lại Id khi xóa.`);
+  const tail = extra.length ? ` ${extra.join(' ')}` : '';
+  let text;
+  if (s?.reason === 'allFailing') text = `Đã dừng insert: ${s.batches} lô ${s.sobject} đầu tiên (${fmt(s.records)} bản ghi) đều lỗi "${s.message}". Sửa bước "${stepName(s.nodeId)}" rồi chạy lại.${written}`;
+  else if (s?.reason === 'bulkFailing') text = `Đã dừng insert: ${s.jobs} job Bulk ${s.sobject} liên tiếp (${fmt(s.records)} bản ghi) đều lỗi "${s.message}". Sửa bước "${stepName(s.nodeId)}" rồi chạy lại, hoặc bỏ chọn "Dùng Bulk API 2.0" trong hộp xác nhận.${written}`;
+  else if (s?.reason === 'history') text = `Không ghi được Id vào Lịch sử (${s.message}) nên đã dừng insert, để không có bản ghi nào trong org mà app không biết Id. Đã insert ${fmt(ins.inserted)} bản ghi; Id của chúng đã được ghi.`;
+  else if (s?.reason === 'bulkTimeout') text = `${s.message} App đã ngừng theo dõi và dừng lần chạy. Job có thể vẫn đang chạy trong org: xem Setup → Bulk Data Load Jobs. Lịch sử ghi lại mã job này.${written}`;
+  else if (s?.reason === 'orgChanged') text = `${s.message}${written}`;
+  else if (s?.reason === 'bulkError') text = `Đã dừng insert: ${s.message}${/[.!?]$/.test(s.message ?? '') ? '' : '.'} Xem job ${s.jobId ?? ''} trong Setup → Bulk Data Load Jobs.${written}`;
+  else if (s) text = `Đã dừng insert: ${s.message ?? s.reason}.${written}`;
+  else if (ins.cancelled) {
+    text = ins.inserted
+      ? `Đã dừng. Đã insert ${fmt(ins.inserted)}/${fmt(total)} bản ghi vào ${org} (${where}); ${STILL_THERE}`
+      : 'Đã dừng. Chưa ghi bản ghi nào vào org.';
+  } else text = ins.failed ? `Insert ${fmt(ins.inserted)}, lỗi ${fmt(ins.failed)}. Xem tab "Lỗi insert".` : `Đã insert ${fmt(ins.inserted)} bản ghi vào ${org}.`;
+  return { text: text + tail, long: Boolean(s || ins.cancelled || tail) };
+}
+
+const hhmm = (iso) => (iso ? new Date(iso).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : '?');
+const whenText = (iso) => {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? '?' : `${hhmm(iso)} ${d.toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit' })}`;
+};
+
+const BULK_HELP = 'Nhanh hơn và ít lời gọi API hơn. Chỉ áp cho bước không có Lookup nào trỏ tới, vì Bulk trả Id không theo thứ tự. Bỏ chọn nếu org có trigger hay gặp lỗi khóa bản ghi (UNABLE_TO_LOCK_ROW).';
+const MAX_BULK_LINES = 5;
+
+/** planInsert (shared with the server's `plan` event) for the preview `previewed` of `workflow`. */
+function insertPlan(previewed, workflow, bulk) {
+  const byStep = previewed.stats.byStep ?? {};
+  const steps = allSteps(workflow, slotKeys)
+    .filter((s) => s.type === 'record' && byStep[s.id]?.records > 0)
+    .map((s) => ({ nodeId: s.id, alias: stepAlias(s), sobject: s.config?.sobject, records: byStep[s.id].records }));
+  return planInsert({ steps, referenced: poolUsage(workflow, state.meta).referenced, bulk, limits: state.meta?.limits });
+}
+
+/**
+ * Always shows the record count of `previewed` (the preview the insert repeats, same seed + now),
+ * the Bulk choice (design 0011 §1), the API calls and the org's remaining API limit, and whether
+ * the insert is written to history. → { bulk } or false.
+ */
+async function confirmInsert(org, previewed) {
   const modal = $('modal');
   const stats = previewed.stats;
   const read = (previewed.queries ?? []).filter((q) => q.source !== 'sample');
-  const calls = Object.values(stats.bySobject).reduce((n, c) => n + Math.ceil(c / BATCH), 0);
   const counts = Object.entries(stats.bySobject).map(([s, n]) => `${s} ${fmt(n)}`).join(', ');
+  const workflow = state.resultRun?.workflow ?? state.workflow;
+  const minBulk = state.meta?.limits?.bulkMinRecords ?? 10000;
+  const bulkSteps = insertPlan(previewed, workflow, 'auto').steps.filter((s) => s.mode === 'bulk');
+  let bulk = 'auto';
+  let limits = null;
+  const callsLine = h('p', { class: 'hint insert-calls' });
+  const limitsLine = h('div', { class: 'insert-limits' });
+  const bulkList = bulkSteps.length
+    ? h('ul', { class: 'bulk-steps' },
+      bulkSteps.slice(0, MAX_BULK_LINES).map((s) => h('li', {}, `${s.alias} (${s.sobject}) ${fmt(s.records)}: ${fmt(s.probe)} bản ghi đầu gửi thử bằng sObject Collections, phần còn lại ${fmt(s.jobs)} job Bulk.`)),
+      bulkSteps.length > MAX_BULK_LINES ? h('li', {}, `… và ${bulkSteps.length - MAX_BULK_LINES} bước khác`) : null)
+    : null;
+  const update = () => {
+    const c = insertPlan(previewed, workflow, bulk).apiCalls;
+    callsLine.textContent = c.bulk
+      ? `Khoảng ${fmt(c.total)} lời gọi API (sObject Collections ${fmt(c.collections)}, Bulk khoảng ${fmt(c.bulk)}), tính vào giới hạn API 24 giờ của org.`
+      : `Khoảng ${fmt(c.total)} lời gọi API (${BATCH} bản ghi mỗi lời gọi), tính vào giới hạn API 24 giờ của org.`;
+    bulkList?.classList.toggle('off', bulk === 'off');
+    const api24 = limits?.api;
+    if (!api24 || !stats.total) {
+      limitsLine.replaceChildren();
+      return;
+    }
+    limitsLine.replaceChildren(c.total > api24.remaining
+      ? h('div', { class: 'warn-box limits-warn' }, `Ước tính cần khoảng ${fmt(c.total)} lời gọi API nhưng org chỉ còn ${fmt(api24.remaining)} trong 24 giờ. Insert có thể dừng giữa chừng với lỗi REQUEST_LIMIT_EXCEEDED. ${bulkSteps.length && bulk === 'off' ? 'Bật Bulk API 2.0, giảm' : 'Giảm'} số bản ghi hoặc chờ hạn mức hồi lại.`)
+      : h('p', { class: 'hint' }, `Org còn ${fmt(api24.remaining)}/${fmt(api24.max)} lời gọi API trong 24 giờ.`));
+  };
+  update();
+  const orgName = state.org;
+  // The org's remaining API calls: ≤ 3 s, never blocks the dialog (a failure leaves the line out).
+  if (stats.total) {
+    api.limits(orgName).then((l) => {
+      limits = l;
+      if (limitsLine.isConnected) update();
+    });
+  }
+  // History (design 0011 §5) and what a full history would drop (review S4) are filled in when
+  // GET /api/history answers (N8: the dialog opens at once); Insert waits for that answer.
+  const historyBox = h('div', { class: 'insert-history' }, stats.total ? h('p', { class: 'hint' }, 'Đang kiểm tra Lịch sử…') : null);
   return new Promise((resolve) => {
-    const done = (v) => { modal.close(); resolve(v); };
+    const done = (v) => { modal.onclose = null; modal.close(); resolve(v); };
     const isProd = org && !org.isSandbox && !org.isScratch;
+    const insertBtn = h('button', {
+      class: 'danger solid',
+      disabled: true,
+      onclick: () => done({ bulk }),
+    }, `Insert ${fmt(stats.total)} bản ghi`);
+    refreshHistory().then((st) => {
+      updateInsertButton();
+      if (!historyBox.isConnected) return; // the dialog was closed or replaced meanwhile
+      const off = Boolean(st && !st.enabled);
+      insertBtn.disabled = !stats.total || off;
+      insertBtn.title = off ? historyOffText(st) : '';
+      historyBox.replaceChildren(...[
+        off
+          ? h('div', { class: 'warn-box history-off' }, historyOffText(st))
+          : stats.total ? h('p', { class: 'hint history-line' }, 'Lần insert được ghi vào Lịch sử trên máy này (danh sách Id) để tải Id hoặc xóa lại sau.') : null,
+        ...(st?.enabled ? st.prune ?? [] : []).map((e) => h('div', { class: 'warn-box history-prune' }, `Lịch sử đã đầy nên lần insert này sẽ bỏ ghi chép của lần insert lúc ${whenText(e.startedAt)} vào org "${e.org?.alias ?? e.org?.username ?? '?'}"${e.workflowName ? ` (workflow "${e.workflowName}")` : ''}, còn ${fmt(e.remaining)} bản ghi trong org: sau đó không tải Id hay xóa dữ liệu của lần đó qua app được nữa. Muốn giữ, Hủy rồi xóa dữ liệu của lần đó trong Lịch sử trước.`)),
+      ].filter(Boolean));
+    });
     // replaceChildren would print "null" for the parts that do not apply.
     modal.replaceChildren(...[
       h('h2', {}, 'Insert vào org?'),
@@ -734,7 +1096,7 @@ function confirmInsert(org, previewed) {
       isProd ? h('div', { class: 'warn-box' }, 'Org này không phải sandbox hay scratch org. Kiểm tra kỹ trước khi insert dữ liệu test.') : null,
       h('p', { class: 'insert-count' }, stats.total ? `Sẽ tạo ${fmt(stats.total)} bản ghi: ${counts}.` : 'Workflow không sinh bản ghi nào: không có gì để insert.'),
       h('p', {}, `Giống hệt bản xem trước (seed ${previewed.seed}).`),
-      state.lastInsert && state.lastInsert.org === state.org && state.lastInsert.key === runKey(state.workflow, previewed.seed)
+      state.lastInserts.some((x) => x.org === state.org && x.key === runKey(state.workflow, previewed.seed))
         ? h('div', { class: 'warn-box same-seed' }, `Seed ${previewed.seed} đã dùng cho lần insert trước vào org này với cùng workflow: cùng seed thì ra cùng dữ liệu (tên, email…), nên các bản ghi này có thể bị trùng với lần trước. Muốn dữ liệu mới, xóa ô Seed rồi bấm Insert lại.`)
         : null,
       read.length
@@ -742,15 +1104,26 @@ function confirmInsert(org, previewed) {
         : null,
       // Within the 10-minute cache the insert reuses the previewed rows as they were; only a re-read
       // (cache expired, server restarted) can notice that the org changed.
-      read.length ? h('p', { class: 'hint query-reuse' }, 'Insert dùng lại đúng các dòng đã đọc lúc xem trước. Nếu đã quá 10 phút (hoặc server vừa khởi động lại), app đọc lại org và dừng trước khi ghi nếu dữ liệu đã đổi. Muốn insert theo dữ liệu mới nhất, bấm ⟳ Đọc lại rồi Insert.') : null,
-      stats.total ? h('p', { class: 'hint' }, `Khoảng ${fmt(calls)} lời gọi API (${BATCH} bản ghi mỗi lời gọi), tính vào giới hạn API 24 giờ của org.`) : null,
-      stats.total ? h('p', { class: 'hint' }, 'Có thể bấm "Dừng" bất cứ lúc nào; bản ghi đã insert không tự xóa.') : null,
+      read.length ? h('p', { class: 'hint query-reuse' }, 'Insert dùng lại đúng các dòng đã đọc lúc xem trước. Nếu đã quá 10 phút (hoặc server vừa khởi động lại), app đọc lại org và dừng trước khi ghi nếu dữ liệu đã đổi. Muốn insert theo dữ liệu mới nhất, bấm Đọc lại rồi Insert.') : null,
+      // Design 0011 §1: only when a step qualifies; on by default, not remembered.
+      bulkSteps.length && stats.total
+        ? h('label', { class: 'check-line bulk-check', title: BULK_HELP },
+          h('input', { type: 'checkbox', checked: true, 'aria-describedby': 'bulk-help', onchange: (e) => { bulk = e.target.checked ? 'auto' : 'off'; update(); } }),
+          `Dùng Bulk API 2.0 cho bước từ ${fmt(minBulk)} bản ghi`)
+        : null,
+      bulkSteps.length && stats.total ? h('p', { class: 'hint', id: 'bulk-help' }, BULK_HELP) : null,
+      stats.total ? bulkList : null,
+      stats.total ? callsLine : null,
+      stats.total ? limitsLine : null,
+      historyBox,
+      stats.total ? h('p', { class: 'hint' }, 'Có thể bấm "Dừng" bất cứ lúc nào; bản ghi đã insert không tự xóa nhưng xóa được trong Lịch sử.') : null,
       h('div', { class: 'actions' },
         h('button', { onclick: () => done(false) }, 'Hủy'),
-        h('button', { class: 'danger solid', disabled: !stats.total, onclick: () => done(true) }, `Insert ${fmt(stats.total)} bản ghi`)),
+        insertBtn),
     ].filter(Boolean));
     modal.onclose = () => resolve(false);
     modal.showModal();
+    modal.querySelector('.actions button')?.focus(); // Hủy: an org write is never one Enter away
   });
 }
 
@@ -779,6 +1152,7 @@ async function loadOrgs(manual = false) {
     if (manual) toast(e.message, 5000);
   }
   updateInsertButton();
+  checkHistory();
   emit('orgs', 'all');
 }
 

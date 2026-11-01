@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { generateValue, listGenerators, describeGenerators, VALUE_TYPES } from '../server/generators/index.js';
+import { generateValue, listGenerators, describeGenerators, VALUE_TYPES, optionIssues } from '../server/generators/index.js';
 import { createRandom } from '../server/random.js';
 import { parseBound } from '../server/generators/date.js';
 import { NOW } from './helpers.js';
@@ -95,4 +95,19 @@ test('every generator declares a known valueType', () => {
 test('template default {{this.$n}} gives the record number', () => {
   assert.equal(gen('template', {}, { n: 7 }), '7');
   assert.equal(gen('template', { template: 'x{{ this.$n }}y' }, { n: 2 }), 'x2y');
+});
+
+const ctxFor = () => ({ rng: createRandom(1), now: NOW, scope: { current: {}, all: {}, vars: {} }, record: {}, fieldName: 'X', fieldState: {}, n: 1 });
+
+test('numeric options are clamped to their min / max; optionIssues reports them (shown options only)', () => {
+  const words = generateValue({ name: 'D', type: 'text', options: { minWords: 5000, maxWords: 1e9, maxLength: 1e9 } }, ctxFor());
+  assert.ok(words.length <= 255);
+  const long = generateValue({ name: 'L', type: 'longtextarea', options: { minParagraphs: 1e6, maxParagraphs: 1e6, maxLength: 1e9 } }, ctxFor());
+  assert.ok(long.length <= 131072);
+  assert.deepEqual(optionIssues({ name: 'D', type: 'text', options: { maxWords: 1001 } }).map((i) => i.option), ['maxWords']);
+  assert.deepEqual(optionIssues({ name: 'D', type: 'text', options: { mode: 'name', maxWords: 1001 } }), [], 'hidden by showIf');
+  assert.deepEqual(optionIssues({ name: 'D', type: 'text', options: { maxWords: 'x' } }).map((i) => i.option), ['maxWords']);
+  assert.deepEqual(optionIssues({ name: 'D', type: 'text', options: null }), []);
+  assert.deepEqual(optionIssues({ name: 'P', type: 'percent', options: { nullRatio: 2 } }).map((i) => i.option), ['nullRatio']);
+  assert.equal(typeof generateValue({ name: 'X', type: 'picklist', options: null }, ctxFor()), 'string', 'null options = defaults');
 });

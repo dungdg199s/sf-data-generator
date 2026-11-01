@@ -394,3 +394,329 @@ test('renameField follows references through the record of an each loop and a Ch
   assert.equal(res.count, 6);
   assert.deepEqual(res.names.sort(), ['a', 'acc', 'pk', 'pk2']);
 });
+
+// ---------- design 0012 B: groups of steps, paste ----------
+
+import {
+  normalizeSelection, rangeBetween, wrapSteps, removeSteps, moveBlock, neighbourTargetBlock, pasteSteps, countSteps, loopVarsAround,
+} from '../shared/workflow-tree.js';
+
+test('rangeBetween lifts both ends to the nearest common sequence', () => {
+  const wf = tree([r('a'), loop('loopCon', [r('con'), r('task')]), r('opp'), r('z')]);
+  assert.deepEqual(rangeBetween(wf, 'con', 'task', slotKeys), ['con', 'task'], 'same sequence');
+  assert.deepEqual(rangeBetween(wf, 'con', 'opp', slotKeys), ['loopCon', 'opp'], 'anchor in a loop, end at the root');
+  assert.deepEqual(rangeBetween(wf, 'z', 'con', slotKeys), ['loopCon', 'opp', 'z'], 'backwards');
+  assert.deepEqual(rangeBetween(wf, 'loopCon', 'task', slotKeys), ['loopCon'], 'a step and its own child');
+  const br = tree([branch('b', [r('t')], [r('f')])]);
+  assert.deepEqual(rangeBetween(br, 't', 'f', slotKeys), ['b'], 'two columns of one branch: the branch');
+  assert.deepEqual(rangeBetween(wf, 'gone', 'opp', slotKeys), ['opp']);
+});
+
+test('normalizeSelection: reading order, steps inside a selected frame dropped, contiguous or not', () => {
+  const wf = tree([r('a'), loop('l', [r('b'), r('c')]), r('d'), r('e')]);
+  const sel = normalizeSelection(wf, ['d', 'b', 'l', 'gone'], slotKeys);
+  assert.deepEqual(sel.ids, ['l', 'd']);
+  assert.equal(sel.contiguous, true);
+  assert.deepEqual([sel.parentId, sel.slot, sel.start, sel.end], [null, null, 1, 2]);
+  assert.equal(normalizeSelection(wf, ['a', 'd'], slotKeys).contiguous, false, 'a gap');
+  assert.equal(normalizeSelection(wf, ['a', 'b'], slotKeys).contiguous, false, 'two sequences');
+  assert.deepEqual(normalizeSelection(wf, ['c', 'b'], slotKeys), { ...normalizeSelection(wf, ['b', 'c'], slotKeys) });
+  assert.deepEqual(normalizeSelection(wf, [], slotKeys).ids, []);
+});
+
+test('wrapSteps keeps the order of the block; refuses a selection that is not one block', () => {
+  const wf = tree([r('a'), r('b'), r('c'), r('d')]);
+  assert.equal(wrapSteps(wf, ['a', 'c'], { id: 'L', type: 'loop', config: {} }, { slotKeys }), null);
+  assert.equal(shape(wf.steps), 'a,b,c,d');
+  wrapSteps(wf, ['c', 'b'], { id: 'L', type: 'loop', config: {} }, { slotKeys });
+  assert.equal(shape(wf.steps), 'a,L{b,c},d');
+  wrapSteps(wf, ['L', 'd'], { id: 'B', type: 'branch', config: {} }, { slotKeys });
+  assert.equal(shape(wf.steps), 'a,B{L{b,c},d|}');
+});
+
+test('removeSteps removes scattered steps with what is inside them', () => {
+  const wf = tree([r('a'), loop('l', [r('b'), r('c')]), r('d')]);
+  const removed = removeSteps(wf, ['d', 'b', 'l'], { slotKeys });
+  assert.deepEqual(removed.map((s) => s.id), ['l', 'd']);
+  assert.equal(shape(wf.steps), 'a');
+});
+
+test('moveBlock / neighbourTargetBlock: a block walks in and out of frames, jumping over collapsed ones', () => {
+  const wf = tree([r('a'), r('x'), r('y'), loop('l', [r('b')]), r('c')]);
+  const step = (dir, collapsed) => {
+    const t = neighbourTargetBlock(wf, ['x', 'y'], dir, collapsed, slotKeys);
+    if (t) assert.equal(moveBlock(wf, ['x', 'y'], t, slotKeys), true);
+    return t ? shape(wf.steps) : null;
+  };
+  assert.equal(step(+1), 'a,l{x,y,b},c', 'enters the open loop at the top');
+  assert.equal(step(+1), 'a,l{b,x,y},c');
+  assert.equal(step(+1), 'a,l{b},x,y,c', 'leaves the loop right after it');
+  assert.equal(step(+1), 'a,l{b},c,x,y');
+  assert.equal(step(+1), null, 'already last');
+  assert.equal(step(-1), 'a,l{b},x,y,c');
+  assert.equal(step(-1, new Set(['l'])), 'a,x,y,l{b},c', 'collapsed containers are jumped over');
+  assert.equal(step(-1), 'x,y,a,l{b},c');
+  assert.equal(step(-1), null, 'already first');
+  // Drag and drop of a block: before-move coordinates; into itself and in place are refused.
+  assert.equal(moveBlock(wf, ['x', 'y'], { parentId: null, slot: null, index: 4 }, slotKeys), true);
+  assert.equal(shape(wf.steps), 'a,l{b},x,y,c');
+  assert.equal(moveBlock(wf, ['x', 'y'], { parentId: null, slot: null, index: 3 }, slotKeys), false, 'already there');
+  assert.equal(moveBlock(wf, ['l', 'x'], { parentId: 'l', slot: 'body', index: 0 }, slotKeys), false, 'into itself');
+  assert.equal(moveBlock(wf, ['a', 'x'], { parentId: null, slot: null, index: 5 }, slotKeys), false, 'not one block');
+  assert.equal(neighbourTargetBlock(wf, ['a', 'x'], 1, new Set(), slotKeys), null);
+});
+
+test('pasteSteps keeps free aliases, renames taken ones (inner references follow), ids always new', () => {
+  const catalog = scopeCatalog();
+  const lookup = (ref) => ({ name: 'AccountId', type: 'lookup', options: { mode: 'random', ref } });
+  const tpl = (t) => ({ name: 'Title', type: 'template', options: { template: t } });
+  const copied = [r('acc', 'acc'), loop('loopCon', [r('con', 'con', [lookup('acc'), tpl('{{acc.Name}} {{users.Name}}')])], { count: 2 })];
+
+  // Into an empty workflow: names kept.
+  const empty = tree([]);
+  const res = pasteSteps(empty, { parentId: null, slot: null, index: 0 }, copied, { catalog, slotKeys });
+  assert.deepEqual(res.ids, ['acc_2', 'loopCon_2']);
+  assert.deepEqual(res.renamed, []);
+  assert.deepEqual(res.missing, ['users']);
+  assert.equal(findStep(empty, 'con_2').step.config.fields[0].options.ref, 'acc');
+
+  // Into the workflow it came from: taken names get the next free one, references inside follow.
+  const same = tree(structuredClone(copied));
+  const res2 = pasteSteps(same, { parentId: null, slot: null, index: 2 }, copied, { catalog, slotKeys });
+  assert.deepEqual(res2.ids, ['acc_2', 'loopCon_2']);
+  assert.deepEqual(res2.renamed, [{ from: 'acc', to: 'acc2' }, { from: 'con', to: 'con2' }]);
+  const con2 = findStep(same, 'con_2').step;
+  assert.deepEqual([con2.config.alias, con2.config.fields[0].options.ref, con2.config.fields[1].options.template], ['con2', 'acc2', '{{acc2.Name}} {{users.Name}}']);
+  assert.equal(findStep(same, 'con').step.config.fields[0].options.ref, 'acc', 'the original is untouched');
+  assert.equal(collectIds(same).size, 6);
+});
+
+test('pasteSteps renames a loop variable that would shadow an enclosing loop; its body follows', () => {
+  const catalog = scopeCatalog();
+  const tpl = (t) => ({ name: 'T', type: 'template', options: { template: t } });
+  const copied = [loop('inner', [r('c', 'c', [tpl('{{loop.index}}')])], { count: 2 })];
+  const wf = tree([loop('outer', [], { count: 3 })]);
+  const res = pasteSteps(wf, { parentId: 'outer', slot: 'body', index: 0 }, copied, { catalog, slotKeys });
+  const pasted = findStep(wf, res.ids[0]).step;
+  assert.equal(pasted.config.alias, 'loop2');
+  assert.equal(pasted.slots.body[0].config.fields[0].options.template, '{{loop2.index}}');
+  assert.deepEqual(res.renamed, [{ from: 'loop', to: 'loop2' }]);
+  // At the root nothing is shadowed: the name stays.
+  const root = tree([loop('outer', [], { count: 3 })]);
+  const res2 = pasteSteps(root, { parentId: null, slot: null, index: 1 }, copied, { catalog, slotKeys });
+  assert.equal(findStep(root, res2.ids[0]).step.config.alias, 'loop');
+  assert.deepEqual(res2.renamed, []);
+});
+
+test('countSteps counts nested steps', () => {
+  assert.equal(countSteps([r('a'), loop('l', [r('b'), branch('br', [r('t')], [])])]), 5);
+  assert.equal(countSteps([]), 0);
+});
+
+test('pasteSteps: renames never chain (acc → acc2 while acc2 is also pasted) (0012 review)', () => {
+  const catalog = scopeCatalog();
+  const lookup = (ref) => ({ name: 'AccountId', type: 'lookup', options: { mode: 'random', ref } });
+  const copied = [r('a1', 'acc'), r('a2', 'acc2'), r('c1', 'c1', [lookup('acc')]), r('c2', 'c2', [lookup('acc2')])];
+  const wf = tree([r('x', 'acc')]);
+  const res = pasteSteps(wf, { parentId: null, slot: null, index: 1 }, copied, { catalog, slotKeys });
+  const [p1, p2, c1, c2] = res.ids.map((id) => findStep(wf, id).step);
+  assert.notEqual(p1.config.alias, p2.config.alias);
+  assert.equal(c1.config.fields[0].options.ref, p1.config.alias, 'c1 still points at the copy of acc');
+  assert.equal(c2.config.fields[0].options.ref, p2.config.alias, 'c2 still points at the copy of acc2');
+  assert.deepEqual([p1.config.alias, p2.config.alias], ['acc3', 'acc2'], 'acc2 is free here, so it is kept');
+  // Ctrl+D of the same four steps in one workflow: no chain either.
+  const same = tree(structuredClone(copied));
+  const { steps } = cloneSteps(same.steps, { ids: collectIds(same), aliases: collectAliases(same, catalog), catalog });
+  assert.deepEqual(steps.map((s) => s.config.alias), ['acc3', 'acc4', 'c3', 'c4']);
+  assert.deepEqual(steps.slice(2).map((s) => s.config.fields[0].options.ref), ['acc3', 'acc4']);
+});
+
+test('pasteSteps renames a record alias that equals a loop variable around the target', () => {
+  const catalog = scopeCatalog();
+  const tpl = (t) => ({ name: 'T', type: 'template', options: { template: t } });
+  const wf = tree([loop('outer', [], { count: 3, alias: 'row' })]);
+  const res = pasteSteps(wf, { parentId: 'outer', slot: 'body', index: 0 }, [r('a', 'row'), r('b', 'b', [tpl('{{row.Name}}')])], { catalog, slotKeys });
+  const [a, b] = res.ids.map((id) => findStep(wf, id).step);
+  assert.equal(a.config.alias, 'row2');
+  assert.equal(b.config.fields[0].options.template, '{{row2.Name}}');
+  assert.deepEqual(res.renamed, [{ from: 'row', to: 'row2' }]);
+});
+
+test('pasteSteps: a rename never lands on a loop variable inside the copy (0012 review 2)', () => {
+  const catalog = scopeCatalog();
+  const tpl = (t) => ({ name: 'T', type: 'template', options: { template: t } });
+  const copied = [r('a', 'item'), loop('l', [r('c', 'c', [tpl('{{item.Name}} #{{item2}}')])], { count: 2, alias: 'item2' })];
+  const wf = tree([r('x', 'item')]);
+  const res = pasteSteps(wf, { parentId: null, slot: null, index: 1 }, copied, { catalog, slotKeys });
+  const [a, l] = res.ids.map((id) => findStep(wf, id).step);
+  assert.equal(a.config.alias, 'item3');
+  assert.equal(l.config.alias, 'item2', 'the loop variable is not taken here: it stays');
+  assert.equal(l.slots.body[0].config.fields[0].options.template, '{{item3.Name}} #{{item2}}');
+  assert.deepEqual(res.renamed, [{ from: 'item', to: 'item3' }]);
+});
+
+test('Ctrl+D inside a loop: the copy does not take the name of the enclosing loop variable (0012 review 2)', () => {
+  const catalog = scopeCatalog();
+  const tpl = (t) => ({ name: 'T', type: 'template', options: { template: t } });
+  const wf = tree([loop('l', [r('a', 'row'), r('b', 'b', [tpl('{{row2.index}}')])], { count: 2, alias: 'row2' })]);
+  const at = findStep(wf, 'a', slotKeys);
+  // As client/js/ops.js duplicateStep: the record aliases plus the loop variables around the step.
+  const aliases = new Set([...collectAliases(wf, catalog), ...loopVarsAround(wf, { parentId: at.parentId }, slotKeys)]);
+  const { steps: [copy] } = cloneSteps([at.step], { ids: collectIds(wf), aliases, catalog });
+  assert.equal(copy.config.alias, 'row3');
+});
+
+// ---------- design 0013: number variables, branch right, each filterValue ----------
+
+const CAT = scopeCatalog();
+const loop13 = (id, config, body = []) => ({ id, type: 'loop', config, slots: { body } });
+const q13 = (id, alias, fields) => ({ id, type: 'query', config: { sobject: 'Account', alias, fields } });
+const num13 = (name) => ({ name, type: 'number', options: {} });
+
+test('renameAlias follows number variables, branch right and each filterValue', () => {
+  const make = () => tree([
+    q13('q', 'accs', ['Id', 'N']),
+    q13('q2', 'cons', ['Id', 'AccountId']),
+    loop13('la', { mode: 'each', from: 'accs', itemAlias: 'acc', alias: 'loop' }, [
+      loop13('lc', { count: '{{acc.N}}', alias: 'k' }),
+      loop13('lr', { mode: 'range', min: 1, max: ' {{ acc.N }} ', alias: 'r' }),
+      loop13('le', { mode: 'each', from: 'cons', itemAlias: 'con', alias: 'e', filter: 'compare', filterField: 'AccountId', filterValue: '{{acc.Id}}' }),
+      { id: 'b', type: 'branch', config: { kind: 'compare', left: 'acc.N', op: 'gt', right: '{{acc.N}} x' }, slots: { true: [], false: [] } },
+    ]),
+  ]);
+  for (const catalog of [CAT, undefined]) {
+    const wf = make();
+    const n = renameAlias(wf.steps, 'acc', 'account', { catalog });
+    const [lc, lr, le, b] = wf.steps[2].slots.body;
+    assert.deepEqual([lc.config.count, lr.config.max, le.config.filterValue, b.config.right, b.config.left], ['{{account.N}}', ' {{ account.N }} ', '{{account.Id}}', '{{account.N}} x', 'account.N'], catalog ? 'catalogue' : 'legacy');
+    assert.equal(n, 5);
+    assert.equal(lr.config.min, 1, 'a number is left alone');
+  }
+});
+
+test('renameField follows number variables and each filter values', () => {
+  const wf = tree([
+    r('a', 'acc', [num13('N'), num13('Code')]),
+    loop13('le', { mode: 'each', from: 'acc', itemAlias: 'it', alias: 'e' }, [
+      loop13('lc', { count: '{{it.N}}', alias: 'k' }),
+    ]),
+    loop13('lf', { mode: 'each', from: 'acc', itemAlias: 'it2', alias: 'f', filter: 'compare', filterField: 'N', filterValue: '{{acc.N}}' }),
+    loop13('lr', { mode: 'range', min: '{{acc.N}}', max: 9, alias: 'r' }),
+  ]);
+  const res = renameField(wf, 'a', 'N', 'Size', { catalog: CAT });
+  assert.equal(res.count, 4);
+  assert.deepEqual([wf.steps[1].slots.body[0].config.count, wf.steps[2].config.filterValue, wf.steps[3].config.min], ['{{it.Size}}', '{{acc.Size}}', '{{acc.Size}}']);
+  assert.equal(wf.steps[2].config.filterField, 'Size', 'the filter field of the each loop follows (review of 0013)');
+  assert.deepEqual(res.places.map((p) => `${p.nodeId}.${p.field}`).sort(), ['lc.count', 'lf.filterField', 'lf.filterValue', 'lr.min']);
+});
+
+test('renameField follows the filterField / weightField of a Chọn bản ghi and a Lặp each, also through a pick (review of 0013)', () => {
+  const wf = tree([
+    r('a', 'acc', [num13('N'), num13('Code')]),
+    r('b', 'other', [num13('N')]),
+    { id: 'p', type: 'pick', config: { from: 'acc', alias: 'one', mode: 'weighted', weightField: 'N', filter: 'compare', filterField: 'N', filterOp: 'gt', filterValue: '1' } },
+    { id: 'p2', type: 'pick', config: { from: 'one', alias: 'two', filter: 'compare', filterField: 'N', filterValue: '1' } },
+    loop13('le', { mode: 'each', from: 'other', itemAlias: 'it', filter: 'compare', filterField: 'N', filterValue: '1' }),
+    loop13('lf', { mode: 'each', from: 'acc', itemAlias: 'it2', filter: 'compare', filterField: 'Code', filterValue: '1' }),
+  ]);
+  const res = renameField(wf, 'a', 'N', 'Size', { catalog: CAT });
+  const cfg = (i) => wf.steps[i].config;
+  assert.deepEqual([cfg(2).weightField, cfg(2).filterField, cfg(3).filterField], ['Size', 'Size', 'Size']);
+  assert.equal(cfg(4).filterField, 'N', 'a loop over another step\'s pool is left alone');
+  assert.equal(cfg(5).filterField, 'Code', 'another field is left alone');
+  assert.equal(res.count, 3);
+  assert.deepEqual(res.places.map((p) => `${p.nodeId}.${p.field}`).sort(), ['p.filterField', 'p.weightField', 'p2.filterField']);
+});
+
+test('setStepAlias on a loop does not rename its own count variable from an outer loop', () => {
+  // The inner loop shadows `loop` inside its body; its own count is read outside it (outer loop).
+  const wf = tree([loop13('outer', { count: 3, alias: 'loop' }, [
+    loop13('inner', { count: '{{loop.index}}', alias: 'loop' }, [r('x', 'x', [{ name: 'T', type: 'template', options: { template: '{{loop.index}}' } }])]),
+  ])]);
+  const memo = new Map();
+  assert.equal(setStepAlias(wf, 'inner', 'k', { memo, slotKeys, catalog: CAT }), true);
+  const inner = wf.steps[0].slots.body[0];
+  assert.equal(inner.config.count, '{{loop.index}}', 'the count still reads the outer loop');
+  assert.equal(inner.slots.body[0].config.fields[0].options.template, '{{k.index}}');
+  // Renaming the outer loop moves the inner count along (it is the outer loop's variable).
+  setStepAlias(wf, 'outer', 'o', { memo, slotKeys, catalog: CAT });
+  assert.equal(inner.config.count, '{{o.index}}');
+  assert.equal(inner.slots.body[0].config.fields[0].options.template, '{{k.index}}');
+});
+
+// ---------- review 2 of 0011, item 8: step ids the server accepts ----------
+
+import { normalizeStepIds, nextId as nextStepId, STEP_ID } from '../shared/workflow-tree.js';
+import { validateWorkflow as validateIds } from '../server/workflow/schema.js';
+
+test('nextId keeps ids within 64 characters, cutting the base and never the number', () => {
+  const long = 'a'.repeat(64);
+  const id = nextStepId(long, new Set([long]));
+  assert.equal(id, `${'a'.repeat(62)}_2`);
+  assert.ok(STEP_ID.test(id));
+  assert.equal(nextStepId(`${'b'.repeat(70)}_9`, new Set()).length, 64);
+});
+
+test('normalizeStepIds rewrites invalid, numeric, leading "-", too long and duplicate ids; a Record without alias keeps its name', () => {
+  const wf = {
+    version: 2,
+    steps: [
+      { id: 5, type: 'record', config: { sobject: 'Account', alias: 'acc', fields: [{ name: 'Name', type: 'text' }] } },
+      { id: 'my acc', type: 'loop', config: { count: 1 }, slots: { body: [
+        { id: '-x', type: 'record', config: { sobject: 'Contact', fields: [{ name: 'LastName', type: 'text' }] } },
+        { id: 'ok', type: 'record', config: { sobject: 'Contact', alias: 'c2', fields: [{ name: 'LastName', type: 'text' }] } },
+      ] } },
+      { id: 'ok', type: 'record', config: { sobject: 'Lead', alias: 'l', fields: [{ name: 'LastName', type: 'text' }] } },
+      { id: `rec_${'z'.repeat(70)}`, type: 'record', config: { sobject: 'Task', fields: [{ name: 'Subject', type: 'text' }] } },
+      { id: 'parent', type: 'record', config: { sobject: 'Contact', fields: [{ name: 'LastName', type: 'text' }, { name: 'AccountId', type: 'lookup', options: { ref: `rec_${'z'.repeat(70)}` } }] } },
+    ],
+  };
+  const before = JSON.stringify(wf);
+  const { workflow, renamed } = normalizeStepIds(wf);
+  assert.equal(JSON.stringify(wf), before, 'pure: the input is not changed');
+  assert.deepEqual(renamed.map((r) => r.from), [5, 'my acc', '-x', 'ok', `rec_${'z'.repeat(70)}`]);
+  const ids = [];
+  const walk = (l) => { for (const s of l) { ids.push(s.id); for (const c of Object.values(s.slots ?? {})) walk(c); } };
+  walk(workflow.steps);
+  assert.deepEqual(ids.slice(0, 5), ['5', 'my_acc', 'x', 'ok', 'ok_2']);
+  assert.ok(ids.every((id) => STEP_ID.test(id)));
+  assert.equal(new Set(ids).size, ids.length);
+  // The long alias-less Record keeps its old id as alias, so the Lookup to it still resolves.
+  assert.equal(workflow.steps[3].config.alias, `rec_${'z'.repeat(70)}`);
+  assert.deepEqual(validateIds(workflow).errors.filter((e) => /Id bước/.test(e.message)), []);
+  const clean = { version: 2, steps: [{ id: 'a', type: 'record', config: {} }] };
+  assert.equal(normalizeStepIds(clean).workflow, clean, 'nothing to change: the same object');
+});
+
+test('final review N2: normalizeStepIds never duplicates a name nor loses a reference', () => {
+  const lookup = (ref) => ({ name: 'AccountId', type: 'lookup', options: { ref } });
+  const wf = {
+    version: 2,
+    steps: [
+      // Old id is not a usable alias ("my acc"): the Record gets one and references follow it.
+      { id: 'my acc', type: 'record', config: { sobject: 'Account', fields: [{ name: 'Name', type: 'text' }] } },
+      // Duplicate id "acc" of an alias-less Record: the first keeps the name, the second is named by its new id.
+      { id: 'acc', type: 'record', config: { sobject: 'Account', fields: [{ name: 'Name', type: 'text' }] } },
+      { id: 'acc', type: 'record', config: { sobject: 'Account', fields: [{ name: 'Name', type: 'text' }] } },
+      // Old id "7" (numeric) whose alias would start with a digit.
+      { id: 7, type: 'record', config: { sobject: 'Lead', fields: [{ name: 'LastName', type: 'text' }] } },
+      { id: 'con', type: 'record', config: { sobject: 'Contact', fields: [
+        { name: 'LastName', type: 'text', options: { mode: 'template', template: 'Of {{acc.Name}} / {{7.LastName}}' } },
+        lookup('my acc'),
+        { name: 'ReportsToId', type: 'lookup', options: { ref: 'acc' } },
+      ] } },
+    ],
+  };
+  const { workflow } = normalizeStepIds(wf);
+  const [a, b, c, d, con] = workflow.steps;
+  assert.deepEqual([a.id, a.config.alias], ['my_acc', 'my_acc']);
+  assert.deepEqual([b.id, b.config.alias], ['acc', undefined], 'the first "acc" keeps its id and name');
+  assert.deepEqual([c.id, c.config.alias], ['acc_2', undefined], 'no second step named "acc"');
+  assert.equal(d.config.alias, 'r_7');
+  assert.equal(con.config.fields[0].options.template, 'Of {{acc.Name}} / {{r_7.LastName}}');
+  assert.equal(con.config.fields[1].options.ref, 'my_acc');
+  assert.equal(con.config.fields[2].options.ref, 'acc', 'a reference to the kept "acc" stays');
+  assert.equal(wf.steps[4].config.fields[1].options.ref, 'my acc', 'pure');
+  const names = workflow.steps.map((s) => s.config.alias ?? s.id);
+  assert.equal(new Set(names).size, names.length);
+});

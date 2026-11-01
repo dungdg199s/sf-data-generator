@@ -70,13 +70,6 @@ export function sampleFor(nodeId, keys) {
   return { text: formatSample(v), title: stale ? 'Từ lần xem trước; workflow đã thay đổi sau đó.' : 'Từ lần xem trước.', stale };
 }
 
-/** Value the server generated for `fieldName` in the first record of the step (the "Lần xem trước" line). */
-export function previewOf(nodeId, fieldName) {
-  const rec = state.result ? firstRecords().get(nodeId) : null;
-  if (!rec || !(fieldName in (rec.fields ?? {}))) return null;
-  return rec.fields[fieldName];
-}
-
 function flatten(members, prefix = []) {
   const out = [];
   for (const m of members ?? []) {
@@ -88,8 +81,31 @@ function flatten(members, prefix = []) {
 
 function item(group, m, keys, nodeId) {
   const sample = m.example ? { text: m.example, title: m.label ?? '' } : m.builtin ? null : sampleFor(nodeId, keys);
-  return { path: [group.name, ...keys].join('.'), key: keys.join('.'), typeLabel: typeLabel(m), help: m.label ?? '', sample };
+  const valueType = m.valueType ?? (m.type && fieldType(m.type)?.valueType) ?? 'string';
+  return { path: [group.name, ...keys].join('.'), key: keys.join('.'), typeLabel: typeLabel(m), help: m.label ?? '', sample, valueType };
 }
+
+/**
+ * Sample of a run variable (design 0013 G): the value it had in the last preview (`run.seed` is
+ * that preview's seed), else the catalogue's example (none for the seed: it changes every run
+ * unless fixed).
+ */
+function runSample(m) {
+  const r = state.result;
+  // An empty Seed box: every run draws a new seed.
+  const random = !(document.getElementById('seed')?.value.trim());
+  const seedNote = random ? ' (đổi mỗi lần chạy nếu không giữ seed)' : '';
+  if (!r) return m.key === 'seed' ? { text: '—', title: `Seed của lần chạy${seedNote}. Bấm Xem trước để thấy giá trị.` } : m.example ? { text: m.example, title: `Ví dụ. ${m.label ?? ''}` } : null;
+  const iso = Number.isFinite(Number(r.now)) ? new Date(Number(r.now)).toISOString() : null;
+  const v = m.key === 'seed' ? r.seed : m.key === 'now' ? iso : m.key === 'today' ? iso?.slice(0, 10) : undefined;
+  if (v === undefined || v === null) return m.example ? { text: m.example, title: m.label ?? '' } : null;
+  const stale = samplesStale();
+  const title = stale ? 'Từ lần xem trước; workflow đã thay đổi sau đó.' : 'Từ lần xem trước.';
+  return { text: m.key === 'seed' ? String(v) : formatSample(v), title: m.key === 'seed' ? `${title}${seedNote}` : title, stale };
+}
+
+/** Value types a number option takes (design 0013 B): Số, and org fields whose type is unknown. */
+const NUMBER_TYPES = new Set(['number', 'any']);
 
 const BADGES = {
   last: ['bản ghi cuối', 'Tạo trong vòng lặp đã kết thúc: giá trị là bản ghi của lần lặp cuối. Lookup "Ngẫu nhiên" sẽ chọn trong tất cả.'],
@@ -98,8 +114,10 @@ const BADGES = {
 /**
  * Groups for the picker at `stepId` (field `fieldIndex` of a record step, or a step option):
  * → { groups: [{ id, nodeType, name, label, badge?, badgeTitle?, note?, items: [...] }], hidden: [{ text }] }
+ * `mode: 'number'` (a number option, design 0013 B) keeps only Số variables and org fields of
+ * unknown type; groups left empty are dropped. The run variables (`run`, "Lần chạy") come last.
  */
-export function groupsFor(stepId, fieldIndex) {
+export function groupsFor(stepId, fieldIndex, { mode } = {}) {
   const scope = currentScope();
   const step = stepById(stepId);
   const here = scope.at[stepId];
@@ -122,7 +140,8 @@ export function groupsFor(stepId, fieldIndex) {
     const src = scope.sources[v.source];
     if (!src) continue;
     const g = {
-      id: src.id ?? src.nodeId, nodeType: src.nodeType, name: src.name, label: src.label || src.sobject || '', items: [],
+      // Run variables are neutral like the built-ins ($n): the Start colour (docs/ui-design-system.md §3).
+      id: src.id ?? src.nodeId, nodeType: src.global ? 'start' : src.nodeType, name: src.name, label: src.label || src.sobject || '', items: [],
       ...(v.certainty === 'last' ? { badge: BADGES.last[0], badgeTitle: BADGES.last[1] } : {}),
       ...(v.certainty === 'maybe' ? { badge: 'có thể trống', badgeTitle: v.note ?? '' } : {}),
     };
@@ -138,13 +157,22 @@ export function groupsFor(stepId, fieldIndex) {
     // The record a Lặp `each` loops over (0010) shows the first record of its pool as sample.
     const sampleId = src.current === 'item' ? src.root ?? src.nodeId : src.nodeId;
     for (const b of builtins) g.items.push(item(g, b, [b.key], sampleId));
-    for (const { m, keys } of flatten(fields)) g.items.push(item(g, m, keys, sampleId));
+    for (const { m, keys } of flatten(fields)) {
+      const it = item(g, m, keys, sampleId);
+      if (src.global) it.sample = runSample(m);
+      g.items.push(it);
+    }
     groups.push(g);
   }
   for (const hdn of here?.hidden ?? []) {
     const src = scope.sources[hdn.source];
     if (!src || src.nodeId === stepId) continue;
     hidden.push({ text: `${src.name} · ${src.label || src.sobject || ''} — ${hdn.note}` });
+  }
+  // Only the usable groups are filtered by type: "Không dùng được ở đây" keeps every source.
+  if (mode === 'number') {
+    for (const g of groups) g.items = g.items.filter((it) => NUMBER_TYPES.has(it.valueType));
+    return { groups: groups.filter((g) => g.items.length), hidden };
   }
   return { groups, hidden };
 }

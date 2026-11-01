@@ -58,6 +58,9 @@ export const toggleView = () => setView(state.view === 'canvas' ? 'process' : 'c
 /** Esc in the inspector: back to the selected card of the active view. */
 export const focusSelected = () => (state.view === 'canvas' ? canvasView.focusSelected() : processView.focusSelected());
 
+/** Run progress (design 0012 D): patch the stat chips and insert-error tags of the active view. */
+export const paintRunInfo = () => (state.view === 'canvas' ? canvasView.paintRunInfo() : processView.paintRunInfo());
+
 /** "/" key: the "+" menu at the default insert position, in the active view. */
 export const openAddMenuAtDefault = () => (state.view === 'canvas' ? canvasView.openAddMenuAtDefault() : processView.openAddMenuAtDefault());
 

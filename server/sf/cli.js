@@ -44,7 +44,7 @@ export function createSfCli({ run = defaultRun } = {}) {
       return [...seen.values()];
     },
 
-    /** { accessToken, instanceUrl, apiVersion, username } for an alias or username. */
+    /** { accessToken, instanceUrl, apiVersion, username, orgId } for an alias or username. */
     async getConnection(target, { refresh = false } = {}) {
       const hit = cache.get(target);
       if (!refresh && hit && Date.now() - hit.at < TOKEN_TTL_MS) return hit.conn;
@@ -55,6 +55,8 @@ export function createSfCli({ run = defaultRun } = {}) {
         instanceUrl: r.instanceUrl.replace(/\/$/, ''),
         apiVersion: r.apiVersion || '62.0',
         username: r.username,
+        // Org Id (`id` of sf org display): the identity a delete checks against history (design 0011).
+        orgId: r.id ?? null,
       };
       cache.set(target, { conn, at: Date.now() });
       return conn;

@@ -1,7 +1,7 @@
 // Field-type generator registry. To add a Salesforce type: write a generator object
 // (see docs/field-types.md for the contract) and add it to GENERATORS below.
 
-import { resolveOptions, allOptions } from './common.js';
+import { resolveOptions, allOptions, plainOptions, optionShown } from './common.js';
 import * as text from './text.js';
 import * as num from './number.js';
 import * as choice from './choice.js';
@@ -71,6 +71,34 @@ export function describeGenerators() {
     ...(g.members ? { members: g.members } : {}),
     options: allOptions(g),
   }));
+}
+
+const bound = (def) => (def.min !== undefined && def.max !== undefined ? `từ ${def.min} đến ${def.max}` : def.min !== undefined ? `từ ${def.min} trở lên` : `tối đa ${def.max}`);
+
+/**
+ * Numeric options of a field outside their `min` / `max` (or not a number), among the options in
+ * effect (showIf). Shared by validation (server/workflow/schema.js) and POST /api/field-samples.
+ * Generation clamps such values (resolveOptions), so this only tells the user.
+ * → [{ option, message }]
+ */
+export function optionIssues(field) {
+  const gen = registry.get(field?.type);
+  if (!gen) return [];
+  const given = plainOptions(field.options);
+  const values = resolveOptions(gen, given);
+  const out = [];
+  for (const def of allOptions(gen)) {
+    if ((def.kind !== 'integer' && def.kind !== 'number') || !optionShown(def, values)) continue;
+    const raw = given[def.key];
+    if (raw === undefined || raw === null || raw === '') continue;
+    const v = Number(raw);
+    if (!Number.isFinite(v)) {
+      out.push({ option: def.key, message: `Field "${field.name}": "${def.label}" phải là một số (đang là "${raw}"). Sửa trong tùy chọn của field.` });
+    } else if ((def.min !== undefined && v < def.min) || (def.max !== undefined && v > def.max)) {
+      out.push({ option: def.key, message: `Field "${field.name}": "${def.label}" phải ${bound(def)} (đang là ${raw}). Sửa trong tùy chọn của field.` });
+    }
+  }
+  return out;
 }
 
 /**

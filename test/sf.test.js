@@ -8,6 +8,9 @@ import { mapDescribe, mapQueryFields } from '../server/sf/describe-map.js';
 import { createQueryCache, prefetchQueries, fingerprint } from '../server/sf/query.js';
 import { WorkflowError } from '../server/workflow/schema.js';
 import { wf, query, pick, record, loop } from './helpers.js';
+import { planInsert } from '../shared/insert-plan.js';
+import { parseCsv, bulkCell } from '../server/sf/bulk-csv.js';
+import { deleteRun } from '../server/sf/delete.js';
 
 test('listOrgs merges groups and de-duplicates by username', async () => {
   const run = async () => ({
@@ -27,6 +30,15 @@ test('listOrgs merges groups and de-duplicates by username', async () => {
 test('missing sf binary gives an actionable message', async () => {
   const run = async () => ({ stdout: '', stderr: '', code: 'ENOENT' });
   await assert.rejects(createSfCli({ run }).listOrgs(), /Chưa cài Salesforce CLI/);
+});
+
+test('getConnection returns the org Id (`id` of sf org display) and never more than the connection keys (0011)', async () => {
+  const run = async (_cmd, args) => ({
+    stdout: JSON.stringify({ status: 0, result: { id: '00D000000000001AAA', accessToken: 'tok', instanceUrl: 'https://acme.my.salesforce.com/', apiVersion: '62.0', username: 'me@x.com', alias: 'dev', clientId: 'PlatformCLI' } }),
+    args,
+  });
+  const conn = await createSfCli({ run }).getConnection('dev');
+  assert.deepEqual(conn, { accessToken: 'tok', instanceUrl: 'https://acme.my.salesforce.com', apiVersion: '62.0', username: 'me@x.com', orgId: '00D000000000001AAA' });
 });
 
 test('toSObject resolves refs, drops nulls, splits geolocation', () => {
@@ -56,6 +68,31 @@ test('insertRecords inserts parents before children and cascades failures', asyn
   assert.deepEqual(res.errors.map((e) => e.ref), ['acc#2', 'con#2']);
 });
 
+test('the inserter counts byStep; children skipped because their parent failed count for their own step (0012 D)', async () => {
+  const client = {
+    async create(_target, _sobject, recs) {
+      return recs.map((r, i) => (r.Name === 'bad' ? { success: false, errors: [{ statusCode: 'X', message: 'nope' }] } : { success: true, id: `id${i}${r.Name ?? r.LastName}` }));
+    },
+  };
+  const records = [
+    { ref: 'acc#1', sobject: 'Account', nodeId: 'a', fields: { Name: 'ok' } },
+    { ref: 'acc#2', sobject: 'Account', nodeId: 'a', fields: { Name: 'bad' } },
+    { ref: 'con#1', sobject: 'Contact', nodeId: 'c', fields: { LastName: 'x', AccountId: { $ref: 'acc#1' } } },
+    { ref: 'con#2', sobject: 'Contact', nodeId: 'c', fields: { LastName: 'y', AccountId: { $ref: 'acc#2' } } },
+    { ref: 'con#3', sobject: 'Contact', nodeId: 'c2', fields: { LastName: 'z', AccountId: { $ref: 'acc#2' } } },
+    { ref: 'x#1', sobject: 'Lead', fields: { LastName: 'no step' } },
+  ];
+  const seen = [];
+  const res = await insertRecords(client, 'dev', records, { onProgress: () => {} });
+  const inserter = createInserter(client, 'dev', { onBatch: (s) => seen.push(JSON.parse(JSON.stringify(s.byStep))) });
+  for (const r of records) await inserter.push(r);
+  const sum = await inserter.end();
+  for (const s of [res, sum]) {
+    assert.deepEqual(s.byStep, { a: { inserted: 1, failed: 1 }, c: { inserted: 1, failed: 1 }, c2: { inserted: 0, failed: 1 } });
+  }
+  assert.deepEqual(seen.at(-1), sum.byStep);
+});
+
 test('mapDescribe picks sensible defaults and skips non-createable fields', () => {
   const { fields } = mapDescribe({
     name: 'Contact',
@@ -75,6 +112,24 @@ test('mapDescribe picks sensible defaults and skips non-createable fields', () =
   assert.deepEqual(byName.AccountId.options, { mode: 'current', ref: '', referenceTo: ['Account'] }, 'referenceTo narrows the parent list (0005)');
   assert.deepEqual(byName.Level__c.options.values, ['A']);
   assert.ok(!byName.Id);
+});
+
+test('mapDescribe returns nameField (0012 G)', () => {
+  const task = mapDescribe({
+    name: 'Task',
+    fields: [
+      { name: 'Id', type: 'id', createable: false },
+      { name: 'Subject', type: 'combobox', length: 255, createable: true, nillable: true, nameField: true },
+      { name: 'OwnerId', type: 'reference', referenceTo: ['User'], createable: true, nillable: false, defaultedOnCreate: true },
+    ],
+  });
+  assert.equal(task.nameField, 'Subject');
+  assert.deepEqual(task.fields.filter((f) => f.required), [], 'OwnerId is defaulted on create');
+  // CaseNumber is the name field but not createable: still reported, not in fields.
+  const kase = mapDescribe({ name: 'Case', fields: [{ name: 'CaseNumber', type: 'string', createable: false, autoNumber: true, nameField: true }] });
+  assert.equal(kase.nameField, 'CaseNumber');
+  assert.deepEqual(kase.fields, []);
+  assert.equal(mapDescribe({ name: 'X__c', fields: [] }).nameField, null);
 });
 
 function fakeJsforce() {
@@ -115,7 +170,7 @@ test('sf client builds one jsforce connection per org from the sf CLI token', as
   const cli = {
     async getConnection(target, { refresh = false } = {}) {
       lookups.push([target, refresh]);
-      return { accessToken: refresh ? 'fresh' : 'tok', instanceUrl: 'https://x.my.salesforce.com', apiVersion: '62.0' };
+      return { accessToken: refresh ? 'fresh' : 'tok', instanceUrl: 'https://x.my.salesforce.com', apiVersion: '62.0', orgId: '00DA' };
     },
   };
   const { made, createConnection } = fakeJsforce();
@@ -132,7 +187,26 @@ test('sf client builds one jsforce connection per org from the sf CLI token', as
   // refreshFn (called by jsforce on INVALID_SESSION_ID) asks the CLI for a fresh token.
   const token = await new Promise((resolve, reject) => made[0].options.refreshFn(made[0], (err, t) => (err ? reject(err) : resolve(t))));
   assert.equal(token, 'fresh');
-  assert.deepEqual(lookups, [['dev', false], ['dev', true]]);
+  // Review of 0011 (S1): every call asks the CLI (cached there) who the target is, so a re-pointed
+  // alias gets its own connection; the connection itself is still made once.
+  assert.deepEqual(lookups, [['dev', false], ['dev', false], ['dev', true]]);
+});
+
+test('sf client: a re-pointed alias gets a new connection; refreshFn refuses a token of another org or user (S1)', async () => {
+  let who = { orgId: '00DA', username: 'me@x.com' };
+  const cli = { getConnection: async (_t, { refresh = false } = {}) => ({ accessToken: refresh ? 'fresh' : 'tok', instanceUrl: 'https://x.my.salesforce.com', apiVersion: '62.0', ...who }) };
+  const { made, createConnection } = fakeJsforce();
+  const client = createSfClient({ cli, createConnection });
+  await client.create('dev', 'Contact', [{ LastName: 'A' }]);
+  who = { orgId: '00DB', username: 'me@x.com' };
+  const refused = await new Promise((resolve) => made[0].options.refreshFn(made[0], (err) => resolve(err)));
+  assert.match(refused.message, /^Alias "dev" bây giờ trỏ tới org khác \(00DB, me@x.com; kết nối đang dùng: .*sf org display --target-org dev; .*sf org login web --alias dev vào đúng org\.$/);
+  await client.create('dev', 'Contact', [{ LastName: 'B' }]);
+  assert.equal(made.length, 2, 'the new org gets its own connection');
+  assert.equal(made[0].calls.length, 1);
+  assert.equal(made[1].calls.length, 1);
+  who = { orgId: '00DB', username: 'other@x.com' };
+  assert.match((await new Promise((resolve) => made[1].options.refreshFn(made[1], (err) => resolve(err)))).message, /bây giờ trỏ tới org khác/);
 });
 
 test('sf client reports Salesforce errors as 502 with the error code', async () => {
@@ -479,4 +553,472 @@ test('error groups: Ids and quoted values are masked in the key, at most 100 gro
   assert.equal(res.errorGroups.length, MAX_ERROR_GROUPS);
   assert.deepEqual(res.errorGroupsOther, { groups: 200, count: 200 });
   assert.equal(res.errorGroups.reduce((n, g) => n + g.count, 0) + res.errorGroupsOther.count, res.errorsTotal);
+});
+
+// ---------- design 0011: the inserter with Bulk API 2.0 (in-memory client) ----------
+
+const tick = () => new Promise((r) => setImmediate(r));
+
+/** In-memory client with create + bulkJob; jobs complete after `checks` InProgress answers. */
+function bulkClient(opts = {}) {
+  let n = 0;
+  const calls = [];
+  const jobs = [];
+  const rows = (text) => parseCsv(text);
+  const id = (sobject) => `${sobject === 'Account' ? '001' : '003'}${String(++n).padStart(15, '0')}`;
+  return {
+    calls,
+    jobs,
+    async create(_t, sobject, recs) {
+      calls.push({ op: 'create', sobject, recs });
+      await opts.gateCreate?.(calls.length);
+      return recs.map((r) => (opts.createFail?.(r, sobject)
+        ? { success: false, errors: [{ statusCode: 'REQUIRED_FIELD_MISSING', message: 'Required fields are missing: [LastName]', fields: ['LastName'] }] }
+        : { success: true, id: id(sobject) }));
+    },
+    async describe(_t, sobject) {
+      return { name: sobject, keyPrefix: { Account: '001', Contact: '003' }[sobject] };
+    },
+    bulkJob(_t, { object, operation }) {
+      if (!['insert', 'delete'].includes(operation)) throw new Error('not allowed');
+      const job = { id: `750${String(jobs.length + 1).padStart(15, '0')}`, object, operation, state: 'Open', csv: '', checks: 0, log: [], results: null };
+      jobs.push(job);
+      calls.push({ op: 'bulkJob', object, operation });
+      const info = () => {
+        const done = job.results ? job.results.slice(0, job.state === 'Aborted' ? (opts.abortKeep ?? 0) : undefined) : [];
+        return { state: job.state, numberRecordsProcessed: done.length, numberRecordsFailed: done.filter((r) => !r.ok).length, errorMessage: job.errorMessage ?? null };
+      };
+      return {
+        get id() { return job.id; },
+        async open() {
+          job.log.push('open');
+          if (opts.openError) throw opts.openError;
+          return { id: job.id, operation: opts.openOperation ?? operation, object: opts.openObject ?? object, state: 'Open' };
+        },
+        async upload(csv) {
+          job.log.push('upload');
+          job.csv = csv;
+          await opts.onUpload?.(job);
+        },
+        async close() {
+          job.log.push('close');
+          const [header, ...data] = rows(job.csv);
+          job.header = header;
+          job.results = data.map((cells) => {
+            const fields = Object.fromEntries(header.map((h, i) => [h, cells[i]]));
+            const err = opts.rowFail?.(fields, job);
+            return err ? { ok: false, cells, err } : { ok: true, cells, id: operation === 'delete' ? fields.Id : id(object) };
+          });
+          job.state = 'UploadComplete';
+        },
+        async abort() {
+          job.log.push('abort');
+          job.state = 'Aborted';
+        },
+        async check() {
+          job.log.push('check');
+          await opts.onCheck?.(job);
+          if (job.state === 'UploadComplete' || job.state === 'InProgress') {
+            if (opts.never || job.checks++ < (opts.checks ?? 1)) job.state = 'InProgress';
+            else {
+              job.state = opts.jobFinal?.(job) ?? 'JobComplete';
+              if (job.state === 'Failed') {
+                job.errorMessage = 'InvalidBatch : Field name not found : Foo__c';
+                job.results = [];
+              }
+            }
+          }
+          return info();
+        },
+        async successfulResults() {
+          job.log.push('successfulResults');
+          if (job.state === 'Aborted' && !opts.abortedResults) throw Object.assign(new Error('Salesforce: NOT_FOUND'), { status: 502 });
+          const done = job.results.slice(0, job.state === 'Aborted' ? (opts.abortKeep ?? 0) : undefined).filter((r) => r.ok).reverse();
+          return [['sf__Id', 'sf__Created', ...job.header], ...done.map((r) => [r.id, 'true', ...r.cells])].map((l) => l.map(bulkCell).join(',')).join('\n') + '\n';
+        },
+        async failedResults() {
+          job.log.push('failedResults');
+          const done = job.results.slice(0, job.state === 'Aborted' ? (opts.abortKeep ?? 0) : undefined).filter((r) => !r.ok);
+          return [['sf__Id', 'sf__Error', ...job.header], ...done.map((r) => ['', r.err, ...r.cells])].map((l) => l.map(bulkCell).join(',')).join('\n') + '\n';
+        },
+      };
+    },
+  };
+}
+
+/** Account (n) each followed by its `per` Contacts, as the executor yields them. */
+function accConRecords(accounts, per) {
+  const out = [];
+  let c = 0;
+  for (let a = 1; a <= accounts; a++) {
+    out.push({ ref: `acc#${a}`, sobject: 'Account', alias: 'acc', nodeId: 'a', fields: { Name: `A${a}` } });
+    for (let k = 0; k < per; k++) {
+      c++;
+      out.push({ ref: `con#${c}`, sobject: 'Contact', alias: 'con', nodeId: 'c', fields: { LastName: `L${c}`, AccountId: { $ref: `acc#${a}` } } });
+    }
+  }
+  return out;
+}
+
+const conPlan = (records, contacts) => planInsert({
+  steps: [{ nodeId: 'a', alias: 'acc', sobject: 'Account', records: records - contacts }, { nodeId: 'c', alias: 'con', sobject: 'Contact', records: contacts }],
+  referenced: new Set(['acc']),
+});
+
+async function insertAll(client, records, opts = {}) {
+  const ins = createInserter(client, 'dev', { keepId: (ref) => ref.startsWith('acc#'), bulkOptions: { sleep: tick }, ...opts });
+  for (const r of records) await ins.push(r);
+  return ins.end();
+}
+
+test('Bulk: Account 300 + Contact 12 000 ⇒ Account only by create, Contact 200 by create then 2 jobs with real Account Ids; unordered results all reach onInserted', async () => {
+  const client = bulkClient();
+  const recs = accConRecords(300, 40);
+  const saved = [];
+  const jobsSeen = [];
+  const res = await insertAll(client, recs, {
+    plan: conPlan(recs.length, 12000),
+    onInserted: async (rows) => { saved.push(...rows); },
+    onJob: async (j) => { jobsSeen.push([j.jobId, j.state]); },
+  });
+  const creates = client.calls.filter((c) => c.op === 'create');
+  assert.equal(creates.filter((c) => c.sobject === 'Account').reduce((s, c) => s + c.recs.length, 0), 300);
+  const conCreates = creates.filter((c) => c.sobject === 'Contact');
+  assert.deepEqual(conCreates.map((c) => c.recs.length), [200], 'the probe: the first Contact call of the step');
+  assert.equal(client.jobs.length, 2);
+  assert.deepEqual(client.jobs.map((j) => j.results.length), [10000, 1800]);
+  assert.ok(client.jobs.every((j) => j.operation === 'insert' && j.log.join() === 'open,upload,close,check,check,successfulResults,failedResults'));
+  // Every Contact row points at a real Account Id from the create results.
+  const accountIds = new Set(saved.filter((r) => r.sobject === 'Account').map((r) => r.id));
+  const [header, ...rows1] = parseCsv(client.jobs[0].csv);
+  assert.deepEqual(header, ['LastName', 'AccountId']);
+  assert.ok(rows1.every(([, accId]) => accountIds.has(accId)));
+  assert.equal(res.inserted, 12300);
+  assert.equal(res.failed, 0);
+  assert.deepEqual(res.bySobject, { Account: { inserted: 300, failed: 0 }, Contact: { inserted: 12000, failed: 0 } });
+  assert.deepEqual(res.byStep, { a: { inserted: 300, failed: 0 }, c: { inserted: 12000, failed: 0 } });
+  assert.equal(saved.length, 12300);
+  assert.equal(new Set(saved.map((r) => r.id)).size, 12300);
+  assert.deepEqual(saved.filter((r) => r.sobject === 'Contact' && r.ref).length, 200, 'Bulk Ids have no ref');
+  assert.deepEqual(res.bulk, [{ nodeId: 'c', sobject: 'Contact', jobs: 2, records: 11800, inserted: 12000, failed: 0 }]);
+  assert.deepEqual(res.bulkJobs.map((j) => [j.state, j.idsCollected, j.inserted]), [['JobComplete', true, 10000], ['JobComplete', true, 1800]]);
+  assert.deepEqual(jobsSeen.map((j) => j[1]), ['Open', 'JobComplete', 'Open', 'JobComplete'], 'job Id recorded before its upload');
+  assert.equal(res.notSent, 0);
+});
+
+test('Bulk: the probe failing 3 times ⇒ allFailing, no job is ever opened', async () => {
+  const client = bulkClient({ createFail: (_r, so) => so === 'Contact' });
+  const recs = accConRecords(300, 40);
+  const res = await insertAll(client, recs, { plan: conPlan(recs.length, 12000) });
+  assert.equal(res.stopped.reason, 'allFailing');
+  assert.equal(res.stopped.sobject, 'Contact');
+  assert.equal(client.jobs.length, 0);
+  assert.equal(client.calls.filter((c) => c.op === 'bulkJob').length, 0);
+});
+
+test('Bulk: failed rows are matched back to their ref with the same message and field as Collections; byStep counts them', async () => {
+  const client = bulkClient({ rowFail: (f) => (f.LastName === 'L500' ? 'REQUIRED_FIELD_MISSING:Required fields are missing: [LastName]:LastName --' : null) });
+  const recs = accConRecords(300, 40);
+  const res = await insertAll(client, recs, { plan: conPlan(recs.length, 12000) });
+  assert.equal(res.failed, 1);
+  assert.deepEqual(res.errors.map((e) => [e.ref, e.nodeId, e.field, e.message]), [['con#500', 'c', 'fields.LastName', 'REQUIRED_FIELD_MISSING: Required fields are missing: [LastName] [LastName]']]);
+  assert.deepEqual(res.byStep.c, { inserted: 11999, failed: 1 });
+});
+
+test('Bulk: a job Failed fails its rows with the job sentence; two such jobs in a row stop with bulkFailing', async () => {
+  const client = bulkClient({ jobFinal: () => 'Failed' });
+  const recs = accConRecords(300, 80); // 24 000 Contacts ⇒ 3 jobs planned
+  const res = await insertAll(client, recs, { plan: conPlan(recs.length, 24000) });
+  assert.equal(res.stopped.reason, 'bulkFailing');
+  assert.equal(res.stopped.jobs, 2);
+  assert.equal(res.stopped.records, 20000);
+  assert.match(res.stopped.message, /^Job Bulk 750\d+ \(Contact\) thất bại: InvalidBatch : Field name not found : Foo__c\. Bản ghi của job này chưa được insert\./);
+  assert.equal(client.jobs.length, 2);
+  assert.equal(res.bySobject.Contact.inserted, 200, 'the probe');
+  assert.equal(res.failed, 20000);
+  assert.equal(res.inserted + res.failed + res.notSent, recs.length);
+  assert.equal(res.errorGroups.length, 1, 'the job Id is masked in the group key');
+  assert.equal(res.errorGroups[0].count, 20000);
+});
+
+test('Bulk: a job Salesforce will not open (INVALIDENTITY) ⇒ the step falls back to Collections with a warning', async () => {
+  const openError = Object.assign(new Error('Salesforce: INVALIDENTITY: Entity is not supported by the Bulk API'), { status: 502, cause: { errorCode: 'INVALIDENTITY', message: 'Entity is not supported by the Bulk API' } });
+  const client = bulkClient({ openError });
+  const recs = accConRecords(300, 40);
+  const res = await insertAll(client, recs, { plan: conPlan(recs.length, 12000) });
+  assert.equal(res.inserted, 12300);
+  assert.deepEqual(res.warnings, ['Bước "con": Bulk API 2.0 không nhận Contact (Entity is not supported by the Bulk API), nên đã gửi bằng sObject Collections.']);
+  assert.equal(client.jobs.length, 1, 'tried once');
+  assert.equal(client.calls.filter((c) => c.op === 'create' && c.sobject === 'Contact').reduce((s, c) => s + c.recs.length, 0), 12000);
+  // A limit error does not fall back: the job's rows fail.
+  const limited = bulkClient({ openError: Object.assign(new Error('Salesforce: REQUEST_LIMIT_EXCEEDED: TotalRequests Limit exceeded.'), { cause: { errorCode: 'REQUEST_LIMIT_EXCEEDED' } }) });
+  const res2 = await insertAll(limited, recs, { plan: conPlan(recs.length, 12000) });
+  assert.equal(res2.warnings.length, 0);
+  assert.equal(res2.failed, 11800);
+  assert.equal(res2.stopped.reason, 'bulkFailing');
+});
+
+test('Bulk: Dừng while a job is InProgress waits for JobComplete (no abort) and counts it; the rest is notSent', async () => {
+  const ctl = new AbortController();
+  const client = bulkClient({ checks: 3, onCheck: (job) => { if (job.checks === 1) ctl.abort(); } });
+  const recs = accConRecords(300, 80);
+  const progress = [];
+  const res = await insertAll(client, recs, { plan: conPlan(recs.length, 24000), signal: ctl.signal, onBatch: (s) => progress.push(s) });
+  assert.equal(client.jobs.length, 1);
+  assert.ok(!client.jobs[0].log.includes('abort'));
+  assert.equal(client.jobs[0].state, 'JobComplete');
+  assert.equal(res.cancelled, true);
+  assert.equal(res.inserted + res.failed + res.notSent, recs.length);
+  assert.equal(res.bySobject.Contact.inserted, 200 + 10000);
+  const withBulk = progress.filter((p) => p.bulk);
+  assert.ok(withBulk.length >= 2);
+  assert.deepEqual(Object.keys(withBulk.at(-1).bulk).sort(), ['failed', 'job', 'jobId', 'jobs', 'nodeId', 'processed', 'records', 'sobject', 'state']);
+  assert.equal(withBulk[0].bulk.jobs, 3);
+});
+
+test('Bulk: Dừng while the job is still Open (uploading) aborts it; its rows are notSent', async () => {
+  const ctl = new AbortController();
+  const client = bulkClient({ onUpload: () => ctl.abort() });
+  const recs = accConRecords(300, 40);
+  const res = await insertAll(client, recs, { plan: conPlan(recs.length, 12000), signal: ctl.signal });
+  assert.deepEqual(client.jobs[0].log, ['open', 'upload', 'abort']);
+  assert.equal(res.bySobject.Contact.inserted, 200);
+  assert.equal(res.bulkJobs[0].state, 'Aborted');
+  assert.equal(res.inserted + res.failed + res.notSent, recs.length);
+  assert.equal(res.cancelled, true);
+});
+
+test('Bulk: Dừng ngay aborts the job being processed, then reads its results when Salesforce keeps them', async () => {
+  const force = new AbortController();
+  const ctl = new AbortController();
+  const client = bulkClient({ checks: 5, abortKeep: 6200, abortedResults: true, onCheck: (job) => { if (job.checks === 1) { ctl.abort(); force.abort(); } } });
+  const recs = accConRecords(300, 40);
+  const saved = [];
+  const res = await insertAll(client, recs, { plan: conPlan(recs.length, 12000), signal: ctl.signal, forceSignal: force.signal, onInserted: async (r) => { saved.push(...r); } });
+  assert.ok(client.jobs[0].log.includes('abort'));
+  assert.deepEqual(res.bulkAborted, { jobId: client.jobs[0].id, sobject: 'Contact', nodeId: 'c', processed: 6200, records: 10000, idsKnown: true });
+  assert.equal(res.bySobject.Contact.inserted, 200 + 6200);
+  assert.equal(saved.filter((r) => r.sobject === 'Contact').length, 6400);
+  // Without results for the aborted job: Ids unknown, counted apart.
+  const force2 = new AbortController();
+  const ctl2 = new AbortController();
+  const client2 = bulkClient({ checks: 5, abortKeep: 6200, onCheck: (job) => { if (job.checks === 1) { ctl2.abort(); force2.abort(); } } });
+  const res2 = await insertAll(client2, recs, { plan: conPlan(recs.length, 12000), signal: ctl2.signal, forceSignal: force2.signal });
+  assert.deepEqual(res2.bulkAborted, { jobId: client2.jobs[0].id, sobject: 'Contact', nodeId: 'c', processed: 6200, records: 10000, idsKnown: false });
+  assert.equal(res2.bulkUnknown, 6200);
+  // S3: the job stays collectable (a later delete reads its results), it is not marked unknown for good.
+  assert.deepEqual([res2.bulkJobs[0].idsCollected, res2.bulkJobs[0].idsUnknown], [false, undefined]);
+  // N7: every record is inserted, failed, not sent or unknown.
+  for (const r of [res, res2]) assert.equal(r.inserted + r.failed + r.notSent + r.bulkUnknown, recs.length);
+});
+
+test('Bulk S3: results that cannot be read leave the job collectable; successes read without failures are still recorded', async () => {
+  const recs = accConRecords(300, 40);
+  // successfulResults fails: stop with bulkError, nothing marked unknown for good.
+  const c1 = bulkClient();
+  const bulkJob1 = c1.bulkJob.bind(c1);
+  c1.bulkJob = (...a) => Object.assign(bulkJob1(...a), { successfulResults: async () => { throw new Error('Salesforce: socket hang up'); } });
+  const r1 = await insertAll(c1, recs, { plan: conPlan(recs.length, 12000) });
+  assert.equal(r1.stopped.reason, 'bulkError');
+  assert.match(r1.stopped.message, /^Không đọc được kết quả của job Bulk 750\d+ \(Contact\): Salesforce: socket hang up$/);
+  assert.deepEqual([r1.bulkJobs[0].idsCollected, r1.bulkJobs[0].idsUnknown], [false, undefined]);
+  assert.equal(r1.inserted + r1.failed + r1.notSent + r1.bulkUnknown, recs.length);
+  // failedResults fails: the successes are counted and saved, the rest is unknown with a warning.
+  const c2 = bulkClient({ rowFail: (f) => (f.LastName === 'L500' ? 'X:no: --' : null) });
+  const bulkJob2 = c2.bulkJob.bind(c2);
+  c2.bulkJob = (...a) => Object.assign(bulkJob2(...a), { failedResults: async () => { throw new Error('Salesforce: timeout'); } });
+  const saved = [];
+  const r2 = await insertAll(c2, recs, { plan: conPlan(recs.length, 12000), onInserted: async (rows) => { saved.push(...rows); } });
+  assert.equal(r2.bySobject.Contact.inserted, 11999);
+  assert.equal(r2.bulkUnknown, 1);
+  assert.equal(saved.length, 12299);
+  assert.ok(r2.bulkJobs.every((j) => j.idsCollected));
+  assert.match(r2.warnings[0], /^Không đọc được danh sách lỗi của job Bulk/);
+  assert.equal(r2.inserted + r2.failed + r2.notSent + r2.bulkUnknown, recs.length);
+});
+
+test('Bulk: a job not done after the timeout stops the run with bulkTimeout (job Id kept)', async () => {
+  let t = 0;
+  const client = bulkClient({ never: true });
+  const recs = accConRecords(300, 40);
+  const res = await insertAll(client, recs, { plan: conPlan(recs.length, 12000), bulkOptions: { sleep: async (ms) => { t += ms; await tick(); }, clock: () => t, timeoutMs: 60000 } });
+  assert.equal(res.stopped.reason, 'bulkTimeout');
+  assert.equal(res.stopped.jobId, client.jobs[0].id);
+  assert.equal(res.bulkUnknown, 10000);
+  // back-off: 2 s × 1.5 … up to 15 s
+  assert.ok(client.jobs[0].log.filter((l) => l === 'check').length < 10);
+});
+
+test('Bulk: onInserted failing stops the insert after the call in flight (history)', async () => {
+  const client = bulkClient();
+  const recs = accConRecords(300, 40);
+  let calls = 0;
+  const res = await insertAll(client, recs, { plan: conPlan(recs.length, 12000), onInserted: async () => { if (++calls === 2) throw new Error('ENOSPC: no space left on device'); } });
+  assert.deepEqual(res.stopped, { reason: 'history', message: 'ENOSPC: no space left on device' });
+  assert.equal(client.calls.filter((c) => c.op === 'create').length, 2, 'nothing sent after the failed write');
+  assert.equal(client.jobs.length, 0);
+});
+
+test('without a plan the inserter never opens a Bulk job (records and calls unchanged)', async () => {
+  const client = bulkClient();
+  const recs = accConRecords(30, 400);
+  const res = await insertAll(client, recs);
+  assert.equal(client.jobs.length, 0);
+  assert.equal(res.inserted, recs.length);
+  assert.deepEqual(res.bulk, []);
+});
+
+// ---------- design 0011 §7: deleteRun (in-memory client, history in a temporary directory) ----------
+
+async function historyWith(rows, steps) {
+  const { mkdtemp } = await import('node:fs/promises');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const { createHistory } = await import('../server/history.js');
+  const h = createHistory({ dir: await mkdtemp(path.join(os.tmpdir(), 'sfdg-del-')) });
+  const hid = await h.create({ org: { alias: 'dev', username: 'me@x.com' }, workflow: null, seed: 1, now: 1, steps, total: rows.length });
+  await h.appendIds(hid, rows);
+  await h.finish(hid, { status: 'done', inserted: rows.length });
+  return { h, hid };
+}
+
+function deleteClient({ errorFor = () => null } = {}) {
+  const calls = [];
+  return {
+    calls,
+    async destroy(_t, sobject, ids) {
+      calls.push({ sobject, ids: [...ids] });
+      return ids.map((id) => {
+        const code = errorFor(id, sobject, calls.length);
+        return code ? { id, success: false, errors: [{ statusCode: code, message: `${code} msg`, fields: [] }] } : { id, success: true, errors: [] };
+      });
+    },
+    bulkJob() {
+      throw new Error('no Bulk in this test');
+    },
+    async describe(_t, sobject) {
+      return { name: sobject, keyPrefix: { Account: '001', Contact: '003' }[sobject] };
+    },
+  };
+}
+
+const id18 = (p, i) => `${p}${String(i).padStart(15, '0')}`;
+
+test('deleteRun: children before parents, Ids of a step in reverse insert order, every outcome in the history file', async () => {
+  const rows = [];
+  for (let a = 1; a <= 3; a++) {
+    rows.push({ sobject: 'Account', nodeId: 'a', ref: `acc#${a}`, id: id18('001', a) });
+    for (let k = 1; k <= 2; k++) rows.push({ sobject: 'Contact', nodeId: 'c', ref: `con#${a}${k}`, id: id18('003', a * 10 + k) });
+  }
+  const { h, hid } = await historyWith(rows, [{ nodeId: 'a', sobject: 'Account' }, { nodeId: 'c', sobject: 'Contact' }]);
+  const client = deleteClient({ errorFor: (id) => (id === id18('003', 12) ? 'ENTITY_IS_DELETED' : null) });
+  const res = await deleteRun({ client, history: h, hid, target: 'dev', batchSize: 4 });
+  assert.deepEqual(client.calls.map((c) => [c.sobject, c.ids]), [
+    ['Contact', [id18('003', 32), id18('003', 31), id18('003', 22), id18('003', 21)]],
+    ['Contact', [id18('003', 12), id18('003', 11)]],
+    ['Account', [id18('001', 3), id18('001', 2), id18('001', 1)]],
+  ]);
+  assert.deepEqual([res.deleted, res.gone, res.failed, res.remaining], [8, 1, 0, 0]);
+  assert.deepEqual(res.bySobject, { Account: { deleted: 3, gone: 0, failed: 0, total: 3 }, Contact: { deleted: 5, gone: 1, failed: 0, total: 6 } });
+  const map = await h.deletedMap(hid);
+  assert.equal(map.size, 9);
+  assert.equal(map.get(id18('003', 12)), 'gone');
+  const data = await h.read(hid);
+  assert.deepEqual([data.deletion.status, data.deletion.deleted, data.deletion.gone], ['done', 8, 1]);
+  assert.equal((await h.remaining(hid)).total, 0);
+});
+
+test('deleteRun: 3 calls of an sObject failing completely (no Delete permission) stop it; nothing of the parents is sent', async () => {
+  const rows = [];
+  for (let i = 1; i <= 2; i++) rows.push({ sobject: 'Account', nodeId: 'a', ref: `acc#${i}`, id: id18('001', i) });
+  for (let i = 1; i <= 1000; i++) rows.push({ sobject: 'Contact', nodeId: 'c', ref: `con#${i}`, id: id18('003', i) });
+  const { h, hid } = await historyWith(rows, [{ nodeId: 'a', sobject: 'Account' }, { nodeId: 'c', sobject: 'Contact' }]);
+  const client = deleteClient({ errorFor: (_id, so) => (so === 'Contact' ? 'INSUFFICIENT_ACCESS_OR_READONLY' : null) });
+  const res = await deleteRun({ client, history: h, hid, target: 'dev' });
+  assert.equal(client.calls.length, 3);
+  assert.ok(client.calls.every((c) => c.sobject === 'Contact'));
+  assert.equal(res.stopped.reason, 'allFailing');
+  assert.equal(res.stopped.text, 'Đã dừng xóa: 3 lời gọi xóa Contact đầu tiên đều lỗi "INSUFFICIENT_ACCESS_OR_READONLY: INSUFFICIENT_ACCESS_OR_READONLY msg". Kiểm tra quyền Delete của user trên Contact. Chưa xóa bản ghi Contact nào.');
+  assert.deepEqual([res.deleted, res.failed, res.remaining], [0, 600, 1002]);
+  assert.equal(res.errorGroups.length, 1);
+  assert.equal((await h.read(hid)).deletion.status, 'partial');
+});
+
+test('deleteRun: DELETE_FAILED Ids get exactly one more try at the end; Dừng stops before the next call', async () => {
+  const rows = [1, 2, 3].map((i) => ({ sobject: 'Account', nodeId: 'a', ref: `acc#${i}`, id: id18('001', i) }));
+  const { h, hid } = await historyWith(rows, [{ nodeId: 'a', sobject: 'Account' }]);
+  let first = true;
+  const client = deleteClient({ errorFor: (id) => (id === id18('001', 2) && first ? (first = false, 'DELETE_FAILED') : null) });
+  const res = await deleteRun({ client, history: h, hid, target: 'dev' });
+  assert.deepEqual(client.calls.map((c) => c.ids.length), [3, 1]);
+  assert.deepEqual([res.deleted, res.failed], [3, 0]);
+
+  const many = Array.from({ length: 1000 }, (_, i) => ({ sobject: 'Account', nodeId: 'a', ref: `acc#${i}`, id: id18('001', i + 1) }));
+  const x = await historyWith(many, [{ nodeId: 'a', sobject: 'Account' }]);
+  const ctl = new AbortController();
+  const c2 = deleteClient({ errorFor: (_id, _so, n) => { if (n === 2) ctl.abort(); return null; } });
+  const res2 = await deleteRun({ client: c2, history: x.h, hid: x.hid, target: 'dev', signal: ctl.signal });
+  assert.equal(c2.calls.length, 2);
+  assert.deepEqual([res2.deleted, res2.remaining, res2.cancelled], [400, 600, true]);
+  assert.equal((await x.h.remaining(x.hid)).total, 600, '"Xóa phần còn lại…" picks up the rest');
+});
+
+test('deleteRun: a step with bulkMinRecords Ids goes probe by destroy, then Bulk delete jobs; Bulk refusing the job falls back to destroy', async () => {
+  const rows = Array.from({ length: 450 }, (_, i) => ({ sobject: 'Contact', nodeId: 'c', ref: '', id: id18('003', i + 1) }));
+  const { h, hid } = await historyWith(rows, [{ nodeId: 'c', sobject: 'Contact' }]);
+  const client = bulkClient();
+  const destroyed = [];
+  client.destroy = async (_t, _so, ids) => { destroyed.push(ids.length); return ids.map((id) => ({ id, success: true, errors: [] })); };
+  const res = await deleteRun({ client, history: h, hid, target: 'dev', minBulk: 300, jobRecords: 100, bulkOptions: { sleep: tick } });
+  assert.deepEqual(destroyed, [200]);
+  assert.deepEqual(client.jobs.map((j) => [j.operation, j.object, j.results.length]), [['delete', 'Contact', 100], ['delete', 'Contact', 100], ['delete', 'Contact', 50]]);
+  assert.equal(parseCsv(client.jobs[0].csv)[0][0], 'Id');
+  assert.deepEqual([res.deleted, res.remaining], [450, 0]);
+  const x = await historyWith(rows, [{ nodeId: 'c', sobject: 'Contact' }]);
+  const refusing = bulkClient({ openError: Object.assign(new Error('Salesforce: INVALIDENTITY'), { cause: { errorCode: 'INVALIDENTITY' } }) });
+  const d2 = [];
+  refusing.destroy = async (_t, _so, ids) => { d2.push(ids.length); return ids.map((id) => ({ id, success: true, errors: [] })); };
+  const res2 = await deleteRun({ client: refusing, history: x.h, hid: x.hid, target: 'dev', minBulk: 300, jobRecords: 100, bulkOptions: { sleep: tick } });
+  assert.deepEqual(d2, [200, 200, 50]);
+  assert.equal(res2.deleted, 450);
+});
+
+test('N2: a Bulk job check that fails transiently is retried twice before giving up', async () => {
+  const { waitForJob } = await import('../server/sf/bulk-job.js');
+  let calls = 0;
+  const flaky = (failures) => ({ check: async () => { if (++calls <= failures) throw new Error('ECONNRESET'); return { state: 'JobComplete', numberRecordsProcessed: 1, numberRecordsFailed: 0 }; } });
+  const sleeps = [];
+  const sleep = async (ms) => { sleeps.push(ms); };
+  assert.equal((await waitForJob(flaky(2), { sleep })).state, 'JobComplete');
+  assert.deepEqual(sleeps, [2000, 1000, 2000]);
+  calls = 0;
+  await assert.rejects(waitForJob(flaky(3), { sleep }), /ECONNRESET/);
+});
+
+test('N3: a job Salesforce opens for another sObject or operation is aborted before any upload; the run stops', async () => {
+  const client = bulkClient({ openObject: 'Account' });
+  const recs = accConRecords(300, 40);
+  const res = await insertAll(client, recs, { plan: conPlan(recs.length, 12000) });
+  assert.deepEqual(client.jobs[0].log, ['open', 'abort']);
+  assert.equal(res.stopped.reason, 'bulkError');
+  assert.match(res.stopped.message, /^Salesforce mở job Bulk 750\d+ khác yêu cầu \(insert Account thay vì insert Contact\), nên đã hủy job và dừng\.$/);
+  assert.equal(res.inserted + res.failed + res.notSent + res.bulkUnknown, recs.length);
+});
+
+test('N8: 3 destroy calls failing with DELETE_FAILED stop with a sentence about related records, not permissions', async () => {
+  const rows = Array.from({ length: 1000 }, (_, i) => ({ sobject: 'Account', nodeId: 'a', ref: `acc#${i}`, id: id18('001', i + 1) }));
+  const { h, hid } = await historyWith(rows, [{ nodeId: 'a', sobject: 'Account' }]);
+  const client = deleteClient({ errorFor: () => 'DELETE_FAILED' });
+  const res = await deleteRun({ client, history: h, hid, target: 'dev' });
+  assert.equal(res.stopped.reason, 'allFailing');
+  assert.match(res.stopped.text, /^Đã dừng xóa: 3 lời gọi xóa Account đầu tiên đều lỗi "DELETE_FAILED: DELETE_FAILED msg"\. Còn bản ghi khác liên quan tới chúng \(Lookup, bản ghi con hoặc quan hệ khác trỏ tới chúng\)\./);
+  assert.ok(!/quyền Delete/.test(res.stopped.text));
+});
+
+test('N3: the opened job object is compared case-insensitively', async () => {
+  const client = bulkClient({ openObject: 'CONTACT' });
+  const recs = accConRecords(300, 40);
+  const res = await insertAll(client, recs, { plan: conPlan(recs.length, 12000) });
+  assert.equal(res.stopped, null);
+  assert.equal(res.inserted, recs.length);
 });

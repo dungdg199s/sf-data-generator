@@ -3,15 +3,16 @@
 //
 // Items:
 //   { group }                                   group header
+//   { separator: true }                         ends the group; the next rows stand alone under a line
 //   { type, label, desc, kbd, disabled, title, danger, onSelect }   a menu row (`type`: step-type icon tile)
-//   { label, checked, onSelect }                a radio row (role=menuitemradio, ✓ when checked)
+//   { label, checked, onSelect }                a radio row (role=menuitemradio, check icon when checked)
 //   { field: { label, value, placeholder, title, onInput, onEnter } }  a label + text input row
 // Arrow keys move between rows and inputs; a printable key jumps to the next row starting with
 // it (not while an input has focus); Esc and Tab / Shift+Tab close it and put focus back on the
 // anchor. ARIA: role=menu holds only menu items and role=group (one per group header, named by
 // it); the title and headers are aria-hidden text, inputs always sit in a group.
 
-import { h, icoTile } from './dom.js';
+import { h, ico, icoTile } from './dom.js';
 
 let popup = null; // { el, anchor, onClose }
 
@@ -55,21 +56,28 @@ function fieldRow(f) {
 
 /**
  * Opens a popup under (or above, if there is no room) `anchor`.
- * opts: { title, items, search, onClose, focus } — `focus`: data-field of an input to focus first.
+ * opts: { title, items, search, searchLabel, onClose, focus } — `focus`: data-field of an input to focus first.
  */
-export function openPopup(anchor, { title, items, search = false, onClose = null, focus = null }) {
+export function openPopup(anchor, { title, items, search = false, searchLabel = 'Tìm loại bước…', onClose = null, focus = null }) {
   closePopup();
   const list = h('div', { class: 'popup-items', role: 'none' });
   const focusables = []; // enabled rows and inputs, in order
   const build = (q = '') => {
     focusables.length = 0;
     const needle = q.trim().toLowerCase();
-    const shown = items.filter((it) => it.group || it.field || !needle || `${it.label} ${it.desc ?? ''}`.toLowerCase().includes(needle));
+    // `searchOnly` rows (the library's older entries) only show up as search results.
+    const shown = items.filter((it) => it.group || it.separator || it.field || (!needle ? !it.searchOnly : `${it.label} ${it.desc ?? ''}`.toLowerCase().includes(needle)));
     const out = [];
     let group = null; // the role=group rows go into, after a group header
     for (const [i, it] of shown.entries()) {
+      if (it.separator) {
+        // Ends the current group: the rows after it stand alone, under a line.
+        group = null;
+        if (out.length && shown[i + 1] && !shown[i + 1].group) out.push(h('div', { class: 'popup-sep', role: 'separator' }));
+        continue;
+      }
       if (it.group) {
-        if (!shown[i + 1] || shown[i + 1].group) continue; // empty after filtering
+        if (!shown[i + 1] || shown[i + 1].group || shown[i + 1].separator) continue; // empty after filtering
         group = h('div', { class: 'popup-groupbox', role: 'group', 'aria-label': it.group }, h('div', { class: 'popup-group', 'aria-hidden': 'true' }, it.group));
         out.push(group);
         continue;
@@ -100,17 +108,17 @@ export function openPopup(anchor, { title, items, search = false, onClose = null
         it.onSelect();
       },
     },
-    h('span', { class: 'pi-label' }, it.type ? icoTile() : null, radio ? h('span', { class: 'pi-check', 'aria-hidden': 'true' }, it.checked ? '✓' : '') : null, it.label),
+    h('span', { class: 'pi-label' }, it.type ? icoTile() : null, it.icon ? ico(it.icon) : null, radio ? h('span', { class: 'pi-check', 'aria-hidden': 'true' }, it.checked ? ico('check') : null) : null, it.label),
     it.desc ? h('small', {}, it.desc) : null,
     it.kbd ? h('kbd', {}, it.kbd) : null);
     if (!it.disabled) focusables.push(b);
     return b;
   };
   build();
-  const searchInput = search ? h('input', { class: 'popup-search', placeholder: 'Tìm loại bước…', 'aria-label': 'Tìm loại bước', oninput: (e) => build(e.target.value) }) : null;
+  const searchInput = search ? h('input', { class: 'popup-search', placeholder: searchLabel, 'aria-label': searchLabel.replace(/…$/, ''), oninput: (e) => build(e.target.value) }) : null;
   const el = h('div', { class: 'popup', role: 'menu', 'aria-label': title },
     title ? h('div', { class: 'popup-title', 'aria-hidden': 'true' }, title) : null,
-    searchInput ? h('div', { role: 'group', 'aria-label': 'Tìm loại bước' }, searchInput) : null,
+    searchInput ? h('div', { role: 'group', 'aria-label': searchLabel.replace(/…$/, '') }, searchInput) : null,
     list);
   el.addEventListener('keydown', (e) => {
     const i = focusables.indexOf(document.activeElement);
@@ -127,15 +135,16 @@ export function openPopup(anchor, { title, items, search = false, onClose = null
       // Leaving the menu: back to its button (not to either end of the page).
       e.preventDefault();
       closePopup(true);
-    } else if (!inInput && e.key.length === 1 && /\S/.test(e.key)) {
+    } else if (!inInput && !e.ctrlKey && !e.metaKey && !e.altKey && e.key.length === 1 && /\S/.test(e.key)) {
       const k = e.key.toLowerCase();
       const buttons = focusables.filter((x) => x.matches('button'));
       const at = buttons.indexOf(document.activeElement);
       const order = [...buttons.slice(at + 1), ...buttons.slice(0, at + 1)];
-      order.find((b) => b.textContent.replace(/^✓/, '').trim().toLowerCase().startsWith(k))?.focus();
+      order.find((b) => b.textContent.trim().toLowerCase().startsWith(k))?.focus();
     }
   });
-  document.body.append(el);
+  // Inside an open modal dialog (its ⋯ buttons): the popup must be in the same top layer to be clickable.
+  (anchor.closest?.('dialog[open]') ?? document.body).append(el);
   const r = anchor.getBoundingClientRect();
   const w = el.offsetWidth;
   const hgt = el.offsetHeight;

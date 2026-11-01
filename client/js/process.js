@@ -8,16 +8,20 @@
 // scroll position survive. While the Sơ đồ view is shown (views.js) this view is empty and
 // does not render.
 
-import { h, icoTile } from './dom.js';
-import { state, subscribe, select, nodeType, fieldType, slotKeys, stepById, setCollapsed } from './store.js';
+import { h, ico, icoTile } from './dom.js';
+import { state, subscribe, select, nodeType, fieldType, slotKeys, stepById, setCollapsed, currentScope } from './store.js';
 import { allSteps, slotList } from '/shared/workflow-tree.js';
 import {
-  stepSummary, stepAlias, statChip, stepLabel, addPointLabel, issuesByStep, innerIssues, innerCount, emptySlotLabel,
+  stepSummary, stepAlias, stepLabel, addPointLabel, issuesByStep, innerIssues, innerCount, emptySlotLabel,
+  startEstimate,
 } from './summary.js';
 import * as ops from './ops.js';
 import { openField, openSheet } from './inspector.js';
 import { openAddMenu, openStepMenu } from './menus.js';
 import { START_ID } from './layout.js';
+import { bindRefTarget, refSourceStep, sourceTitle, refTargetId } from './ref-target.js';
+import { paintCardRun, resultStale, noteText, stepsById } from './run-cards.js';
+import { isSelected, clickSelect, toggleSelected, extendBy, inSelectMode, selectionInfo } from './selection.js';
 
 const MAX_FIELD_CHIPS = 12;
 
@@ -73,7 +77,7 @@ function render() {
     renderFrame = 0;
   }
   if (!active()) return;
-  staleStats = state.lastRunSteps !== null && state.lastRunSteps !== JSON.stringify(state.workflow.steps);
+  staleStats = resultStale();
   const scroll = root.scrollTop;
   const hadFocus = root.contains(document.activeElement) && !document.activeElement.closest('.popup');
   const steps = state.workflow.steps ?? [];
@@ -83,7 +87,7 @@ function render() {
       steps.length
         ? renderSeq(steps, null, null, 1)
         : h('div', { class: 'add-point big', ...targetAttrs({ parentId: null, slot: null, index: 0 }) },
-          h('button', { class: 'add-first', title: 'Thêm bước ở đây (/)', onclick: (e) => openAddMenu(e.currentTarget, { parentId: null, slot: null, index: 0 }) }, '+ Thêm bước đầu tiên')),
+          h('button', { class: 'add-first', title: 'Thêm bước ở đây (/)', onclick: (e) => openAddMenu(e.currentTarget, { parentId: null, slot: null, index: 0 }) }, ico('plus'), 'Thêm bước đầu tiên')),
     ),
   );
   root.scrollTop = scroll;
@@ -101,7 +105,7 @@ function targetOf(el) {
 
 function startCard(rootSize) {
   const wf = state.workflow;
-  const max = wf.settings?.maxRecords ?? state.meta?.limits.maxRecordsDefault;
+  const est = startEstimate();
   return h(
     'div',
     {
@@ -119,7 +123,8 @@ function startCard(rootSize) {
       },
     },
     h('span', { class: 'type' }, icoTile(), 'Bắt đầu'),
-    h('span', { class: 'sum' }, `${wf.name || 'Workflow'} · ≤ ${Number(max).toLocaleString('vi-VN')} bản ghi`),
+    h('span', { class: 'sum', title: 'Ước tính từ cấu hình · giới hạn bản ghi mỗi lần chạy' }, `${wf.name || 'Workflow'} · ${est.text}`),
+    est.over ? h('span', { class: 'tag-est-over', title: est.over.title }, est.over.label) : null,
     h('span', { class: 'badges' }),
   );
 }
@@ -152,7 +157,7 @@ function addPoint(target, list) {
   return h(
     'div',
     { class: 'add-point', ...targetAttrs(target) },
-    h('button', { class: 'add-btn', title: 'Thêm bước ở đây (/)', 'aria-label': label, onclick: (e) => openAddMenu(e.currentTarget, target) }, '+'),
+    h('button', { class: 'add-btn', title: 'Thêm bước ở đây (/)', 'aria-label': label, onclick: (e) => openAddMenu(e.currentTarget, target) }, ico('plus')),
   );
 }
 
@@ -163,8 +168,6 @@ function renderStep(step, level, at) {
   const collapsed = container && state.collapsed.has(step.id);
   const alias = stepAlias(step);
   const summary = stepSummary(step);
-  const chip = state.result ? statChip(step, state.result.stats?.byStep) : null;
-  const stale = staleStats;
   const showDetails = !container && detailsOpen.has(step.id);
 
   const card = h(
@@ -178,24 +181,30 @@ function renderStep(step, level, at) {
       'aria-setsize': String(at.setsize),
       'aria-expanded': container ? String(!collapsed) : undefined,
       tabindex: '-1',
+      // Shift+click must not select the page's text (it selects a range of cards, design 0012 B).
+      onmousedown: (e) => { if (e.shiftKey) e.preventDefault(); },
       onclick: (e) => {
         if (e.target.closest('button, .handle')) return;
-        select({ kind: 'step', id: step.id });
-        openSheet(); // narrow screens: a tap on the selected card shows the sheet a run (or ‹ Xong) closed
+        if (inSelectMode()) toggleSelected(step.id); // narrow select mode: a tap adds / removes the card
+        else if (e.shiftKey || e.ctrlKey || e.metaKey) clickSelect(step.id, { range: e.shiftKey, toggle: !e.shiftKey });
+        else {
+          select({ kind: 'step', id: step.id });
+          openSheet(); // narrow screens: a tap on the selected card shows the sheet a run (or ‹ Xong) closed
+        }
         card.focus({ preventScroll: true });
       },
     },
-    h('span', { class: 'handle', title: 'Kéo để di chuyển (hoặc Alt+↑ / Alt+↓)', 'aria-hidden': 'true', onpointerdown: (e) => onHandleDown(e, step) }, '⠿'),
+    h('span', { class: 'handle', title: 'Kéo để di chuyển (hoặc Alt+↑ / Alt+↓)', 'aria-hidden': 'true', onpointerdown: (e) => onHandleDown(e, step) }, ico('grip')),
     h('span', { class: 'type' }, icoTile(), type?.label ?? step.type),
     alias ? h('span', { class: 'alias' }, alias) : null,
     h('span', { class: 'sum', title: summary }, summary),
-    chip ? h('span', { class: `stat${stale ? ' stale' : ''}`, title: stale ? 'Số liệu của lần xem trước gần nhất; workflow đã đổi sau đó.' : 'Số liệu của lần xem trước gần nhất.' }, chip) : null,
+    // The stat chip and the insert-error tag go here (paintCardRun in decorate).
     h('span', { class: 'badges' }),
     step.disabled ? h('span', { class: 'tag-off', title: 'Bước này đang tắt: không chạy và không được kiểm tra. Ctrl+/ để bật lại.' }, 'Đã tắt') : null,
     type?.needsOrg && !state.org && !step.disabled ? h('span', { class: 'tag-sample', title: 'Chưa chọn org: Xem trước dùng bản ghi mẫu (Id giả). Chọn org ở thanh trên để đọc dữ liệu thật.' }, 'chưa chọn org') : null,
-    h('button', { class: 'icon menu-btn', title: 'Thao tác với bước', 'aria-label': `Thao tác với bước ${stepLabel(step)}`, onclick: (e) => openStepMenu(e.currentTarget, step.id) }, '⋯'),
+    h('button', { class: 'icon menu-btn', title: 'Thao tác với bước', 'aria-label': `Thao tác với bước ${stepLabel(step)}`, onclick: (e) => openStepMenu(e.currentTarget, step.id) }, ico('more')),
     container
-      ? h('button', { class: 'icon toggle', title: collapsed ? 'Mở khung' : 'Thu gọn khung', 'aria-label': collapsed ? 'Mở khung' : 'Thu gọn khung', onclick: () => setCollapsed([step.id], !collapsed) }, collapsed ? '▸' : '▾')
+      ? h('button', { class: 'icon toggle', title: collapsed ? 'Mở khung' : 'Thu gọn khung', 'aria-label': collapsed ? 'Mở khung' : 'Thu gọn khung', onclick: () => setCollapsed([step.id], !collapsed) }, ico(collapsed ? 'chevron-right' : 'chevron-down'))
       : step.type === 'record'
         ? h('button', {
           class: 'icon toggle',
@@ -205,7 +214,7 @@ function renderStep(step, level, at) {
             showDetails ? detailsOpen.delete(step.id) : detailsOpen.add(step.id);
             render();
           },
-        }, showDetails ? '▾' : '▸')
+        }, ico(showDetails ? 'chevron-down' : 'chevron-right'))
         : null,
   );
 
@@ -246,15 +255,18 @@ function renderSlot(step, def, level, labelled) {
 
 function fieldChips(step) {
   const fields = Array.isArray(step.config?.fields) ? step.config.fields : [];
+  const scope = currentScope();
   const chips = fields.slice(0, MAX_FIELD_CHIPS).map((f, i) => {
     const t = fieldType(f.type)?.label ?? f.type;
     const ref = (f.type === 'lookup' || f.type === 'masterdetail') && f.options?.ref ? ` → ${f.options.ref}` : '';
-    return h('button', {
+    // Design 0012 I: a Lookup chip outlines its parent step's card on hover / focus.
+    const src = ref ? refSourceStep(scope.refs.find((r) => r.nodeId === step.id && r.field === `fields.${f.name}` && r.option === 'ref' && !r.hidden)) : null;
+    return bindRefTarget(h('button', {
       class: 'field-chip',
       'data-field': `fields.${f.name}`,
-      title: 'Mở tùy chọn của field này trong panel bên phải',
+      title: `Mở tùy chọn của field này trong panel bên phải${src ? `\n${sourceTitle(src)}` : ''}`,
       onclick: () => openField(step.id, i),
-    }, `${f.name || '(chưa đặt tên)'} · ${t}${ref}`);
+    }, `${f.name || '(chưa đặt tên)'} · ${t}${ref}`), src);
   });
   if (fields.length > MAX_FIELD_CHIPS) chips.push(h('span', { class: 'field-more' }, `+${fields.length - MAX_FIELD_CHIPS} field`));
   if (!fields.length) chips.push(h('span', { class: 'field-more' }, 'Chưa có field nào.'));
@@ -263,9 +275,26 @@ function fieldChips(step) {
 
 // ---------- decoration (selection, issues) without rebuilding ----------
 
+/** Chip, insert-error tag and the collapsed note's insert count of one card (design 0012 D, H). */
+function paintRun(card, note = card.parentElement.querySelector(':scope > .collapsed-note'), steps = stepsById()) {
+  const step = steps.get(card.dataset.id);
+  if (!step) return;
+  paintCardRun(card, step, { stale: staleStats, parent: card, before: card.querySelector(':scope > .badges') });
+  if (note) note.textContent = noteText(note.dataset.base ?? '', step);
+}
+
+/** Progress of a run (design 0012 D): patch every card's chip and tag, nothing else. */
+export function paintRunInfo() {
+  if (!root || !active()) return;
+  staleStats = resultStale();
+  const steps = stepsById();
+  for (const card of root.querySelectorAll('.step-card')) paintRun(card, undefined, steps);
+}
+
 function decorate() {
   if (!root) return;
   const issues = issuesByStep();
+  const steps = stepsById();
   const sel = state.selection;
   const selectedId = sel?.kind === 'step' && stepById(sel.id) ? sel.id : sel?.kind === 'workflow' ? START_ID : null;
   let focusable = null;
@@ -283,11 +312,14 @@ function decorate() {
       errors += inner.errors;
       warnings += inner.warnings;
     }
-    const selected = id === selectedId;
+    // Every selected card has the selected style (design 0012 B); the primary one is the tab stop.
+    const primary = id === selectedId;
+    const selected = primary || (id !== START_ID && isSelected(id));
     card.classList.toggle('selected', selected);
+    card.classList.toggle('is-ref-target', id === refTargetId());
     card.setAttribute('aria-selected', String(selected));
     card.tabIndex = -1;
-    if (selected) focusable = card;
+    if (primary) focusable = card;
     card.classList.toggle('has-error', errors > 0);
     card.classList.toggle('has-warning', !errors && warnings > 0);
     const badges = card.querySelector(':scope > .badges');
@@ -309,8 +341,9 @@ function decorate() {
       const parts = [`${note.dataset.count} bước bên trong`];
       if (inner.errors) parts.push(`${inner.errors} lỗi`);
       else if (inner.warnings) parts.push(`${inner.warnings} cảnh báo`);
-      note.textContent = parts.join(' · ');
+      note.dataset.base = parts.join(' · ');
     }
+    paintRun(card, note, steps);
     // Field chips and slots of this step.
     const fieldIssues = [...own.errors, ...own.warnings];
     for (const chip of stepEl.querySelectorAll(':scope > .details .field-chip')) {
@@ -364,6 +397,12 @@ export function revealStep(id, { flash = false, focus = true, block = 'center' }
 
 function onTreeKey(e) {
   if (e.target.closest('input, textarea, select, .popup') || e.altKey || e.ctrlKey || e.metaKey) return;
+  // Shift+↑ / Shift+↓: grow or shrink the range inside the anchor's sequence (design 0012 B).
+  if (e.shiftKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+    e.preventDefault();
+    if (extendBy(e.key === 'ArrowUp' ? -1 : 1)) focusSelected();
+    return;
+  }
   const cards = [...root.querySelectorAll('.step-card')];
   const current = e.target.closest('.step-card') ?? cards.find((c) => c.classList.contains('selected'));
   const idx = cards.indexOf(current);
@@ -479,13 +518,18 @@ function onPaletteDrop(e) {
   if (point) ops.addStep(type, targetOf(point));
 }
 
-// Steps are moved with pointer events on the ⠿ handle (mouse and touch).
+// Steps are moved with pointer events on the grip handle (mouse and touch).
 function onHandleDown(e, step) {
   if (e.pointerType === 'mouse' && e.button !== 0) return;
   e.preventDefault();
   e.stopPropagation();
+  if (inSelectMode()) return; // no dragging while tapping cards in and out of the selection
   const handle = e.currentTarget;
   const stepEl = handle.closest('.step');
+  // A card of a selected block drags the whole block; any other card drags alone (design 0012 B).
+  const sel = isSelected(step.id) ? selectionInfo() : null;
+  const block = sel && sel.ids.length > 1 && sel.contiguous ? sel.ids : null;
+  const blockEls = block ? block.map((id) => root.querySelector(`.step[data-step="${CSS.escape(id)}"]`)).filter(Boolean) : [stepEl];
   const start = { x: e.clientX, y: e.clientY };
   let drag = null;
   let holdTimer = null;
@@ -493,7 +537,7 @@ function onHandleDown(e, step) {
   let scrollRaf = 0;
 
   const begin = () => {
-    select({ kind: 'step', id: step.id });
+    if (!block) select({ kind: 'step', id: step.id });
     const card = stepEl.querySelector(':scope > .step-card');
     const r = card.getBoundingClientRect();
     const ghost = card.cloneNode(true);
@@ -501,9 +545,9 @@ function onHandleDown(e, step) {
     ghost.style.width = `${r.width}px`;
     document.body.append(ghost);
     root.classList.add('dragging');
-    stepEl.classList.add('drag-source');
-    // No drop inside the dragged step itself.
-    for (const p of stepEl.querySelectorAll('.add-point, .slot-empty')) p.classList.add('no-drop');
+    for (const el of blockEls) el.classList.add('drag-source');
+    // No drop inside the dragged step(s) itself.
+    for (const el of blockEls) for (const p of el.querySelectorAll('.add-point, .slot-empty')) p.classList.add('no-drop');
     drag = { ghost, offX: start.x - r.left, offY: start.y - r.top, target: null };
     position(last);
     const tick = () => {
@@ -531,7 +575,7 @@ function onHandleDown(e, step) {
     if (drag) {
       drag.ghost.remove();
       root.classList.remove('dragging');
-      stepEl.classList.remove('drag-source');
+      for (const el of blockEls) el.classList.remove('drag-source');
       for (const p of root.querySelectorAll('.no-drop')) p.classList.remove('no-drop');
       highlightDrop(null);
     }
@@ -552,7 +596,8 @@ function onHandleDown(e, step) {
     const wasDragging = Boolean(drag);
     cleanup();
     drag = null;
-    if (target) ops.moveTo(step.id, target);
+    if (target && block) ops.moveBlockTo(block, target);
+    else if (target) ops.moveTo(step.id, target);
     else if (!wasDragging) {
       select({ kind: 'step', id: step.id });
       cardOf(step.id)?.focus({ preventScroll: true });

@@ -106,6 +106,29 @@ export function parseSoql(text) {
   return out;
 }
 
+/**
+ * `soql` with `field` appended to its outer SELECT list (right after the last item, before
+ * FROM; the spacing around FROM is kept), for the "Thêm <Field> vào SELECT" quick fix (design
+ * 0012 F1). Unchanged when the list already has the field (ignoring case). Null when the
+ * statement cannot be edited safely: not a valid read-only SELECT, a subquery or FIELDS(…) /
+ * TYPEOF in the SELECT list, or `field` is not a field path.
+ */
+export function addSelectField(soql, field) {
+  const raw = String(soql ?? '');
+  const name = String(field ?? '').trim();
+  if (!isFieldPath(name)) return null;
+  if (checkSoql(raw).some((i) => i.level === 'error')) return null;
+  const p = parseSoql(raw);
+  if (p.subquery || p.open || !p.fields.length) return null;
+  if (p.fields.some((f) => f.toLowerCase() === name.toLowerCase())) return raw;
+  const head = /^\s*SELECT\s/i.exec(blankStrings(raw));
+  const from = topLevel(blankStrings(raw), /\bFROM\s+([A-Za-z][A-Za-z0-9_]*)/i, head[0].length);
+  if (!from) return null;
+  const before = raw.slice(0, from.index);
+  const at = before.length - /\s*$/.exec(before)[0].length;
+  return `${raw.slice(0, at)}, ${name}${raw.slice(at)}`;
+}
+
 // Checked on text whose string literals are blanked, anywhere (not only at the top level).
 const FOR_CLAUSE = /\bFOR\s+(?:UPDATE|VIEW|REFERENCE)\b/i;
 const UPDATE_WORD = /\bUPDATE\b/i;
@@ -285,8 +308,12 @@ export function normalizeRow(row) {
 /**
  * Deterministic sample rows when no org is selected (no rng): Id `mẫu:accs#1`, Name
  * `Account mẫu 1`, other fields `<field> mẫu 1`; relationship fields become nested objects.
+ * A field listed in `numeric` (design 0013 F, any case) is the row number 1, 2, 3… (not Id / Name).
  */
-export function sampleRows(config, alias) {
+export function sampleRows(config, alias, { numeric = [] } = {}) {
+  // Fields read as numbers (design 0013 F: a loop count, a pick weight) get the row number, so a
+  // preview without an org still loops and weighs (`numericSampleFields` in shared/scope.js).
+  const isNumeric = new Set((numeric ?? []).map((f) => String(f).toLowerCase()));
   const max = maxFetchFor(config, SAMPLE_ROWS);
   const n = Math.max(0, Math.min(SAMPLE_ROWS, Number.isFinite(max) ? max : SAMPLE_ROWS));
   const sobject = soqlSobject(config) || 'Record';
@@ -304,8 +331,10 @@ export function sampleRows(config, alias) {
       });
       const leaf = parts[parts.length - 1];
       let value = `${f} mẫu ${i}`;
+      // Id and Name keep their shape even when read as a number somewhere (review of 0013).
       if (parts.length === 1 && leaf.toLowerCase() === 'id') value = `mẫu:${alias || 'q'}#${i}`;
       else if (parts.length === 1 && leaf.toLowerCase() === 'name') value = `${sobject} mẫu ${i}`;
+      else if (isNumeric.has(f.toLowerCase())) value = i;
       level[leaf] = value;
     }
     rows.push(row);

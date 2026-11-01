@@ -6,12 +6,16 @@
 // Version 2 (tree of steps) is the current format. Version 1 (graph) is still accepted: it is
 // migrated with shared/migrate-v1.js first, and the conversion is reported as warnings.
 
-import { NODE_TYPES, nodeTypeMap, CONDITION_OPS, LIMITS } from './nodes.js';
-import { checkSoql, checkBuilder, isFieldPath, buildSoql, soqlSobject, selectFields, builderLimit } from '../../shared/soql.js';
-import { getGenerator, describeGenerators } from '../generators/index.js';
+import { NODE_TYPES, nodeTypeMap, CONDITION_OPS, LIMITS, recordPreset, WORKFLOW_GLOBALS } from './nodes.js';
+import { checkSoql, checkBuilder, isFieldPath, buildSoql, soqlSobject, selectFields, builderLimit, addSelectField } from '../../shared/soql.js';
+import { getGenerator, describeGenerators, optionIssues, VALUE_TYPES } from '../generators/index.js';
 import { migrateV1, describeReport, reportNeedsReview } from '../../shared/migrate-v1.js';
-import { analyzeScope, referenceOptions, hasUnclosed } from '../../shared/scope.js';
+import { analyzeScope, referenceOptions, hasUnclosed, optionShown, numberVarPath, isVar, valueList } from '../../shared/scope.js';
 import { stepNames } from '../../shared/workflow-tree.js';
+
+/** Step ids (review of 0011, B1; review 2: no leading "-"): the shared rule, also used by the client. */
+export { STEP_ID } from '../../shared/workflow-tree.js';
+import { STEP_ID } from '../../shared/workflow-tree.js';
 
 const API_NAME = /^[A-Za-z][A-Za-z0-9_]*$/;
 const ALIAS = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -21,7 +25,7 @@ const REF_TYPES = new Set(['lookup', 'masterdetail']);
 let catalogCache = null;
 /** The catalogue analyzeScope reads, same shape as /api/meta. */
 export function scopeCatalog() {
-  catalogCache ??= { nodeTypes: NODE_TYPES, fieldTypes: describeGenerators() };
+  catalogCache ??= { nodeTypes: NODE_TYPES, fieldTypes: describeGenerators(), globals: WORKFLOW_GLOBALS };
   return catalogCache;
 }
 
@@ -108,6 +112,12 @@ export function prepareWorkflow(wf) {
       if (!step || typeof step !== 'object' || step.id === undefined || step.id === null || step.id === '') {
         err('Có bước không có id.');
         continue;
+      }
+      // Ids end up in insert history and its CSV files (design 0011): letters, digits, _ and - only.
+      if (typeof step.id !== 'string') {
+        err(`Id bước ${JSON.stringify(step.id)?.slice(0, 40)} phải là chuỗi (ví dụ "acc"), không phải ${typeof step.id}. Đổi id của bước trong file workflow, hoặc mở file trong app để tự sửa.`, step.id, 'id');
+      } else if (!STEP_ID.test(step.id)) {
+        err(`Id bước "${String(step.id).slice(0, 80).replace(/[\u0000-\u001f\u007f]/g, '?')}" không hợp lệ: chỉ dùng chữ không dấu, số, "_" hoặc "-" (không bắt đầu bằng "-"), tối đa 64 ký tự. Đổi id của bước trong file workflow, hoặc mở file trong app để tự sửa.`, step.id, 'id');
       }
       if (ids.has(step.id)) err(`Trùng id bước "${step.id}".`, step.id);
       ids.add(step.id);
@@ -233,18 +243,28 @@ export function prepareWorkflow(wf) {
       const mode = c.mode ?? 'fixed';
       // Whether the pool `from` is usable here is checked by analyzeScope (refs), like Chọn bản ghi.
       if (mode === 'each' && !c.from) err('Chưa chọn pool để lặp. Chọn alias của một bước Query, Record hoặc Chọn bản ghi ở phía trên.', step.id, 'from');
-      const check = (key) => {
-        const v = c[key];
-        if (v !== undefined && (!Number.isInteger(Number(v)) || v < 0 || v > LIMITS.maxCountPerNode)) {
-          err(`Số lần lặp phải là số nguyên từ 0 đến ${LIMITS.maxCountPerNode}.`, step.id, key);
+      validateNumberOptions(step, c, { err });
+      if (mode === 'range') {
+        // A variable bound is only known while running (max < min then uses min).
+        if (!isVar(c.min) && !isVar(c.max) && Number(c.min) > Number(c.max)) err('"Ít nhất" lớn hơn "Nhiều nhất".', step.id, 'min');
+      } else if (mode === 'values') {
+        const raw = c.values;
+        // One value is text, a number or a true/false; an object or a list is not (review of 0013).
+        const bad = Array.isArray(raw) ? raw.findIndex((v) => v !== null && typeof v === 'object') : -1;
+        const n = raw === undefined || Array.isArray(raw) || typeof raw === 'string' ? valueList(raw).length : 0;
+        if (bad >= 0) err(`Giá trị thứ ${bad + 1} của danh sách không phải chữ hoặc số. Nhập mỗi dòng một giá trị (ví dụ Hot, Warm, Cold).`, step.id, 'values', { code: 'valuesObject' });
+        else if (!n) err('Nhập ít nhất một giá trị, mỗi dòng một giá trị (ví dụ Hot, Warm, Cold).', step.id, 'values', { code: 'valuesEmpty' });
+        else if (n > LIMITS.maxCountPerNode) {
+          err(`Danh sách có ${n.toLocaleString('vi-VN')} giá trị, quá giới hạn ${LIMITS.maxCountPerNode.toLocaleString('vi-VN')} lần lặp của một bước Lặp. Bớt giá trị.`, step.id, 'values');
         }
-      };
-      if (mode === 'fixed') check('count');
-      else if (mode === 'range') {
-        check('min');
-        check('max');
-        if (Number(c.min) > Number(c.max)) err('"Ít nhất" lớn hơn "Nhiều nhất".', step.id, 'min');
-      } else if (mode !== 'each') err(`Chế độ lặp "${mode}" không hợp lệ.`, step.id, 'mode');
+      } else if (mode === 'each') {
+        validateFilter(step, c, { err });
+        if (!EACH_ORDERS.has(c.order ?? 'pool')) err(`Thứ tự "${c.order}" không hợp lệ.`, step.id, 'order');
+        const limit = c.limit ?? 0;
+        if (!Number.isInteger(Number(limit)) || Number(limit) < 0 || Number(limit) > LIMITS.maxCountPerNode || typeof limit === 'boolean' || (typeof limit === 'string' && !/^\s*\d+\s*$/.test(limit))) {
+          err(`"Tối đa số bản ghi" phải là số nguyên từ 0 đến ${LIMITS.maxCountPerNode} (0 = tất cả).`, step.id, 'limit');
+        }
+      } else if (mode !== 'fixed') err(`Chế độ lặp "${mode}" không hợp lệ.`, step.id, 'mode');
       if (!step.slots?.body?.length) warn('Vòng lặp chưa có bước nào. Bấm "+ Thêm bước vào vòng lặp".', step.id, 'slots.body');
     }
     if (step.type === 'branch') {
@@ -272,7 +292,7 @@ export function prepareWorkflow(wf) {
       const key = `${ref.nodeId}|${ref.field}|${ref.path}|${ref.code}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      const issue = referenceIssue(ref, scope, stepById.get(ref.nodeId));
+      const issue = referenceIssue(ref, scope, stepById.get(ref.nodeId), (id) => stepById.get(id));
       if (!issue) continue;
       (ref.level === 'warning' ? warn : err)(issue.message, ref.nodeId, ref.field, issue.extra);
     }
@@ -320,6 +340,7 @@ function validateRecord(step, c, { err, warn, scope }) {
   }
   if (!fields.length) warn('Bước chưa có field nào; bản ghi sẽ rỗng. Thêm field hoặc "Import từ org…".', step.id);
   const names = new Set();
+  const preset = recordPreset(c.sobject);
   for (const f of fields) {
     const key = `fields.${f?.name}`;
     if (!f?.name || !API_NAME.test(f.name)) {
@@ -328,10 +349,20 @@ function validateRecord(step, c, { err, warn, scope }) {
     }
     if (names.has(f.name.toLowerCase())) err(`Field "${f.name}" bị khai báo hai lần.`, step.id, key);
     names.add(f.name.toLowerCase());
+    if (f.name.toLowerCase() === 'name' && preset?.noName) {
+      // A Task / Contact / Case… has no createable Name: every insert would fail (design 0012 G).
+      const to = preset.nameField;
+      const taken = fields.some((x) => x !== f && String(x?.name ?? '').toLowerCase() === to.toLowerCase());
+      const so = c.sobject;
+      if (taken) warn(`${so} không ghi được field Name nên insert sẽ lỗi. Xóa field này (bước đã có field ${to}).`, step.id, key, { code: 'noNameField' });
+      else warn(`${so} không ghi được field Name nên insert sẽ lỗi. Đổi thành ${to} hoặc xóa field này.`, step.id, key, { code: 'noNameField', fix: { kind: 'renameField', stepId: step.id, from: f.name, to } });
+    }
     if (!getGenerator(f.type)) {
       err(`Field "${f.name}": kiểu "${f.type}" không được hỗ trợ.`, step.id, key);
       continue;
     }
+    // Out-of-range numeric options (also the check of /api/field-samples): generation clamps them.
+    for (const i of optionIssues(f)) err(i.message, step.id, key, { code: 'optionRange', option: i.option });
     if (REF_TYPES.has(f.type) && (f.options?.mode ?? 'current') !== 'fixed') {
       if (!f.options?.ref) err(`Field "${f.name}": chưa chọn bản ghi cha. Chọn một bước Record phía trên trong ô "Bản ghi cha".`, step.id, key);
       else {
@@ -372,19 +403,59 @@ function validateQuery(step, c, { err, warn, inLoop }) {
   if (inLoop) warn('Query nằm trong vòng lặp vẫn chỉ đọc org một lần, trước khi sinh dữ liệu. Nên đặt Query ngay sau Bắt đầu.', step.id, undefined, { code: 'queryInLoop' });
 }
 
-const PICK_MODES = new Set(['random', 'unique', 'sequential']);
+const PICK_MODES = new Set(['random', 'unique', 'sequential', 'weighted']);
+const EACH_ORDERS = new Set(['pool', 'shuffle']);
 
 /** Chọn bản ghi (design 0006). Whether `from` is usable here is checked by analyzeScope (refs). */
 function validatePick(step, c, { err }) {
   if (!c.from) err('Chưa chọn pool. Chọn alias của bước Query hoặc Record ở phía trên.', step.id, 'from');
   if (!PICK_MODES.has(c.mode ?? 'random')) err(`Cách chọn "${c.mode}" không hợp lệ.`, step.id, 'mode');
+  if (c.mode === 'weighted') {
+    // Design 0013 E: chosen in proportion to a numeric field of the pool's records.
+    if (!String(c.weightField ?? '').trim()) err('Chưa nhập field trọng số, ví dụ NumberOfEmployees hoặc Amount.', step.id, 'weightField');
+    else if (!isFieldPath(c.weightField)) err(`Field "${c.weightField}" không hợp lệ. Dùng API name; field quan hệ viết Account.NumberOfEmployees.`, step.id, 'weightField');
+  }
+  validateFilter(step, c, { err });
+  if (!['skip', 'error'].includes(c.onEmpty ?? 'skip')) err(`Lựa chọn "${c.onEmpty}" không hợp lệ.`, step.id, 'onEmpty');
+}
+
+/** The filter of a Chọn bản ghi and of a Lặp `each` (design 0013 C): same keys, same messages. */
+function validateFilter(step, c, { err }) {
   const filter = c.filter ?? 'none';
   if (filter === 'compare') {
     if (!String(c.filterField ?? '').trim()) err('Chưa nhập field để lọc, ví dụ AccountId hoặc Account.Type.', step.id, 'filterField');
     else if (!isFieldPath(c.filterField)) err(`Field "${c.filterField}" không hợp lệ. Dùng API name; field quan hệ viết Account.Type.`, step.id, 'filterField');
     if (!CONDITION_OPS.some((o) => o.value === (c.filterOp ?? 'eq'))) err('Phép so sánh không hợp lệ.', step.id, 'filterOp');
   } else if (filter !== 'none') err(`Cách lọc "${filter}" không hợp lệ.`, step.id, 'filter');
-  if (!['skip', 'error'].includes(c.onEmpty ?? 'skip')) err(`Lựa chọn "${c.onEmpty}" không hợp lệ.`, step.id, 'onEmpty');
+}
+
+/**
+ * Every shown step option with `vars: 'number'` (design 0013 B: the counts of a Lặp): a number
+ * within the option's range, or exactly one `{{path}}` token (whether that variable can be used
+ * here, and its type, is checked by analyzeScope with the other references).
+ */
+function validateNumberOptions(step, c, { err }) {
+  const defs = nodeTypeMap.get(step.type)?.options ?? [];
+  const values = { ...Object.fromEntries(defs.map((d) => [d.key, d.default])), ...c };
+  for (const def of defs) {
+    if (def.vars !== 'number' || !optionShown(defs, def, values)) continue;
+    const v = c[def.key];
+    if (v === undefined) continue;
+    if (typeof v === 'string' && v.includes('{{')) {
+      if (numberVarPath(v) === null) {
+        err(`"${def.label}" phải là một số nguyên, hoặc đúng một biến như {{acc.NumberOfEmployees}}. Bỏ phần chữ quanh biến.`, step.id, def.key, { code: 'numberFormat' });
+      }
+      continue;
+    }
+    // (The message of before 0013 for "Số lần lặp"; the other counts say their own label.)
+    // `true` is not 1 here (review of 0013), like "Tối đa số bản ghi".
+    // A string is plain digits (or decimals where the option takes them): not `1e3`, `0x10`, `+5`.
+    const textOk = typeof v !== 'string' || (def.kind === 'integer' ? /^\s*\d+\s*$/ : /^\s*\d+(\.\d+)?\s*$/).test(v);
+    if (typeof v === 'boolean' || !textOk || !Number.isInteger(Number(v)) || v < (def.min ?? 0) || v > (def.max ?? LIMITS.maxCountPerNode)) {
+      const label = def.key === 'count' ? def.label : `"${def.label}"`;
+      err(`${label} phải là số nguyên từ ${def.min ?? 0} đến ${def.max ?? LIMITS.maxCountPerNode}.`, step.id, def.key);
+    }
+  }
 }
 
 /** A Lookup imported from the org (referenceTo) whose parent step creates another sObject. */
@@ -399,20 +470,24 @@ function checkReferenceTo(step, f, key, { warn, scope }) {
 // ---------- variable references (design 0005, "Thông báo lỗi và cảnh báo") ----------
 
 /**
- * Issue for one problem reference found by analyzeScope: { message, extra: { code, path, option, suggestion? } }.
+ * Issue for one problem reference found by analyzeScope: { message, extra: { code, path, option, suggestion?, fix? } }.
  * Field options get the `Field "<Name>": ` prefix; step options (branch `left`) do not.
+ * `stepOf(id)` finds another step (the Query a missing field can be added to: `fix`, design 0012 F1).
  */
-export function referenceIssue(ref, scope, step) {
+export function referenceIssue(ref, scope, step, stepOf = () => undefined) {
   const src = ref.source !== undefined ? scope.sources[ref.source] : null;
   const fieldName = ref.field.startsWith('fields.') ? ref.field.slice('fields.'.length) : null;
   const prefix = fieldName !== null ? `Field "${fieldName}": ` : '';
-  const show = (p) => (ref.mode === 'template' ? `{{${p}}}` : p);
+  const show = (p) => (ref.mode === 'template' || ref.mode === 'number' ? `{{${p}}}` : p);
+  // Label of a step option (`"Số lần lặp"`), for the messages of design 0013.
+  const optionLabel = nodeTypeMap.get(step?.type)?.options.find((o) => o.key === ref.option)?.label ?? ref.option;
   const s = src?.name ?? ref.name;
   const what = src ? `${src.sobject ? ` (${src.sobject})` : ''}` : '';
   const suggest = ref.suggestion ? ref.suggestion.to : null;
   const firstField = (source) => source?.members.find((m) => !m.builtin)?.key ?? 'Name';
   const isMD = fieldName !== null && (step?.config?.fields ?? []).find((f) => f?.name === fieldName)?.type === 'masterdetail';
   let message;
+  let fix = null;
 
   const isLoop = step?.type === 'loop';
   if (ref.mode === 'ref' && ref.option === 'from') {
@@ -472,15 +547,33 @@ export function referenceIssue(ref, scope, step) {
       case 'unknownName':
         message = `không có biến "${ref.name}" (không phải alias của bước Record nào, cũng không phải tên biến lặp).${suggest ? ` Ý bạn là "${suggest.split('.')[0]}"?` : ''} Bấm {x} để chọn biến có sẵn.`;
         break;
+      case 'ownLoop':
+        message = `"${optionLabel}": ${show(ref.path)} là ${src?.kind === 'vars' ? 'biến' : 'bản ghi đang lặp'} của chính bước Lặp này, chỉ có bên trong thân; ô này được tính một lần trước lần lặp đầu. Dùng biến của bước phía trên.`;
+        break;
+      case 'notNumber': {
+        const typeLabel = VALUE_TYPES.find((t) => t.value === ref.valueType)?.label ?? ref.valueType;
+        message = ref.level === 'warning'
+          ? `"${optionLabel}": ${show(ref.path)} là ${typeLabel}; lần chạy nào giá trị không phải số thì vòng lặp chạy 0 lần. Nên chọn biến kiểu Số bằng {x}.`
+          : `"${optionLabel}": ${show(ref.path)} là ${typeLabel}, không phải số. Bấm {x} để chọn biến kiểu Số, ví dụ {{accs.$count}} hoặc {{loop.index}}.`;
+        break;
+      }
       case 'unknownMember':
         if (src?.kind === 'vars') {
           message = `biến lặp "${s}" chỉ có ${src.members.map((m) => m.key).join(', ')}; không có "${ref.missing ?? ref.member}".`;
+          // A member that exists in another mode only (`loop.value`, design 0013 D): say which.
+          const when = whenOf(src, ref.missing ?? ref.member);
+          if (when) message += ` ${show(ref.path)} chỉ có khi ${when}.`;
         } else if (src?.origin === 'org' || src?.nodeType === 'query') {
-          // For a Chọn bản ghi, name the Query its rows come from.
+          // For a Chọn bản ghi or the record a Lặp `each` loops over, name the Query its rows come from.
           const q = src.root !== undefined ? scope.sources[src.root]?.name ?? s : s;
+          // The missing field as its whole SELECT path (`Owner.Email`, `Owner.Manager.Email`), not
+          // cut at the first level the Query lacks.
+          const missing = ref.member || ref.missing;
           message = ref.mode === 'template'
-            ? `Template dùng ${show(ref.path)} nhưng Query "${q}" không lấy field ${ref.missing}. Thêm ${ref.missing} vào "Field cần lấy" của bước Query.`
-            : `Biến ${ref.path} cần field ${ref.missing} nhưng Query "${q}" không lấy field này. Thêm ${ref.missing} vào "Field cần lấy" của bước Query.`;
+            ? `Template dùng ${show(ref.path)} nhưng Query "${q}" không lấy field ${missing}. Thêm ${missing} vào "Field cần lấy" của bước Query.`
+            : `Biến ${ref.path} cần field ${missing} nhưng Query "${q}" không lấy field này. Thêm ${missing} vào "Field cần lấy" của bước Query.`;
+          // (`Name.Foo` on a plain field is not a field to add.)
+          if (!String(ref.missing).includes('.')) fix = selectFieldFix(stepOf(src.root ?? src.nodeId ?? src.id), missing);
         } else if (ref.memberOf) {
           const hint = suggest ? suggest.split('.').pop() : null;
           message = `field "${ref.memberOf}" của bước "${s}" chỉ có ${ref.validMembers.join(', ')}; không có "${ref.missing}".${hint ? ` Ý bạn là "${hint}"?` : ''}`;
@@ -563,9 +656,39 @@ export function referenceIssue(ref, scope, step) {
         return null;
     }
   }
+  // `{{run.seed}}` read from a step or loop called "run" (review of 0013): say what hides it.
+  const [head, runKey] = String(ref.path ?? '').split('.');
+  const runVar = head === 'run' && src && !src.global && Boolean(scope.sources.$run?.members.some((m) => m.key === runKey));
+  if (runVar) message += ` Alias "run" che biến Lần chạy; đổi alias để dùng {{run.${runKey}}}.`;
   const extra = { code: ref.code, path: ref.path, option: ref.option };
   if (ref.suggestion) extra.suggestion = ref.suggestion;
+  if (fix) extra.fix = fix;
   return { message: prefix + message, extra };
+}
+
+/**
+ * "Thêm <Field> vào SELECT" (design 0012 F1): a fix when `field` can be added to Query step `q`
+ * (builder: always; hand-written SOQL: when shared/soql.js addSelectField can edit it). Null otherwise.
+ */
+function selectFieldFix(q, field) {
+  if (q?.type !== 'query' || !isFieldPath(field)) return null;
+  const c = q.config ?? {};
+  if ((c.mode ?? 'builder') === 'soql' && addSelectField(c.soql, field) === null) return null;
+  return { kind: 'addSelectField', stepId: q.id, field };
+}
+
+/**
+ * `"Lặp theo" là "Mỗi giá trị trong danh sách"` when member `key` of the variables `src` is
+ * declared with `when` in the catalogue (exists in that mode only), else null.
+ */
+function whenOf(src, key) {
+  const type = nodeTypeMap.get(src?.nodeType);
+  const entries = [type?.exposes ?? []].flat();
+  const m = entries.filter((ex) => ex.kind === 'vars').flatMap((ex) => (Array.isArray(ex.members) ? ex.members : [])).find((x) => x.key === key && x.when);
+  if (!m) return null;
+  const opt = type.options.find((o) => o.key === m.when.key);
+  const labels = m.when.in.map((v) => `"${opt?.choices?.find((c) => c.value === v)?.label ?? v}"`);
+  return `"${opt?.label ?? m.when.key}" là ${labels.join(' hoặc ')}`;
 }
 
 function maybeMessage(ref, s, isLookup, isMD) {

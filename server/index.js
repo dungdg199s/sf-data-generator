@@ -4,20 +4,25 @@
 // so it must not be reachable from the network unless HOST is set explicitly.
 
 import http from 'node:http';
+import net from 'node:net';
+import os from 'node:os';
 import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { describeGenerators, VALUE_TYPES } from './generators/index.js';
-import { serializableNodeTypes, STEP_CATEGORIES, LIMITS, QUERY_PRESETS } from './workflow/nodes.js';
+import { serializableNodeTypes, STEP_CATEGORIES, LIMITS, QUERY_PRESETS, RECORD_PRESETS, RECORD_DEFAULT_FIELDS, WORKFLOW_GLOBALS } from './workflow/nodes.js';
 import { TEMPLATE_TOKEN } from './workflow/paths.js';
 import { validateWorkflow, prepareWorkflow, insertBlockedReason, WorkflowError } from './workflow/schema.js';
-import { createRun } from './workflow/executor.js';
+import { createRun, isValidNow } from './workflow/executor.js';
+import { fieldSamples } from './workflow/samples.js';
 import { executeRun, createRunRegistry, YIELD_EVERY } from './run.js';
 import { createSfCli } from './sf/cli.js';
 import { createSfClient } from './sf/client.js';
 import { mapDescribe, mapQueryFields } from './sf/describe-map.js';
 import { createQueryCache, prefetchQueries } from './sf/query.js';
+import { createHistory, defaultDataDir, isValidHid } from './history.js';
+import { deleteRun, collectPendingJobs } from './sf/delete.js';
 
 const ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CLIENT_DIR = path.join(ROOT_DIR, 'client');
@@ -68,19 +73,183 @@ export function requestGuard(req, { allowedHosts = null } = {}) {
   return null;
 }
 
+/**
+ * Requests that write to or delete from an org, or abort a Bulk job (review of 0011, S6): an insert
+ * (`/api/run` with an org target), a delete or forget of a history entry, a forced cancel.
+ */
+export function isOrgWrite(method, pathname, body) {
+  if (method !== 'POST') return false;
+  if (pathname === '/api/run') return body?.target?.kind === 'org';
+  if (/^\/api\/history\/[^/]+\/(delete|forget)$/.test(pathname)) return true;
+  if (/^\/api\/runs\/[^/]+\/cancel$/.test(pathname)) return body?.force === true;
+  return false;
+}
+
+/**
+ * On a wildcard bind (HOST=0.0.0.0 / ::) requestGuard cannot check Host against a list, so the
+ * requests of isOrgWrite still need a Host that cannot be a DNS-rebinding name: an IP literal,
+ * localhost, or this machine's own host name. → { status, message } | null
+ */
+export function writeHostGuard(req, { hostname: machine = os.hostname() } = {}) {
+  const host = String(req.headers.host ?? '');
+  let name = host.toLowerCase();
+  if (name.startsWith('[')) name = name.slice(1, name.indexOf(']') > 0 ? name.indexOf(']') : undefined);
+  else name = name.replace(/:\d+$/, '');
+  if (net.isIP(name) || name === 'localhost' || name === String(machine).toLowerCase()) return null;
+  return {
+    status: 403,
+    message: `Từ chối ghi hoặc xóa dữ liệu org qua địa chỉ "${host}". Server đang nghe mọi địa chỉ mạng, nên thao tác này chỉ nhận qua địa chỉ IP, localhost hoặc tên máy "${machine}". Mở app bằng http://127.0.0.1:<cổng>.`,
+  };
+}
+
 /** Hosts for requestGuard from the HOST the server listens on (a wildcard bind accepts any name). */
 export function allowedHostsFor(bindHost) {
   if (bindHost && WILDCARD_HOSTS.has(bindHost)) return null;
   return new Set([...LOCAL_HOSTS, ...(bindHost ? [String(bindHost).toLowerCase()] : [])]);
 }
 
-export function createApp({ cli = createSfCli(), client, queryCache = createQueryCache(), runOptions = {}, allowedHosts = allowedHostsFor(null) } = {}) {
+/** The sentence of an insert refused because history cannot be written (S7; also server/run.js). */
+export const historyOffMessage = ({ reason, dir, locked }) => `Không ghi được Lịch sử (${reason}), nên chưa ghi gì vào org.${locked ? '' : ` Kiểm tra quyền ghi thư mục ${dir} hoặc đặt SFDG_DATA_DIR.`}`;
+/** Review 2, item 3: rows of an Id file that a delete never touches. */
+export const rejectedMessage = (n) => `${n} dòng trong file Id không thuộc bước nào của lần insert này (file có thể đã bị sửa), không xóa.`;
+const HISTORY_MISSING = 'Không tìm thấy lần insert này trong Lịch sử (có thể đã bị dọn vì vượt giới hạn lưu trữ).';
+const LIMITS_CACHE_MS = 60000;
+const LIMITS_TIMEOUT_MS = 3000;
+
+/** Kind of an org from `sf org list` (design 0011): sandbox, scratch, production; unknown when not listed. */
+export function orgKind(orgs, { alias, username }) {
+  const o = (orgs ?? []).find((x) => (username && x.username === username) || (alias && x.alias === alias));
+  if (!o) return 'unknown';
+  return o.isScratch ? 'scratch' : o.isSandbox ? 'sandbox' : 'production';
+}
+
+export function createApp({
+  cli = createSfCli(), client, queryCache = createQueryCache(), runOptions = {}, allowedHosts = allowedHostsFor(null),
+  history = createHistory({ dir: defaultDataDir(), maxRuns: LIMITS.historyMaxRuns, maxBytes: LIMITS.historyMaxBytes }),
+  deleteOptions = {},
+} = {}) {
   const sfClient = client ?? createSfClient({ cli });
   const runs = createRunRegistry();
+  const limitsCache = new Map(); // org → { at, value }
+
+  /**
+   * Who an org target is right now: org Id and username from Salesforce's identity service through
+   * the very connection that writes (`client.whoami`, review of 0011 S1), kind from `sf org list`.
+   * Kept in history and checked before a delete. Never the token. Throws when Salesforce does not
+   * say, or says something else than the sf CLI. kind: 'unknown' when `sf org list` fails or does
+   * not list it.
+   */
+  async function orgInfo(target, { refresh = false } = {}) {
+    const [who, orgs] = await Promise.all([sfClient.whoami(target, { refresh }), Promise.resolve().then(() => cli.listOrgs()).catch(() => null)]);
+    if (!who?.orgId || !who?.username) throw new Error('Salesforce không trả org Id và username của kết nối.');
+    if ((who.cli?.orgId && who.cli.orgId !== who.orgId) || (who.cli?.username && who.cli.username !== who.username)) {
+      throw Object.assign(new Error(`sf CLI ghi org ${who.cli.orgId ?? '?'} (${who.cli.username ?? '?'}) nhưng token thuộc org ${who.orgId} (${who.username}).`), { code: 'ORG_MISMATCH' });
+    }
+    const listed = orgs?.find((o) => o.username === who.username || o.alias === target);
+    return {
+      alias: listed?.alias ?? (target !== who.username ? target : null),
+      username: who.username,
+      orgId: who.orgId,
+      instanceUrl: who.instanceUrl ?? null,
+      kind: orgs ? orgKind(orgs, { alias: target, username: who.username }) : 'unknown',
+      // The connection whoami checked: every write of this run goes through it (review 2, item 1).
+      // Never stored (server/history.js keeps the identity keys only).
+      session: who.session ?? null,
+    };
+  }
+
+  /** History must be writable (and this server its only writer, N6) for a delete or a forget. */
+  async function requireHistory(what) {
+    const st = await history.status({ retry: true });
+    // A lock held by another server: its sentence already says what to do (N11).
+    if (!st.enabled) throw httpError(503, `Không ghi được Lịch sử (${st.reason}), nên không ${what} được.${st.locked ? '' : ` Kiểm tra quyền ghi thư mục ${st.dir} hoặc đặt SFDG_DATA_DIR.`}`);
+  }
+
+  /**
+   * Every check of a delete (design 0011 §8), before any header is sent and before any write call.
+   * Throws the HTTP error of the first one that fails. → { target, rem }
+   */
+  async function checkDelete(hid, data, body) {
+    const kind = history.activeKind(hid);
+    if (kind === 'insert' || data.status === 'running') throw httpError(409, 'Lần insert này đang chạy. Bấm "Dừng", chờ nó dừng rồi mới xóa.');
+    if (kind === 'delete') throw httpError(409, 'Đang xóa dữ liệu của lần insert này ở một tab khác. Chờ lần đó xong.');
+    if (kind) throw httpError(409, 'Lần insert này đang được quên ở một tab khác.');
+    const confirm = body?.confirm;
+    if (!confirm || typeof confirm !== 'object' || typeof confirm.username !== 'string' || !Number.isInteger(confirm.count)) {
+      throw httpError(400, 'Thiếu xác nhận (org và số bản ghi). Chỉ xóa được từ hộp xác nhận của app.');
+    }
+    if (body.bulk !== undefined && body.bulk !== 'auto' && body.bulk !== 'off') throw httpError(400, 'bulk phải là "auto" hoặc "off".');
+    const was = data.org ?? {};
+    if (!was.username || confirm.username !== was.username) {
+      throw httpError(409, `Xác nhận ghi org "${confirm.username}" nhưng lần insert này thuộc org "${was.username ?? '?'}". Mở lại hộp xác nhận.`);
+    }
+    // Known Ids only here; Bulk jobs not collected yet are read after the org checks (S2).
+    const rem = await history.remaining(hid);
+    const pending = (data.bulkJobs ?? []).some((j) => !j.idsCollected && !j.idsLost);
+    if (!pending) countCheck(rem, confirm.count);
+    const target = was.alias ?? was.username;
+    const name = was.alias ?? was.username;
+    let now;
+    try {
+      now = await orgInfo(target, { refresh: true });
+    } catch (e) {
+      if (e.code === 'ORG_MISMATCH') throw httpError(409, `${e.message} Không xóa gì. Đăng nhập lại đúng org bằng sf org login web --alias ${name} rồi thử lại.`);
+      throw httpError(502, `${e.message} Đăng nhập lại: sf org login web --alias ${name}`);
+    }
+    // The alias must still be the very org (and user) of the insert: a re-login into a refreshed
+    // sandbox keeps the alias but is another org.
+    const sameOrg = was.orgId && now.orgId ? was.orgId === now.orgId : Boolean(was.instanceUrl) && was.instanceUrl === now.instanceUrl;
+    if (!sameOrg || now.username !== was.username) {
+      throw httpError(409, `Org "${name}" bây giờ là org khác (${now.orgId ?? now.instanceUrl ?? '?'}, ${now.username ?? '?'}) so với lúc insert (${was.orgId ?? was.instanceUrl ?? '?'}, ${was.username}). Không xóa gì. Đăng nhập lại đúng org bằng sf org login web --alias ${name} rồi thử lại.`);
+    }
+    // Production (or a kind the CLI could not tell): the org name typed by hand.
+    if (now.kind !== 'sandbox' && now.kind !== 'scratch') {
+      const typed = typeof confirm.typedOrg === 'string' ? confirm.typedOrg.trim().toLowerCase() : '';
+      const names = [was.alias, was.username].filter(Boolean).map((x) => x.toLowerCase());
+      if (!typed || !names.includes(typed)) {
+        // The dialog may not have shown the name field (the kind changed since it opened): tell it to (review, S3).
+        const text = now.kind === 'production'
+          ? `Org "${name}" là production: gõ đúng tên org trong hộp xác nhận để xóa.`
+          : `sf CLI không trả lời nên coi như production: gõ đúng tên org "${name}" trong hộp xác nhận để xóa.`;
+        throw Object.assign(httpError(400, text), { body: { needTypedOrg: true, kind: now.kind } });
+      }
+    }
+    return { target, rem, pending, session: now.session ?? target };
+  }
+
+  /** confirm.count must be exactly what this delete may remove (review of 0011, S2). */
+  function countCheck(rem, count, { added = 0, stillPending = [] } = {}) {
+    if (rem.total === 0) {
+      const waiting = stillPending.length ? ` Job Bulk ${stillPending.map((j) => j.jobId).join(', ')} chưa trả Id (đang chạy hoặc chưa có kết quả); thử lại sau.` : '';
+      throw httpError(409, `Lần insert này không còn bản ghi nào để xóa.${waiting}`);
+    }
+    if (count === rem.total) return;
+    if (added) throw Object.assign(httpError(409, `Số bản ghi cần xóa đã đổi thành ${rem.total} vì vừa lấy được Id từ job Bulk. Xác nhận lại.`), { body: { count: rem.total, collected: added } });
+    throw Object.assign(httpError(409, `Số bản ghi còn phải xóa đã đổi (còn ${rem.total}, hộp xác nhận ghi ${count}). Mở lại hộp xác nhận để xem số mới.`), { body: { count: rem.total } });
+  }
+
+  /**
+   * The history entry of a URL segment, or 404 (also for a malformed hid: no path traversal).
+   * corrupt: an entry whose .json is broken or missing but whose files exist gives `data: null`
+   * (its Ids can still be downloaded and the entry forgotten; review S4).
+   */
+  async function historyEntry(raw, { corrupt = false } = {}) {
+    let hid;
+    try {
+      hid = decodeURIComponent(raw);
+    } catch {
+      hid = null;
+    }
+    if (!isValidHid(hid)) throw httpError(404, HISTORY_MISSING);
+    const data = await history.read(hid);
+    if (!data && !(corrupt && await history.exists(hid))) throw httpError(404, HISTORY_MISSING);
+    return { hid, data };
+  }
 
   /** Checks shared by /api/run and /api/export, then the Query pre-fetch (0006): all before any header is sent. */
   async function prepareRun(body, { insert, pinned = null }) {
-    if (body?.now !== undefined && !(typeof body.now === 'number' && Number.isFinite(body.now))) throw httpError(400, 'Tham số now không hợp lệ.');
+    // A Date holds ±8.64e15 ms: a larger `now` would fail inside the run (review of 0013).
+    if (body?.now !== undefined && !isValidNow(body.now)) throw httpError(400, 'Tham số now không hợp lệ.');
     const { workflow, errors } = prepareWorkflow(body?.workflow);
     if (errors.length) throw new WorkflowError(errors);
     // Query steps are read first (design 0006): when inserting always from the target org
@@ -122,10 +291,15 @@ export function createApp({ cli = createSfCli(), client, queryCache = createQuer
         stepCategories: STEP_CATEGORIES,
         limits: LIMITS,
         queryPresets: QUERY_PRESETS,
+        recordPresets: RECORD_PRESETS,
+        recordDefaultFields: RECORD_DEFAULT_FIELDS,
+        globals: WORKFLOW_GLOBALS,
         syntax: { templateToken: TEMPLATE_TOKEN, valueTypes: VALUE_TYPES },
       }),
     ],
     ['POST', /^\/api\/validate$/, (_m, body) => validateWorkflow(body?.workflow, { derived: true })],
+    // Design 0012 E: a few values of one field for the inspector (no I/O, no org).
+    ['POST', /^\/api\/field-samples$/, (_m, body) => fieldSamples(body)],
     [
       'POST',
       /^\/api\/run$/,
@@ -142,10 +316,20 @@ export function createApp({ cli = createSfCli(), client, queryCache = createQuer
           const blocked = insertBlockedReason(body.workflow);
           if (blocked) throw httpError(422, blocked);
           if (!body.target.org) throw httpError(400, 'Chưa chọn org để insert.');
+          if (body.target.bulk !== undefined && body.target.bulk !== 'auto' && body.target.bulk !== 'off') {
+            throw httpError(400, 'target.bulk phải là "auto" hoặc "off".');
+          }
+          // No history ⇒ no insert (review of 0011, S7), answered before the run is even prepared.
+          const st = await history.status({ retry: true });
+          if (!st.enabled) throw httpError(503, historyOffMessage(st));
         }
         // Validation (422), the Query pre-fetch (409 / 502) and `now` (400) answer as plain JSON.
-        const { run, pre } = await prepareRun(body, { insert });
+        const { run, pre, workflow } = await prepareRun(body, { insert });
         const target = insert ? body.target.org : null;
+        // Org identity for the history entry, read while the dry pass runs (design 0011 §5).
+        const org = target ? orgInfo(target) : null;
+        org?.catch(() => {});
+        const orgRun = target ? { history, org, workflow, bulk: body.target.bulk ?? 'auto' } : {};
         const start = { queries: pre.queries, warnings: pre.warnings };
         res.off('close', onEarlyClose);
         if (gone || res.destroyed) return STREAMED;
@@ -167,7 +351,7 @@ export function createApp({ cli = createSfCli(), client, queryCache = createQuer
           // One JSON body with every record (scripts, tests); same sinks as the stream.
           let end;
           try {
-            end = await executeRun({ run, target, sfClient, signal: handle.signal, start: { ...start, runId: handle.id }, collect: true, ...runOptions });
+            end = await executeRun({ run, target, sfClient, signal: handle.signal, forceSignal: handle.forceSignal, start: { ...start, runId: handle.id }, collect: true, ...orgRun, ...runOptions });
           } catch (e) {
             await finish();
             throw e;
@@ -186,7 +370,7 @@ export function createApp({ cli = createSfCli(), client, queryCache = createQuer
         res.flushHeaders?.();
         try {
           await executeRun({
-            run, target, sfClient, signal: handle.signal, start: { ...start, runId: handle.id }, ...runOptions,
+            run, target, sfClient, signal: handle.signal, forceSignal: handle.forceSignal, start: { ...start, runId: handle.id }, ...orgRun, ...runOptions,
             emit: (ev) => { if (!res.destroyed) res.write(`${JSON.stringify(ev)}\n`); },
           });
         } finally {
@@ -199,15 +383,175 @@ export function createApp({ cli = createSfCli(), client, queryCache = createQuer
     [
       'POST',
       /^\/api\/runs\/([^/]+)\/cancel$/,
-      ([, runId]) => {
+      ([, runId], body) => {
         let id;
         try {
           id = decodeURIComponent(runId);
         } catch {
           id = null; // malformed escape: no such run
         }
-        if (!id || !runs.cancel(id)) throw httpError(404, 'Lần chạy này đã kết thúc.');
+        // { force: true } = Dừng ngay: also abort the Bulk job being processed (design 0011 §3).
+        if (!id || !runs.cancel(id, { force: body?.force === true })) throw httpError(404, 'Lần chạy này đã kết thúc.');
         return { ok: true };
+      },
+    ],
+    // ---------- insert history (design 0011 §5): files on this machine, never the org ----------
+    [
+      'GET',
+      /^\/api\/history$/,
+      async () => {
+        const st = await history.status();
+        return {
+          enabled: st.enabled, ...(st.reason ? { reason: st.reason } : {}), ...(st.locked ? { locked: true } : {}), dir: st.dir, maxRuns: st.maxRuns, runs: st.enabled ? await history.list() : [],
+          // Entries the next insert would drop although they still have records in an org (S4): the
+          // insert confirmation warns before the user confirms (the `plan` event repeats it).
+          prune: st.enabled ? await history.prunePreview() : [],
+        };
+      },
+    ],
+    [
+      'GET',
+      /^\/api\/history\/([^/]+)$/,
+      async ([, raw]) => {
+        const { hid, data } = await historyEntry(raw);
+        const rem = await history.remaining(hid);
+        const { workflow, ...rest } = data;
+        return {
+          ...rest,
+          workflowName: workflow?.name ?? '',
+          ...(history.activeKind(hid) ? { active: history.activeKind(hid) } : {}),
+          remaining: { total: rem.total, bySobject: rem.bySobject, steps: rem.steps.map((s) => ({ nodeId: s.nodeId, sobject: s.sobject, remaining: s.ids.length })) },
+          // Rows of the Id file that belong to no step of this insert (edited file): never deleted (review 2, item 3).
+          rejected: rem.rejected,
+          ...(rem.rejected ? { rejectedMessage: rejectedMessage(rem.rejected) } : {}),
+          // Bulk jobs whose Ids are not in the file yet: a delete reads them first and asks to confirm the new count.
+          pendingBulkJobs: (data.bulkJobs ?? []).filter((j) => !j.idsCollected && !j.idsLost).map((j) => ({ jobId: j.jobId, sobject: j.sobject, nodeId: j.nodeId, records: j.records, state: j.state })),
+          // Jobs whose Ids can no longer be read (results purged, or not this user's insert job): what to do instead.
+          lostBulkJobs: (data.bulkJobs ?? []).filter((j) => j.idsLost).map((j) => ({ jobId: j.jobId, sobject: j.sobject, records: j.records, message: j.idsLostMessage })),
+        };
+      },
+    ],
+    [
+      'GET',
+      /^\/api\/history\/([^/]+)\/ids\.csv$/,
+      async ([, raw], _body, params, { res }) => {
+        const { hid, data } = await historyEntry(raw, { corrupt: true });
+        await streamIdsCsv(res, history, hid, data, params.get('sobject'));
+        return STREAMED;
+      },
+    ],
+    [
+      'POST',
+      /^\/api\/history\/([^/]+)\/forget$/,
+      async ([, raw]) => {
+        const { hid, data } = await historyEntry(raw, { corrupt: true });
+        await requireHistory('quên lần insert này');
+        if (history.activeKind(hid) || data?.status === 'running') throw httpError(409, 'Lần insert này đang chạy. Bấm "Dừng", chờ nó dừng rồi mới quên.');
+        await history.forget(hid); // marks the entry active while it removes it, refuses an active one (N1)
+        return { ok: true };
+      },
+    ],
+    [
+      'POST',
+      /^\/api\/history\/([^/]+)\/delete$/,
+      async ([, raw], body, _params, { req, res }) => {
+        // A client that left (Hủy while the org was being checked, tab closed) gets no delete (review, S1).
+        let gone = false;
+        const onEarlyClose = () => { gone = true; };
+        res.on('close', onEarlyClose);
+        const left = () => gone || res.destroyed || req.socket.destroyed;
+        const { hid, data } = await historyEntry(raw);
+        await requireHistory('xóa');
+        const checked = await checkDelete(hid, data, body);
+        const { target, session } = checked;
+        let { rem } = checked;
+        // Checked again right before marking: another request may have started meanwhile.
+        if (history.activeKind(hid)) throw httpError(409, 'Đang xóa dữ liệu của lần insert này ở một tab khác. Chờ lần đó xong.');
+        if (left()) {
+          res.off('close', onEarlyClose);
+          return STREAMED;
+        }
+        const release = history.markActive(hid, 'delete');
+        // S2: Bulk jobs whose Ids were never read are collected FIRST (read-only), then the count the
+        // user confirmed is compared with the new total; a difference ⇒ 409 and nothing deleted.
+        let collected = { added: 0, pending: [], lost: [] };
+        try {
+          if (checked.pending) {
+            collected = await collectPendingJobs({ client: sfClient, history, hid, target: session });
+            rem = await history.remaining(hid);
+            if (!rem) throw httpError(404, HISTORY_MISSING);
+            countCheck(rem, body.confirm.count, { added: collected.added, stillPending: collected.pending });
+          }
+        } catch (e) {
+          release();
+          throw e;
+        }
+        res.off('close', onEarlyClose);
+        if (left()) {
+          release();
+          return STREAMED;
+        }
+        const handle = runs.open();
+        const onClose = () => { if (!res.writableEnded) runs.cancel(handle.id); };
+        res.on('close', onClose);
+        const ndjson = String(req.headers.accept ?? '').includes(NDJSON);
+        const emit = (ev) => { if (ndjson && !res.destroyed) res.write(`${JSON.stringify(ev)}\n`); };
+        const bySobject = rem.bySobject;
+        if (ndjson) {
+          res.writeHead(200, { 'Content-Type': `${NDJSON}; charset=utf-8`, 'Cache-Control': 'no-cache', 'X-Content-Type-Options': 'nosniff' });
+          res.flushHeaders?.();
+        }
+        emit({ type: 'start', runId: handle.id, historyId: hid, total: rem.total, bySobject });
+        let result;
+        let failure = null;
+        let last = 0;
+        try {
+          result = await deleteRun({
+            client: sfClient, history, hid, target: session, bulk: body.bulk ?? 'auto', signal: handle.signal, forceSignal: handle.forceSignal, ...deleteOptions,
+            collected: collected.added, pendingBulkJobs: collected.pending, lostBulkJobs: collected.lost ?? [],
+            onProgress: (p) => {
+              const t = Date.now();
+              if (t - last < (runOptions.progressIntervalMs ?? 250)) return;
+              last = t;
+              emit({ type: 'progress', phase: 'delete', ...p });
+            },
+          });
+        } catch (e) {
+          failure = e;
+        } finally {
+          release();
+          handle.close();
+          res.off('close', onClose);
+        }
+        if (failure) {
+          if (!failure.status) console.error(failure);
+          if (!ndjson) throw failure;
+          emit({ type: 'error', error: failure.message });
+          res.end();
+        } else if (ndjson) {
+          emit({ type: 'done', result });
+          res.end();
+        } else sendJson(res, 200, result);
+        await invalidateAfterInsert(target);
+        return STREAMED;
+      },
+    ],
+    [
+      'GET',
+      /^\/api\/orgs\/([^/]+)\/limits$/,
+      async ([, raw]) => {
+        const org = orgParam(raw);
+        const hit = limitsCache.get(org);
+        if (hit && Date.now() - hit.at < LIMITS_CACHE_MS) return hit.value;
+        let timer;
+        const l = await Promise.race([
+          sfClient.limits(org),
+          new Promise((_, reject) => { timer = setTimeout(() => reject(httpError(504, 'Org trả hạn mức API quá chậm.')), LIMITS_TIMEOUT_MS); }),
+        ]).finally(() => clearTimeout(timer));
+        const pair = (x) => (x && Number.isFinite(x.Max) ? { max: x.Max, remaining: x.Remaining } : null);
+        const value = { api: pair(l?.DailyApiRequests), bulkBatches: pair(l?.DailyBulkApiBatches) };
+        limitsCache.set(org, { at: Date.now(), value });
+        return value;
       },
     ],
     [
@@ -242,7 +586,7 @@ export function createApp({ cli = createSfCli(), client, queryCache = createQuer
       async ([, org], _body, params) => {
         // ?for=query: objects a Query step can read; default: objects a Record step can create.
         const forQuery = params.get('for') === 'query';
-        const r = await sfClient.describeGlobal(decodeURIComponent(org));
+        const r = await sfClient.describeGlobal(orgParam(org));
         return r.sobjects
           .filter((s) => (forQuery ? s.queryable : s.createable) && !s.deprecatedAndHidden)
           .map((s) => ({ name: s.name, label: s.label, custom: s.custom }))
@@ -252,12 +596,12 @@ export function createApp({ cli = createSfCli(), client, queryCache = createQuer
     [
       'GET',
       /^\/api\/orgs\/([^/]+)\/sobjects\/([A-Za-z0-9_]+)\/fields$/,
-      async ([, org, name]) => mapQueryFields(await sfClient.describe(decodeURIComponent(org), name)),
+      async ([, org, name]) => mapQueryFields(await sfClient.describe(orgParam(org), name)),
     ],
     [
       'GET',
       /^\/api\/orgs\/([^/]+)\/sobjects\/([A-Za-z0-9_]+)$/,
-      async ([, org, name]) => mapDescribe(await sfClient.describe(decodeURIComponent(org), name)),
+      async ([, org, name]) => mapDescribe(await sfClient.describe(orgParam(org), name)),
     ],
   ];
 
@@ -270,6 +614,10 @@ export function createApp({ cli = createSfCli(), client, queryCache = createQuer
         const route = routes.find(([method, re]) => method === req.method && re.test(url.pathname));
         if (!route) throw httpError(404, 'Không có API này.');
         const body = req.method === 'POST' ? await readJson(req) : undefined;
+        if (allowedHosts === null && isOrgWrite(req.method, url.pathname, body)) {
+          const refusedWrite = writeHostGuard(req);
+          if (refusedWrite) throw httpError(refusedWrite.status, refusedWrite.message);
+        }
         const data = await route[2](url.pathname.match(route[1]), body, url.searchParams, { req, res });
         if (data === STREAMED) return undefined;
         return sendJson(res, 200, data);
@@ -286,9 +634,45 @@ export function createApp({ cli = createSfCli(), client, queryCache = createQuer
       const status = e.status ?? 500;
       if (!e.status) console.error(e); // unexpected errors only; known ones (sf missing, 4xx) go to the client
       // 409 (org data changed) and Salesforce errors of a Query step name the step in `issues`.
-      return sendJson(res, status, e.issues ? { error: e.message, issues: e.issues } : { error: e.message });
+      return sendJson(res, status, { error: e.message, ...(e.issues ? { issues: e.issues } : {}), ...(e.body ?? {}) });
     }
   };
+}
+
+/**
+ * Ids of a history entry as CSV: sobject,id,ref,step,status (status = inserted | deleted | gone),
+ * optionally one sObject. File name: <workflow>-<yyyyMMdd-HHmm>-ids.csv (time of the insert).
+ */
+async function streamIdsCsv(res, history, hid, data, sobject) {
+  const outcome = await history.deletedMap(hid);
+  const t = new Date(data?.startedAt ?? Date.now());
+  const p2 = (n) => String(n).padStart(2, '0');
+  const when = `${t.getFullYear()}${p2(t.getMonth() + 1)}${p2(t.getDate())}-${p2(t.getHours())}${p2(t.getMinutes())}`;
+  const base = String(data?.workflow?.name || 'workflow').replace(/[^\w.-]+/g, '_');
+  res.writeHead(200, {
+    'Content-Type': 'text/csv; charset=utf-8',
+    'Content-Disposition': `attachment; filename="${base}-${when}-ids.csv"`,
+    'Cache-Control': 'no-cache',
+    'X-Content-Type-Options': 'nosniff',
+  });
+  let closed = false;
+  res.on('close', () => { closed = true; });
+  const write = async (chunk) => {
+    if (!res.write(chunk)) await new Promise((resolve) => { res.once('drain', resolve); res.once('close', resolve); });
+  };
+  await write('sobject,id,ref,step,status\r\n');
+  let lines = [];
+  for await (const r of history.ids(hid)) {
+    if (closed) break;
+    if (sobject && r.sobject !== sobject) continue;
+    lines.push([r.sobject, r.id, r.ref, r.nodeId, outcome.get(r.id) ?? 'inserted'].map(idsCell).join(','));
+    if (lines.length >= 1000) {
+      await write(`${lines.join('\r\n')}\r\n`);
+      lines = [];
+    }
+  }
+  if (lines.length && !closed) await write(`${lines.join('\r\n')}\r\n`);
+  res.end();
 }
 
 /** CSV value as in the results table: `{ $ref }` → its ref, objects as JSON, null → empty. */
@@ -338,6 +722,26 @@ async function streamExport(res, run, { format, sobject, name }) {
   res.end();
 }
 
+/** An org alias / username from a URL segment; a malformed escape is a 400, not a crash (N9). */
+function orgParam(raw) {
+  try {
+    const org = decodeURIComponent(raw);
+    if (org) return org;
+  } catch {
+    // fall through
+  }
+  throw httpError(400, 'Tên org trong đường dẫn không hợp lệ.');
+}
+
+/**
+ * A cell of the downloaded Id CSV: a value starting with = + - @ (or a tab / CR) is prefixed with '
+ * so a spreadsheet never runs it as a formula (N10).
+ */
+function idsCell(v) {
+  const s = String(v ?? '');
+  return csvCell(/^[=+\-@\t\r]/.test(s) ? `'${s}` : s);
+}
+
 function httpError(status, message) {
   return Object.assign(new Error(message), { status });
 }
@@ -376,12 +780,23 @@ async function serveStatic(pathname, res) {
   const rel = pathname === '/' ? 'index.html' : decoded.slice(shared ? '/shared/'.length : 0).replace(/^\/+/, '');
   const file = path.resolve(dir, rel);
   if (!file.startsWith(dir + path.sep)) throw httpError(403, 'Forbidden');
+  let info;
   try {
-    if (!(await stat(file)).isFile()) throw new Error();
+    info = await stat(file);
+    if (!info.isFile()) throw new Error();
   } catch {
     throw httpError(404, 'Not found');
   }
-  res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] ?? 'application/octet-stream', 'Cache-Control': 'no-cache' });
+  // no-cache + a validator: the browser always asks, an unchanged file answers 304 (no body), and the
+  // cached copy keeps its compiled-code cache, so a reload does not parse every module again.
+  const etag = `W/"${info.size.toString(16)}-${Math.floor(info.mtimeMs).toString(16)}"`;
+  const headers = { 'Content-Type': MIME[path.extname(file)] ?? 'application/octet-stream', 'Cache-Control': 'no-cache', ETag: etag };
+  if (res.req?.headers['if-none-match'] === etag) {
+    res.writeHead(304, headers);
+    res.end();
+    return;
+  }
+  res.writeHead(200, headers);
   res.end(await readFile(file));
 }
 

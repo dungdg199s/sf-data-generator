@@ -53,6 +53,32 @@ export function createRandom(seed = Date.now()) {
       }
       return idx.slice(0, Math.min(k, list.length)).sort((a, b) => a - b).map((i) => list[i]);
     },
+    /**
+     * The first `k` items of a seeded shuffle of `list` (design 0013 C, Lặp `each` "Xáo trộn"):
+     * a partial Fisher–Yates that draws exactly min(k, length) numbers. `list` is not changed.
+     */
+    shuffleTake(list, k) {
+      return rng.shufflePositions(list.length, k).map((p) => list[p]);
+    },
+    /**
+     * Positions 0…len-1 in the order shuffleTake would give for a list of length `len`, first `k`
+     * only: the same draws (`j = i + ⌊next()·(len−i)⌋`) over a virtual array whose swaps are kept
+     * in a sparse Map, so time and memory are O(k), not O(len) (review of 0013: 10 000 visits
+     * with "Tối đa 1" over a pool of 10 000 took 7 s).
+     */
+    shufflePositions(len, k) {
+      const n = Math.min(Math.max(0, Math.trunc(Number(k)) || 0), len);
+      const swapped = new Map(); // position → value, where it differs from the position itself
+      const out = new Array(n);
+      for (let i = 0; i < n; i++) {
+        const j = i + Math.floor(next() * (len - i));
+        const vj = swapped.has(j) ? swapped.get(j) : j;
+        // Position i is never read again: only j keeps what was at i.
+        if (j !== i) swapped.set(j, swapped.has(i) ? swapped.get(i) : i);
+        out[i] = vj;
+      }
+      return out;
+    },
     digits(n) {
       let s = '';
       for (let i = 0; i < n; i++) s += Math.floor(next() * 10);

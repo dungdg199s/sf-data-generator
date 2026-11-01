@@ -30,8 +30,8 @@ export const text = {
   uniqueable: true,
   options: [
     opt('mode', 'Kiểu nội dung', 'select', 'words', { choices: TEXT_MODES }),
-    opt('minWords', 'Số từ tối thiểu', 'integer', 1, { min: 1, showIf: { key: 'mode', in: ['words'] } }),
-    opt('maxWords', 'Số từ tối đa', 'integer', 3, { min: 1, showIf: { key: 'mode', in: ['words'] } }),
+    opt('minWords', 'Số từ tối thiểu', 'integer', 1, { min: 1, max: 1000, showIf: { key: 'mode', in: ['words'] } }),
+    opt('maxWords', 'Số từ tối đa', 'integer', 3, { min: 1, max: 1000, showIf: { key: 'mode', in: ['words'] } }),
     opt('pattern', 'Mẫu', 'string', 'ID-####', {
       showIf: { key: 'mode', in: ['pattern'] },
       help: '# = chữ số, ? = chữ hoa, * = chữ hoặc số, \\ để giữ nguyên ký tự.',
@@ -82,8 +82,8 @@ export const textarea = {
   category: 'Text',
   sfTypes: ['textarea'],
   options: [
-    opt('minSentences', 'Số câu tối thiểu', 'integer', 1, { min: 1 }),
-    opt('maxSentences', 'Số câu tối đa', 'integer', 3, { min: 1 }),
+    opt('minSentences', 'Số câu tối thiểu', 'integer', 1, { min: 1, max: 200 }),
+    opt('maxSentences', 'Số câu tối đa', 'integer', 3, { min: 1, max: 200 }),
     opt('maxLength', 'Độ dài tối đa', 'integer', 255, { min: 1, max: 255 }),
   ],
   generate(o, { rng }) {
@@ -100,8 +100,8 @@ export const longtextarea = {
   category: 'Text',
   sfTypes: [],
   options: [
-    opt('minParagraphs', 'Số đoạn tối thiểu', 'integer', 1, { min: 1 }),
-    opt('maxParagraphs', 'Số đoạn tối đa', 'integer', 3, { min: 1 }),
+    opt('minParagraphs', 'Số đoạn tối thiểu', 'integer', 1, { min: 1, max: 50 }),
+    opt('maxParagraphs', 'Số đoạn tối đa', 'integer', 3, { min: 1, max: 50 }),
     opt('maxLength', 'Độ dài tối đa', 'integer', 32768, { min: 1, max: 131072 }),
   ],
   generate(o, { rng }) {
@@ -118,8 +118,8 @@ export const richtextarea = {
   category: 'Text',
   sfTypes: [],
   options: [
-    opt('minParagraphs', 'Số đoạn tối thiểu', 'integer', 1, { min: 1 }),
-    opt('maxParagraphs', 'Số đoạn tối đa', 'integer', 3, { min: 1 }),
+    opt('minParagraphs', 'Số đoạn tối thiểu', 'integer', 1, { min: 1, max: 50 }),
+    opt('maxParagraphs', 'Số đoạn tối đa', 'integer', 3, { min: 1, max: 50 }),
     opt('maxLength', 'Độ dài tối đa', 'integer', 32768, { min: 1, max: 131072 }),
   ],
   generate(o, { rng }) {

@@ -10,16 +10,24 @@
 // the Start card when nothing is selected) is always in the DOM, so it can hold focus.
 // Workflow / view / result events rebuild; selection and issue events only re-decorate.
 // While the Quy trình view is shown (views.js) this view is empty and does not render.
+// Minimap (design 0014 §5, minimap.js): a fixed set of SVG paths rebuilt after a render (one rAF,
+// at most every 250 ms while typing in the inspector); pan / zoom only move its viewBox, the
+// viewport rectangle and the overview thumb.
 
-import { h, icoTile } from './dom.js';
+import { h, ico, icoTile } from './dom.js';
 import { state, subscribe, select, nodeType, stepById, setCollapsed } from './store.js';
 import { layout, START_ID } from './layout.js';
 import {
-  stepSummary, stepAlias, statChip, stepLabel, addPointLabel, issuesByStep, innerIssues, innerCount, emptySlotLabel,
+  stepSummary, stepAlias, stepLabel, addPointLabel, issuesByStep, innerIssues, innerCount, emptySlotLabel,
+  startEstimate,
 } from './summary.js';
 import * as ops from './ops.js';
 import { openSheet } from './inspector.js';
 import { openAddMenu, openStepMenu } from './menus.js';
+import { refTargetId } from './ref-target.js';
+import { paintCardRun, resultStale, noteText, stepsById } from './run-cards.js';
+import { isSelected, clickSelect, toggleSelected, extendBy, inSelectMode } from './selection.js';
+import { minimapModel, minimapPaths, mapToWorld, trackToWorld } from './minimap.js';
 
 const SVG = 'http://www.w3.org/2000/svg';
 const ZOOM_MIN = 0.1;
@@ -90,6 +98,7 @@ export function initCanvas() {
   // The viewport changes size (results panel, issues bar, sheet, window): a selected card that was
   // fully visible stays visible; otherwise only the elements are updated.
   let size = null;
+  watchBoxes();
   new ResizeObserver(() => {
     if (!active() || !lay) return;
     const was = size;
@@ -108,12 +117,14 @@ export function initCanvas() {
   document.getElementById('btn-zoom-out').onclick = () => zoomBy(1 / ZOOM_STEP);
   document.getElementById('btn-zoom-fit').onclick = fit;
   zoomLabel.onclick = () => zoomBy(1 / zoom);
+  initMinimap();
 
   subscribe(({ kind, source }) => {
     if (!active()) return;
     // Another workflow (Mới, Mở…, Mẫu): start again at 100 % with its Start card at the left.
     if (kind === 'workflow' && source === 'replace') placed = false;
-    // Typing in the inspector: one rebuild per frame at most, not one per keystroke.
+    // Typing in the inspector: one rebuild per frame at most, not one per keystroke (the minimap: per 250 ms).
+    mmThrottle = kind === 'workflow' && source === 'inspector';
     if (kind === 'workflow' && source === 'inspector') scheduleRender();
     else if (kind === 'workflow' || kind === 'all' || kind === 'view' || kind === 'result') render();
     else if (kind === 'selection' || kind === 'issues') decorate();
@@ -133,6 +144,7 @@ export function clearCanvas() {
   for (const el of els.values()) el.remove();
   els.clear();
   lay = null;
+  mm?.el.classList.remove('show');
 }
 
 // ---------- rendering ----------
@@ -145,7 +157,7 @@ function render() {
   if (!active()) return;
   const focused = root.contains(document.activeElement) && !document.activeElement.closest('.popup') ? document.activeElement : null;
   const focusKey = focused?.closest('[data-key]')?.dataset.key ?? null;
-  staleStats = state.lastRunSteps !== null && state.lastRunSteps !== JSON.stringify(state.workflow.steps);
+  staleStats = resultStale();
   lay = layout(state.workflow.steps ?? [], { slotsOf: (type) => nodeType(type)?.slots ?? [], collapsed: state.collapsed });
   buildItems();
   lines.setAttribute('d', lay.edges.map((p) => `M${p[0]} ${p[1]}${pointsTail(p)}`).join(''));
@@ -157,6 +169,7 @@ function render() {
   els.clear();
   issues = issuesByStep();
   if (!placed) placeInitial();
+  mmDirty = true;
   applyNow(); // the elements exist before focus is put back on one of them
   if (focusKey) {
     const el = els.get(focusKey);
@@ -213,8 +226,7 @@ function selectedId() {
 /** Creates the elements near the viewport and removes the others (focused one excepted). */
 function cull() {
   if (!lay) return;
-  const W = root.clientWidth;
-  const H = root.clientHeight;
+  const { w: W, h: H } = viewportBox();
   const vx = (-pan.x - CULL_MARGIN) / zoom;
   const vy = (-pan.y - CULL_MARGIN) / zoom;
   const vw = (W + 2 * CULL_MARGIN) / zoom;
@@ -244,6 +256,7 @@ function cull() {
     el.remove();
     els.delete(key);
   }
+  updateMinimap();
 }
 
 const KEEP_VISIBLE = 120; // px of the diagram that panning always leaves on screen
@@ -251,8 +264,7 @@ const KEEP_VISIBLE = 120; // px of the diagram that panning always leaves on scr
 /** Pan never loses the diagram: at least KEEP_VISIBLE px of its box stay in the viewport. */
 function clampPan() {
   if (!lay) return;
-  const W = root.clientWidth;
-  const H = root.clientHeight;
+  const { w: W, h: H } = viewportBox();
   const w = lay.width * zoom;
   const hh = lay.height * zoom;
   const kx = Math.min(KEEP_VISIBLE, w, W);
@@ -292,7 +304,7 @@ const typeLabel = (step) => nodeType(step.type)?.label ?? step.type;
 
 function startCard() {
   const wf = state.workflow;
-  const max = wf.settings?.maxRecords ?? state.meta?.limits.maxRecordsDefault;
+  const est = startEstimate();
   return h(
     'div',
     {
@@ -308,14 +320,20 @@ function startCard() {
     },
     h('div', { class: 'dg-row' }, h('span', { class: 'type' }, icoTile(), h('span', { class: 'type-label' }, 'Bắt đầu')), h('span', { class: 'badges' })),
     h('div', { class: 'sum dg-sum', title: wf.name || 'Workflow' }, wf.name || 'Workflow'),
-    h('div', { class: 'dg-tags' }, h('span', { class: 'dg-note' }, `≤ ${Number(max).toLocaleString('vi-VN')} bản ghi`)),
+    h('div', { class: 'dg-tags' },
+      h('span', { class: 'dg-note', title: 'Ước tính từ cấu hình · giới hạn bản ghi mỗi lần chạy' }, est.text),
+      est.over ? h('span', { class: 'tag-est-over', title: est.over.title }, est.over.label) : null),
   );
 }
 
 function cardClick(e, id) {
   if (e.target.closest('button')) return;
-  select(id === START_ID ? { kind: 'workflow' } : { kind: 'step', id });
-  openSheet(); // narrow screens: a tap on the selected card shows the sheet a run (or ‹ Xong) closed
+  if (id !== START_ID && inSelectMode()) toggleSelected(id); // narrow select mode (design 0012 B)
+  else if (id !== START_ID && (e.shiftKey || e.ctrlKey || e.metaKey)) clickSelect(id, { range: e.shiftKey, toggle: !e.shiftKey });
+  else {
+    select(id === START_ID ? { kind: 'workflow' } : { kind: 'step', id });
+    openSheet(); // narrow screens: a tap on the selected card shows the sheet a run (or ‹ Xong) closed
+  }
   e.currentTarget.focus({ preventScroll: true });
 }
 
@@ -324,20 +342,18 @@ function cardEl(n) {
   const type = nodeType(step.type);
   const alias = stepAlias(step);
   const summary = stepSummary(step);
-  const chip = state.result ? statChip(step, state.result.stats?.byStep) : null;
   const head = n.kind === 'frame';
   const parts = {
     type: h('span', { class: 'type' }, icoTile(), h('span', { class: 'type-label' }, typeLabel(step))),
     alias: alias ? h('span', { class: 'alias', title: alias }, alias) : null,
     sum: h('span', { class: `sum${head ? '' : ' dg-sum'}`, title: summary }, summary),
-    chip: chip ? h('span', { class: `stat${staleStats ? ' stale' : ''}`, title: staleStats ? 'Số liệu của lần xem trước gần nhất; workflow đã đổi sau đó.' : 'Số liệu của lần xem trước gần nhất.' }, chip) : null,
     badges: h('span', { class: 'badges' }),
     off: step.disabled ? h('span', { class: 'tag-off', title: 'Bước này đang tắt: không chạy và không được kiểm tra. Ctrl+/ để bật lại.' }, 'Đã tắt') : null,
     sample: type?.needsOrg && !state.org && !step.disabled ? h('span', { class: 'tag-sample', title: 'Chưa chọn org: Xem trước dùng bản ghi mẫu (Id giả). Chọn org ở thanh trên để đọc dữ liệu thật.' }, 'chưa chọn org') : null,
     note: n.collapsed ? h('span', { class: 'dg-note', 'data-count': String(innerCount(step)) }) : null,
-    menu: h('button', { class: 'icon menu-btn', title: 'Thao tác với bước', 'aria-label': `Thao tác với bước ${stepLabel(step)}`, onclick: (e) => openStepMenu(e.currentTarget, step.id) }, '⋯'),
+    menu: h('button', { class: 'icon menu-btn', title: 'Thao tác với bước', 'aria-label': `Thao tác với bước ${stepLabel(step)}`, onclick: (e) => openStepMenu(e.currentTarget, step.id) }, ico('more')),
     toggle: n.container
-      ? h('button', { class: 'icon toggle', title: n.collapsed ? 'Mở khung' : 'Thu gọn khung', 'aria-label': n.collapsed ? 'Mở khung' : 'Thu gọn khung', onclick: () => setCollapsed([step.id], !n.collapsed) }, n.collapsed ? '▸' : '▾')
+      ? h('button', { class: 'icon toggle', title: n.collapsed ? 'Mở khung' : 'Thu gọn khung', 'aria-label': n.collapsed ? 'Mở khung' : 'Thu gọn khung', onclick: () => setCollapsed([step.id], !n.collapsed) }, ico(n.collapsed ? 'chevron-right' : 'chevron-down'))
       : null,
   };
   const attrs = {
@@ -350,17 +366,20 @@ function cardEl(n) {
     'aria-setsize': String(n.setsize),
     'aria-expanded': n.container ? String(!n.collapsed) : undefined,
     tabindex: '-1',
+    onmousedown: (e) => { if (e.shiftKey) e.preventDefault(); }, // Shift+click: a range of cards, not text
     onclick: (e) => cardClick(e, step.id),
   };
   // A frame header is one row, like a Quy trình card; other cards have three short rows.
-  if (head) return h('div', attrs, parts.type, parts.alias, parts.sum, parts.chip, parts.badges, parts.off, parts.sample, parts.menu, parts.toggle);
+  // The stat chip and the insert-error tag are added by paintCardRun (decorateCard): before the
+  // badges of a frame header, after the note in the tag row of other cards.
+  if (head) return h('div', attrs, parts.type, parts.alias, parts.sum, parts.badges, parts.off, parts.sample, parts.menu, parts.toggle);
   // The alias goes on the summary row, so the type label keeps the first row ("Query (đọc org)").
   return h(
     'div',
     attrs,
     h('div', { class: 'dg-row' }, parts.type, parts.badges, parts.menu, parts.toggle),
     h('div', { class: 'dg-row' }, parts.alias, parts.sum),
-    h('div', { class: 'dg-tags' }, parts.note, parts.chip, parts.off, parts.sample),
+    h('div', { class: 'dg-tags' }, parts.note, parts.off, parts.sample),
   );
 }
 
@@ -395,14 +414,14 @@ function addEl(a) {
     'aria-label': addPointLabel([a.after, a.before], 1),
     ...targetAttrs(a.parentId, a.slot, a.index),
     onclick: (e) => openAddMenu(e.currentTarget, target),
-  }, '+');
+  }, ico('plus'));
   return el;
 }
 
 function emptyEl(e) {
   const target = { parentId: e.parentId, slot: e.slot, index: 0 };
   if (e.root) {
-    return h('button', { class: 'add-first dg-empty', title: 'Thêm bước ở đây (/)', ...targetAttrs(null, null, 0), onclick: (ev) => openAddMenu(ev.currentTarget, target) }, '+ Thêm bước đầu tiên');
+    return h('button', { class: 'add-first dg-empty', title: 'Thêm bước ở đây (/)', ...targetAttrs(null, null, 0), onclick: (ev) => openAddMenu(ev.currentTarget, target) }, ico('plus'), 'Thêm bước đầu tiên');
   }
   return h(
     'button',
@@ -422,6 +441,7 @@ function labelEl(l) {
 function decorate() {
   if (!lay) return;
   issues = issuesByStep();
+  mmDirty = true; // selected and error groups
   cull(); // the selection is pinned: a newly selected card off screen exists from now on
   for (const el of els.values()) decorateEl(el);
 }
@@ -443,11 +463,14 @@ function decorateCard(card) {
     errors += inner.errors;
     warnings += inner.warnings;
   }
-  const selected = id === (selectedId() ?? null);
+  const primary = id === (selectedId() ?? null);
+  // Every selected card has the selected style (design 0012 B); cards made again after cull too.
+  const selected = primary || (id !== START_ID && isSelected(id));
   card.classList.toggle('selected', selected);
+  card.classList.toggle('is-ref-target', id === refTargetId()); // 0012 I (a card made again by cull)
   card.setAttribute('aria-selected', String(selected));
-  // Roving tab stop: the selected card, or the Start card when nothing is selected.
-  card.tabIndex = selected || (id === START_ID && !selectedId()) ? 0 : -1;
+  // Roving tab stop: the primary selected card, or the Start card when nothing is selected.
+  card.tabIndex = primary || (id === START_ID && !selectedId()) ? 0 : -1;
   card.classList.toggle('has-error', errors > 0);
   card.classList.toggle('has-warning', !errors && warnings > 0);
   const jump = (e) => {
@@ -468,8 +491,29 @@ function decorateCard(card) {
     const parts = [`${note.dataset.count} bước bên trong`];
     if (inner.errors) parts.push(`${inner.errors} lỗi`);
     else if (inner.warnings) parts.push(`${inner.warnings} cảnh báo`);
-    note.textContent = parts.join(' · ');
+    note.dataset.base = parts.join(' · ');
   }
+  paintRun(card);
+}
+
+/** Chip, insert-error tag and the collapsed note's insert count of one card (design 0012 D, H). */
+function paintRun(card, steps = stepsById()) {
+  const step = steps.get(card.dataset.id);
+  if (!step) return;
+  const tags = card.querySelector(':scope > .dg-tags');
+  const note = card.querySelector('.dg-note[data-count]');
+  paintCardRun(card, step, tags
+    ? { stale: staleStats, parent: tags, before: note ? note.nextSibling : tags.firstChild, tabindex: '-1' }
+    : { stale: staleStats, parent: card, before: card.querySelector(':scope > .badges'), tabindex: '-1' });
+  if (note) note.textContent = noteText(note.dataset.base ?? '', step);
+}
+
+/** Progress of a run (design 0012 D): patch the chip and tag of every card made, nothing else. */
+export function paintRunInfo() {
+  if (!lay || state.view !== 'canvas') return;
+  staleStats = resultStale();
+  const steps = stepsById();
+  for (const el of els.values()) if (el.classList.contains('step-card')) paintRun(el, steps);
 }
 
 function decorateSlot(el) {
@@ -486,6 +530,37 @@ function decorateSlot(el) {
 
 // ---------- viewport: pan, zoom, ensureVisible ----------
 
+// Sizes read on every pan / zoom frame (cull, clampPan, minimap), kept by ResizeObservers so a frame
+// does not force a layout after writing the transform. A zero width (the view was hidden) reads afresh.
+const boxes = { w: 0, h: 0, top: 0, insp: 0, mm: 0 };
+
+function measureBoxes() {
+  boxes.w = root.clientWidth;
+  boxes.h = root.clientHeight;
+  boxes.top = root.getBoundingClientRect().top;
+  boxes.insp = document.getElementById('inspector').offsetHeight;
+  boxes.mm = mm ? mm.svg.clientWidth || mm.el.clientWidth : 0;
+}
+
+function watchBoxes() {
+  const ro = new ResizeObserver(measureBoxes);
+  for (const el of [root, document.getElementById('inspector'), document.getElementById('dg-minimap'), document.querySelector('.topbar')]) ro.observe(el);
+  window.addEventListener('resize', measureBoxes);
+}
+
+/** { w, h } of the viewport, cached. */
+function viewportBox() {
+  if (!boxes.w) measureBoxes();
+  return boxes;
+}
+
+/** visibleHeight() from the cached sizes (per-frame callers). */
+function visibleHeightCached() {
+  const { h, top, insp } = viewportBox();
+  if (!document.body.classList.contains('sheet-open')) return h;
+  return Math.max(0, Math.min(h, window.innerHeight - insp - top));
+}
+
 /** Height of the viewport not covered by the bottom sheet (narrow screens). */
 function visibleHeight() {
   const H = root.clientHeight;
@@ -495,13 +570,18 @@ function visibleHeight() {
   return Math.max(0, Math.min(H, window.innerHeight - insp.offsetHeight - top));
 }
 
-/** The zoom bar over the viewport's top right corner (viewport coordinates), or null. */
-function zoomBarRect() {
-  const bar = wrap.querySelector('.dg-zoom');
-  const z = bar?.getBoundingClientRect();
-  if (!z?.width) return null;
+/**
+ * What floats over the viewport (viewport coordinates): the zoom bar (top right) and, when shown,
+ * the minimap (bottom right). showRect keeps cards out from under both.
+ */
+function overlayRects() {
   const v = root.getBoundingClientRect();
-  return { left: z.left - v.left, top: z.top - v.top, right: z.right - v.left, bottom: z.bottom - v.top };
+  const rel = (z) => ({ left: z.left - v.left, top: z.top - v.top, right: z.right - v.left, bottom: z.bottom - v.top });
+  const out = [];
+  const bar = wrap.querySelector('.dg-zoom')?.getBoundingClientRect();
+  if (bar?.width) out.push(rel(bar));
+  if (minimapShown()) out.push(rel(mm.el.getBoundingClientRect()));
+  return out;
 }
 
 /**
@@ -517,12 +597,13 @@ function showRect(r, { center = false } = {}) {
   const sw = w * zoom;
   const sh = r.h * zoom;
   const M = Math.max(0, Math.min(EDGE_MARGIN, (H - sh) / 2, (W - sw) / 2));
-  const bar = zoomBarRect();
+  const overlays = overlayRects();
   const at = (p) => ({ sx: r.x * zoom + p.x, sy: r.y * zoom + p.y });
-  const covered = (p) => {
+  const coveredBy = (p, o) => {
     const { sx, sy } = at(p);
-    return bar && sx < bar.right && sx + sw > bar.left - M && sy < bar.bottom + M && sy + sh > bar.top;
+    return sx < o.right + M && sx + sw > o.left - M && sy < o.bottom + M && sy + sh > o.top - M;
   };
+  const covered = (p) => overlays.some((o) => coveredBy(p, o));
   const fits = (p) => {
     const { sx, sy } = at(p);
     return sx >= M && sx + sw <= W - M && (sh > H ? sy >= 0 && sy <= M : sy >= M && sy + sh <= H - M) && !covered(p);
@@ -540,10 +621,13 @@ function showRect(r, { center = false } = {}) {
     next = { x, y };
   }
   if (sh > H) next.y = M - r.y * zoom; // taller than what is visible: show its top
-  // Under the zoom bar: move the card left of it, or below it when there is no room on the left.
-  if (covered(next)) {
-    if (bar.left - M - sw >= M) next.x = bar.left - M - sw - r.x * zoom;
-    else next.y = bar.bottom + M - r.y * zoom;
+  // Under the zoom bar or the minimap: move the card left of it, or (no room on the left) below the
+  // bar / above the minimap.
+  for (const o of overlays) {
+    if (!coveredBy(next, o)) continue;
+    if (o.left - M - sw >= M) next.x = o.left - M - sw - r.x * zoom;
+    else if (o.top > H / 2) next.y = o.top - M - sh - r.y * zoom;
+    else next.y = o.bottom + M - r.y * zoom;
   }
   pan = { x: Math.round(next.x), y: Math.round(next.y) };
   applyNow();
@@ -711,6 +795,12 @@ export function revealStep(id, { flash = false, focus = true, block = 'center' }
 
 function onKey(e) {
   if (e.target.closest('input, textarea, select, .popup') || e.altKey || e.ctrlKey || e.metaKey || !lay) return;
+  // Shift+↑ / Shift+↓: grow or shrink the range inside the anchor's sequence (design 0012 B).
+  if (e.shiftKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+    e.preventDefault();
+    if (extendBy(e.key === 'ArrowUp' ? -1 : 1)) focusSelected();
+    return;
+  }
   // Zoom keys anywhere in the diagram.
   if (e.key === '+' || e.key === '=') return void (e.preventDefault(), zoomBy(ZOOM_STEP));
   if (e.key === '-') return void (e.preventDefault(), zoomBy(1 / ZOOM_STEP));
@@ -826,4 +916,195 @@ function onPaletteDrop(e) {
   const point = nearestPoint(e.clientX, e.clientY);
   paletteDragEnd();
   if (point) ops.addStep(type, { parentId: point.dataset.parent || null, slot: point.dataset.slot || null, index: Number(point.dataset.index) });
+}
+
+// ---------- minimap (design 0014 §5) ----------
+
+const MM_KEY = 'sfdg.minimap';
+const MM_THROTTLE = 250; // ms between two rebuilds while typing in the inspector
+let mm = null; // { el, svg, gFrames, gCards, paths: Map, off, err, sel, halo, view, track, thumb, model, built }
+let mmOn = true;
+let mmDirty = true;
+let mmThrottle = false;
+let mmBuildFrame = 0;
+let mmBuildTimer = 0;
+let mmLastBuild = -Infinity;
+let mmHold = null; // { x, y }: the window held still while dragging on the map
+
+const svgEl = (tag, cls) => {
+  const el = document.createElementNS(SVG, tag);
+  if (cls) el.setAttribute('class', cls);
+  return el;
+};
+
+function initMinimap() {
+  const el = document.getElementById('dg-minimap');
+  const svg = svgEl('svg', 'mm-map');
+  svg.setAttribute('aria-hidden', 'true');
+  svg.setAttribute('preserveAspectRatio', 'none');
+  const gFrames = svgEl('g');
+  const gCards = svgEl('g');
+  mm = {
+    el, svg, gFrames, gCards, paths: new Map(),
+    off: svgEl('path', 'mm-off'), err: svgEl('path', 'mm-err'), sel: svgEl('path', 'mm-sel'),
+    halo: svgEl('rect', 'mm-view-halo'), view: svgEl('rect', 'mm-view'),
+    track: el.querySelector('.mm-track'), thumb: el.querySelector('.mm-thumb'), model: null, built: null,
+  };
+  svg.append(gFrames, gCards, mm.off, mm.err, mm.sel, mm.halo, mm.view);
+  el.prepend(svg);
+  try { mmOn = localStorage.getItem(MM_KEY) !== '0'; } catch { /* storage blocked: on */ }
+  const btn = document.getElementById('btn-minimap');
+  btn.setAttribute('aria-pressed', String(mmOn));
+  btn.onclick = () => {
+    mmOn = !mmOn;
+    try {
+      if (mmOn) localStorage.removeItem(MM_KEY);
+      else localStorage.setItem(MM_KEY, '0');
+    } catch { /* not remembered */ }
+    btn.setAttribute('aria-pressed', String(mmOn));
+    updateMinimap();
+  };
+  // Map: a press centres the viewport there; a drag follows the pointer, the window held still.
+  svg.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0 || !mm.model) return;
+    e.preventDefault();
+    svg.setPointerCapture(e.pointerId);
+    mmHold = { x: mm.model.window.x, y: mm.model.window.y };
+    centreOnMap(e);
+  });
+  svg.addEventListener('pointermove', (e) => { if (mmHold) centreOnMap(e); });
+  const release = () => {
+    if (!mmHold) return;
+    mmHold = null;
+    updateMinimap(); // the window follows the viewport again
+  };
+  svg.addEventListener('pointerup', release);
+  svg.addEventListener('pointercancel', release);
+  // Overview track: the viewport goes to that place of the whole diagram (same zoom, same height).
+  let onTrack = false;
+  mm.track.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0 || !lay) return;
+    e.preventDefault();
+    mm.track.setPointerCapture(e.pointerId);
+    onTrack = true;
+    goToTrack(e);
+  });
+  mm.track.addEventListener('pointermove', (e) => { if (onTrack) goToTrack(e); });
+  mm.track.addEventListener('pointerup', () => { onTrack = false; });
+  mm.track.addEventListener('pointercancel', () => { onTrack = false; });
+  // A wheel over the minimap does nothing (a slip of the wheel must not throw the diagram far away).
+  el.addEventListener('wheel', (e) => e.preventDefault(), { passive: false });
+}
+
+/** Shown: switched on, in the Sơ đồ view, the diagram larger than the viewport, not hidden by CSS (phone, sheet). */
+function minimapShown() {
+  if (!mm?.el.classList.contains('show')) return false;
+  return getComputedStyle(mm.el).visibility !== 'hidden';
+}
+
+const viewWorld = () => ({ x: -pan.x / zoom, y: -pan.y / zoom, w: viewportBox().w / zoom, h: visibleHeightCached() / zoom });
+
+function minimapModelNow() {
+  if (!boxes.mm) measureBoxes();
+  const w = boxes.mm;
+  if (!lay || !w) return null;
+  return minimapModel(lay, viewWorld(), { w }, mmHold ? { windowX: mmHold.x, windowY: mmHold.y } : {});
+}
+
+/** Every frame of a pan / zoom: O(1) (viewBox, the viewport rectangle, the thumb). */
+function updateMinimap() {
+  if (!mm) return;
+  const vp = viewportBox();
+  const overflows = lay && (lay.width * zoom > vp.w || lay.height * zoom > vp.h);
+  const show = Boolean(mmOn && active() && overflows);
+  mm.el.classList.toggle('show', show);
+  if (!show) return;
+  const model = minimapModelNow();
+  if (!model) return;
+  mm.model = model;
+  const { window: win, viewRect: v, track } = model;
+  mm.svg.style.height = `${Math.round(model.height)}px`;
+  mm.svg.setAttribute('viewBox', `${win.x} ${win.y} ${win.w} ${win.h}`);
+  for (const r of [mm.halo, mm.view]) {
+    r.toggleAttribute('hidden', !v);
+    if (!v) continue;
+    r.setAttribute('x', v.x);
+    r.setAttribute('y', v.y);
+    r.setAttribute('width', v.w);
+    r.setAttribute('height', v.h);
+  }
+  mm.track.hidden = !track;
+  if (track) {
+    mm.thumb.style.left = `${track.left}px`;
+    mm.thumb.style.width = `${track.width}px`;
+  }
+  const b = mm.built;
+  if (mmDirty || !b || win.x < b.x0 || win.x + win.w > b.x1) scheduleMinimapBuild();
+}
+
+function scheduleMinimapBuild() {
+  if (mmBuildFrame || mmBuildTimer) return;
+  const wait = mmThrottle ? MM_THROTTLE - (performance.now() - mmLastBuild) : 0;
+  const go = () => { mmBuildTimer = 0; mmBuildFrame = requestAnimationFrame(buildMinimap); };
+  if (wait > 0) mmBuildTimer = setTimeout(go, wait);
+  else go();
+}
+
+/** The path groups for the window ± one window (a long diagram builds only what is near). */
+function buildMinimap() {
+  mmBuildFrame = 0;
+  if (!lay || !mm.model || !active()) return;
+  mmLastBuild = performance.now();
+  mmDirty = false;
+  const { window: win, scale } = mm.model;
+  const range = { x0: win.x - win.w, x1: win.x + 2 * win.w };
+  const errors = new Set([...issues].filter(([, v]) => v.errors?.length).map(([id]) => id));
+  const p = minimapPaths(lay, { errors, selected: selectedId(), startId: START_ID, range, grow: 1.5 / scale, knownType: (t) => Boolean(nodeType(t)) });
+  const used = new Set();
+  const put = (key, parent, cls, type, d) => {
+    used.add(key);
+    let path = mm.paths.get(key);
+    if (!path) {
+      path = svgEl('path', cls);
+      path.setAttribute('data-type', type);
+      parent.append(path);
+      mm.paths.set(key, path);
+    }
+    if (path.getAttribute('d') !== d) path.setAttribute('d', d);
+  };
+  for (const [type, d] of Object.entries(p.frames)) put(`f:${type}`, mm.gFrames, 'mm-frame', type, d);
+  for (const [type, d] of Object.entries(p.cards)) put(`c:${type}`, mm.gCards, 'mm-card', type, d);
+  for (const [key, path] of mm.paths) {
+    if (used.has(key)) continue;
+    path.remove();
+    mm.paths.delete(key);
+  }
+  mm.off.setAttribute('d', p.off);
+  mm.err.setAttribute('d', p.err);
+  mm.sel.setAttribute('d', p.sel);
+  mm.built = range;
+}
+
+function centreOnMap(e) {
+  const model = minimapModelNow();
+  if (!model) return;
+  const box = mm.svg.getBoundingClientRect();
+  const p = mapToWorld(model, e.clientX - box.left, e.clientY - box.top, box.width);
+  const W = root.clientWidth;
+  const H = visibleHeight();
+  const vw = W / zoom;
+  const vh = H / zoom;
+  const win = model.window;
+  // While dragging, the viewport stays inside the held window.
+  if (vw < win.w) p.x = Math.min(win.x + win.w - vw / 2, Math.max(win.x + vw / 2, p.x));
+  if (vh < win.h) p.y = Math.min(win.y + win.h - vh / 2, Math.max(win.y + vh / 2, p.y));
+  pan = { x: Math.round(W / 2 - p.x * zoom), y: Math.round(H / 2 - p.y * zoom) };
+  applyNow();
+}
+
+function goToTrack(e) {
+  const box = mm.track.getBoundingClientRect();
+  const x = trackToWorld(e.clientX - box.left, box.width, lay.width);
+  pan = { x: Math.round(root.clientWidth / 2 - x * zoom), y: pan.y };
+  applyNow();
 }

@@ -15,8 +15,9 @@
 // inspector and the card summary assume); `initial`, when present, is what a step added from the
 // UI starts with instead (a new Lặp runs 3 times, a hand-written one without `count` runs 0 times).
 
-import { loopMinIterations } from '../../shared/scope.js';
+import { loopMinIterations, pickMaySkip } from '../../shared/scope.js';
 import { QUERY_DEFAULTS } from '../../shared/soql.js';
+import { BULK_DEFAULTS } from '../../shared/insert-plan.js';
 
 export const LIMITS = {
   maxRecordsDefault: 50000,
@@ -35,6 +36,14 @@ export const LIMITS = {
   queryTimeoutMs: 30000,
   queryTotalMs: 120000, // all Query steps of one run together, well under the HTTP timeouts
   queryCacheTtlMs: 600000,
+  // Org writes (design 0011): a Record step of at least bulkMinRecords leaf records goes through
+  // Bulk API 2.0 in jobs of bulkJobRecords rows, each followed for at most bulkJobTimeoutMs; insert
+  // history keeps at most historyMaxRuns runs / historyMaxBytes on disk.
+  bulkMinRecords: BULK_DEFAULTS.bulkMinRecords,
+  bulkJobRecords: BULK_DEFAULTS.bulkJobRecords,
+  bulkJobTimeoutMs: BULK_DEFAULTS.bulkJobTimeoutMs,
+  historyMaxRuns: 100,
+  historyMaxBytes: 256 * 1024 * 1024,
 };
 
 /**
@@ -52,10 +61,91 @@ export const QUERY_PRESETS = {
   Event: { fields: ['Id', 'Subject'] },
 };
 
+/**
+ * Default fields of a Record step per sObject (design 0012 G), served as meta.recordPresets: the
+ * standard objects without a createable `Name` field, or with other required fields. Any other
+ * sObject (custom ones included) starts with `Name` (Text, Họ tên); Account keeps the company name.
+ * `noName`: the sObject has no createable Name field, so a `Name` field on it fails every insert
+ * (validation warns `noNameField`); `nameField` is the field to rename it to.
+ */
+const SUBJECTS = ['Call', 'Send Letter', 'Send Quote', 'Other'];
+export const RECORD_PRESETS = {
+  Account: { fields: [{ name: 'Name', type: 'text', options: { mode: 'company' } }] },
+  Contact: {
+    fields: [
+      { name: 'FirstName', type: 'text', options: { mode: 'firstName' } },
+      { name: 'LastName', type: 'text', options: { mode: 'lastName' } },
+    ],
+    noName: true,
+    nameField: 'LastName',
+  },
+  Lead: {
+    fields: [
+      { name: 'FirstName', type: 'text', options: { mode: 'firstName' } },
+      { name: 'LastName', type: 'text', options: { mode: 'lastName' } },
+      { name: 'Company', type: 'text', options: { mode: 'company' } },
+    ],
+    noName: true,
+    nameField: 'LastName',
+  },
+  Task: { fields: [{ name: 'Subject', type: 'text', options: { mode: 'list', values: SUBJECTS } }], noName: true, nameField: 'Subject' },
+  Event: {
+    fields: [
+      { name: 'Subject', type: 'text', options: { mode: 'list', values: SUBJECTS } },
+      { name: 'ActivityDateTime', type: 'datetime', options: { from: 'now', to: '+30d' } },
+      { name: 'DurationInMinutes', type: 'number', options: { min: 30, max: 90, scale: 0 } },
+    ],
+    noName: true,
+    nameField: 'Subject',
+  },
+  Case: { fields: [{ name: 'Subject', type: 'text', options: { mode: 'words', minWords: 3, maxWords: 6 } }], noName: true, nameField: 'Subject' },
+  Opportunity: {
+    fields: [
+      { name: 'Name', type: 'text', options: { mode: 'words' } },
+      { name: 'StageName', type: 'text', options: { mode: 'list', values: ['Prospecting'] } },
+      { name: 'CloseDate', type: 'date', options: { from: 'today', to: '+90d' } },
+    ],
+  },
+};
+/** Default fields of a Record for an sObject without a preset. */
+export const RECORD_DEFAULT_FIELDS = [{ name: 'Name', type: 'text', options: { mode: 'name' } }];
+
+/** The preset of an sObject (API names ignore case), or null. */
+export function recordPreset(sobject) {
+  const key = Object.keys(RECORD_PRESETS).find((k) => k.toLowerCase() === String(sobject ?? '').toLowerCase());
+  return key ? RECORD_PRESETS[key] : null;
+}
+
 const BUILDER = { key: 'mode', in: ['builder'] };
 const SOQL = { key: 'mode', in: ['soql'] };
 const FILTER = { key: 'filter', in: ['compare'] };
 const EACH = { key: 'mode', in: ['each'] };
+const VALUES = { key: 'mode', in: ['values'] };
+const NUM_HELP = 'Số nguyên 0–100000, hoặc bấm {x} để lấy từ biến kiểu Số, ví dụ {{acc.NumberOfEmployees}} hay {{accs.$count}}.';
+
+/**
+ * The four filter options shared by Chọn bản ghi and Lặp `each` (design 0013 C): they differ in
+ * the showIf of `filter` and the help of `filterValue`. `showIf` is transitive, so the filter
+ * fields of a Lặp are hidden whenever `filter` is.
+ */
+function filterOptions({ showIf, valueHelp }) {
+  return [
+    {
+      key: 'filter',
+      label: 'Lọc',
+      kind: 'select',
+      default: 'none',
+      ...(showIf ? { showIf } : {}),
+      choices: [
+        { value: 'none', label: 'Không lọc' },
+        { value: 'compare', label: 'Chỉ bản ghi thỏa điều kiện' },
+      ],
+    },
+    { key: 'filterField', label: 'Field', kind: 'string', default: '', showIf: FILTER, suggest: { kind: 'poolFields', poolKey: 'from' }, help: 'Field của bản ghi trong pool, ví dụ AccountId, Industry hoặc Account.Type.' },
+    { key: 'filterOp', label: 'Phép so sánh', kind: 'select', default: 'eq', choices: CONDITION_OPS, showIf: FILTER },
+    { key: 'filterValue', label: 'So với', kind: 'string', default: '', vars: 'template', showIf: FILTER, help: valueHelp },
+  ];
+}
 
 export const STEP_CATEGORIES = [
   { key: 'data', label: 'Dữ liệu' },
@@ -75,6 +165,22 @@ export const CONDITION_OPS = [
   { value: 'divisibleBy', label: 'chia hết cho' },
 ];
 
+/**
+ * Variables of the whole run (design 0013 G), served as meta.globals: `{{run.seed}}`, … A step
+ * alias or loop variable called `run` hides them (the name the user gave wins).
+ */
+export const WORKFLOW_GLOBALS = [
+  {
+    name: 'run',
+    label: 'Lần chạy',
+    members: [
+      { key: 'seed', valueType: 'number', label: 'Seed của lần chạy', example: 'seed của lần xem trước' },
+      { key: 'now', valueType: 'datetime', label: 'Thời điểm chạy (UTC, ISO 8601)', example: '2026-10-28T03:00:00.000Z' },
+      { key: 'today', valueType: 'date', label: 'Ngày chạy (UTC, YYYY-MM-DD)', example: '2026-10-28' },
+    ],
+  },
+];
+
 export const NODE_TYPES = [
   {
     type: 'record',
@@ -92,6 +198,8 @@ export const NODE_TYPES = [
       builtins: [{ key: '$n', valueType: 'number', label: 'Số thứ tự bản ghi (n trong acc#n)' }],
       current: 'last',
       pool: true,
+      // Every run of the step adds ≥ 1 record (count ≥ 1): a Lặp `each` over it runs ≥ 1 time (0013 C4).
+      nonEmpty: true,
       origin: 'generated',
       lookupParent: true,
     },
@@ -148,6 +256,8 @@ export const NODE_TYPES = [
     description: 'Chọn một bản ghi từ pool (kết quả Query hoặc bản ghi đã sinh) làm bản ghi hiện tại của alias mới. Mỗi lần chạy qua chọn lại.',
     slots: [],
     flow: { kind: 'sequence' },
+    // May end the rest of its sequence (onEmpty 'skip'): what follows in a loop body may not run.
+    maySkip: pickMaySkip,
     exposes: {
       kind: 'record',
       name: { key: 'alias' },
@@ -171,22 +281,20 @@ export const NODE_TYPES = [
           { value: 'random', label: 'Ngẫu nhiên (có thể lặp lại)' },
           { value: 'unique', label: 'Ngẫu nhiên, không lặp lại' },
           { value: 'sequential', label: 'Lần lượt theo thứ tự (quay vòng)' },
+          { value: 'weighted', label: 'Ngẫu nhiên theo trọng số (field số)' },
         ],
-        help: 'Muốn chạy đúng một lần cho mỗi bản ghi của pool, dùng bước Lặp → "Mỗi bản ghi trong pool".',
+        help: 'Muốn chạy đúng một lần cho mỗi bản ghi của pool, dùng bước Lặp → "Mỗi bản ghi trong pool". Muốn chọn N bản ghi khác nhau một lần, dùng Lặp → "Mỗi bản ghi trong pool", Xáo trộn, Tối đa N.',
       },
       {
-        key: 'filter',
-        label: 'Lọc',
-        kind: 'select',
-        default: 'none',
-        choices: [
-          { value: 'none', label: 'Không lọc' },
-          { value: 'compare', label: 'Chỉ bản ghi thỏa điều kiện' },
-        ],
+        key: 'weightField',
+        label: 'Field trọng số',
+        kind: 'string',
+        default: '',
+        showIf: { key: 'mode', in: ['weighted'] },
+        suggest: { kind: 'poolFields', poolKey: 'from' },
+        help: 'Field số của bản ghi trong pool, ví dụ NumberOfEmployees hoặc Amount. Bản ghi có giá trị gấp đôi được chọn nhiều gấp đôi; trống hoặc âm tính là 0.',
       },
-      { key: 'filterField', label: 'Field', kind: 'string', default: '', showIf: FILTER, suggest: { kind: 'poolFields', poolKey: 'from' }, help: 'Field của bản ghi trong pool, ví dụ AccountId, Industry hoặc Account.Type.' },
-      { key: 'filterOp', label: 'Phép so sánh', kind: 'select', default: 'eq', choices: CONDITION_OPS, showIf: FILTER },
-      { key: 'filterValue', label: 'So với', kind: 'string', default: '', vars: 'template', showIf: FILTER, help: 'Giá trị cố định, hoặc {{acc.Id}} để lấy theo bản ghi ở bước trước.' },
+      ...filterOptions({ valueHelp: 'Giá trị cố định, hoặc {{acc.Id}} để lấy theo bản ghi ở bước trước.' }),
       {
         key: 'onEmpty',
         label: 'Khi không còn bản ghi để chọn',
@@ -204,7 +312,7 @@ export const NODE_TYPES = [
     type: 'loop',
     label: 'Lặp',
     category: 'control',
-    description: 'Chạy các bước bên trong nhiều lần: số lần cố định, ngẫu nhiên, hoặc mỗi bản ghi của một pool; rồi đi tiếp xuống bước sau.',
+    description: 'Chạy các bước bên trong nhiều lần: số lần cố định, ngẫu nhiên, mỗi bản ghi của một pool hoặc mỗi giá trị của một danh sách; rồi đi tiếp xuống bước sau.',
     slots: [{ key: 'body', label: '', empty: 'Thêm bước vào vòng lặp' }],
     flow: { kind: 'loop', body: 'body' },
     minIterations: loopMinIterations,
@@ -221,6 +329,8 @@ export const NODE_TYPES = [
           { key: 'index', valueType: 'number', label: 'Lần lặp hiện tại (từ 1)' },
           { key: 'index0', valueType: 'number', label: 'Lần lặp hiện tại (từ 0)' },
           { key: 'count', valueType: 'number', label: 'Tổng số lần lặp' },
+          // `when` (design 0013): only while looping over a list of values.
+          { key: 'value', valueType: 'string', label: 'Giá trị đang lặp', when: VALUES },
         ],
       },
       {
@@ -248,14 +358,35 @@ export const NODE_TYPES = [
           { value: 'fixed', label: 'Số lần cố định' },
           { value: 'range', label: 'Số lần ngẫu nhiên trong khoảng' },
           { value: 'each', label: 'Mỗi bản ghi trong pool' },
+          { value: 'values', label: 'Mỗi giá trị trong danh sách' },
         ],
       },
-      { key: 'count', label: 'Số lần lặp', kind: 'integer', default: 0, initial: 3, min: 0, max: LIMITS.maxCountPerNode, showIf: { key: 'mode', in: ['fixed'] } },
-      { key: 'min', label: 'Ít nhất', kind: 'integer', default: 1, min: 0, max: LIMITS.maxCountPerNode, showIf: { key: 'mode', in: ['range'] } },
-      { key: 'max', label: 'Nhiều nhất', kind: 'integer', default: 1, initial: 5, min: 0, max: LIMITS.maxCountPerNode, showIf: { key: 'mode', in: ['range'] } },
-      { key: 'from', label: 'Lặp qua pool', kind: 'ref', default: '', showIf: EACH, accepts: { pool: true }, placeholder: '— chọn pool —', empty: '— chưa có pool nào phía trên —', help: 'Alias của bước Query, Record hoặc Chọn bản ghi ở phía trên. Thân vòng lặp chạy một lần cho mỗi bản ghi, theo thứ tự của pool.' },
+      // `vars: 'number'` (design 0013 B): a number, or a string holding exactly one {{path}}.
+      { key: 'count', label: 'Số lần lặp', kind: 'integer', vars: 'number', default: 0, initial: 3, min: 0, max: LIMITS.maxCountPerNode, showIf: { key: 'mode', in: ['fixed'] }, help: NUM_HELP },
+      { key: 'min', label: 'Ít nhất', kind: 'integer', vars: 'number', default: 1, min: 0, max: LIMITS.maxCountPerNode, showIf: { key: 'mode', in: ['range'] } },
+      {
+        key: 'max', label: 'Nhiều nhất', kind: 'integer', vars: 'number', default: 1, initial: 5, min: 0, max: LIMITS.maxCountPerNode, showIf: { key: 'mode', in: ['range'] },
+        help: 'Ít nhất / Nhiều nhất nhận số hoặc một biến kiểu Số (bấm {x}). Khi chạy, Nhiều nhất nhỏ hơn Ít nhất thì dùng Ít nhất.',
+      },
+      {
+        key: 'values', label: 'Danh sách giá trị', kind: 'list', default: [], showIf: VALUES, placeholder: 'Hot\nWarm\nCold',
+        // One value per line: a value may hold a comma (a company name), as valueList reads a string.
+        split: 'lines',
+        help: 'Mỗi dòng một giá trị. Bên trong dùng {{loop.value}}; với field Picklist chọn kiểu "Lấy từ biến (giữ kiểu)" rồi loop.value.',
+      },
+      { key: 'from', label: 'Lặp qua pool', kind: 'ref', default: '', showIf: EACH, accepts: { pool: true }, placeholder: '— chọn pool —', empty: '— chưa có pool nào phía trên —', help: 'Alias của bước Query, Record hoặc Chọn bản ghi ở phía trên. Thân vòng lặp chạy một lần cho mỗi bản ghi, theo thứ tự của pool. Pool Record gồm mọi bản ghi của alias đã sinh từ đầu lần chạy.' },
       { key: 'itemAlias', label: 'Tên bản ghi đang lặp', kind: 'string', default: '', showIf: EACH, help: 'Bên trong vòng lặp dùng {{acc.Name}}, hoặc Lookup "Bản ghi hiện tại" acc.' },
-      { key: 'alias', label: 'Tên biến lặp', kind: 'string', default: 'loop', help: 'Dùng {{loop.index}} (từ 1), {{loop.index0}} (từ 0), {{loop.count}}. Khi lặp theo pool, count = số bản ghi của pool.' },
+      ...filterOptions({ showIf: EACH, valueHelp: 'Giá trị cố định, hoặc {{acc.Id}} để chỉ lấy bản ghi con của bản ghi đang lặp ở vòng ngoài. Tính một lần khi vòng lặp bắt đầu.' }),
+      {
+        key: 'order', label: 'Thứ tự', kind: 'select', default: 'pool', showIf: EACH,
+        choices: [
+          { value: 'pool', label: 'Theo thứ tự của pool' },
+          { value: 'shuffle', label: 'Xáo trộn (theo seed)' },
+        ],
+        help: 'Xáo trộn: mỗi lần chạy qua một thứ tự khác, cùng seed thì như nhau. Kết hợp với "Tối đa số bản ghi" để lấy N bản ghi ngẫu nhiên không trùng.',
+      },
+      { key: 'limit', label: 'Tối đa số bản ghi', kind: 'integer', default: 0, min: 0, max: LIMITS.maxCountPerNode, showIf: EACH, help: '0 = tất cả. Áp dụng sau khi lọc và xáo trộn.' },
+      { key: 'alias', label: 'Tên biến lặp', kind: 'string', default: 'loop', help: 'Dùng {{loop.index}} (từ 1), {{loop.index0}} (từ 0), {{loop.count}}; {{loop.value}} khi lặp theo danh sách. Khi lặp theo pool, count = số bản ghi được lặp.' },
     ],
   },
   {
@@ -282,7 +413,7 @@ export const NODE_TYPES = [
       { key: 'probability', label: 'Xác suất đi nhánh đúng (0–1)', kind: 'number', default: 0.5, min: 0, max: 1, step: 0.05, showIf: { key: 'kind', in: ['chance'] } },
       { key: 'left', label: 'Giá trị', kind: 'string', vars: 'path', default: 'loop.index', help: 'Bấm {x} để chọn biến, ví dụ acc.Industry hoặc loop.index.', showIf: { key: 'kind', in: ['compare'] } },
       { key: 'op', label: 'Phép so sánh', kind: 'select', default: 'eq', choices: CONDITION_OPS, showIf: { key: 'kind', in: ['compare'] } },
-      { key: 'right', label: 'So với', kind: 'string', default: '', showIf: { key: 'kind', in: ['compare'] } },
+      { key: 'right', label: 'So với', kind: 'string', vars: 'template', default: '', showIf: { key: 'kind', in: ['compare'] }, help: 'Giá trị cố định (100000, Banking), hoặc bấm {x} để so với biến, ví dụ {{opp.Amount}}.' },
     ],
   },
 ];
@@ -292,7 +423,7 @@ export const nodeTypeMap = new Map(NODE_TYPES.map((n) => [n.type, n]));
 /** Slot keys of a step type in reading order (for shared/workflow-tree.js). */
 export const slotKeys = (type) => nodeTypeMap.get(type)?.slots.map((s) => s.key) ?? [];
 
-/** NODE_TYPES without function-valued keys (minIterations), as served by /api/meta. */
+/** NODE_TYPES without function-valued keys (minIterations, maySkip), as served by /api/meta. */
 export function serializableNodeTypes() {
   return NODE_TYPES.map((t) => Object.fromEntries(Object.entries(t).filter(([, v]) => typeof v !== 'function')));
 }
