@@ -9,13 +9,21 @@ App không tự làm OAuth. Việc được chia làm hai phần:
   | Việc | Lệnh | Hàm |
   | --- | --- | --- |
   | Danh sách org | `sf org list --json` | `listOrgs()` |
-  | Access token, instance URL, API version, username, org Id (`id`, 0011) | `sf org display --target-org <alias> --json` | `getConnection()`; cache trong bộ nhớ 10 phút |
+  | Access token, instance URL, API version, username, org Id (`id`, 0011) | `sf org display --target-org <alias> --json` | `getConnection()`; cache trong bộ nhớ 10 phút (`refresh` đọc lại) |
 
 - **Mọi lời gọi API đi qua [jsforce](https://jsforce.github.io/)** (`server/sf/client.js`). Mỗi org có một `jsforce.Connection`,
   được tạo từ `accessToken`, `instanceUrl` và `version` mà CLI trả về.
 
 Khi Salesforce trả `INVALID_SESSION_ID` (token hết hạn), jsforce gọi `refreshFn`. Hàm này chạy lại `sf org display`
-(CLI tự làm mới token từ thông tin đăng nhập nó đang giữ), rồi jsforce gọi lại request đó. Lỗi từ Salesforce được trả về
+(CLI tự làm mới token từ thông tin đăng nhập nó đang giữ), rồi jsforce gọi lại request đó. Token mới thuộc org Id hoặc username
+khác kết nối đang dùng ⇒ bị từ chối (`Org "…" bây giờ là org khác …`), request không được gửi lại (sửa sau review 0011, S1).
+Kết nối jsforce được giữ theo **danh tính** (instance URL + username + org Id mà CLI trả), không theo alias: alias trỏ sang
+org khác (đăng nhập lại sau khi refresh sandbox) dùng kết nối mới.
+
+**Org thật là ai** (`client.whoami`, S1): org Id và username lấy từ dịch vụ identity của Salesforce qua **chính kết nối sẽ ghi**
+(jsforce `conn.identity()`), không chỉ tin CLI. Insert ghi danh tính này vào Lịch sử; khác điều CLI nói (hoặc không lấy được)
+⇒ lần insert kết thúc lỗi trước mọi lời gọi ghi: `Không xác định được org "dev" (…), nên chưa ghi gì vào org. Đăng nhập lại:
+sf org login web --alias dev rồi chạy lại.` (S5). Xóa đọc lại CLI (`refresh`) rồi hỏi identity trước khi kiểm tra org. Lỗi từ Salesforce được trả về
 UI với HTTP 502 và mã lỗi, ví dụ `Salesforce: NOT_FOUND: ...`.
 Nếu máy chưa cài `sf` thì `/api/orgs` trả 503 kèm thông báo; UI vẫn dùng được ở chế độ xem trước.
 
@@ -146,8 +154,13 @@ thật, `collectRefs` không coi là phụ thuộc, nên bản ghi con được 
   đường). Quá 30 phút ⇒ `stopped.reason: "bulkTimeout"` (job có thể vẫn chạy trong org; mã job nằm trong Lịch sử).
 - **Dừng** chờ job đang xử lý xong (số đếm và Id chính xác), hủy job còn đang tải lên (`Open`, chưa có gì được xử lý); bộ đệm
   chưa gửi tính vào `notSent`. **Dừng ngay** (`cancel` với `{ "force": true }`) hủy job đang xử lý (`Aborted`) rồi thử đọc kết
-  quả; đọc được ⇒ `bulkAborted.idsKnown: true`, không ⇒ `idsKnown: false`, số bản ghi đã xử lý nằm trong `bulkUnknown` và job
-  được đánh dấu `idsUnknown` trong Lịch sử. Đóng tab = Dừng.
+  quả; đọc được ⇒ `bulkAborted.idsKnown: true`, không ⇒ `idsKnown: false`, số bản ghi đã xử lý nằm trong `bulkUnknown`. Đóng
+  tab = Dừng.
+- **Không đọc được kết quả** (lỗi mạng, job hủy chưa có kết quả, job `Failed`): job giữ `idsCollected: false` trong Lịch sử
+  (không bao giờ bị coi là "mất Id" vĩnh viễn) và lần xóa sau đọc lại nó trước (S3). Đọc được `successfulResults` mà không đọc được
+  `failedResults` ⇒ Id thành công vẫn được ghi, phần còn lại vào `bulkUnknown` kèm cảnh báo. Mọi bản ghi của một job luôn nằm
+  đúng một trong `inserted`, `failed`, `notSent`, `bulkUnknown` (N7). `check()` lỗi tạm thời được thử lại 2 lần (1 s, 2 s; N2).
+  Job Salesforce mở phải đúng `operation`/`object` đã yêu cầu, không thì bị hủy trước khi tải dữ liệu (N3).
 - **Tiến độ:** `progress` (`insert`) có `bulk: { nodeId, sobject, jobId, job, jobs, processed, failed, records, state }`;
   `inserted` đã cộng `processed − failed` của job đang chạy (số tạm). Đang Dừng mà còn job: `{ "type": "progress", "phase":
   "stopping", "waitingBulk": { jobId, sobject, nodeId, processed, records } }`.
@@ -160,22 +173,32 @@ dữ liệu: server chỉ xóa Id chính nó đã ghi, không bao giờ nhận d
 - **Thư mục:** `SFDG_DATA_DIR` nếu có; không thì Linux `$XDG_DATA_HOME/sf-data-generator` (mặc định
   `~/.local/share/sf-data-generator`), macOS `~/Library/Application Support/sf-data-generator`, Windows
   `%APPDATA%\sf-data-generator`; Lịch sử ở `<thư mục>/history/` (quyền `0700`, file `0600`).
-- **File:** `<hid>.json` (thông tin lần chạy, ghi lại toàn bộ qua file tạm + rename), `<hid>.ids.csv` (`sobject,step,ref,id`,
-  chỉ nối thêm), `<hid>.deleted.csv` (`id,outcome`, `deleted` | `gone`). `hid` = `h<yyyyMMdd>T<HHmmss>Z-<6 hex>`; `hid` sai
-  định dạng ⇒ 404 (không path traversal).
-- **Khi nào ghi:** mục được tạo sau lượt chạy thử, ngay trước sự kiện `plan`; **tạo lỗi (kể cả Lịch sử đang tắt vì thư mục không
-  ghi được) ⇒ lần chạy kết thúc với `error`, `insert: null`, chưa ghi gì vào org**. Id của mỗi lời gọi Collections và mỗi job
+- **File:** `<hid>.json` (thông tin lần chạy, ghi lại toàn bộ qua file tạm + `fsync` + rename), `<hid>.ids.csv`
+  (`sobject,step,ref,id`, chỉ nối thêm, `fsync` sau mỗi lần nối), `<hid>.deleted.csv` (`id,outcome`, `deleted` | `gone`). `hid` =
+  `h<yyyyMMdd>T<HHmmss>Z-<6 hex>`; `hid` sai định dạng ⇒ 404 (không path traversal). File CSV được đọc bằng parser RFC 4180 thật
+  (ô trong ngoặc kép giữ nguyên xuống dòng) và **không bao giờ ghi ô có xuống dòng** (ghi như vậy bị từ chối ⇒ insert dừng với
+  `stopped.reason: "history"`); id bước chỉ gồm chữ, số, `_`, `-` (sửa sau review, B1).
+- **Một server mỗi thư mục** (N6): `<thư mục>/history/.lock` giữ pid; một tiến trình khác còn sống đang giữ ⇒ Lịch sử tắt với câu
+  `Một server sf-data-generator khác (pid …) đang dùng thư mục Lịch sử …`, nên insert / xóa / quên trả 503. Khóa của tiến trình đã
+  chết được lấy lại. Lúc khởi tạo, file tạm còn sót và file Id không có `.json` bị dọn; `.json` rỗng hoặc hỏng vẫn hiện trong danh
+  sách với `status: "corrupt"` (N5).
+- **Khi nào ghi:** mục được tạo sau lượt chạy thử, ngay trước sự kiện `plan`. **Lịch sử tắt ⇒ `/api/run` với org trả 503 trước
+  khi chạy** (`Không ghi được Lịch sử (…), nên chưa ghi gì vào org. Kiểm tra quyền ghi thư mục … hoặc đặt SFDG_DATA_DIR.`, cả chế
+  độ JSON; S7); tạo mục lỗi lúc chạy ⇒ lần chạy kết thúc với `error`, `insert: null`, chưa ghi gì vào org. Id của mỗi lời gọi Collections và mỗi job
   Bulk được nối vào file và **chờ ghi xong trước lời gọi ghi tiếp theo**; ghi lỗi ⇒ dừng (`stopped.reason: "history"`). Mã job
   Bulk được ghi trước khi tải CSV lên. Xem trước không bao giờ tạo mục.
 - **Không bao giờ lưu credential:** chỉ `alias`, `username`, `orgId`, `instanceUrl`, `kind` (`sandbox` | `scratch` |
   `production` | `unknown`, theo `sf org list`); không token, không header, không dòng Query.
 - **Trạng thái:** `running` | `done` | `cancelled` | `stopped` | `error` | `interrupted` (server tắt giữa lúc insert: lần dùng
   Lịch sử đầu tiên sau khi khởi động đổi `running` thành `interrupted` và đếm lại Id từ file).
-- **Giới hạn:** `LIMITS.historyMaxRuns` = 100 lần, `LIMITS.historyMaxBytes` = 256 MB; khi tạo mục mới, dọn mục cũ nhất đã xóa
-  hết / không có bản ghi trước, rồi mới tới mục cũ nhất còn bản ghi; không bao giờ dọn mục đang chạy.
+- **Giới hạn:** `LIMITS.historyMaxRuns` = 100 lần, `LIMITS.historyMaxBytes` = 256 MB; khi tạo mục mới, dọn **mọi** mục không còn
+  bản ghi trong org (đã xóa hết, không insert được gì) trước bất kỳ mục nào còn bản ghi (job Bulk chưa lấy Id cũng tính là còn),
+  cũ nhất trước trong mỗi nhóm; không bao giờ dọn mục đang chạy. Sắp phải dọn một mục còn bản ghi ⇒ sự kiện `plan` có
+  `warnings: [{ code: "historyPruned", historyId, message }]` (S4).
 - **API:** `GET /api/history` (`{ enabled, reason?, dir, maxRuns, runs }`), `GET /api/history/:hid` (bỏ `workflow`, thêm
-  `remaining`, `pendingBulkJobs`), `GET /api/history/:hid/ids.csv[?sobject=]` (`sobject,id,ref,step,status`), `POST
-  /api/history/:hid/forget` (409 khi đang chạy). Chi tiết ở [workflow-schema.md](workflow-schema.md#lịch-sử-insert-và-xóa-0011).
+  `remaining`, `pendingBulkJobs`), `GET /api/history/:hid/ids.csv[?sobject=]` (`sobject,id,ref,step,status`; ô bắt đầu bằng
+  `=` `+` `-` `@` được thêm `'` để bảng tính không chạy như công thức, N10), `POST /api/history/:hid/forget` (409 khi đang chạy,
+  đang xóa hoặc đang quên ở tab khác; N1). Chi tiết ở [workflow-schema.md](workflow-schema.md#lịch-sử-insert-và-xóa-0011).
 
 ## Xóa dữ liệu đã insert (0011)
 
@@ -183,11 +206,21 @@ dữ liệu: server chỉ xóa Id chính nó đã ghi, không bao giờ nhận d
 (không bao giờ `hardDelete`).
 
 - **Kiểm tra trước** (mọi kiểm tra chạy trước khi gửi header và trước lời gọi ghi đầu tiên; bị từ chối thì org không nhận request
-  ghi nào): mục có thật; không đang insert (409) hay đang xóa ở tab khác (409); body có `confirm: { username, count }` (400);
-  `confirm.username` = username lúc insert (409); còn gì để xóa (409); `confirm.count` = số Id còn phải xóa (409); org của alias
-  bây giờ (sf CLI) cùng `orgId` (thiếu `orgId` thì cùng instance URL) **và cùng username** với lúc insert (409; không lấy được
-  org ⇒ 502 kèm `sf org login web --alias …`); org production hoặc không biết loại ⇒ `confirm.typedOrg` phải là alias hoặc
-  username (không phân biệt hoa thường, bỏ khoảng trắng hai đầu) (400).
+  ghi nào): Lịch sử ghi được (503); mục có thật; không đang insert, xóa hay quên ở tab khác (409); body có `confirm: { username,
+  count }` (400); `confirm.username` = username lúc insert (409); org của alias bây giờ — identity của kết nối sau khi đọc lại
+  CLI — cùng `orgId` (thiếu thì cùng instance URL) **và cùng username** với lúc insert, và CLI cùng ý với identity (409; không
+  lấy được org ⇒ 502 kèm `sf org login web --alias …`); org production hoặc không biết loại ⇒ `confirm.typedOrg` phải là alias
+  hoặc username (không phân biệt hoa thường, bỏ khoảng trắng hai đầu) (400).
+- **`confirm.count` giới hạn những gì bị xóa** (S2): job Bulk insert chưa lấy Id (lần chạy `interrupted`, kết quả chưa đọc được)
+  được đọc **trước** (chỉ đọc: `check` + `successfulResults`, Id chưa có mới được nối vào file và cộng vào `inserted` của mục),
+  rồi mới so số: không còn gì ⇒ 409 `Lần insert này không còn bản ghi nào để xóa.` (kèm tên job còn đang chạy nếu có); khác số
+  ⇒ 409 `Số bản ghi cần xóa đã đổi thành N vì vừa lấy được Id từ job Bulk. Xác nhận lại.` (body có `count: N`, `collected`)
+  hoặc `Số bản ghi còn phải xóa đã đổi (…)` (`count`), và không xóa gì. `GET /api/history/:hid` có `pendingBulkJobs` để hộp xác
+  nhận nói trước.
+- **Chỉ Id của chính các bước của lần insert** (B1): dòng của file Id có bước không thuộc mục, hay sObject khác sObject của bước,
+  bị bỏ (`remaining().rejected`). Trước khi gửi một bước, mọi Id của bước phải cùng **tiền tố 3 ký tự** và đúng `keyPrefix` của
+  sObject theo describe (đọc qua client); sai ⇒ không gửi Id nào của bước đó, `result.skipped: [{ nodeId, sobject, count,
+  reason }]`.
 - **Thứ tự:** các bước theo thứ tự ngược lúc insert (con trước cha), trong bước Id theo thứ tự ngược.
 - **Cách gửi:** bước còn < 10 000 Id (hoặc `bulk: "off"`): `client.destroy` 200 Id mỗi lời gọi (`DELETE /composite/sobjects`).
   Bước lớn hơn: `destroy` tới khi có một lời gọi thành công, rồi job Bulk `operation: 'delete'` (CSV một cột `Id`) 10 000 Id mỗi
@@ -195,9 +228,11 @@ dữ liệu: server chỉ xóa Id chính nó đã ghi, không bao giờ nhận d
 - **Kết quả từng Id:** `deleted`; `gone` khi `ENTITY_IS_DELETED`, `INVALID_CROSS_REFERENCE_KEY`, `NOT_FOUND` (đã xóa bằng tay,
   đã trong Thùng rác, bị xóa dây chuyền) — không phải lỗi; lỗi khác gom nhóm như insert. Mỗi lô kết quả nối vào
   `<hid>.deleted.csv` và chờ ghi xong. Id lỗi `DELETE_FAILED` được thử lại **một** lần sau cùng. 3 lời gọi xóa đầu của một sObject
-  đều lỗi 100 % ⇒ dừng (`stopped.reason: "allFailing"`, `stopped.text` là câu hướng dẫn kiểm tra quyền Delete).
-- Job Bulk insert chưa lấy kết quả (lần chạy `interrupted`): đọc `successfulResults` (chỉ đọc) và nối Id vào file trước khi xóa
-  (`result.collected`).
+  đều lỗi 100 % ⇒ dừng (`stopped.reason: "allFailing"`, `stopped.text`: kiểm tra quyền Delete; với `DELETE_FAILED` thì nói còn
+  bản ghi liên quan trỏ tới chúng, N8).
+- Job Bulk chưa trả Id vì còn đang chạy: `result.pendingBulkJobs: [{ jobId, sobject, state, reason }]` (N4); bản ghi của nó không
+  nằm trong lần xóa này. Mục biến mất giữa lúc xóa (bị xóa khỏi thư mục) ⇒ dừng sau lời gọi đang gửi, 404 (hoặc sự kiện `error`)
+  `Lần insert này không còn trong Lịch sử (…), nên đã dừng xóa. …` và không tạo lại file (N11).
 - **Dừng / Dừng ngay** như insert; Id chưa gửi vẫn "còn trong org" và xóa được bằng lần xóa sau ("Xóa phần còn lại…").
 
 ## An toàn

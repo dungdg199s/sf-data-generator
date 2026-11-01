@@ -731,6 +731,24 @@ Hai test cũ được sửa vì hành vi mới đúng thiết kế: `plan` có t
 Contact (server.test.js) gửi `target.bulk: "off"` vì bước 40 000 bản ghi lá nay được lập kế hoạch Bulk mà client giả của test
 không có `bulkJob`.
 
+### Sửa sau review phía server (2026-11-01)
+
+Reviewer tìm 1 lỗi chặn (B1) và 7 lỗi nên sửa (S1–S7) cùng các nit; mỗi nhóm một commit, `npm test` xanh (464 → 488),
+`test/stream.test.js` không sửa, smoke `SMOKE OK`. Mọi trường hợp từ chối vẫn có org nhận 0 request ghi.
+
+| # | Commit | Sửa | Test |
+| --- | --- | --- | --- |
+| B1 | `8f09279` | Id bước có `\n` từng chèn được dòng Id lạ vào `ids.csv` (đọc theo dòng). Nay: (a) đọc CSV Lịch sử bằng parser RFC 4180 (`parseCsv`), không bao giờ ghi ô có xuống dòng; (b) `schema.js` chỉ nhận id bước `^[A-Za-z0-9_-]{1,64}$` (id của UI, mẫu, file v1 đều khớp); (c) `remaining()` bỏ dòng có bước không thuộc mục hoặc sObject khác bước (`rejected`); (d) `deleteRun` đòi mọi Id của bước cùng tiền tố 3 ký tự = `keyPrefix` của sObject (describe), sai thì không gửi gì của bước (`skipped`) | `org-writes.test.js`: workflow có id độc bị 422; file cũ có ô nhiều dòng chỉ cho Id của mình, Id lạ không bị xóa; `ids.csv` hỏng; tiền tố sai ⇒ 0 request ghi; `history.test.js`, `workflow.test.js` |
+| S1, S5 | `d42d0a5` | `client.whoami` (jsforce `conn.identity()`): org Id + username của **kết nối ghi**, dùng cho Lịch sử lúc insert và cho kiểm tra xóa (đọc lại CLI); kết nối giữ theo instance URL + username + org Id; `refreshFn` từ chối token của org/user khác. Không xác định được org ⇒ insert lỗi trước mọi lời gọi ghi | `org-writes.test.js` (alias trỏ sang org khác, CLI chưa biết ⇒ 409, 0 ghi; Lịch sử ghi identity; S5 ⇒ `error`, 0 ghi), `jsforce.test.js` (refresh sang org khác bị từ chối, không gửi lại), `sf.test.js` |
+| S2, S3, N4, N7, N11 | `51eeb8f` | Job Bulk chưa lấy Id được đọc **trước** khi so `confirm.count`; khác ⇒ 409 `Số bản ghi cần xóa đã đổi thành N vì vừa lấy được Id từ job Bulk. Xác nhận lại.` (body `count`), không xóa gì; `count: 0` với job đang chờ không còn được nhận. Không đọc được kết quả ⇒ job giữ `idsCollected: false` (bỏ `idsUnknown`), đọc được `successfulResults` thì luôn ghi Id. Kế toán sau hủy cộng đúng tổng. Job còn chạy báo trong kết quả xóa; mục biến mất giữa lúc xóa ⇒ 404 có câu | `org-writes.test.js` (test cũ "count 0" đã sửa thành 409 rồi xác nhận 3), `sf.test.js` |
+| S4 | `e32863d` | Đọc thêm Id nâng `inserted` của mục; dọn mọi mục không còn bản ghi trước bất kỳ mục còn bản ghi (job chưa lấy Id tính là còn); `plan.warnings` (`historyPruned`) khi sắp dọn mục còn bản ghi | `history.test.js`, `run.test.js` |
+| S6 | `85f3621` | Bind mọi địa chỉ: insert, xóa, quên, Dừng ngay chỉ nhận Host là IP, `localhost` hoặc tên máy (403) | `server.test.js` |
+| S7 | `acb876f` | Lịch sử tắt ⇒ `/api/run` với org trả 503 trước khi chuẩn bị lần chạy (cả JSON); sửa câu trong thiết kế (warn-box, nút Insert khóa) | `org-writes.test.js` |
+| Nit | `1229552` | N1 quên đánh dấu mục đang dùng; N2 thử lại `check()`; N3 kiểm `operation`/`object` của job mở, job gắn theo Id không hủy được; N5 `fsync`, dọn file tạm / file Id mồ côi, `.json` rỗng hiện `corrupt`; N6 khóa pid một server mỗi thư mục; N8 câu `DELETE_FAILED`; N9 giải mã URL; N10 ô công thức trong `ids.csv`; N12 bỏ getter kết nối thô + quét | `history.test.js`, `sf.test.js`, `server.test.js`, `org-writes.test.js`, `safety.test.js`, `jsforce.test.js` |
+
+Ghi chú: khác thiết kế số 1 ở trên nay là quyết định của review (S7); số 6 (`idsUnknown`) đã bỏ: job không đọc được kết quả
+luôn thu lại được. Vẫn chưa sửa `CLAUDE.md` / `.claude/agents/implementer.md` (người điều phối làm).
+
 Chưa làm: UI bước 9–10 (hộp xác nhận, tiến độ Bulk, Dừng ngay, hộp Lịch sử, hộp xóa, smoke 16), tài liệu UI
 (`ui-design-system.md`), `CLAUDE.md`, `.claude/agents/implementer.md`, `.claude/skills/smoke-test/SKILL.md`; số đo Bulk thật
 (chưa chạy trên org thật nào).
