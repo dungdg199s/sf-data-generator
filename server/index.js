@@ -98,18 +98,25 @@ export function createApp({
   const limitsCache = new Map(); // org → { at, value }
 
   /**
-   * Who an org target is right now (sf CLI): identity kept in history and checked before a delete.
-   * Never the token. kind: 'unknown' when `sf org list` fails or does not list it.
+   * Who an org target is right now: org Id and username from Salesforce's identity service through
+   * the very connection that writes (`client.whoami`, review of 0011 S1), kind from `sf org list`.
+   * Kept in history and checked before a delete. Never the token. Throws when Salesforce does not
+   * say, or says something else than the sf CLI. kind: 'unknown' when `sf org list` fails or does
+   * not list it.
    */
-  async function orgInfo(target) {
-    const [conn, orgs] = await Promise.all([cli.getConnection(target), Promise.resolve().then(() => cli.listOrgs()).catch(() => null)]);
-    const listed = orgs?.find((o) => o.username === conn.username || o.alias === target);
+  async function orgInfo(target, { refresh = false } = {}) {
+    const [who, orgs] = await Promise.all([sfClient.whoami(target, { refresh }), Promise.resolve().then(() => cli.listOrgs()).catch(() => null)]);
+    if (!who?.orgId || !who?.username) throw new Error('Salesforce không trả org Id và username của kết nối.');
+    if ((who.cli?.orgId && who.cli.orgId !== who.orgId) || (who.cli?.username && who.cli.username !== who.username)) {
+      throw Object.assign(new Error(`sf CLI ghi org ${who.cli.orgId ?? '?'} (${who.cli.username ?? '?'}) nhưng token thuộc org ${who.orgId} (${who.username}).`), { code: 'ORG_MISMATCH' });
+    }
+    const listed = orgs?.find((o) => o.username === who.username || o.alias === target);
     return {
-      alias: listed?.alias ?? (target !== conn.username ? target : null),
-      username: conn.username ?? null,
-      orgId: conn.orgId ?? null,
-      instanceUrl: conn.instanceUrl ?? null,
-      kind: orgs ? orgKind(orgs, { alias: target, username: conn.username }) : 'unknown',
+      alias: listed?.alias ?? (target !== who.username ? target : null),
+      username: who.username,
+      orgId: who.orgId,
+      instanceUrl: who.instanceUrl ?? null,
+      kind: orgs ? orgKind(orgs, { alias: target, username: who.username }) : 'unknown',
     };
   }
 
@@ -140,8 +147,9 @@ export function createApp({
     const name = was.alias ?? was.username;
     let now;
     try {
-      now = await orgInfo(target);
+      now = await orgInfo(target, { refresh: true });
     } catch (e) {
+      if (e.code === 'ORG_MISMATCH') throw httpError(409, `${e.message} Không xóa gì. Đăng nhập lại đúng org bằng sf org login web --alias ${name} rồi thử lại.`);
       throw httpError(502, `${e.message} Đăng nhập lại: sf org login web --alias ${name}`);
     }
     // The alias must still be the very org (and user) of the insert: a re-login into a refreshed

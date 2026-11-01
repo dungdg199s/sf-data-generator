@@ -8,6 +8,8 @@ import path from 'node:path';
 // Insert history (design 0011) of every app in this file goes to a throwaway directory, never ~.
 process.env.SFDG_DATA_DIR = mkdtempSync(path.join(os.tmpdir(), 'sfdg-server-test-'));
 const { createApp } = await import('../server/index.js');
+/** Org identity of the fake clients (client.whoami, review of 0011 S1). */
+const WHOAMI = async () => ({ orgId: '00D000000000001AAA', username: 'a@x.com', instanceUrl: 'https://x' });
 import { wf, record, loop, query, pick } from './helpers.js';
 import { V1_SAMPLES } from './fixtures/v1-samples.js';
 import { W, rec, E } from './fixtures/v1-cases.js';
@@ -22,6 +24,7 @@ const queried = [];
 before(async () => {
   const cli = { listOrgs: async () => [{ alias: 'dev', username: 'a@x.com' }], getConnection: async () => ({}) };
   const client = {
+    whoami: async () => ({ orgId: '00D000000000001AAA', username: 'a@x.com', instanceUrl: 'https://x' }),
     create: async (_t, _sobject, recs) => {
       inserted.push(...recs);
       return recs.map((_, i) => ({ success: true, id: `001${i}` }));
@@ -360,6 +363,7 @@ test('POST /api/runs/:id/cancel stops an insert after the call in flight', async
   let calls = 0;
   const held = new Promise((r) => { release = r; });
   const client = {
+    whoami: WHOAMI,
     identity: async (org) => org,
     create: async (_t, _s, recs) => {
       if (++calls === 2) await held;
@@ -458,6 +462,7 @@ test('a client that leaves while Query steps are read gets no run (nothing inser
   let created = 0;
   let queried2 = 0;
   const client = {
+    whoami: WHOAMI,
     identity: async (org) => org,
     query: async () => {
       queried2++;
@@ -490,7 +495,7 @@ import { requestGuard } from '../server/index.js';
 
 /** A throwaway app on its own port with a given client; → { url, close }. */
 async function appWith(client, opts = {}) {
-  const app = http.createServer(createApp({ cli: { listOrgs: async () => [{ alias: 'dev', username: 'a@x.com' }], getConnection: async () => ({}) }, client, ...opts }));
+  const app = http.createServer(createApp({ cli: { listOrgs: async () => [{ alias: 'dev', username: 'a@x.com' }], getConnection: async () => ({}) }, client: { whoami: WHOAMI, ...client }, ...opts }));
   await new Promise((r) => app.listen(0, '127.0.0.1', r));
   return { url: `http://127.0.0.1:${app.address().port}`, close: () => app.close() };
 }

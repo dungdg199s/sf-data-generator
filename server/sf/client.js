@@ -13,32 +13,40 @@ export const BULK_OPERATIONS = Object.freeze(['insert', 'delete']);
 const MAX_COLLECTION = 200;
 
 export function createSfClient({ cli, createConnection = (options) => new Connection(options) }) {
-  const connections = new Map(); // target -> Promise<Connection>
+  // Connections are keyed by who the CLI says the target is (instance URL + username + org Id), so
+  // an alias re-pointed at another org (re-login after a sandbox refresh) gets a new connection
+  // instead of writing with the old one (review of 0011, S1).
+  const connections = new Map(); // identity key -> Promise<Connection>
+  const keyOf = (info) => `${info.instanceUrl}|${info.username ?? ''}|${info.orgId ?? ''}`;
 
-  function connectionFor(target) {
-    if (!connections.has(target)) {
-      const pending = cli.getConnection(target).then((info) =>
-        createConnection({
-          instanceUrl: info.instanceUrl,
-          accessToken: info.accessToken,
-          version: info.apiVersion,
-          refreshFn: (_conn, callback) => {
-            cli.getConnection(target, { refresh: true }).then(
-              (fresh) => callback(null, fresh.accessToken),
-              (err) => callback(err),
-            );
-          },
-        }),
-      );
-      // Don't cache a failed lookup (e.g. org not logged in yet) — the next call should retry.
-      pending.catch(() => connections.delete(target));
-      connections.set(target, pending);
+  async function connectionFor(target, { refresh = false } = {}) {
+    const info = refresh ? await cli.getConnection(target, { refresh: true }) : await cli.getConnection(target);
+    const key = keyOf(info);
+    if (!connections.has(key)) {
+      const pending = Promise.resolve().then(() => createConnection({
+        instanceUrl: info.instanceUrl,
+        accessToken: info.accessToken,
+        version: info.apiVersion,
+        refreshFn: (_conn, callback) => {
+          cli.getConnection(target, { refresh: true }).then(
+            (fresh) => {
+              // A fresh token for another org or user must never be used by this connection.
+              if ((info.orgId && fresh.orgId && fresh.orgId !== info.orgId) || (info.username && fresh.username && fresh.username !== info.username)) {
+                callback(Object.assign(new Error(`Org "${target}" bây giờ là org khác (${fresh.orgId ?? '?'}, ${fresh.username ?? '?'}) so với kết nối đang dùng (${info.orgId ?? '?'}, ${info.username ?? '?'}). Không gửi tiếp. Chạy lại thao tác này.`), { errorCode: 'ORG_CHANGED' }));
+              } else callback(null, fresh.accessToken);
+            },
+            (err) => callback(err),
+          );
+        },
+      }));
+      pending.catch(() => connections.delete(key));
+      connections.set(key, pending);
     }
-    return connections.get(target);
+    return { conn: await connections.get(key), info };
   }
 
   async function call(target, fn) {
-    const conn = await connectionFor(target);
+    const { conn } = await connectionFor(target);
     try {
       return await fn(conn);
     } catch (e) {
@@ -48,7 +56,28 @@ export function createSfClient({ cli, createConnection = (options) => new Connec
   }
 
   return {
-    connection: connectionFor,
+    /**
+     * Who the org connection really is (review of 0011, S1): Salesforce's identity service through
+     * the jsforce connection the writes use (`conn.identity()`), not what the CLI remembers.
+     * `refresh`: read the CLI again first (a re-login since the last call is seen).
+     * → { orgId, username, userId, instanceUrl, cli: { orgId, username } }
+     */
+    whoami: async (target, { refresh = false } = {}) => {
+      const { conn, info } = await connectionFor(target, { refresh });
+      let id;
+      try {
+        id = await conn.identity();
+      } catch (e) {
+        throw Object.assign(new Error(`Salesforce: ${e.errorCode ? `${e.errorCode}: ` : ''}${e.message}`), { status: 502, cause: e });
+      }
+      return {
+        orgId: id?.organization_id ?? null,
+        username: id?.username ?? null,
+        userId: id?.user_id ?? null,
+        instanceUrl: info.instanceUrl ?? null,
+        cli: { orgId: info.orgId ?? null, username: info.username ?? null },
+      };
+    },
     describeGlobal: (target) => call(target, (conn) => conn.describeGlobal()),
     describe: (target, sobject) => call(target, (conn) => conn.describe(sobject)),
     /**

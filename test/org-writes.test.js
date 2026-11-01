@@ -210,11 +210,15 @@ test('every refused delete answers the right status and sentence, and the org re
 
     // The alias now points at another org (refreshed sandbox, re-login).
     s.cli.orgId = '00D000000000002BBB';
+    s.fake.identity.orgId = '00D000000000002BBB';
     await expectRefused({ confirm: good }, 409, 'Org "dev" bây giờ là org khác (00D000000000002BBB, me@example.com) so với lúc insert (00D000000000001AAA, me@example.com). Không xóa gì. Đăng nhập lại đúng org bằng sf org login web --alias dev rồi thử lại.');
     s.cli.orgId = '00D000000000001AAA';
+    s.fake.identity.orgId = '00D000000000001AAA';
     s.cli.username = 'me2@example.com';
+    s.fake.identity.username = 'me2@example.com';
     await expectRefused({ confirm: good }, 409, /^Org "dev" bây giờ là org khác/);
     s.cli.username = 'me@example.com';
+    s.fake.identity.username = 'me@example.com';
 
     // The org is not logged in any more.
     const getConnection = s.cli.getConnection;
@@ -477,6 +481,57 @@ test('B1: Ids whose key prefix is not the step sObject\'s (describe) are not sen
     assert.equal(out.skipped.length, 1);
     assert.match(out.skipped[0].reason, /^Không xóa 2 bản ghi Contact của bước "c": Id trong Lịch sử không cùng tiền tố 003 của Contact/);
     assert.deepEqual(s.fake.alive().sort(), [foreign, ours].sort());
+  } finally {
+    await s.close();
+  }
+});
+
+// ---------- review of 0011, S1 / S5: identity from the connection that writes ----------
+
+test('S1: the token now belongs to another org although the sf CLI still names the old one ⇒ delete refused, 0 writes', async () => {
+  const s = await stack();
+  try {
+    const hid = await inserted(s);
+    const writes = s.fake.writes().length;
+    s.fake.identity.orgId = '00D000000000009ZZZ'; // the alias was re-pointed; the CLI cache did not notice
+    const r = await s.post(`/api/history/${hid}/delete`, { confirm: await confirmOf(s, hid) });
+    assert.equal(r.status, 409);
+    assert.match((await r.json()).error, /^sf CLI ghi org 00D000000000001AAA \(me@example.com\) nhưng token thuộc org 00D000000000009ZZZ \(me@example.com\)\. Không xóa gì\./);
+    assert.equal(s.fake.writes().length, writes);
+    // The re-login is complete (CLI and token agree on the new org): still another org than the insert's.
+    s.cli.orgId = '00D000000000009ZZZ';
+    const r2 = await s.post(`/api/history/${hid}/delete`, { confirm: await confirmOf(s, hid) });
+    assert.equal(r2.status, 409);
+    assert.match((await r2.json()).error, /^Org "dev" bây giờ là org khác \(00D000000000009ZZZ/);
+    assert.equal(s.fake.writes().length, writes);
+  } finally {
+    await s.close();
+  }
+});
+
+test('S1: history keeps the org Id and username Salesforce reports for the writing connection', async () => {
+  const s = await stack();
+  try {
+    const hid = await inserted(s);
+    const one = await (await s.get(`/api/history/${hid}`)).json();
+    assert.deepEqual(one.org, { alias: 'dev', username: 'me@example.com', orgId: '00D000000000001AAA', instanceUrl: s.fake.url, kind: 'sandbox' });
+    assert.ok(s.fake.requests.some((r) => r.path.startsWith('/id/00D000000000001AAA/')), 'identity service asked');
+  } finally {
+    await s.close();
+  }
+});
+
+test('S5: an org whose identity cannot be read ⇒ the insert ends with an error before any write', async () => {
+  const s = await stack();
+  try {
+    s.cli.orgId = '00D000000000007XXX'; // CLI and token disagree
+    const { events } = await s.insert(accCon(2, 2));
+    const last = events.at(-1);
+    assert.equal(last.type, 'error');
+    assert.equal(last.insert, null);
+    assert.match(last.error, /^Không xác định được org "dev" \(sf CLI ghi org 00D000000000007XXX .*\), nên chưa ghi gì vào org\. Đăng nhập lại: sf org login web --alias dev rồi chạy lại\.$/);
+    assert.equal(s.fake.writes().length, 0);
+    assert.deepEqual((await (await s.get('/api/history')).json()).runs, []);
   } finally {
     await s.close();
   }

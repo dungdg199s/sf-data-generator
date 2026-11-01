@@ -246,3 +246,20 @@ test('real jsforce: Bulk inserter (Account 300 + Contact 12 000) against the fak
     await fake.close();
   }
 });
+
+test('real jsforce: a refreshed token of another org is refused; the call is not retried (review of 0011, S1)', async () => {
+  const fake = await startFakeSalesforce({ expireOnce: new Set(['POST /composite/sobjects']) });
+  try {
+    const cli = fakeCli(fake);
+    const getConnection = cli.getConnection.bind(cli);
+    cli.getConnection = async (t, o = {}) => ({ ...(await getConnection(t, o)), ...(o.refresh ? { orgId: '00D000000000002BBB' } : {}) });
+    const client = createSfClient({ cli });
+    await assert.rejects(client.create('dev', 'Contact', [{ LastName: 'A' }]), /bây giờ là org khác/);
+    assert.equal(fake.requests.filter((r) => r.method === 'POST').length, 1, 'only the request refused with 401');
+    assert.equal(fake.records.size, 0);
+    const who = await createSfClient({ cli: fakeCli(fake) }).whoami('dev');
+    assert.deepEqual([who.orgId, who.username], ['00D000000000001AAA', 'me@example.com']);
+  } finally {
+    await fake.close();
+  }
+});

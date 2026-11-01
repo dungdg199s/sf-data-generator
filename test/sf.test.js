@@ -187,7 +187,26 @@ test('sf client builds one jsforce connection per org from the sf CLI token', as
   // refreshFn (called by jsforce on INVALID_SESSION_ID) asks the CLI for a fresh token.
   const token = await new Promise((resolve, reject) => made[0].options.refreshFn(made[0], (err, t) => (err ? reject(err) : resolve(t))));
   assert.equal(token, 'fresh');
-  assert.deepEqual(lookups, [['dev', false], ['dev', true]]);
+  // Review of 0011 (S1): every call asks the CLI (cached there) who the target is, so a re-pointed
+  // alias gets its own connection; the connection itself is still made once.
+  assert.deepEqual(lookups, [['dev', false], ['dev', false], ['dev', true]]);
+});
+
+test('sf client: a re-pointed alias gets a new connection; refreshFn refuses a token of another org or user (S1)', async () => {
+  let who = { orgId: '00DA', username: 'me@x.com' };
+  const cli = { getConnection: async (_t, { refresh = false } = {}) => ({ accessToken: refresh ? 'fresh' : 'tok', instanceUrl: 'https://x.my.salesforce.com', apiVersion: '62.0', ...who }) };
+  const { made, createConnection } = fakeJsforce();
+  const client = createSfClient({ cli, createConnection });
+  await client.create('dev', 'Contact', [{ LastName: 'A' }]);
+  who = { orgId: '00DB', username: 'me@x.com' };
+  const refused = await new Promise((resolve) => made[0].options.refreshFn(made[0], (err) => resolve(err)));
+  assert.match(refused.message, /^Org "dev" bây giờ là org khác \(00DB, me@x.com\)/);
+  await client.create('dev', 'Contact', [{ LastName: 'B' }]);
+  assert.equal(made.length, 2, 'the new org gets its own connection');
+  assert.equal(made[0].calls.length, 1);
+  assert.equal(made[1].calls.length, 1);
+  who = { orgId: '00DB', username: 'other@x.com' };
+  assert.match((await new Promise((resolve) => made[1].options.refreshFn(made[1], (err) => resolve(err)))).message, /bây giờ là org khác/);
 });
 
 test('sf client reports Salesforce errors as 502 with the error code', async () => {

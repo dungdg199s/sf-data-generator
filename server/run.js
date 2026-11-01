@@ -164,12 +164,23 @@ export async function executeRun({
 
   // ---------- pass 2: insert ----------
   const plan = planInsert({ steps: [...stepsSeen.values()], referenced: run.referencedAliases, bulk, limits: LIMITS });
+  // Who the org is, from the connection that writes (review of 0011, S5): unknown ⇒ no write.
+  let orgIdentity = null;
+  if (org) {
+    try {
+      orgIdentity = await org;
+    } catch (e) {
+      const ev = { type: 'error', error: `Không xác định được org "${target}" (${e.message}), nên chưa ghi gì vào org. Đăng nhập lại: sf org login web --alias ${target} rồi chạy lại.`, insert: null };
+      emit(ev);
+      return ev;
+    }
+  }
   // History entry before the first write; no entry ⇒ nothing is written (design 0011 §5).
   let hid = null;
   let releaseHistory = () => {};
   if (history) {
     try {
-      hid = await history.create({ org: await Promise.resolve(org).catch(() => ({ alias: target })), workflow, seed: run.seed, now: run.now, bulk, steps: plan.steps, total });
+      hid = await history.create({ org: orgIdentity ?? { alias: target }, workflow, seed: run.seed, now: run.now, bulk, steps: plan.steps, total });
       releaseHistory = history.markActive(hid, 'insert');
     } catch (e) {
       const ev = { type: 'error', error: `Không ghi được Lịch sử (${e.message}), nên chưa ghi gì vào org. Kiểm tra quyền ghi thư mục ${history.dir} hoặc đặt SFDG_DATA_DIR.`, insert: null };
