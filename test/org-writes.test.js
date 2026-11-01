@@ -26,12 +26,12 @@ const accCon = (n, per) => wf([loop('l', { count: n }, [
   loop('m', { count: per }, [record('c', 'Contact', 'con', [{ name: 'LastName', type: 'text', options: { mode: 'lastName' } }, { name: 'AccountId', type: 'lookup', options: { ref: 'acc' } }])]),
 ])], { name: 'Account + Contact' });
 
-export async function stack({ fake: fakeOpts = {}, cli: cliOpts = {} } = {}) {
+export async function stack({ fake: fakeOpts = {}, cli: cliOpts = {}, historyOpts = {} } = {}) {
   const fake = await startFakeSalesforce(fakeOpts);
   const cli = fakeCli(fake, cliOpts);
   const dir = await mkdtemp(path.join(os.tmpdir(), 'sfdg-orgwrites-'));
   dirs.push(dir);
-  const history = createHistory({ dir });
+  const history = createHistory({ dir, ...historyOpts });
   const app = http.createServer(createApp({
     cli, history,
     runOptions: { progressIntervalMs: 0, insertOptions: { bulkOptions: { sleep: tick } } },
@@ -120,6 +120,19 @@ test('a preview creates no history entry; forget removes the entry files; unknow
       assert.equal((await s.get(`/api/history/${bad}/ids.csv`)).status, 404);
       assert.equal((await s.post(`/api/history/${bad}/forget`, {})).status, 404);
     }
+  } finally {
+    await s.close();
+  }
+});
+
+test('GET /api/history names in `prune` the entries the next insert would drop while they still have records in the org', async () => {
+  const s = await stack({ historyOpts: { maxRuns: 1 } });
+  try {
+    assert.deepEqual((await (await s.get('/api/history')).json()).prune, []);
+    const { events } = await s.insert(accCon(2, 2));
+    const hid = events.at(-1).result.insert.historyId;
+    const { prune } = await (await s.get('/api/history')).json();
+    assert.deepEqual(prune.map((e) => [e.id, e.remaining, e.workflowName, e.org.alias]), [[hid, 6, 'Account + Contact', 'dev']]);
   } finally {
     await s.close();
   }

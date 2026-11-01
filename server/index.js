@@ -385,7 +385,12 @@ export function createApp({
       /^\/api\/history$/,
       async () => {
         const st = await history.status();
-        return { enabled: st.enabled, ...(st.reason ? { reason: st.reason } : {}), dir: st.dir, maxRuns: st.maxRuns, runs: st.enabled ? await history.list() : [] };
+        return {
+          enabled: st.enabled, ...(st.reason ? { reason: st.reason } : {}), dir: st.dir, maxRuns: st.maxRuns, runs: st.enabled ? await history.list() : [],
+          // Entries the next insert would drop although they still have records in an org (S4): the
+          // insert confirmation warns before the user confirms (the `plan` event repeats it).
+          prune: st.enabled ? await history.prunePreview() : [],
+        };
       },
     ],
     [
