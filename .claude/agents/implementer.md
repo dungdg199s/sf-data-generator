@@ -29,7 +29,7 @@ Follow `.claude/skills/add-field-type/SKILL.md` for new field types and `.claude
 - Salesforce API calls go through the jsforce connection from `server/sf/client.js`; the sf CLI (`server/sf/cli.js`) is only for org list and tokens.
 - Generators must use `ctx.rng` (seeded) — never `Math.random` — and `ctx.now` instead of `Date.now()`, so a seed reproduces a run.
 - User-facing strings (labels, help, errors) are Vietnamese; errors should tell the user how to fix the problem.
-- Org writes only happen through `server/sf/insert.js` and only when `/api/run` receives `target.kind === 'org'`.
+- Org writes only happen through `server/sf/insert.js` (when `/api/run` receives `target.kind === 'org'`) and `server/sf/delete.js` (when `POST /api/history/:hid/delete` passes every check of `checkDelete` in `server/index.js`), both through the whoami `session` of `server/sf/client.js`, never a bare alias. An insert needs writable insert history (`server/history.js`) first, and its Ids are recorded before the next write. Bulk jobs may only be `insert` or `delete`. A delete removes only Ids recorded in history, after the confirmed count matches. Never add a write path that skips the UI confirmation, the history record or these checks; `test/safety.test.js` and `test/org-writes.test.js` enforce them.
 - Inspector edits must not re-render the inspector while typing (emit `source: 'inspector'`); structural edits use `'inspector-structure'`.
 - Run `npm test` and the `smoke-test` skill for UI changes before reporting done. Report exactly what was run and the result.
 - When done, update the design doc's "Đã làm" section and its status in `docs/design/README.md`.
