@@ -744,6 +744,78 @@ test đếm `progress` của xem trước trong `run.test.js` dùng đồng hồ
 lần nhường theo thời gian). Smoke: luồng 16 mới; kiểm tra menu ⋯ ở 800 px nay là `Chạy, Mẫu`. Smoke chạy 3 lần: `SMOKE OK`
 (8,1–9,3 giây).
 
+## Sửa sau review
+
+Mỗi mục có test hỏng nếu bỏ phần sửa (đã kiểm bằng cách chạy test mới trên mã cũ); test dùng Salesforce giả và `SFDG_DATA_DIR`
+tạm, không gọi org thật.
+
+**Chặn (an toàn org)**
+
+- **B1. Dừng / đóng tab trong lúc kiểm tra xóa.** Route xóa nghe `close` **trước** `await` đầu tiên (như `onEarlyClose` của
+  `/api/run`); sau các kiểm tra, client đã rời thì trả lại trạng thái cũ của mục, nhả khóa và không gửi gì. Test
+  (`jsforce.test.js`): Dừng trong lúc `sf org display` chậm ⇒ 0 request ghi, mục vẫn `none` / còn 9.
+- **B2. Org của Lịch sử phải là org nhận bản ghi.** `client.js` giữ `{ conn, info }` cho mỗi alias; `refreshOrg(target)` đọc lại
+  `sf org display` và dựng lại Connection **từ chính lần đọc đó**, `orgOf(target)` trả định danh (không token). Mỗi insert vào
+  org (trước cả lần đọc Query) và mỗi lần xóa bắt đầu bằng `refreshOrg`; mục Lịch sử và `checkDelete` dùng kết quả của nó.
+  `refreshFn` từ chối token mới nếu `orgId` / instance URL khác org lúc dựng Connection (`ORG_CHANGED`, không gọi lại). Không
+  biết `orgId` hoặc username ⇒ 502 `sf CLI không cho biết org "dev" là org nào (thiếu orgId hoặc username), nên chưa ghi gì
+  vào org. …`. Test: alias trỏ sang org B sau khi Connection tới A đã cache ⇒ bản ghi vào B, Lịch sử ghi B, xóa trong B, A
+  không nhận request ghi nào; làm mới token rơi vào org khác ⇒ lời gọi lỗi, không ghi lại bằng token mới; thiếu `orgId` ⇒
+  502, 0 ghi, không có mục Lịch sử.
+
+**Nên sửa**
+
+- **S1.** Khóa "đang xóa" được giữ **đồng bộ** ngay đầu route (trước mọi `await`) và nhả ở mọi đường từ chối. Test: hai request
+  cùng lúc ⇒ 200 + 409, mỗi Id chỉ gửi một lần.
+- **S2.** `idsCollected` của job Bulk lấy từ kết quả `recordIds` đã chờ (ghi Id lỗi ⇒ `false`, lần xóa sau đọc lại). Test ở
+  `sf.test.js`.
+- **S3.** `pendingBulkJobs` chỉ bỏ qua job app **biết** chưa từng vào hàng đợi Salesforce (`neverProcessed`: hủy trước khi
+  đóng, tải lên lỗi); job `Failed` vẫn được đọc (có thể xử lý một phần). Trước khi đọc kết quả, `check()` phải là
+  `JobComplete` / `Failed` / `Aborted`; chưa xong (hoặc không đọc được) thì để nguyên và kết quả xóa có `pendingJobs` +
+  `pendingMessage` `Job Bulk … chưa xong hoặc chưa đọc được nên chưa lấy được Id của nó; bản ghi của job đó chưa bị xóa. Thử lại
+  sau bằng "Xóa phần còn lại…" trong Lịch sử.` (UI nối vào toast; mục Lịch sử thành `partial`). Lỗi ở bước `close` giữ job ở
+  trạng thái chưa đọc. Test ở `delete.test.js`.
+- **S4. Dọn Lịch sử.** Mục có job Bulk chưa đọc tính là còn bản ghi. Chỉ tự dọn mục **không còn gì trong org**; nếu chỉ còn mục
+  có bản ghi mà đã đủ 100 lần / 256 MB thì **từ chối insert** (`code: 'HISTORY_FULL'`, câu `Lịch sử đã đủ 100 lần insert còn
+  bản ghi trong org (hoặc 256 MB), nên chưa ghi gì vào org: app không tự quên một lần insert còn bản ghi. Mở Lịch sử, bấm "Xóa
+  khỏi org…" hoặc "Quên lần insert này" ở các lần cũ rồi insert lại.`). Chọn từ chối thay vì chỉ cảnh báo rồi quên: không bao
+  giờ mất Id của bản ghi còn trong org mà người dùng không biết. Hộp xác nhận Insert hỏi `GET /api/history/status` và hiện câu
+  này trong `.warn-box`, khóa nút. Test ở `history.test.js`.
+- **S5.** Câu xóa dây chuyền luôn hiện (`… có thể làm Salesforce tự xóa cả bản ghi con …`), không chỉ khi có bước được Lookup
+  trỏ tới. Smoke 16b.
+- **S6.** `test/safety.test.js` bắt mọi receiver tên `*client` / `*Client` (cả `this.sfClient`, `opts.client?.`) và mọi lời gọi
+  `.bulkJob(`; một test riêng kiểm chính mẫu regex với các cách viết đó.
+
+**Nhỏ**
+
+- `/api/orgs/:org/limits` với `%` hỏng ⇒ 404 (trước là 500).
+- `history/.lock` (pid): server thứ hai trên cùng thư mục ⇒ Lịch sử tắt với câu `thư mục Lịch sử … đang được một server khác
+  dùng (pid …). Dừng server đó, hoặc đặt SFDG_DATA_DIR khác cho server này`; khóa của process đã chết được lấy lại; xóa khi
+  process thoát.
+- `lstat` + uid: thư mục hay file Lịch sử là symlink hoặc thuộc user khác thì không dùng (thư mục ⇒ Lịch sử tắt; file ⇒ lỗi, không
+  đọc, không nối thêm qua link).
+- Mục `interrupted`: đếm lại cả `inserted` của từng bước từ file Id.
+- Nút xóa là `Lấy Id và xóa` khi chỉ còn job Bulk chưa đọc; danh sách Lịch sử ghi `Còn n job Bulk chưa lấy Id` và vẫn cho xóa
+  (`client/js/history-text.js`, hàm thuần, test trong Node).
+- Server coi org là production (hoặc không rõ) mà hộp không có ô gõ tên: lỗi có `code: 'typedOrgRequired'`, toast có nút
+  **Mở lại hộp xác nhận**.
+- Lần lưu `deletion: running` đầu tiên lỗi ⇒ không xóa gì và trạng thái cũ giữ nguyên (`save` ghi file trước rồi mới đổi bản
+  trong bộ nhớ).
+- Hàng nhóm lỗi (tab "Lỗi insert" và "Lỗi xóa") chỉ là nút khi bước còn trong workflow (`title` `Bước này không còn trong
+  workflow.`). Smoke 16c.
+- `GET /api/history/status` (`{ enabled, reason?, dir, maxRuns, full, fullMessage? }`) thay cho đọc cả danh sách trong hộp
+  xác nhận Insert.
+- CSV Bulk: số không bao giờ ở dạng mũ (`1e21` ⇒ `1000000000000000000000`, `1e-7` ⇒ `0.0000001`), cả trong khóa khớp dòng lỗi.
+- Nút ghost "Lịch sử": chữ token `text` (§6.2), có test trong `css-tokens.test.js`.
+
+**Smoke dưới tải.** 3 `npm test` song song + smoke trên máy 4 CPU: 7 lượt, không lỗi chức năng nào; smoke mất 20–23 giây (quá
+ngân sách 12 giây, như dự kiến khi máy quá tải) và **không chậm hơn khi có luồng 16** (20,2–20,9 giây có, 20,2–21,4 giây không). Lỗi
+`#btn-stop` reviewer gặp ở `flowEditing` (3b) là đọc trạng thái một lần ngay khi Dừng hiện: kiểm tra giờ chờ request bị giữ
+tới route và chờ tiêu đề `Đang sinh dữ liệu` (có câu lỗi rõ nếu không tới). Dưới tải đó hai test thời gian có sẵn của 0010
+(`maxSteps took …`, ngưỡng 3 giây) có thể hỏng; không đổi. `npm test` qua 2 lần và 3 lần song song; smoke qua 3 lần.
+
+Test: 311 → 326.
+
 **Chưa làm / còn lại.** Số đo Bulk thật (test không bao giờ gọi org thật; ghi vào đây khi người dùng chạy trên sandbox của
 họ), kiểm ô trống CSV và kết quả job đã hủy trên sandbox thật (Rủi ro). Hàng "Org writes" trong `.claude/agents/implementer.md`
 (thêm `history.js`, `delete.js`) chưa sửa vì lượt này không được sửa `.claude/agents`. Các câu hỏi mở ở trên giữ nguyên.

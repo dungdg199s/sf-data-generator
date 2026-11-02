@@ -40,7 +40,8 @@ the others; never add a fixed `waitForTimeout`.
    header sits right under the sticky tab row (no gap). The Record and Loop stripes (`border-left-color`)
    differ from each other and from the unknown-type `[data-type]` fallback. Screenshot `smoke-1440.png`.
 3b. **Run progress (design doc 0004).** With `/api/run` held until Dừng was clicked (a promise, no timer), the results header shows
-   "Đang sinh dữ liệu", the download buttons give their place to **Dừng**, and the `<progress>` is a ≤ 3 px
+   "Đang sinh dữ liệu" (the check waits for the held request to reach the route and for that text, review 0011: one snapshot
+   was racy under CPU load), the download buttons give their place to **Dừng**, and the `<progress>` is a ≤ 3 px
    line on the bottom edge of `.results-head`; Dừng drops the request ("Đã dừng") and re-enables Xem
    trước, and focus moves from Dừng to Xem trước; `#results-summary` is `aria-live="polite"`. With the run's response body
    held back in the page (a `fetch` wrapper, released after the click), Dừng sends `POST /api/runs/<runId>/cancel` once `start` arrives instead
@@ -168,12 +169,14 @@ the others; never add a fixed `waitForTimeout`.
       count and shows the `.limits-warn` box (61 > 30); the request sends `target.bulk: "off"`; the summary gets the
       **Tải Id** and **Lịch sử** links and the toast **Xóa dữ liệu này…**.
     - **16b** That toast button opens the delete confirmation with focus on **Hủy** and `Xóa 12 005 bản ghi` (`.danger.solid`);
-      the request carries `confirm.username` and `confirm.count` = 12 005 (`smoke-1440-delete.png`).
+      the request carries `confirm.username` and `confirm.count` = 12 005; the cascade warning is shown although the run has
+      no parent steps (review S5) (`smoke-1440-delete.png`).
     - **16d (1440)** The **Lịch sử** button opens the dialog filtered on `dev-sb` (`smoke-1440-history.png`); the interrupted run
       has the "Server dừng giữa lúc insert…" title; ⋯ → "Quên lần insert này" asks first (nothing in the org) and then sends
       `forget`.
     - **16c** With the filter off, the `dev-prod` run's delete stays locked until `dev-prod` is typed (a wrong name keeps it
-      locked); the request carries `typedOrg`.
+      locked); the request carries `typedOrg`. Its (mocked) result has one failure on a step no longer in the workflow: the
+      "Lỗi xóa (1)" tab opens and that row is not a button (review nit).
     - **16d (390)** The dialog is full screen with no horizontal overflow (`smoke-390-history.png`).
 
 It also fails on any page error or a run over 12 s (typically ~5.5–6.5 s since the flows run in parallel, flow 14 included, ~7–8.5 s with flow 15 on a 4-CPU machine, ~8–9.5 s with flow 16; ~10 s before;

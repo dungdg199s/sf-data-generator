@@ -12,7 +12,9 @@ App không tự làm OAuth. Việc được chia làm hai phần:
   | Access token, instance URL, API version, `orgId` | `sf org display --target-org <alias> --json` | `getConnection()`; cache trong bộ nhớ 10 phút (xóa thì luôn đọc lại, xem [Xóa](#xóa-dữ-liệu-đã-insert)) |
 
 - **Mọi lời gọi API đi qua [jsforce](https://jsforce.github.io/)** (`server/sf/client.js`). Mỗi org có một `jsforce.Connection`,
-  được tạo từ `accessToken`, `instanceUrl` và `version` mà CLI trả về.
+  được tạo từ `accessToken`, `instanceUrl` và `version` mà CLI trả về, và nhớ định danh org của lần đọc đó (`orgOf`). Mỗi insert
+  và mỗi lần xóa bắt đầu bằng `refreshOrg`: đọc lại `sf org display` và dựng lại Connection, nên bản ghi luôn vào đúng org mà
+  Lịch sử ghi; không biết `orgId` / username thì không insert. Làm mới token mà ra org khác ⇒ lời gọi lỗi (`ORG_CHANGED`).
 
 Khi Salesforce trả `INVALID_SESSION_ID` (token hết hạn), jsforce gọi `refreshFn`. Hàm này chạy lại `sf org display`
 (CLI tự làm mới token từ thông tin đăng nhập nó đang giữ), rồi jsforce gọi lại request đó. Lỗi từ Salesforce được trả về
@@ -124,8 +126,11 @@ thư mục `0700`, file `0600`.
   ghi gì. Id được nối vào file **sau mỗi lời gọi** (và mỗi lần lấy kết quả job) và chờ ghi xong trước lời gọi ghi tiếp theo;
   ghi lỗi ⇒ dừng insert (`stopped.reason: "history"`). Mã job Bulk được ghi trước khi tải CSV lên.
 - Lúc khởi động, mục còn `running` thành `interrupted` (`inserted` đếm lại từ file Id).
-- Giữ `historyMaxRuns` (100) lần và `historyMaxBytes` (256 MB): khi tạo mục mới, dọn mục cũ nhất đã xóa hết hoặc không có bản
-  ghi trước, rồi mới tới mục còn bản ghi; không bao giờ dọn mục đang chạy.
+- Giữ `historyMaxRuns` (100) lần và `historyMaxBytes` (256 MB): khi tạo mục mới chỉ tự dọn mục cũ nhất **không còn gì trong
+  org** (đã xóa hết, không có bản ghi, không còn job Bulk chưa đọc), không bao giờ mục đang chạy. Chỉ còn mục có bản ghi mà đã
+  đầy ⇒ insert bị từ chối (`HISTORY_FULL`), hộp xác nhận báo trước qua `GET /api/history/status`.
+- Một server mỗi thư mục: `history/.lock` giữ pid (server khác đang chạy ⇒ Lịch sử tắt). Thư mục hay file là symlink hoặc
+  thuộc user khác thì không dùng (`lstat` + uid).
 - **Không bao giờ lưu credential hay dòng Query**: org chỉ là `alias`, `username`, `orgId`, `instanceUrl`, `kind`.
 - UI: nút **Lịch sử** ở đầu panel kết quả, link **Tải Id** / **Lịch sử** trong tóm tắt, mục `Lịch sử insert` của menu ⋯
   (≤ 900 px). "Quên lần insert này" chỉ xóa 3 file trên máy (có xác nhận).
@@ -135,16 +140,18 @@ thư mục `0700`, file `0600`.
 `POST /api/history/:hid/delete` (`server/sf/delete.js`) là cách **duy nhất** app xóa trong org, và chỉ xóa Id có trong
 `<hid>.ids.csv` của chính mục đó (không nhận Id hay SOQL từ client, không xóa bản ghi Query, không bao giờ `hardDelete`):
 
-- **Kiểm tra trước** (trước header và lời gọi ghi đầu tiên): mục có trong Lịch sử, không đang insert / xóa, `confirm.username`
+- **Kiểm tra trước** (trước header và lời gọi ghi đầu tiên; đóng tab trong lúc này ⇒ không xóa gì): mục có trong Lịch sử,
+  không đang insert, không có lần xóa khác của mục (khóa giữ ngay khi request tới), `confirm.username`
   đúng username lúc insert, `confirm.count` đúng số còn phải xóa, org production (hoặc sf CLI không cho biết loại) thì
   `confirm.typedOrg` phải là alias hoặc username, và `sf org display` **đọc lại** cho alias phải ra cùng `orgId` (thiếu thì cùng
-  instance URL + username) như lúc insert; sau đó kết nối jsforce được dựng lại từ lần đọc này.
+  instance URL + username) như lúc insert; kết nối jsforce được dựng lại từ chính lần đọc này (`client.refreshOrg`).
 - **Thứ tự:** bước theo thứ tự ngược bản ghi đầu tiên của bước (con trước cha), trong bước ngược thứ tự insert. Bước còn
   < 10 000 Id (hoặc `bulk: "off"`): `conn.sobject(type).destroy(ids)` 200 Id mỗi lời gọi (sObject Collections `DELETE`,
   `allOrNone` mặc định false). Nhiều hơn: lô thử bằng `destroy`, rồi job Bulk `delete` 10 000 Id mỗi job, một job mỗi lúc.
 - `ENTITY_IS_DELETED`, `INVALID_CROSS_REFERENCE_KEY`, `NOT_FOUND` ⇒ "đã không còn" (không phải lỗi). Lỗi khác gom nhóm như insert;
   3 lời gọi đầu của một sObject lỗi 100 % (thường thiếu quyền Delete) ⇒ dừng. `DELETE_FAILED` được thử lại một lần cuối.
-- Job Bulk insert chưa lấy kết quả (lần chạy bị gián đoạn) được lấy `successfulResults` (chỉ đọc) trước khi xóa.
+- Job Bulk insert chưa lấy kết quả (lần chạy bị gián đoạn, job `Failed` có thể xử lý một phần) được lấy `successfulResults`
+  (chỉ đọc) trước khi xóa, **chỉ khi** `check()` cho thấy job đã kết thúc; job chưa xong thì để lại, kết quả nói thử lại sau.
 - Bản ghi vào Thùng rác; xóa cha có thể làm Salesforce xóa dây chuyền bản ghi con (hộp xác nhận nói rõ). Dừng / Dừng ngay
   như insert; phần còn lại xóa được bằng "Xóa phần còn lại…".
 

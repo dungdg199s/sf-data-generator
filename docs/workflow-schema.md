@@ -385,15 +385,17 @@ chạy đã xong hoặc không tồn tại ⇒ 404 `Lần chạy này đã kết
 | `GET /api/history` | `{ enabled, reason?, dir, maxRuns, runs: [{ id, status, startedAt, finishedAt, org, workflowName, seed, total, inserted, failed, notSent, bySobject, steps, bulkJobs, stopped, deletion: { status, deleted, gone, failed, remaining, lastAt } }] }`, mới nhất trước. `status`: `running` \| `done` \| `cancelled` \| `stopped` \| `error` \| `interrupted` |
 | `GET /api/history/:hid` | Toàn bộ mục (bỏ `workflow`), thêm `workflowName`, `remaining: { total, bySobject, bySteps }` (tính từ file Id trừ Id đã xóa / đã không còn), `pendingBulkJobs`, `hasParents` (có bước được Lookup trỏ tới) |
 | `GET /api/history/:hid/ids.csv[?sobject=…]` | CSV `sobject,id,ref,step,status` (`inserted` \| `deleted` \| `gone`), `Content-Disposition: attachment; filename="<workflow>-<yyyyMMdd-HHmm>-ids.csv"` |
-| `POST /api/history/:hid/delete` | Body `{ "confirm": { "username", "count", "typedOrg"? }, "bulk": "auto" \| "off" }`. NDJSON như `/api/run` (có `Accept: application/x-ndjson`; không thì JSON một cục): `start { runId, historyId, total, bySobject }`, `progress { phase: "delete", deleted, gone, failed, total, bySobject, bulk? }`, `progress { phase: "stopping", waitingBulk }`, `done { result: { total, deleted, gone, failed, errorGroups, errorGroupsOther, bySobject, remaining, cancelled, stopped, bulkAborted, fetched } }`, `error` |
+| `POST /api/history/:hid/delete` | Body `{ "confirm": { "username", "count", "typedOrg"? }, "bulk": "auto" \| "off" }`. NDJSON như `/api/run` (có `Accept: application/x-ndjson`; không thì JSON một cục): `start { runId, historyId, total, bySobject }`, `progress { phase: "delete", deleted, gone, failed, total, bySobject, bulk? }`, `progress { phase: "stopping", waitingBulk }`, `done { result: { total, deleted, gone, failed, errorGroups, errorGroupsOther, bySobject, remaining, cancelled, stopped, bulkAborted, fetched, pendingJobs, pendingMessage } }`, `error` |
+| `GET /api/history/status` | `{ enabled, reason?, dir, maxRuns, full, fullMessage? }`: rẻ, cho hộp xác nhận Insert (`full`: insert sẽ bị từ chối `HISTORY_FULL`) |
 | `POST /api/history/:hid/forget` | `{ "ok": true }`: xóa 3 file của mục (không đụng org); 409 khi đang insert/xóa |
 | `GET /api/orgs/:org/limits` | `{ api: { max, remaining }, bulkBatches: { max, remaining } }` (chỉ đọc; cache 60 giây; quá 3 giây ⇒ 504) |
 
 `hid` sai định dạng hay không có ⇒ 404 `Không tìm thấy lần insert này trong Lịch sử (có thể đã bị dọn vì vượt giới hạn lưu
 trữ).` Xóa bị từ chối **trước** khi gửi header và trước mọi lời gọi ghi: thiếu `confirm` (400), `confirm.username` khác
 username lúc insert (409), không còn gì để xóa (409), `confirm.count` khác số còn lại (409), org production (hoặc không rõ loại)
-mà `typedOrg` không phải alias / username (400), org không còn đăng nhập (502), `orgId` hiện tại của alias khác lúc insert (409),
-đang insert hoặc đang xóa cùng mục (409). Câu chữ ở 0011 §7. Không có endpoint nào nhận danh sách Id hay SOQL để xóa.
+mà `typedOrg` không phải alias / username (400, `code: "typedOrgRequired"`), org không còn đăng nhập (502), `orgId` hiện tại của alias khác lúc insert (409),
+đang insert hoặc đang xóa cùng mục (409). Câu chữ ở 0011 §7. Không có endpoint nào nhận danh sách Id hay SOQL để xóa. Insert vào org mà sf CLI không cho biết `orgId` /
+username ⇒ 502 trước khi ghi; Lịch sử đầy mục còn bản ghi ⇒ sự kiện `error` (`insert: null`) với câu `HISTORY_FULL`.
 
 ### `POST /api/export`
 
