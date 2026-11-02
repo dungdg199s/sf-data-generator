@@ -34,8 +34,12 @@ npm test
 3. **▶ Xem trước** (Ctrl+Enter) để sinh dữ liệu và xem bảng kết quả (200 dòng đầu mỗi sObject), tải JSON hoặc CSV đủ mọi
    bản ghi.
 4. Chọn org rồi bấm **⤒ Insert vào org**: hộp xác nhận luôn ghi số bản ghi sẽ tạo và insert đúng dữ liệu vừa xem trước
-   (tự xem trước nếu chưa có). Trong lúc chạy có tiến độ và nút **Dừng**; bản ghi đã insert vẫn ở lại trong org.
-   Bấm **📌 giữ seed** để lần chạy sau ra đúng dữ liệu đó.
+   (tự xem trước nếu chưa có). Bước có từ 10 000 bản ghi mà không bước nào cần Id của chúng tự đi **Bulk API 2.0** (ít lời
+   gọi API hơn; bỏ chọn được trong hộp xác nhận). Trong lúc chạy có tiến độ và nút **Dừng**; bản ghi đã insert vẫn ở lại trong
+   org. Bấm **📌 giữ seed** để lần chạy sau ra đúng dữ liệu đó.
+5. Mỗi lần insert được ghi vào **Lịch sử** trên máy chạy server (`SFDG_DATA_DIR`, mặc định `~/.local/share/sf-data-generator`
+   trên Linux): nút **Lịch sử** ở đầu panel kết quả để **tải Id** đã insert hoặc **xóa khỏi org** đúng các bản ghi đó (nút
+   **Xóa dữ liệu này…** trên thông báo sau khi insert). Xóa luôn qua hộp xác nhận; org production phải gõ tên org.
 
 File workflow cũ (version 1, dạng sơ đồ nối dây) vẫn mở được: ứng dụng tự chuyển sang dạng các bước và giữ bản gốc.
 

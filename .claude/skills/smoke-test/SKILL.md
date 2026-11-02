@@ -13,13 +13,15 @@ node .claude/skills/smoke-test/smoke.cjs /path/to/screenshot-dir   # dir optiona
 
 It runs the app **in its own process** (`createApp` from `server/index.js` on port 0, so it dies with the smoke on
 Ctrl+C or kill and a stale server on a busy port can never answer instead) with a **stub sf CLI** that fails like a machine
-without `sf` (503 `smoke: …`, checked at start), so no flow can reach a real org. It drives headless Chromium through these
+without `sf` (503 `smoke: …`, checked at start), so no flow can reach a real org. Its insert history (design 0011) and the files
+the flows open live in one temporary directory (`sfdg-smoke-*` under the OS temp dir) removed at the end, never the user's
+data directory. It drives headless Chromium through these
 flows
 (failed checks are collected and reported together; a timed-out wait aborts that flow, the others finish).
 
 **Speed (since design 0009).** The flows are grouped into seven independent functions that run **in parallel**, each in
 its own browser context (so storage, routes and dialogs never leak between them): `flowEditing` (1–5), `flowPicker`
-(5b), `flowFiles` (5c–10), `flowDark` (12), `flowLayoutWide` and `flowLayoutNarrow` (11, 13), `flowEach` (14), `flowCanvas` (15). The browser launches
+(5b), `flowFiles` (5c–10), `flowDark` (12), `flowLayoutWide` and `flowLayoutNarrow` (11, 13), `flowEach` (14), `flowCanvas` (15), `flowHistory` (16). The browser launches
 while the server starts; a fresh context starts with empty storage, so no `localStorage.clear()` + reload; storage a flow
 needs before its first load is written by `addInitScript` (once, guarded by a marker key, so reloads keep it); layout
 checks resize one page (`setViewportSize`) instead of opening a context per width; waits for the sheet or toast
@@ -116,7 +118,8 @@ the others; never add a fixed `waitForTimeout`.
     - **13c ⋯ menu at 390 × 844**: Mới, Mở…, Lưu, a Seed field, Account + Contact, Tối (radio, "Theo hệ thống" checked);
       typing 42 sets `#seed` and shows the chip "Seed 42"; the chip reopens the menu on the Seed field; Mẫu "Lead theo xác
       suất" then "Account + Contact" replace the workflow. At 800 px the menu only has the Mẫu group. Esc in the menu opened
-      from the chip returns focus to the chip; Tab and Shift+Tab close the menu onto ⋯. Inside `role=menu` there is no
+      from the chip returns focus to the chip; Tab and Shift+Tab close the menu onto ⋯. At 800 px the menu has the groups Chạy
+      (only "Lịch sử insert", 0011) and Mẫu. Inside `role=menu` there is no
       text or input outside a group, a menu item or `aria-hidden` text.
     - **13d sheet at 390 × 844**: tapping `con` leaves its bottom ≤ the sheet top and ≥ 190 px of canvas above the sheet;
       "‹ Xong" by keyboard closes it, makes it inert and focuses the `con` card; Ctrl+Enter in the alias field closes the
@@ -156,11 +159,29 @@ the others; never add a fixed `waitForTimeout`.
     not under the zoom bar, its ⋯ is 32 px; ⋯ → "Quy trình" there leaves `sfdg.view` = `canvas` (landscape phone = phone).
     `SMOKE_ONLY=flowCanvas` (comma list) runs only the named flows.
 
-It also fails on any page error or a run over 12 s (typically ~5.5–6.5 s since the flows run in parallel, flow 14 included, ~7–8.5 s with flow 15 on a 4-CPU machine; ~10 s before;
+16. **Insert history and delete (design 0011), `flowHistory`, own context.** Every org-facing call is answered by one
+    `page.route('**/api/**')` dispatcher (orgs `dev-sb` [sandbox] and `dev-prod` [production], `/limits` with 30 calls left,
+    a canned preview of 12 005 records with `con` = 12 000, canned inserts, history list / run / delete / forget); nothing
+    reaches the server's stub CLI or an org.
+    - **16a** Insert confirmation: the Bulk checkbox is ticked, the line `con (Contact) 12 000: 200 bản ghi đầu gửi thử bằng
+      sObject Collections, phần còn lại 2 job Bulk.`, "Org còn …" without a warning (26 calls fit); unticking raises the call
+      count and shows the `.limits-warn` box (61 > 30); the request sends `target.bulk: "off"`; the summary gets the
+      **Tải Id** and **Lịch sử** links and the toast **Xóa dữ liệu này…**.
+    - **16b** That toast button opens the delete confirmation with focus on **Hủy** and `Xóa 12 005 bản ghi` (`.danger.solid`);
+      the request carries `confirm.username` and `confirm.count` = 12 005 (`smoke-1440-delete.png`).
+    - **16d (1440)** The **Lịch sử** button opens the dialog filtered on `dev-sb` (`smoke-1440-history.png`); the interrupted run
+      has the "Server dừng giữa lúc insert…" title; ⋯ → "Quên lần insert này" asks first (nothing in the org) and then sends
+      `forget`.
+    - **16c** With the filter off, the `dev-prod` run's delete stays locked until `dev-prod` is typed (a wrong name keeps it
+      locked); the request carries `typedOrg`.
+    - **16d (390)** The dialog is full screen with no horizontal overflow (`smoke-390-history.png`).
+
+It also fails on any page error or a run over 12 s (typically ~5.5–6.5 s since the flows run in parallel, flow 14 included, ~7–8.5 s with flow 15 on a 4-CPU machine, ~8–9.5 s with flow 16; ~10 s before;
 ~7–8 s with two CPU-bound processes running alongside).
 Screenshots (only when a directory is given): `smoke-1440.png`, `smoke-390.png`, `smoke-390-sheet.png`,
 `smoke-390-dark.png`, `smoke-390-topbar.png`, `smoke-1280-issues.png`, `smoke-1440-dark.png`, `smoke-1440-dark-insert.png`,
-`smoke-1440-canvas.png`, `smoke-1440-canvas-dark.png`, `smoke-390-canvas.png`.
+`smoke-1440-canvas.png`, `smoke-1440-canvas-dark.png`, `smoke-390-canvas.png`, `smoke-1440-history.png`, `smoke-1440-delete.png`,
+`smoke-390-history.png`.
 Requires Playwright with Chromium (`require('playwright')`); exit code 2 means it is not installed.
 
 Extend the script when you add a UI flow worth guarding (keep it fast: see "Speed" above).

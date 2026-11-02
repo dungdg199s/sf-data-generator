@@ -1,6 +1,6 @@
 # 0011 — Thao tác dữ liệu trên org: Bulk API 2.0, lịch sử insert, xóa dữ liệu đã insert
 
-- **Trạng thái:** Đã duyệt (người dùng giao chọn theo phương án đề xuất; xem [Đã chốt](#đã-chốt))
+- **Trạng thái:** Đã làm (duyệt: người dùng giao chọn theo phương án đề xuất; xem [Đã chốt](#đã-chốt) và [Đã làm](#đã-làm))
 - **Ngày:** 2026-10-28
 - **Liên quan:** [0002](0002-jsforce-api.md) (jsforce, sf CLI chỉ lấy token), [0004](0004-streaming-execution.md) (insert theo
   cửa sổ, Dừng, nhóm lỗi; câu hỏi mở 6 và 7), [0006](0006-query-pick-nodes.md) (Query chỉ đọc, cache, dấu vân tay),
@@ -670,4 +670,80 @@ Người dùng giao chọn theo phương án đề xuất; planner chốt như s
 
 ## Đã làm
 
-(Chưa làm. Cập nhật khi code xong: commit, chỗ khác thiết kế và lý do, số đo Bulk thật nếu có.)
+Làm theo đủ bước 0–11 (2026-11-02). Commit:
+
+- `aa77da3` tầng jsforce (`bulkJob` chỉ `insert`/`delete`, `destroy` ≤ 200 Id, `limits`; `orgId` từ `sf org display`),
+  `shared/insert-plan.js`, `server/sf/bulk-csv.js`, Salesforce giả `test/fake-salesforce.js`.
+- `ab23d30` inserter có Bulk, `server/history.js`, `server/sf/delete.js`, nối vào `server/run.js` và các endpoint mới ở
+  `server/index.js`, `LIMITS` mới; test server.
+- `90e4119` UI: hộp xác nhận Insert (Bulk, số lời gọi, hạn mức, dòng Lịch sử), Dừng ngay, link Tải Id / Lịch sử, toast "Xóa
+  dữ liệu này…", `client/js/history.js` (hộp Lịch sử, Quên, hộp xác nhận xóa), tiến độ xóa, tab "Lỗi xóa".
+- `6422741` smoke luồng 16 (`flowHistory`) và sửa một test đếm tiến độ phụ thuộc thời gian.
+- Commit tài liệu (doc này, `org-connection.md`, `architecture.md`, `workflow-schema.md`, `ui-design-system.md`, `README.md`,
+  `CLAUDE.md`, skill smoke-test).
+
+**An toàn và test của nó.**
+
+- Xóa chỉ qua `POST /api/history/:hid/delete`, chỉ Id trong `<hid>.ids.csv`; mọi kiểm tra chạy trước header và lời gọi ghi
+  đầu tiên. `test/jsforce.test.js` (jsforce thật + Salesforce giả): mỗi trường hợp bị từ chối (hid lạ / `../`, thiếu
+  `confirm`, sai `username`, sai `count`, production thiếu hoặc sai `typedOrg`, `bulk` sai, org đổi `orgId`, org chưa đăng
+  nhập, đang insert, đang xóa, không còn gì, `Origin` lạ 403, `text/plain` 415) trả đúng mã và câu và **Salesforce giả nhận 0
+  request ghi**; insert (Collections + Bulk) rồi xóa: tập Id trong các `DELETE` và job `delete` **bằng đúng** tập Id đã insert,
+  con trước cha, không job nào khác `insert`/`delete`.
+- `bulkJob` với `hardDelete` / `update` / `upsert` / thiếu ⇒ throw, 0 request (test). `test/safety.test.js` quét mã nguồn:
+  `.bulk2`, `.sobject(…).create/destroy(` chỉ ở `server/sf/client.js`; `client.create/destroy/bulkJob` chỉ được gọi trong
+  `insert.js` và `delete.js`; `hardDelete` chỉ được nhắc ở chỗ bị từ chối.
+- Lịch sử không lưu credential: `test/history.test.js` chạy một insert qua app với token giả `SECRET-TOKEN-123` (cả trong
+  `refreshToken` và header `Authorization`) và một dòng Query giả, rồi quét mọi file: không có token, `accessToken`,
+  `refreshToken`, `Authorization`, dòng Query. Quyền `0700`/`0600` được kiểm (trừ Windows).
+- Test luôn dùng `SFDG_DATA_DIR` tạm (`test/data-dir.js`, xóa khi process thoát); `dataDir()` **từ chối** chạy dưới
+  `node --test` mà thiếu `SFDG_DATA_DIR`, nên test không thể ghi vào thư mục thật. Smoke dùng một thư mục tạm riêng (xóa ở
+  cuối). `requestGuard` phủ mọi endpoint mới (test 403/415 cho delete, ids.csv, history, limits, forget).
+- Hash vàng của `test/stream.test.js` không đổi.
+
+**Quyết định khi làm (chỗ doc chưa nói rõ hoặc khác doc):**
+
+1. **Lịch sử tắt ⇒ không insert.** Hộp xác nhận ở §1 viết như thể vẫn insert được khi Lịch sử tắt; Đã chốt 6 và bảng §7 nói
+   "không ghi được ⇒ không bắt đầu". Đã làm theo Đã chốt: server trả `error` (`insert: null`), hộp xác nhận thay dòng Lịch sử
+   bằng `.warn-box` `… App không insert khi không ghi được Lịch sử (để luôn tải Id và xóa lại được). Đặt biến môi trường
+   SFDG_DATA_DIR …` và khóa nút Insert.
+2. **Không thêm icon mới.** Theo quy tắc icon của 0014 (helper `ico()` chưa có): `⤓ Id` thành link chữ **Tải Id**, nút
+   Lịch sử ở ≤ 720 px vẫn là chữ "Lịch sử" (không `--ico-history`), nút đóng hộp Lịch sử là "Đóng" thay cho ×; ▸/▾/⋯ là ký tự
+   đã có.
+3. `destroy` dùng `conn.sobject(t).destroy(ids, { allOrNone: false })` của jsforce: jsforce chỉ thêm `allOrNone` vào URL khi
+   `true`, và Salesforce mặc định `false`; test khẳng định URL không có `allOrNone=true`.
+4. Tạo job lỗi: chuyển hẳn sang Collections (kèm cảnh báo) khi có mã lỗi khác `REQUEST_LIMIT_EXCEEDED` / `INVALID_SESSION_ID`
+   và đó là job đầu của bước; lỗi giới hạn / mạng (không mã) thì mọi bản ghi của job tính là lỗi và tính vào quy tắc 2 job
+   (`bulkFailing`).
+5. "Tối đa 2 bộ đệm": nhiều bước Bulk cùng đầy dần mà tổng dòng đệm vượt 2 × `bulkJobRecords` thì gửi sớm bộ đệm lớn nhất.
+6. Job quá 30 phút (hoặc 3 lần `check()` liên tiếp lỗi): `stopped.reason: "bulkTimeout"`, bản ghi của job tính vào `notSent`,
+   job ghi `idsCollected: false` và được lấy Id trước khi xóa. Job xong mà không đọc được kết quả: cũng `notSent` +
+   `idsCollected: false`.
+7. Kế hoạch xóa và Bulk khi xóa tính **theo bước** (cùng nhóm với thứ tự xóa), không gộp theo sObject.
+8. Thứ tự kiểm tra của endpoint xóa: 404 → đang insert 409 → đang xóa 409 → thiếu `confirm` 400 → `bulk` sai 400 →
+   `username` 409 → không còn gì 409 → `count` 409 → production `typedOrg` 400 → sf CLI 502 → `orgId` 409. `typedOrg` nhận alias
+   hoặc username (của Lịch sử hay của `sf org list`). Sau kiểm tra `orgId`, kết nối jsforce của alias được dựng lại từ lần đọc
+   mới (token mới, đúng org). Còn job Bulk chưa lấy Id thì xóa được cả khi số đã biết là 0.
+9. Loại org "không rõ" (sf CLI lỗi) coi như production ở cả server và hộp xác nhận (phải gõ tên).
+10. `deletion` trong `<hid>.json` cập nhật khi xóa xong (`done` / `partial`; server tắt giữa lúc xóa ⇒ `interrupted`); số còn
+    phải xóa luôn tính lại từ file. "Quên" cũng bị chặn (409) khi đang xóa.
+11. Ô Id trong bảng kết quả của bản ghi gửi bằng Bulk hiện `Bulk` (có `title`), không phải ✕.
+12. Popup mở trong hộp thoại modal (menu ⋯ của một dòng Lịch sử) được gắn vào chính hộp thoại (top layer), nếu không nó nằm
+    dưới hộp và không bấm được (`client/js/popup.js`).
+13. `/limits` chậm quá 3 giây ⇒ 504 (hộp xác nhận bỏ dòng hạn mức). Tên file `ids.csv` theo giờ địa phương của server.
+14. Test: kịch bản inserter Bulk ở `test/sf.test.js` (client giả); test `deleteRun` ở `test/delete.test.js`; các test endpoint
+    cần jsforce thật (0 request ghi, insert + xóa) ở `test/jsforce.test.js` thay vì `server.test.js`, vì chỉ file đó xóa biến
+    proxy trước khi import jsforce. Smoke 16a dùng hạn mức giả **30** lời gọi còn lại (doc ghi 100): 12 005 bản ghi cần 26 lời
+    gọi khi bật Bulk và 61 khi tắt, nên 30 mới kiểm được cả hai phía.
+
+**Test.** 270 → 311 test (`npm test` qua; 3 lần song song đều qua). Mới: `test/insert-plan.test.js`, `test/bulk-csv.test.js`,
+`test/history.test.js`, `test/delete.test.js`, `test/safety.test.js`, thêm vào `sf.test.js`, `run.test.js`, `server.test.js`,
+`jsforce.test.js`. Sửa có chủ ý: sự kiện `plan` trong `run.test.js` có thêm `apiCallsBy`/`steps`; test nhóm lỗi 40 000
+Contact trong `server.test.js` gửi `target.bulk: "off"` (40 000 Contact lá giờ đi Bulk, test này nói về nhóm lỗi Collections);
+test đếm `progress` của xem trước trong `run.test.js` dùng đồng hồ đứng yên (trước đó chạy song song thì thỉnh thoảng có thêm
+lần nhường theo thời gian). Smoke: luồng 16 mới; kiểm tra menu ⋯ ở 800 px nay là `Chạy, Mẫu`. Smoke chạy 3 lần: `SMOKE OK`
+(8,1–9,3 giây).
+
+**Chưa làm / còn lại.** Số đo Bulk thật (test không bao giờ gọi org thật; ghi vào đây khi người dùng chạy trên sandbox của
+họ), kiểm ô trống CSV và kết quả job đã hủy trên sandbox thật (Rủi ro). Hàng "Org writes" trong `.claude/agents/implementer.md`
+(thêm `history.js`, `delete.js`) chưa sửa vì lượt này không được sửa `.claude/agents`. Các câu hỏi mở ở trên giữ nguyên.
