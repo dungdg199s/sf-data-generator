@@ -136,9 +136,13 @@ export function groupsFor(stepId, fieldIndex, { mode } = {}) {
     });
     groups.push(g);
   }
+  // Variables of Đặt biến (design 0015): one group `var · Biến`, one row per name, the nearest
+  // assignment first, placed after the aliases and before the run variables.
+  const varGroup = valueGroup(scope, here);
   for (const v of here?.visible ?? []) {
     const src = scope.sources[v.source];
-    if (!src) continue;
+    if (!src || src.kind === 'value') continue;
+    if (src.global && varGroup && !groups.includes(varGroup)) groups.push(varGroup);
     const g = {
       // Run variables are neutral like the built-ins ($n): the Start colour (docs/ui-design-system.md §3).
       id: src.id ?? src.nodeId, nodeType: src.global ? 'start' : src.nodeType, name: src.name, label: src.label || src.sobject || '', items: [],
@@ -164,9 +168,19 @@ export function groupsFor(stepId, fieldIndex, { mode } = {}) {
     }
     groups.push(g);
   }
+  if (varGroup && !groups.includes(varGroup)) groups.push(varGroup);
+  const shownVars = new Set(varGroup?.items.map((it) => it.key) ?? []);
+  const hiddenVars = new Set();
   for (const hdn of here?.hidden ?? []) {
     const src = scope.sources[hdn.source];
     if (!src || src.nodeId === stepId) continue;
+    if (src.kind === 'value') {
+      // A name set by a usable step is usable: only names with no usable assignment are listed.
+      if (!src.name || shownVars.has(src.name) || hiddenVars.has(src.name)) continue;
+      hiddenVars.add(src.name);
+      hidden.push({ text: `${src.namespace}.${src.name} — ${hdn.note}` });
+      continue;
+    }
     hidden.push({ text: `${src.name} · ${src.label || src.sobject || ''} — ${hdn.note}` });
   }
   // Only the usable groups are filtered by type: "Không dùng được ở đây" keeps every source.
@@ -175,6 +189,44 @@ export function groupsFor(stepId, fieldIndex, { mode } = {}) {
     return { groups: groups.filter((g) => g.items.length), hidden };
   }
   return { groups, hidden };
+}
+
+const VALUE_NOTES = {
+  maybe: 'Có thể trống: chỉ được đặt trên một số nhánh hoặc trong vòng lặp có thể chạy 0 lần phía trên.',
+  last: 'Giá trị lần lặp cuối: được đặt trong vòng lặp đã kết thúc.',
+};
+
+/**
+ * The `var · Biến` group of the picker (design 0015) from the visible Đặt biến sources at `here`,
+ * or null when there is none: one row per variable name (nearest assignment first: `visible` is
+ * sorted that way), its type (one type, or Bất kỳ when the steps disagree), the value of the last
+ * preview, and a note when it may be empty or is the value of a finished loop.
+ */
+function valueGroup(scope, here) {
+  const byName = new Map();
+  for (const v of here?.visible ?? []) {
+    const src = scope.sources[v.source];
+    if (src?.kind !== 'value' || !src.name) continue;
+    const e = byName.get(src.name);
+    if (!e) byName.set(src.name, { src, ns: src.namespace, types: new Set([src.valueType]), certainty: v.certainty });
+    else {
+      e.types.add(src.valueType);
+      if ({ always: 0, last: 1, maybe: 2 }[v.certainty] < { always: 0, last: 1, maybe: 2 }[e.certainty]) e.certainty = v.certainty;
+    }
+  }
+  if (!byName.size) return null;
+  const first = [...byName.values()][0];
+  // The colour of the step type (docs/ui-design-system.md §3.4), the label of its `exposes`.
+  const g = { id: `$${first.ns}`, nodeType: first.src.nodeType, name: first.ns, label: first.src.label || 'Biến', items: [] };
+  for (const [name, e] of byName) {
+    const valueType = e.types.size === 1 ? [...e.types][0] : 'any';
+    const note = VALUE_NOTES[e.certainty];
+    g.items.push({
+      path: `${e.ns}.${name}`, key: name, typeLabel: valueTypeLabel(valueType), valueType,
+      help: note ?? '', sample: sampleFor(e.src.nodeId, [name]),
+    });
+  }
+  return g;
 }
 
 /** Score of an item for `q` (lower first); null when it does not match. */

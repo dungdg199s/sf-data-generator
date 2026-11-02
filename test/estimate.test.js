@@ -134,3 +134,35 @@ test('0013: a values loop runs once per value; an each filter and limit are esti
   assert.equal(e.t.exact, false);
   assert.deepEqual(e.u, { records: 60, min: 60, max: 60, exact: true });
 });
+
+// Design 0015: a count from a Đặt biến kiểu Số set once to a constant is exact.
+import { setVar } from './helpers.js';
+
+test('a count from {{var.n}} set once to a constant number is exact; any other Đặt biến is not', () => {
+  const body = [record('r', 'Account', 'acc')];
+  const exact = est(wf([setVar('s', 'n', '5', { valueType: 'number' }), loop('l1', { count: '{{var.n}}' }, [loop('l2', { count: '{{var.n}}', alias: 'loop2' }, body)])]));
+  assert.deepEqual(exact.byStep.r, { records: 25, min: 25, max: 25, exact: true });
+  const run = runWorkflow(wf([setVar('s', 'n', '5', { valueType: 'number' }), loop('l1', { count: '{{var.n}}' }, [loop('l2', { count: '{{var.n}}', alias: 'loop2' }, body)])]), { seed: 1, now: NOW });
+  assert.equal(run.stats.byStep.r.records, 25);
+  // Two steps, a template, Chữ, Cộng thêm or a turned-off step: the old guess (1, not exact).
+  const guess = { records: 1, min: 0, max: LIMITS.maxCountPerNode, exact: false };
+  for (const sets of [
+    [setVar('s', 'n', '5', { valueType: 'number' }), setVar('s2', 'n', '6', { valueType: 'number' })],
+    [setVar('s', 'n', '{{run.seed}}', { valueType: 'number' })],
+    [setVar('s', 'n', '5')],
+    [setVar('s', 'n', '5', { mode: 'add' })],
+    [{ ...setVar('s', 'n', '5', { valueType: 'number' }), disabled: true }],
+  ]) assert.deepEqual(est(wf([...sets, loop('l', { count: '{{var.n}}' }, body)])).byStep.r, guess);
+  // A turned-off second step does not count.
+  assert.equal(est(wf([setVar('s', 'n', '3', { valueType: 'number' }), { ...setVar('s2', 'n', '9', { valueType: 'number' }), disabled: true }, loop('l', { count: '{{var.n}}' }, body)])).byStep.r.records, 3);
+});
+
+test('after review (S2): a constant Đặt biến that may not run before the loop is at most that number, not exact', () => {
+  const body = [record('r', 'Account', 'acc')];
+  const n = (extra = {}) => setVar('s', 'n', '4', { valueType: 'number', ...extra });
+  const maybe = { records: 4, min: 0, max: 4, exact: false };
+  assert.deepEqual(est(wf([branch('b', { probability: 0.5 }, [n()], []), loop('l', { count: '{{var.n}}' }, body)])).byStep.r, maybe);
+  assert.deepEqual(est(wf([loop('l0', { mode: 'range', min: 0, max: 2, alias: 'l0' }, [n()]), loop('l', { count: '{{var.n}}' }, body)])).byStep.r, maybe);
+  // In a loop that always runs (count 2) it is surely set: exact.
+  assert.deepEqual(est(wf([loop('l0', { count: 2, alias: 'l0' }, [n()]), loop('l', { count: '{{var.n}}' }, body)])).byStep.r, { records: 4, min: 4, max: 4, exact: true });
+});

@@ -97,9 +97,11 @@ Khóa thêm của option ([0005](design/0005-variable-picker.md)):
   `{ kind: 'sobject', purpose: 'query' | 'create' }` → datalist sObject (`GET /api/orgs/:org/sobjects?for=query` hoặc danh
   sách createable); `{ kind: 'fields', sobjectKey }` → nút "Chọn field…" (`GET /api/orgs/:org/sobjects/:name/fields`);
   `{ kind: 'poolFields', poolKey }` → datalist field của pool (từ `members` của nguồn trong `analyzeScope`).
+  `{ kind: 'varNames' }` ([0015](design/0015-buoc-dat-bien.md), "Tên biến" của Đặt biến) → datalist các biến đã có trong
+  workflow kèm kiểu và số bước (không cần org).
 - `initial` (option của bước): giá trị khi thêm bước mới từ UI; `default` là giá trị khi thiếu khóa (xem
   [workflow-schema.md](workflow-schema.md#bước)). `rows` / `monospace` cho `kind: 'text'` (ô SOQL).
 
-`GET /api/meta` trả thêm `syntax: { templateToken, valueTypes: [{ value, label }] }` (nhãn tiếng Việt của `valueType`).
+`GET /api/meta` trả thêm `syntax: { templateToken, valueTypes: [{ value, label }], varNamespace }` (nhãn tiếng Việt của `valueType`; `varNamespace` = `var`, nhóm biến của bước Đặt biến, [0015](design/0015-buoc-dat-bien.md)).
 
 Thêm kiểu mới: xem skill `.claude/skills/add-field-type/SKILL.md`.

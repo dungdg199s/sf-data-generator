@@ -6,7 +6,7 @@
 // Version 2 (tree of steps) is the current format. Version 1 (graph) is still accepted: it is
 // migrated with shared/migrate-v1.js first, and the conversion is reported as warnings.
 
-import { NODE_TYPES, nodeTypeMap, CONDITION_OPS, LIMITS, recordPreset, WORKFLOW_GLOBALS } from './nodes.js';
+import { NODE_TYPES, nodeTypeMap, CONDITION_OPS, LIMITS, recordPreset, WORKFLOW_GLOBALS, VAR_NAMESPACE, VAR_NAME } from './nodes.js';
 import { checkSoql, checkBuilder, isFieldPath, buildSoql, soqlSobject, selectFields, builderLimit, addSelectField } from '../../shared/soql.js';
 import { getGenerator, describeGenerators, optionIssues, VALUE_TYPES } from '../generators/index.js';
 import { migrateV1, describeReport, reportNeedsReview } from '../../shared/migrate-v1.js';
@@ -212,6 +212,22 @@ export function prepareWorkflow(wf) {
     }
   }
 
+  // Design 0015: once a Đặt biến exists (turned off or not), `var` names its variables
+  // ({{var.<tên>}}), so no alias, record looped over or loop variable may be called `var`.
+  if (steps.some(({ step }) => step.type === 'set')) {
+    for (const { step } of steps) {
+      for (const { key, value } of stepNames(step, catalog)) {
+        if (value === VAR_NAMESPACE) err(`Alias "${VAR_NAMESPACE}" trùng tên nhóm biến của bước Đặt biến ({{${VAR_NAMESPACE}.…}}). Đổi alias khác, ví dụ ${VAR_NAMESPACE}s.`, step.id, key, { code: 'varReserved' });
+      }
+      if (step.type === 'record' && !step.config?.alias && String(step.id) === VAR_NAMESPACE) {
+        err(`Bước này chưa có alias nên được gọi bằng id "${VAR_NAMESPACE}", trùng tên nhóm biến của bước Đặt biến. Đặt alias cho bước này, ví dụ ${VAR_NAMESPACE}s.`, step.id, 'alias', { code: 'varReserved' });
+      }
+      if (step.type === 'loop' && (step.config?.alias || 'loop') === VAR_NAMESPACE) {
+        err(`Tên biến lặp "${VAR_NAMESPACE}" trùng tên nhóm biến của bước Đặt biến. Đổi tên biến lặp, ví dụ v.`, step.id, 'alias', { code: 'varReserved' });
+      }
+    }
+  }
+
   // Per-step config (turned-off steps are not checked: they do not run).
   const scope = analyzeScope(workflow, catalog);
   const insideLoop = new Set();
@@ -228,6 +244,7 @@ export function prepareWorkflow(wf) {
     mark(workflow.steps, false);
   }
   let queries = 0;
+  const varTypes = new Map(); // Đặt biến (0015): variable name → type of its first step (reading order)
   for (const { step, off } of steps) {
     if (off) continue;
     const c = step.config ?? {};
@@ -239,6 +256,7 @@ export function prepareWorkflow(wf) {
       validateQuery(step, c, { err, warn, scope, inLoop: insideLoop.has(step.id) });
     }
     if (step.type === 'pick') validatePick(step, c, { err });
+    if (step.type === 'set') validateSet(step, c, { err, warn, varTypes });
     if (step.type === 'loop') {
       const mode = c.mode ?? 'fixed';
       // Whether the pool `from` is usable here is checked by analyzeScope (refs), like Chọn bản ghi.
@@ -419,6 +437,50 @@ function validatePick(step, c, { err }) {
   if (!['skip', 'error'].includes(c.onEmpty ?? 'skip')) err(`Lựa chọn "${c.onEmpty}" không hợp lệ.`, step.id, 'onEmpty');
 }
 
+const SET_MODES = new Set(['set', 'add']);
+/** Labels of the "Kiểu" choices of Đặt biến (the catalogue's): { text: 'Chữ', number: 'Số' }. */
+const SET_TYPES = Object.fromEntries(nodeTypeMap.get('set').options.find((o) => o.key === 'valueType').choices.map((c) => [c.value, c.label]));
+
+/**
+ * Đặt biến (design 0015). `varTypes` (name → { type, id }) remembers the type of the first step
+ * setting each name, so a later step of another type gets the `setVarType` warning.
+ */
+function validateSet(step, c, { err, warn, varTypes }) {
+  const name = c.name === undefined || c.name === null ? '' : String(c.name);
+  if (!name.trim()) err(`Đặt tên biến (chữ không dấu, số, "_"), ví dụ total. Bước phía dưới dùng {{${VAR_NAMESPACE}.total}}.`, step.id, 'name', { code: 'setVarName' });
+  else if (typeof c.name !== 'string' || !VAR_NAME.test(name)) {
+    err(`Tên biến "${name.slice(0, 60)}" không hợp lệ: chỉ dùng chữ không dấu, số và "_", không bắt đầu bằng số, tối đa 40 ký tự. Ví dụ: total, ma_lo.`, step.id, 'name', { code: 'setVarName' });
+  }
+  const mode = c.mode ?? 'set';
+  if (!SET_MODES.has(mode)) err(`Cách đặt "${mode}" không hợp lệ. Chọn "Gán giá trị" hoặc "Cộng thêm (số)".`, step.id, 'mode');
+  const valueType = c.valueType ?? 'text';
+  if (mode !== 'add' && !Object.hasOwn(SET_TYPES, valueType)) err(`Kiểu "${valueType}" không hợp lệ. Chọn Chữ hoặc Số.`, step.id, 'valueType');
+  const raw = c.value ?? '';
+  if (typeof raw !== 'string' && typeof raw !== 'number') {
+    err('"Giá trị" phải là chữ hoặc số, ví dụ TEST-{{run.today}} hoặc 5.', step.id, 'value');
+    return;
+  }
+  const value = String(raw);
+  if (value.length > LIMITS.maxVarLength) {
+    err(`"Giá trị" dài quá ${LIMITS.maxVarLength.toLocaleString('vi-VN')} ký tự. Rút ngắn giá trị.`, step.id, 'value', { code: 'setVarTooLong' });
+  }
+  const numeric = mode === 'add' || valueType === 'number';
+  if (numeric && !value.includes('{{') && !(value.trim() !== '' && Number.isFinite(Number(value)))) {
+    err(mode === 'add'
+      ? '"Giá trị" phải là số (ví dụ 5 hoặc 12.5) hoặc một biến số {{…}}.'
+      : '"Giá trị" phải là số (ví dụ 5 hoặc 12.5) hoặc một biến {{…}}. Muốn lưu chữ thì đổi "Kiểu" thành Chữ.', step.id, 'value', { code: 'setVarNotNumber' });
+  }
+  // Every step setting one name should agree on its type (Cộng thêm is Số).
+  if (!VAR_NAME.test(name) || !SET_MODES.has(mode)) return;
+  const type = mode === 'add' ? 'number' : valueType;
+  if (!Object.hasOwn(SET_TYPES, type)) return;
+  const first = varTypes.get(name);
+  if (!first) varTypes.set(name, { type, id: step.id });
+  else if (first.type !== type) {
+    warn(`Biến ${VAR_NAMESPACE}.${name} được đặt kiểu ${SET_TYPES[first.type]} ở bước khác; ở đây là ${SET_TYPES[type]}. Chọn cùng một kiểu cho mọi bước Đặt biến "${name}", nếu không ô dùng biến có thể nhận chữ thay vì số.`, step.id, mode === 'add' ? 'mode' : 'valueType', { code: 'setVarType' });
+  }
+}
+
 /** The filter of a Chọn bản ghi and of a Lặp `each` (design 0013 C): same keys, same messages. */
 function validateFilter(step, c, { err }) {
   const filter = c.filter ?? 'none';
@@ -538,6 +600,46 @@ export function referenceIssue(ref, scope, step, stepOf = () => undefined) {
         break;
       case 'maybe':
         message = maybeMessage(ref, s, true, isMD);
+        break;
+      default:
+        return null;
+    }
+  } else if (ref.namespace) {
+    // A variable of Đặt biến (design 0015): `{{var.<x>}}`.
+    const ns = ref.namespace;
+    const x = ref.varName;
+    switch (ref.code) {
+      case 'unknownName': {
+        const to = suggest ? suggest.split('.').slice(0, 2).join('.') : null;
+        message = `chưa có biến ${ns}.${x}.${to ? ` Ý bạn là ${to}?` : ''} Thêm bước Đặt biến tên ${x} ở phía trên, hoặc bấm {x} để chọn biến có sẵn.`;
+        break;
+      }
+      case 'after':
+        message = `bước Đặt biến "${x}" chạy sau bước này nên {{${ns}.${x}}} chưa có giá trị khi chạy tới đây. Kéo bước Đặt biến "${x}" lên phía trên.`;
+        break;
+      case 'otherBranch':
+        message = `biến ${ns}.${x} chỉ được đặt ở nhánh còn lại của Rẽ nhánh phía trên. Đặt giá trị ban đầu bằng một bước Đặt biến "${x}" trước Rẽ nhánh.`;
+        break;
+      case 'disabled':
+        message = `bước Đặt biến "${x}" đang tắt. Bật lại bước đó (Ctrl+/) hoặc chọn biến khác.`;
+        break;
+      case 'varUnset':
+        // (A Cộng thêm already starts from 0: no need to suggest it.)
+        message = `{{${ns}.${x}}} chưa có giá trị trước bước này (chính bước này đang đặt nó). Thêm bước Đặt biến "${x}" phía trên để đặt giá trị ban đầu (ví dụ trước vòng lặp)${step?.type === 'set' && (step.config?.mode ?? 'set') === 'add' ? '.' : ', hoặc chọn "Cộng thêm" nếu muốn cộng dồn.'}`;
+        break;
+      case 'wholeRecord':
+        message = `{{${ns}}} là cả nhóm biến; chọn một biến, ví dụ {{${ns}.${ref.example ?? 'total'}}}.`;
+        break;
+      case 'unknownMember':
+        message = `${ns}.${x} là một giá trị, không có "${ref.missing}". Dùng {{${ns}.${x}}}.`;
+        break;
+      case 'maybe':
+        message = `biến ${ns}.${x} chỉ được đặt trên một số nhánh hoặc trong vòng lặp có thể chạy 0 lần trước khi tới đây, nên có thể trống. Thêm bước Đặt biến "${x}" phía trên (trước Rẽ nhánh/Lặp) để luôn có giá trị.`;
+        break;
+      case 'notNumber':
+        // The sentence of 0013 B, plus the fix on the Đặt biến step(s).
+        message = `"${optionLabel}": ${show(ref.path)} là ${VALUE_TYPES.find((t) => t.value === ref.valueType)?.label ?? ref.valueType}; lần chạy nào giá trị không phải số thì vòng lặp chạy 0 lần. Nên chọn biến kiểu Số bằng {x}. Đổi "Kiểu" của bước Đặt biến "${x}" thành Số.`;
+        fix = { kind: 'setVarType', name: x, to: 'number' };
         break;
       default:
         return null;

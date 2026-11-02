@@ -150,7 +150,10 @@ function chip(part, input, opts, issues) {
   let title;
   if (issue) title = issue.message;
   else if (!known) title = `Chưa khớp biến nào: ${part.path}`;
-  else {
+  else if (src.kind === 'value') {
+    // A variable of Đặt biến (design 0015): var.total · Số.
+    title = `${part.path} · ${typeLabel({ valueType: ref.valueType ?? src.valueType })}`;
+  } else {
     const member = src.members.find((m) => m.key === rest[0]);
     const owner = src.kind === 'vars' ? `${src.name}` : src.sobject || src.name;
     title = `${owner}.${rest.join('.')}${member ? ` · ${typeLabel(member)}` : ''}`;

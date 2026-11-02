@@ -35,6 +35,15 @@
 //   shadowed    — a loop variable hidden by an inner loop with the same name (a run variable:
 //                 by a loop variable or alias called like it)
 //   disabled    — the source, or a container around it, is turned off
+//
+// Named values (design 0015, Đặt biến): `exposes.kind: 'value'` with a `namespace` (`var`). Each
+// step is a source (id = step id, `name` = the variable name, `valueType`), pushed on the chain like
+// a downstream record (always / last / maybe, after / otherBranch / disabled work unchanged), but
+// kept out of the alias namespace (`byName`): `{{var.<name>}}` is resolved through `byVar`, over
+// every step setting that name — the nearest visible one is the `source`, the best certainty of
+// the visible ones counts (one `always` assignment above is enough). A loop variable or an alias
+// called like the namespace wins (validation reports it: `varReserved`), and the namespace wins
+// over the run variables.
 
 import { selectFields, soqlSobject } from './soql.js';
 
@@ -350,7 +359,13 @@ function buildSource(step, type, ex, id, cat, off) {
   const value = (key) => c[key] ?? type.options?.find((o) => o.key === key)?.default;
   const declared = (list) => list.filter((m) => !m.when || m.when.in.includes(value(m.when.key)));
   if (ex.label?.key === 'sobject' || type.options?.some((o) => o.key === 'sobject')) src.sobject = c.sobject ?? '';
-  if (ex.kind === 'vars') {
+  if (ex.kind === 'value') {
+    // A named value (design 0015): its type from the config (`valueType`, or `whenMode` for a mode
+    // that fixes it: Cộng thêm is always a number).
+    src.namespace = ex.namespace ?? 'var';
+    const vt = ex.valueType ?? {};
+    src.valueType = vt.whenMode?.[value('mode')] ?? vt.map?.[value(vt.key)] ?? 'any';
+  } else if (ex.kind === 'vars') {
     const ex2 = VAR_EXAMPLES[step.type]?.(c);
     if (ex2 && typeof ex.label === 'string') src.label = ex2.label;
     src.members = declared(Array.isArray(ex.members) ? ex.members : []).map((m) => ({ ...m, ...(ex2?.examples?.[m.key] ? { example: ex2.examples[m.key] } : {}) }));
@@ -385,6 +400,23 @@ const NOTES = {
   otherBranch: 'ở nhánh còn lại của Rẽ nhánh',
   disabled: 'đang tắt',
 };
+/** Notes of a hidden variable of Đặt biến (design 0015). */
+const VALUE_NOTES = {
+  after: 'Đặt biến chạy sau bước này',
+  self: 'là chính bước này',
+  otherBranch: 'ở nhánh còn lại của Rẽ nhánh',
+  disabled: 'đang tắt',
+};
+
+/** Chain key of a variable name (design 0015): set by every step setting that name. */
+const valueKey = (ns, name) => `\u0000${ns}.${name}`;
+
+/** Namespaces of named values in the catalogue (design 0015: `var`). */
+function valueNamespaces(cat) {
+  const out = new Set();
+  for (const t of cat.nodeTypes.values()) for (const ex of exposesList(t)) if (ex.kind === 'value') out.add(ex.namespace ?? 'var');
+  return out;
+}
 
 /**
  * @returns {{
@@ -434,11 +466,15 @@ export function analyzeScope(wf, catalog) {
   }
 
   const byName = new Map(); // name → [source] in reading order
+  // Named values (design 0015) are not in the alias namespace: variable name → [source].
+  const byVar = new Map();
   for (const s of Object.values(sources)) {
     if (!s.name) continue;
-    if (!byName.has(s.name)) byName.set(s.name, []);
-    byName.get(s.name).push(s);
+    const map = s.kind === 'value' ? byVar : byName;
+    if (!map.has(s.name)) map.set(s.name, []);
+    map.get(s.name).push(s);
   }
+  const namespaces = valueNamespaces(cat);
   for (const s of Object.values(sources)) {
     for (const [key, refName] of s._from) {
       const named = (byName.get(refName) ?? []).filter((x) => x.kind === 'record' && x !== s);
@@ -578,7 +614,12 @@ export function analyzeScope(wf, catalog) {
       // Turned-off containers contribute nothing to the steps after them.
       if (added && !stepOff) for (const [id, e] of added) head = push(head, id, mark(e));
       const own = sources[step.id];
-      if (own && own.visibleIn === 'downstream' && !stepOff) head = push(head, step.id, mark({ certainty: 'always', seq: ++seq }));
+      if (own && own.visibleIn === 'downstream' && !stepOff) {
+        head = push(head, step.id, mark({ certainty: 'always', seq: ++seq }));
+        // A named value (0015) also sets the chain key of its name, shared by every step setting
+        // it: set on both sides of a Rẽ nhánh, the join sees it `always`.
+        if (own.kind === 'value' && own.name) head = push(head, valueKey(own.namespace, own.name), mark({ certainty: 'always', seq }));
+      }
       const skipFn = typeof type?.maySkip === 'function' ? type.maySkip : MAY_SKIP[step.type];
       if (!stepOff && skipFn?.(step.config ?? {}, { poolNonEmpty: (name) => poolNonEmptyAt(head, name) })) {
         cut = true;
@@ -651,6 +692,7 @@ export function analyzeScope(wf, catalog) {
     };
     const noteOf = (sid, st) => {
       const s = sources[sid];
+      if (s.kind === 'value') return VALUE_NOTES[st.reason === 'after' && sid === id ? 'self' : st.reason] ?? NOTES[st.reason];
       if (st.reason === 'outsideLoop') return `chỉ có bên trong vòng lặp "${s.kind === 'vars' ? s.name : sources[s.nodeId]?.name ?? s.name}"`;
       if (st.reason === 'shadowed') return s.global ? `bị ${varByName(s.name) ? 'biến lặp' : 'alias'} "${s.name}" che` : `bị vòng lặp "${s.name}" bên trong che`;
       if (st.reason === 'after' && sid === id) return NOTES.self;
@@ -660,6 +702,8 @@ export function analyzeScope(wf, catalog) {
       self: id,
       disabled: r.off,
       state,
+      /** Chain entry of a downstream source at this step ({ certainty, seq, why? }), or null. */
+      entry: (sid) => (sid === id ? null : entryAt(r.head, sid)),
       /** Innermost visible loop variable called `name`, as a source. */
       varSource: (name) => {
         const v = varByName(name);
@@ -678,7 +722,7 @@ export function analyzeScope(wf, catalog) {
           list.push({ source: v.id, certainty: 'always', seq: v.seq });
         }
         for (let n = r.head; n && n !== ROOT; n = n.prev) {
-          if (seen.has(n.id)) continue;
+          if (seen.has(n.id) || !sources[n.id]) continue; // (name keys of named values are no source)
           seen.add(n.id);
           list.push({ source: n.id, certainty: n.entry.certainty, seq: n.entry.seq, ...(n.entry.why ? { why: n.entry.why } : {}) });
         }
@@ -714,7 +758,7 @@ export function analyzeScope(wf, catalog) {
     if (!here) continue;
     for (const o of referenceOptions(step, cat, { includeHidden: true })) {
       for (const { path } of pathsIn(o.mode, o.value)) {
-        const ref = { ...resolveRef({ step, here, o, path, sources, byName, loopKeys }), disabled: off };
+        const ref = { ...resolveRef({ step, here, o, path, sources, byName, byVar, namespaces, loopKeys }), disabled: off };
         if (o.hidden) ref.hidden = true;
         refs.push(ref);
       }
@@ -746,7 +790,7 @@ function resolveMember(members, parts, ignoreCase = false) {
   return { ok: true };
 }
 
-function resolveRef({ step, here, o, path, sources, byName, loopKeys }) {
+function resolveRef({ step, here, o, path, sources, byName, byVar, namespaces, loopKeys }) {
   const parts = String(path).split('.');
   const [name, ...rest] = parts;
   const member = rest.join('.');
@@ -797,9 +841,13 @@ function resolveRef({ step, here, o, path, sources, byName, loopKeys }) {
     return { ...base, source: step.id, viaThis: true, certainty: 'always' };
   }
 
-  // A loop variable in scope wins (like the executor), then a record alias, then the run
-  // variables (design 0013 G), then any loop variable.
+  // A loop variable in scope wins (like the executor), then a record alias, then the named values
+  // of Đặt biến (design 0015: `var.<name>`), then the run variables (design 0013 G), then any loop
+  // variable.
   const visibleVar = here.varSource(name);
+  if (namespaces?.has(name) && !visibleVar && !(byName.get(name) ?? []).some((s) => s.kind !== 'vars')) {
+    return resolveValue({ step, here, o, sources, byVar, base, fail, ns: name, rest });
+  }
   const candidates = byName.get(name) ?? [];
   const src = visibleVar ?? candidates.find((s) => s.kind !== 'vars') ?? candidates.find((s) => s.global)
     ?? candidates.find((s) => !s.disabled) ?? candidates[0];
@@ -816,7 +864,7 @@ function resolveRef({ step, here, o, path, sources, byName, loopKeys }) {
     // (`accs.Name` would be noCurrent); `accs.$count` still can (0010 review).
     const fieldPath = rest.length > 0 && !rest[0].startsWith('$');
     const fits = (src) => src && !(fieldPath && src.current === 'none');
-    const visibleNames = here.visible.map((v) => sources[v.source]).filter(fits).map((x) => x.name);
+    const visibleNames = here.visible.map((v) => sources[v.source]).filter((x) => fits(x) && x.kind !== 'value').map((x) => x.name);
     const allNames = [...byName.entries()].filter(([, list]) => list.some(fits)).map(([n]) => n);
     const hint = closest(name, [...visibleNames, ...(o.fieldIndex !== undefined ? ['this'] : [])]) ?? closest(name, allNames);
     return fail('unknownName', hint ? { suggestion: { option: o.option, from: path, to: [hint, ...rest].join('.') } } : {});
@@ -880,6 +928,58 @@ function resolveRef({ step, here, o, path, sources, byName, loopKeys }) {
 }
 
 /**
+ * `<ns>.<name>` — a named value of Đặt biến (design 0015). Every step setting `name` is a source;
+ * the nearest one visible here is `source`, the best certainty of the visible ones counts, and
+ * their common value type (`any` when they differ) is checked in a number option like a field.
+ * Only the step itself sets it → `varUnset`; none visible → the reason of the first one, in the
+ * order disabled > otherBranch > after; none at all → `unknownName` with a "Did you mean".
+ * Refs carry `varName` (the variable) besides `name` (the namespace).
+ */
+function resolveValue({ step, here, o, sources, byVar, base, fail, ns, rest }) {
+  const inNs = (s) => s?.kind === 'value' && s.namespace === ns;
+  const visibleNames = () => here.visible.map((v) => sources[v.source]).filter(inNs).map((s) => s.name);
+  if (!rest.length) return fail('wholeRecord', { namespace: ns, example: visibleNames()[0] ?? null });
+  const x = rest[0];
+  const list = (byVar.get(x) ?? []).filter(inNs);
+  const extra = { namespace: ns, varName: x };
+  if (!list.length) {
+    const all = [...byVar.values()].flat().filter(inNs).map((s) => s.name);
+    const hint = closest(x, visibleNames()) ?? closest(x, all);
+    return fail('unknownName', { ...extra, ...(hint ? { suggestion: { option: o.option, from: [ns, ...rest].join('.'), to: [ns, hint, ...rest.slice(1)].join('.') } } : {}) });
+  }
+  const others = list.filter((s) => s.nodeId !== step.id);
+  const seen = others.map((s) => ({ s, st: here.state(s.id), e: here.entry(s.id) })).filter((v) => v.st.certainty);
+  if (seen.length) {
+    const nearest = seen.reduce((a, b) => ((b.e?.seq ?? 0) > (a.e?.seq ?? 0) ? b : a));
+    // Certainty of the name (every step setting it, joined like one source: one assignment on each
+    // side of a Rẽ nhánh is `always`), never worse than the best single assignment.
+    const byName = here.entry(valueKey(ns, x));
+    const best = seen.map((v) => v.st.certainty).reduce((a, b) => (RANK[a] <= RANK[b] ? a : b));
+    const certainty = byName && RANK[byName.certainty] < RANK[best] ? byName.certainty : best;
+    const types = new Set(seen.map((v) => v.s.valueType));
+    const valueType = types.size === 1 ? [...types][0] : 'any';
+    const withSrc = { ...extra, source: nearest.s.id };
+    if (rest.length > 1) return fail('unknownMember', { ...withSrc, missing: rest.slice(1).join('.') });
+    let out = { ...base, ...withSrc, certainty, valueType };
+    if (certainty === 'maybe') {
+      const why = byName?.why ?? seen.find((v) => v.st.certainty === 'maybe' && v.st.why)?.st.why;
+      out = { ...out, code: 'maybe', level: 'warning', ...(why ? { why } : {}) };
+    }
+    // A number option (design 0013 B): Chữ is a warning (may not be a number), `any` is fine.
+    if (o.mode === 'number' && valueType === 'string' && !out.code) out = { ...out, code: 'notNumber', level: 'warning' };
+    return out;
+  }
+  // Nothing visible. Only this very step sets it (or the others all run after it): it reads its
+  // own value before any assignment.
+  const reasons = others.map((s) => ({ s, reason: here.state(s.id).reason ?? 'after' }));
+  if (list.length > others.length && reasons.every((v) => v.reason === 'after')) {
+    return fail('varUnset', { ...extra, source: list.find((s) => s.nodeId === step.id).id });
+  }
+  const first = ['disabled', 'otherBranch', 'after'].map((r) => reasons.find((v) => v.reason === r)).find(Boolean) ?? reasons[0];
+  return fail(first.reason, { ...extra, source: first.s.id, reason: first.reason });
+}
+
+/**
  * Choices for a `kind: 'ref'` option at `stepId` (Lookup "Bản ghi cha", 0006 `pick.from`):
  * usable sources first (nearest first), then the others with the reason they cannot be used.
  * `accepts` filters sources by their flags (default: lookupParent).
@@ -918,6 +1018,25 @@ export function sourceStep(scope, sourceId) {
 export function refsToRecords(scope, stepId, member, opts) {
   const via = Object.values(scope?.sources ?? {}).filter((x) => x.root === stepId && (x.current === 'picked' || x.current === 'item')).map((x) => x.id);
   return [stepId, ...via].flatMap((id) => refsTo(scope, id, member, opts));
+}
+
+/**
+ * References that removing steps breaks (delete toasts): the references of `before` (analyzeScope of
+ * the workflow before the change) that resolved there and are errors in `after` (the same place:
+ * step, field, option, path), outside the steps `removed`. Whatever kept them valid — a Đặt biến
+ * still setting the name above (design 0015), another source — is taken into account.
+ */
+export function brokenRefs(before, after, { removed = new Set() } = {}) {
+  const key = (r) => `${r.nodeId}|${r.field}|${r.option}|${r.path}`;
+  const errors = new Set((after?.refs ?? []).filter((r) => r.level === 'error').map(key));
+  return (before?.refs ?? []).filter((r) => !removed.has(r.nodeId) && r.level !== 'error' && errors.has(key(r)));
+}
+
+/** Name of the source of a reference as the user writes it: `acc`, `loop`, `var.total` (0015). */
+export function sourceLabel(scope, sourceId) {
+  const s = scope?.sources?.[sourceId];
+  if (!s) return String(sourceId ?? '');
+  return s.kind === 'value' ? `${s.namespace}.${s.name}` : s.name;
 }
 
 /** References (from analyzeScope) that point at `sourceId`, optionally at one member. */
@@ -991,7 +1110,9 @@ export function numericSampleFields(wf, catalog) {
     (out[root.nodeId] ??= new Set()).add(String(field).trim());
   };
   for (const r of scope.refs) {
-    if (r.mode !== 'number' || r.disabled || r.hidden || r.level === 'error' || r.source === undefined) continue;
+    // The `value` of a Đặt biến kiểu Số or Cộng thêm (design 0015) is read as a number too.
+    const numeric = r.mode === 'number' || (r.option === 'value' && r.fieldIndex === undefined && scope.sources[r.nodeId]?.kind === 'value' && scope.sources[r.nodeId].valueType === 'number');
+    if (!numeric || r.disabled || r.hidden || r.level === 'error' || r.source === undefined) continue;
     add(scope.sources[r.source], r.member);
   }
   const visit = (list) => {

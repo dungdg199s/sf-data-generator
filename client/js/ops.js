@@ -5,9 +5,9 @@
 import { h, toast } from './dom.js';
 import {
   state, subscribe, updateWorkflow, select, undo, nodeType, slotKeys, locate, stepById, newId, suggestAlias, workflowRevision, currentScope,
-  suggestPoolAlias, suggestPickAlias,
+  suggestPoolAlias, suggestPickAlias, suggestVarName,
 } from './store.js';
-import { analyzeScope, refChoices, sourceStep } from '/shared/scope.js';
+import { analyzeScope, refChoices, brokenRefs, sourceLabel } from '/shared/scope.js';
 import { eachWrapPlan as planEachWrap, applyEachRewire } from '/shared/each-wrap.js';
 import {
   insertStep, removeStep, moveStep, wrapStep, cloneSteps, collectIds, collectAliases,
@@ -81,7 +81,7 @@ export function recordPreset(sobject) {
 export function newStep(type, target, around = []) {
   const def = nodeType(type);
   const step = {
-    id: newId({ record: 'r', loop: 'l', branch: 'b', query: 'q', pick: 'p' }[type] ?? 's'),
+    id: newId({ record: 'r', loop: 'l', branch: 'b', query: 'q', pick: 'p', set: 'v' }[type] ?? 's'),
     type,
     // `initial` (a new step's value) wins over `default` (the value used when the key is missing).
     config: Object.fromEntries((def?.options ?? []).map((o) => [o.key, o.initial ?? o.default]).filter(([, v]) => v !== '' && v !== undefined).map(([k, v]) => [k, structuredClone(v)])),
@@ -92,6 +92,8 @@ export function newStep(type, target, around = []) {
     step.config.fields = recordPresetFields(step.config.sobject);
   }
   if (type === 'query') step.config.alias = suggestPoolAlias(step.config.sobject);
+  // Đặt biến (design 0015): bien1, bien2… a name no Đặt biến uses yet.
+  if (type === 'set') step.config.name = suggestVarName();
   if (type === 'loop') {
     // Do not shadow the variable of an enclosing loop: loop, loop2, loop3…
     // …nor a loop inside the steps it wraps, nor a record alias.
@@ -196,15 +198,18 @@ export function addStep(type, target = defaultTarget()) {
   });
   if (ok === false) return null;
   select({ kind: 'step', id: step.id });
+  // Đặt biến (design 0015): the name is typed first, its suggestion selected to type over it.
+  if (type === 'set') focusInspectorField('name', { selectAll: true });
   reveal(step.id, { flash: true });
   return step;
 }
 
-/** References from outside `step` to variables it (or a step inside it) provides. */
-function outsideRefs(step) {
-  const inside = subtreeIds(step, slotKeys);
-  const scope = currentScope();
-  return scope.refs.filter((r) => inside.has(sourceStep(scope, r.source)) && !inside.has(r.nodeId));
+/** Focus an option of the step shown in the inspector (after the "+" menu gave focus back). */
+function focusInspectorField(key, { selectAll = false } = {}) {
+  const input = document.querySelector(`#inspector .options [data-key="${CSS.escape(key)}"]`);
+  if (!input) return;
+  input.focus();
+  if (selectAll) input.select?.();
 }
 
 /** The step to select after removing `id`: next sibling, else previous, else the parent. */
@@ -225,7 +230,7 @@ export function deleteStep(id = selectedId()) {
  * workflow (another edit, undo or redo), the button is removed — Ctrl+Z still works.
  */
 let dropUndoWatch = null;
-function toastWithUndo(message) {
+export function toastWithUndo(message) {
   dropUndoWatch?.();
   const rev = workflowRevision();
   const t = toast(message, 4000, {
@@ -248,17 +253,18 @@ function doRemove(at, keepChildren) {
   const step = at.step;
   const nextSel = keepChildren ? (slotKeys(step.type).flatMap((k) => slotList(step, k))[0]?.id ?? selectionAfterRemove(at)) : selectionAfterRemove(at);
   const scope = currentScope();
-  // Bỏ vỏ: references to what the container provided (its loop variable, the record a Lặp
-  // `each` loops over) break.
-  const refs = keepChildren ? scope.refs.filter((r) => sourceStep(scope, r.source) === step.id && r.nodeId !== step.id) : outsideRefs(step);
-  const srcName = refs.length ? scope.sources[refs[0].source]?.name ?? refs[0].source : '';
+  // The references that resolved before and are errors after the removal (Bỏ vỏ: those to what
+  // the container provided — its loop variable, the record a Lặp `each` loops over; a variable of
+  // Đặt biến another step still sets above is fine, design 0015).
+  const removed = keepChildren ? new Set([step.id]) : subtreeIds(step, slotKeys);
   updateWorkflow((wf) => removeStep(wf, step.id, { keepChildren, slotKeys }));
+  const refs = brokenRefs(scope, currentScope(), { removed });
+  const labels = new Set(refs.map((r) => sourceLabel(scope, r.source)));
   select(nextSel ? { kind: 'step', id: nextSel } : null);
   if (nextSel) reveal(nextSel);
   const places = placesText(refs);
-  const sources = new Set(refs.map((r) => r.source));
   const used = places.length
-    ? ` ${sources.size === 1 ? `Bước "${srcName}"` : 'Các bước vừa xóa'} đang được dùng ở ${places.length} chỗ: ${places.join(', ')}. ${places.length > 1 ? 'Các chỗ đó' : 'Chỗ đó'} sẽ báo lỗi cho tới khi sửa.`
+    ? ` ${labels.size === 1 ? `Bước "${[...labels][0]}"` : 'Các bước vừa xóa'} đang được dùng ở ${places.length} chỗ: ${places.join(', ')}. ${places.length > 1 ? 'Các chỗ đó' : 'Chỗ đó'} sẽ báo lỗi cho tới khi sửa.`
     : '';
   toastWithUndo(keepChildren ? `Đã bỏ vỏ ${stepLabel(step)}.${used}` : `Đã xóa bước ${stepLabel(step)}.${used}`);
 }
@@ -441,13 +447,13 @@ function removeMany(ids, { cut = false } = {}) {
   if (!ids.length) return;
   const inside = new Set(ids.flatMap((id) => [...subtreeIds(stepById(id), slotKeys)]));
   const scope = currentScope();
-  const refs = scope.refs.filter((r) => inside.has(sourceStep(scope, r.source)) && !inside.has(r.nodeId));
   const first = locate(ids[0]);
   const last = locate(ids.at(-1));
   const nextSel = last.list.slice(last.index + 1).find((s) => s?.id && !inside.has(s.id))?.id
     ?? first.list.slice(0, first.index).reverse().find((s) => s?.id && !inside.has(s.id))?.id
     ?? first.parentId;
   updateWorkflow((wf) => removeSteps(wf, ids, { slotKeys }));
+  const refs = brokenRefs(scope, currentScope(), { removed: inside });
   select(nextSel ? { kind: 'step', id: nextSel } : null);
   if (nextSel) reveal(nextSel);
   if (cut) {

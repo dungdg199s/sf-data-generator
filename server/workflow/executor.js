@@ -40,6 +40,10 @@
 // - samples: the fields of the first record of every Record step and the first pick of every
 //   Chọn bản ghi (variable picker), also on `generator.samples` while it runs (0013 F).
 // - scope.run = { seed, now, today } (design 0013 G), read after every name the user gave.
+// - set (design 0015, Đặt biến): scope.var[name] = the value (Chữ: the rendered template; Số: a
+//   number or null; Cộng thêm: previous number (or 0) + the value, rounded to 15 significant
+//   digits). scope.var is one prototype-less object for the whole run (loop bodies copy the scope
+//   shallowly, so an assignment inside a loop is still there after it). Draws nothing from the rng.
 // Record pools (scope.current / scope.all) are global to the run; loop variables are lexical.
 // Memory (0004 + 0007 conflict 1): the pool of a Record alias is count-only
 // ({ kind: 'generated', length, refAt(i) } → `alias#(i+1)`), unless a step reads whole records
@@ -79,6 +83,8 @@ export function isValidNow(now) {
   return typeof now === 'number' && Number.isFinite(now) && Math.abs(now) <= MAX_TIME_MS;
 }
 const vi = (n) => n.toLocaleString('vi-VN');
+/** A finite number, else null (`Infinity` reads as a number for toNumber). */
+const finite = (x) => (x !== null && Number.isFinite(x) ? x : null);
 
 /** Left side of a filter: the field of a pool record, a Lookup `{ $ref }` as its ref. */
 function filterLeft(rec, field) {
@@ -168,7 +174,8 @@ function generate(workflow, { seed, now, maxRecords, queryResults, keptPools, ti
   const live = { total: 0, bySobject: {}, byStep: {} };
   const iso = new Date(now).toISOString();
   // `run` (design 0013 G): the same seed + now in preview, insert and export give the same values.
-  const rootScope = { current: {}, all: {}, vars: {}, run: { seed, now: iso, today: iso.slice(0, 10) } };
+  // `var` (design 0015): no prototype, so a variable called `__proto__` or `constructor` is just a name.
+  const rootScope = { current: {}, all: {}, vars: {}, var: Object.create(null), run: { seed, now: iso, today: iso.slice(0, 10) } };
   // Step id → fields of its first record (Record) or first pick (Chọn bản ghi): variable picker
   // samples, also readable while the run goes (a cancelled preview still returns them).
   const samples = {};
@@ -403,6 +410,42 @@ function generate(workflow, { seed, now, maxRecords, queryResults, keptPools, ti
       return Math.trunc(x);
     }
 
+    /**
+     * Đặt biến (design 0015): no rng, no record. A number that does not come out of the value
+     * (empty, text, a Lookup) leaves the variable empty (Gán) or adds 0 (Cộng thêm), counted in
+     * `stat.notNumber` for one warning at the end.
+     */
+    function setVariable(step, c, stat, scope) {
+      const name = String(c.name ?? '');
+      const text = c.value === undefined || c.value === null ? '' : String(c.value);
+      const mode = c.mode ?? 'set';
+      let v;
+      if (mode !== 'add' && (c.valueType ?? 'text') !== 'number') {
+        v = renderTemplate(text, scope, undefined);
+        if (v.length > LIMITS.maxVarLength) {
+          fail(step, `Bước Đặt biến "${name}": giá trị dài quá ${vi(LIMITS.maxVarLength)} ký tự ở lần chạy qua thứ ${vi(stat.runs)}. Kiểm tra "Giá trị" (có đang nối thêm vào chính biến này trong vòng lặp?).`, 'value');
+        }
+      } else {
+        // Exactly one {{path}} keeps the value as it is (a number stays a number); otherwise the text.
+        const path = numberVarPath(text);
+        const x = finite(toNumber(path !== null ? resolvePath(path, scope, undefined) : renderTemplate(text, scope, undefined)));
+        if (x === null) stat.notNumber = (stat.notNumber ?? 0) + 1;
+        if (mode === 'add') {
+          const prev = finite(toNumber(scope.var[name])) ?? 0;
+          // 15 significant digits: 0.1 + 0.2 is 0.3, the same on every machine.
+          v = Number((prev + (x ?? 0)).toPrecision(15));
+          // Past the largest number (Infinity): keep the previous value and warn, never restart at 0.
+          if (!Number.isFinite(v)) {
+            if (x !== null) stat.notNumber = (stat.notNumber ?? 0) + 1;
+            v = prev;
+          }
+        } else v = x;
+      }
+      scope.var[name] = v;
+      stat.value = typeof v === 'string' && v.length > 100 ? v.slice(0, 100) : v;
+      samples[step.id] ??= { [name]: v };
+    }
+
     /** Lặp "Mỗi giá trị trong danh sách" (design 0013 D): no rng. */
     function* runValues(step, c, stat, scope) {
       let values = valueLists.get(step.id);
@@ -598,6 +641,9 @@ function generate(workflow, { seed, now, maxRecords, queryResults, keptPools, ti
             (scope.all[c.alias] ??= []).push(rec);
             break;
           }
+          case 'set':
+            setVariable(step, c, stat, scope);
+            break;
           default:
             fail(step, `Loại bước "${step.type}" không chạy được.`);
         }
@@ -652,6 +698,17 @@ function generate(workflow, { seed, now, maxRecords, queryResults, keptPools, ti
               code: 'numberVarClamped',
             });
           }
+        }
+        if (step.type === 'set' && s?.notNumber) {
+          const head = `Bước Đặt biến "${step.config?.name ?? ''}": giá trị không ra số ở ${vi(s.notNumber)}/${vi(s.runs)} lần chạy qua`;
+          runWarnings.push({
+            message: (step.config?.mode ?? 'set') === 'add'
+              ? `${head} nên đã cộng 0 ở các lần đó. Kiểm tra biến trong "Giá trị".`
+              : `${head} nên biến trống ở các lần đó. Kiểm tra biến trong "Giá trị" hoặc đổi "Kiểu" thành Chữ.`,
+            nodeId: step.id,
+            field: 'value',
+            code: 'setVarNotNumber',
+          });
         }
         if (step.type === 'pick' && s?.skipped) {
           runWarnings.push({

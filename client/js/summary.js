@@ -1,5 +1,5 @@
 // One-line summaries and run-stat chips for step cards (moved out of the old canvas.js).
-// Record, Query, Chọn bản ghi, Lặp and Rẽ nhánh have their own sentence; other step types fall
+// Record, Query, Chọn bản ghi, Lặp, Rẽ nhánh and Đặt biến have their own sentence; other step types fall
 // back to the options marked `summary: true` in /api/meta.
 
 import { state, nodeType, queryResultOf, stepById, slotKeys, currentEstimate } from './store.js';
@@ -8,6 +8,8 @@ import { START_ID } from './layout.js';
 import { selectFields, soqlSobject } from '/shared/soql.js';
 import { exposesOf, valueList } from '/shared/scope.js';
 
+/** `var.<name>` (meta.syntax.varNamespace, design 0015). */
+export const varPath = (name) => `${state.meta?.syntax?.varNamespace ?? 'var'}.${name}`;
 const opLabel = (type, key, value) => nodeType(type)?.options.find((o) => o.key === key)?.choices?.find((x) => x.value === value)?.label ?? value;
 const PICK_MODE = { random: 'ngẫu nhiên', unique: 'không lặp', sequential: 'lần lượt' };
 /** " · lọc AccountId = {{acc.Id}}" of a Chọn bản ghi or Lặp `each` with a filter, else ''. */
@@ -62,6 +64,15 @@ export function stepSummary(step) {
       if ((c.kind ?? 'chance') === 'chance') return `${Math.round((c.probability ?? 0.5) * 100)}% đi nhánh Đúng`;
       return `${c.left ?? ''} ${opLabel('branch', 'op', c.op)} ${c.right ?? ''}`;
     }
+    case 'set': {
+      // Design 0015, after review: the name is already on the card (stepAlias `var.lo`), so the
+      // summary starts at the operator: "= TEST-{{run.today}}", "= 5 · Số", "+= {{opp.Amount}}".
+      if (!c.name) return 'Chưa đặt tên biến';
+      const raw = c.value === undefined || c.value === null ? '' : String(c.value);
+      const value = raw === '' ? '(trống)' : raw.length > 48 ? `${raw.slice(0, 48)}…` : raw;
+      if (c.mode === 'add') return `+= ${value}`;
+      return `= ${value}${c.valueType === 'number' ? ` · ${opLabel('set', 'valueType', 'number')}` : ''}`;
+    }
     default: {
       const defs = (nodeType(step.type)?.options ?? []).filter((o) => o.summary);
       return defs.map((d) => c[d.key] ?? d.default).filter((v) => v !== undefined && v !== '').join(' · ');
@@ -77,6 +88,11 @@ export function stepSummary(step) {
  */
 export function stepAlias(step) {
   const active = exposesOf(nodeType(step?.type), step?.config);
+  // A variable of Đặt biến (design 0015) shows as it is used: var.total.
+  if (active[0]?.ex.kind === 'value') {
+    const name = step.config?.[active[0].ex.name?.key];
+    return name ? varPath(name) : '';
+  }
   for (let i = active.length - 1; i >= 0; i--) {
     const key = active[i].ex.name?.key;
     if (key && step.config?.[key]) return step.config[key];
@@ -104,6 +120,14 @@ export function statChip(step, byStep) {
     return q?.source === 'sample' ? `${q.count} bản ghi mẫu` : `${q?.count ?? s.rows ?? 0} bản ghi đọc từ org`;
   }
   if (step.type === 'pick') return `chọn ${s.picked ?? 0} lần${s.skipped ? ` · bỏ qua ${s.skipped}` : ''}`;
+  if (step.type === 'set') {
+    // Design 0015: "đặt 12 lần · = 4.520", "đặt 1 lần · = "TEST-2026-11-02"", "· 2 lần không phải số".
+    const v = s.value;
+    const shown = v === null || v === undefined ? '(trống)'
+      : typeof v === 'number' ? v.toLocaleString('vi-VN', { maximumFractionDigits: 10 })
+        : `"${String(v).length > 24 ? `${String(v).slice(0, 24)}…` : v}"`;
+    return `đặt ${s.runs.toLocaleString('vi-VN')} lần · = ${shown}${s.notNumber ? ` · ${s.notNumber.toLocaleString('vi-VN')} lần không phải số` : ''}`;
+  }
   return s.records ? `${s.records} bản ghi` : `${s.runs} lần chạy`;
 }
 

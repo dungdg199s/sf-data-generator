@@ -13,6 +13,9 @@
 // trị trong danh sách" runs once per value (exact); a Lặp `each` with a filter is not exact: an
 // `eq` filter is taken to split the pool between the visits (parent–child: every Contact once
 // over all the Accounts), another operator to keep half; "Tối đa số bản ghi" caps every visit.
+// Design 0015: `{{var.n}}` set by exactly one enabled Đặt biến (Gán, Số, a constant value) counts
+// as that number, exact like a number typed in the box — when that step surely ran before (not in a
+// branch, nor in a loop that may run 0 times); otherwise it is at most that number, not exact.
 
 import { maxFetchFor } from './soql.js';
 import { numberVarPath, valueList } from './scope.js';
@@ -37,9 +40,41 @@ export function estimateSteps(wf, catalog, { queryCounts = {} } = {}) {
   };
   const num = (v, fallback = 0) => (Number.isFinite(Number(v)) ? Number(v) : fallback);
   const cap = catalog?.limits?.maxCountPerNode ?? 100000;
-  /** Iterations given by a number variable (never exact). */
+  // Đặt biến (design 0015): variable name → the steps (turned on) setting it.
+  const varNs = catalog?.syntax?.varNamespace ?? 'var';
+  const setters = new Map();
+  const collectSetters = (list) => {
+    for (const step of Array.isArray(list) ? list : []) {
+      if (!isStep(step) || step.disabled === true) continue;
+      if (step.type === 'set') {
+        const n = String(step.config?.name ?? '');
+        if (!setters.has(n)) setters.set(n, []);
+        setters.get(n).push(step);
+      }
+      for (const k of types.get(step.type)?.slots?.map((x) => x.key) ?? []) collectSetters(step.slots?.[k]);
+    }
+  };
+  collectSetters(wf?.steps);
+  // Đặt biến steps met so far in reading order (= run order): name → true when surely reached.
+  const setReached = new Map();
+  /** The constant of `{{var.<name>}}` when one Đặt biến (Gán, Số, no `{{`) sets it, else null. */
+  const varConstant = (name) => {
+    const list = setters.get(name) ?? [];
+    if (list.length !== 1) return null;
+    const c = list[0].config ?? {};
+    const raw = c.value === undefined || c.value === null ? '' : String(c.value);
+    if ((c.mode ?? 'set') !== 'set' || c.valueType !== 'number' || raw.includes('{{') || raw.trim() === '') return null;
+    const n = Number(raw);
+    // Like the executor's count: not a number → 0, clamped to 0…maxCountPerNode, whole.
+    return Number.isFinite(n) ? Math.min(cap, Math.max(0, Math.trunc(n))) : null;
+  };
+  /** Iterations given by a number variable (never exact, but a constant Đặt biến is). */
   const varCount = (path) => {
     const [name, member, ...more] = path.split('.');
+    if (name === varNs && member !== undefined && !more.length && setReached.has(member)) {
+      const k = varConstant(member);
+      if (k !== null) return setReached.get(member) ? { e: k, min: k, max: k, exact: true } : { e: k, min: 0, max: k, exact: false };
+    }
     const p = member === '$count' && !more.length ? pools.get(name) : null;
     return p ? { e: p.size, min: p.min, max: p.max, exact: false } : { e: 1, min: 0, max: cap, exact: false };
   };
@@ -150,6 +185,12 @@ export function estimateSteps(wf, catalog, { queryCounts = {} } = {}) {
           const size = known ? num(queryCounts[step.id]) : limit;
           if (step.config?.alias) pools.set(step.config.alias, { size, min: known ? size : 0, max: size, exact: known, grownIn: new Set() });
           e.rows = size;
+          break;
+        }
+        case 'set': {
+          // Surely reached when the list it is in runs at least once on every path (ctx.min ≥ 1).
+          const n = String(step.config?.name ?? '');
+          setReached.set(n, Boolean(setReached.get(n)) || ctx.min >= 1);
           break;
         }
         case 'pick': {

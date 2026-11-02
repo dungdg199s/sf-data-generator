@@ -78,7 +78,7 @@ Từ [0003](design/0003-process-mode.md), workflow là **cây các bước** (ve
 | `settings.maxRecords` | không | Giới hạn bản ghi mỗi lần chạy (trần cứng 200 000) |
 | `steps` | có | Dãy bước gốc, chạy từ trên xuống |
 | `steps[].id` | có | Duy nhất trong **cả cây**. Là `nodeId` trong lỗi và trong `records[]`. Chuỗi gồm chữ không dấu, số, `_`, `-`, không bắt đầu bằng `-`, 1–64 ký tự (`STEP_ID` của `shared/workflow-tree.js`; sửa sau review 0011 B1 và lần 2: id nằm trong file Lịch sử; số hay chuỗi sai ⇒ lỗi `Id bước … phải là chuỗi…` / `Id bước "…" không hợp lệ…` gắn bước). Id do UI tạo (`s…`, `…_2`, `nextId` giữ ≤ 64 ký tự) luôn hợp lệ; UI tự sửa id sai (`normalizeStepIds`) khi mở file, nhập file thư viện và dán; `migrateV1` đổi id số thành chuỗi |
-| `steps[].type` | có | `record`, `query`, `pick`, `loop`, `branch` |
+| `steps[].type` | có | `record`, `query`, `pick`, `loop`, `branch`, `set` ([0015](design/0015-buoc-dat-bien.md)) |
 | `steps[].config` | không | Cấu hình của bước (bảng dưới) |
 | `steps[].slots` | không | Chỉ cho loại bước có `slots` trong meta. Object `{ <slot key>: [bước…] }`; thiếu slot nghĩa là dãy rỗng |
 | `steps[].disabled` | không | `true`: bỏ qua bước này và mọi bước con khi chạy |
@@ -95,6 +95,7 @@ Bản cũ của app không đọc được file version 2.
 | `pick` (0006) | – | `from` (alias của pool phía trên), `alias` (bắt buộc), `mode`: `random` \| `unique` \| `sequential` \| `weighted` ([0013](design/0013-mo-rong-bien-va-lap.md) E: `weightField` = field số của bản ghi trong pool, bắt buộc); `filter`: `none` \| `compare` (`filterField`, `filterOp`, `filterValue` nhận `{{…}}`); `onEmpty`: `skip` \| `error` |
 | `loop` | `body` | `mode`: `fixed` (`count`), `range` (`min`, `max`), `each` ([0010](design/0010-lap-theo-ban-ghi.md): `from` = alias của pool Query/Record/Chọn bản ghi phía trên, `itemAlias` = tên bản ghi đang lặp, bắt buộc; 0013 C thêm `filter`/`filterField`/`filterOp`/`filterValue` như Chọn bản ghi, `order`: `pool` \| `shuffle` (mặc định `pool`), `limit` số nguyên 0–100 000, `0` = tất cả) hoặc `values` (0013 D: `values` = mảng chuỗi/số/đúng sai, hoặc chuỗi mỗi dòng một giá trị; một phần tử là object/mảng là lỗi `valuesObject` gắn `values`); `alias` của biến lặp (mặc định `loop`). `count`, `min`, `max` là số **hoặc** một chuỗi đúng một biến `"{{acc.NumberOfEmployees}}"` (0013 B; khoảng trắng hai đầu được bỏ qua); chuỗi số chỉ gồm chữ số (`"7"`, không `"1e3"`, `"0x10"`, `"+5"`), `true`/`false` là lỗi (sau review 0013; `limit` cũng vậy). Thiếu `count` = 0 lần, thiếu `max` = 1. Khóa của chế độ khác bị bỏ qua (không kiểm tra, không xóa) |
 | `branch` | `true` (Đúng), `false` (Sai) | `kind`: `chance` (`probability`) hoặc `compare` (`left`, `op`, `right`; `right` nhận `{{…}}` từ 0013 A) |
+| `set` ([0015](design/0015-buoc-dat-bien.md), "Đặt biến") | – | `name` (tên biến, `^[A-Za-z_][A-Za-z0-9_]*$`, ≤ 40 ký tự, phân biệt hoa thường, bắt buộc), `mode`: `set` (mặc định) \| `add` (cộng thêm, luôn Số), `valueType`: `text` (mặc định) \| `number` (bỏ qua khi `add`), `value` (template, mặc định `''`; số JSON `5` cũng nhận, như `"5"`). Gán lại cùng `name` ở bước khác là hợp lệ và là cách đổi giá trị |
 
 Danh mục nằm ở `server/workflow/nodes.js` và được `GET /api/meta` trả về (`nodeTypes[]`): mỗi loại có `label`,
 `category` (`data` hoặc `control`, nhãn nhóm trong `stepCategories`), `description`, `slots` (`key`, `label`, và tùy chọn
@@ -128,7 +129,7 @@ phạm vi (`analyzeScope` trong `shared/scope.js`) chỉ đọc hai khóa này, 
 | --- | --- | --- |
 | `flow.kind` | `sequence`; `loop` (`body`: khóa slot lặp lại); `branch` (`alternatives`: các slot loại trừ nhau) | Cách các slot chạy. Loop có thêm hàm `minIterations(config, ctx)` (không gửi qua meta; trình duyệt dùng bản trong `shared/scope.js`); `ctx.poolNonEmpty(name)` (0013): pool đó luôn có bản ghi tại bước Lặp. Chọn bản ghi có hàm `maySkip(config, ctx)` (`pickMaySkip`, sau review 0013): bước có thể bỏ qua phần còn lại của lượt (`onEmpty: "skip"`, trừ khi không lọc, không `unique` và pool `from` luôn có bản ghi) |
 | `exposes` | một object như các dòng dưới, hoặc **mảng** các object (0010) | Mỗi phần tử là một nguồn. Phần tử có `when` (`{ key, in }`, như `showIf`) chỉ có hiệu lực khi config khớp. Phần tử đầu có id nguồn = id bước; phần tử sau có id `<id bước>#<key>` (Lặp `each`: `<id>#item`) |
-| `exposes.kind` | `record`: `<tên>.<field>` là field của bản ghi hiện tại; `vars`: `<tên>.<key>` là biến rời | Loại nguồn biến |
+| `exposes.kind` | `record`: `<tên>.<field>` là field của bản ghi hiện tại; `vars`: `<tên>.<key>` là biến rời; `value` (0015): một giá trị có tên trong nhóm `exposes.namespace` (`{{var.<name>}}`, `meta.syntax.varNamespace`), kiểu từ `exposes.valueType` (`{ key, map, whenMode }`: `valueType` của config qua `map`, trừ khi `mode` có trong `whenMode`), không thuộc không gian tên alias | Loại nguồn biến |
 | `exposes.name` | `{ key, default?, fallback? }` | Tên trong đường dẫn: `config[key]`, rỗng thì `default`, rồi `id` nếu `fallback: "id"` (Record: `alias` hoặc `id`) |
 | `exposes.label` | chuỗi, `{ key }` hoặc `{ fromSource }` | Nhãn nhóm trong bảng chọn biến (Record: sObject; Lặp: "Vòng lặp 1–4 lần") |
 | `exposes.visibleIn` | `"downstream"` hoặc `{ "inside": "<slot>" }` | Thấy ở mọi bước chạy sau, hoặc chỉ bên trong slot đó (biến lặp; bản ghi đang lặp của 0010) |
@@ -217,6 +218,15 @@ chỉ thấy các field ở phía trên.
 - Biến của lần chạy (0013 G): `run.seed`, `run.now` (`new Date(now).toISOString()`), `run.today` (10 ký tự đầu của `now`,
   UTC). Cùng `seed` + `now` ở xem trước, insert và tải về ⇒ cùng giá trị. Tên người dùng đặt (biến lặp, alias) tên `run` thắng;
   khi đó lỗi của `{{run.seed}}`/`now`/`today` có thêm `Alias "run" che biến Lần chạy; đổi alias để dùng {{run.seed}}.`
+- `set` ([0015](design/0015-buoc-dat-bien.md)): gán `scope.var[name]` (một object chung cho cả lần chạy, không prototype;
+  thân vòng lặp dùng chung nên giá trị gán trong vòng lặp còn sau vòng lặp). `text`: `value` thay `{{…}}` như template (dài hơn
+  10 000 ký tự ⇒ lỗi gắn `value`); `number`: đúng một token ⇒ giá trị của biến, không thì chuỗi đã thay, qua `toNumber`; không ra
+  số ⇒ `null` và **một** cảnh báo `setVarNotNumber` mỗi bước cuối lần chạy; `add`: giá trị cũ (không phải số ⇒ 0) cộng số mới
+  (không ra số ⇒ 0, có cảnh báo), làm tròn `toPrecision(15)` (15 chữ số có nghĩa: `0.1 + 0.2` ra `0.3`; tổng từ khoảng 10¹³ trở lên mất phần xu, ví dụ
+  12 345 678 901 234,56 thành 12 345 678 901 234,6); tổng vượt số lớn nhất (`Infinity`) thì giữ giá trị cũ và tính vào cảnh báo
+  `setVarNotNumber`. Không dùng `rng`, không sinh bản ghi. `byStep`: `{ runs, records: 0,
+  value, notNumber? }` (`value` = giá trị cuối, chữ cắt ở 100 ký tự). `samples[<id>] = { <name>: <giá trị lần gán đầu> }`
+  (mẫu cho bảng chọn biến). Bước tắt không chạy, biến giữ nguyên.
 - Bản ghi đã sinh (`<alias>` hiện tại và danh sách mọi bản ghi của alias) dùng chung cho cả lần chạy; biến lặp theo phạm vi.
   Từ [0004](design/0004-streaming-execution.md), "danh sách" của một alias Record chỉ là **số đếm** (`alias#1…alias#n`),
   trừ khi một bước đọc cả bản ghi của pool đó (option bước `kind: "ref"` có `accepts.pool`: Chọn bản ghi `from`, Lặp `each`
@@ -241,6 +251,7 @@ chỉ thấy các field ở phía trên.
 | `<itemAlias>.Field` | Field của bản ghi đang lặp của Lặp `each` (0010), **chỉ bên trong thân** vòng lặp đó; như `<pick>.Field` (`<itemAlias>.$n` với pool Record) |
 | `<loopAlias>.index` / `.index0` / `.count` | Biến lặp (từ 1 / từ 0 / tổng số lần) |
 | `<loopAlias>.value` | Giá trị đang lặp của Lặp `values` (0013 D); chế độ khác là lỗi `unknownMember` |
+| `var.<tên>` (0015) | Giá trị hiện tại của biến do bước Đặt biến gán (lần gán gần nhất đã chạy). Phân giải sau biến lặp, alias và `$count`, trước `run`. Alias, `itemAlias` hay biến lặp tên `var` là lỗi `varReserved` khi workflow có bước Đặt biến |
 | `run.seed` / `run.now` / `run.today` | Seed, thời điểm chạy (ISO 8601, UTC), ngày chạy `YYYY-MM-DD` (0013 G). Phân giải sau biến lặp, alias và `$count` |
 
 Template dùng `{{path}}` (regex `\{\{\s*([\w.$]+)\s*\}\}`, khai báo một lần ở `shared/scope.js` và gửi qua
@@ -266,7 +277,16 @@ duyệt đều gọi nó. Kết quả `{ partial, sources, at, refs }`:
 - `at[<id bước>]`: `visible` (gần nhất trước: vòng lặp trong cùng và bước ngay phía trên đứng đầu) và `hidden` kèm `reason`
   và `note` tiếng Việt.
 - `refs[]`: mọi tham chiếu trong workflow (`nodeId`, `field`, `option`, `path`, `source`, `valueType` của member tìm được), kèm
-  `code` khi có vấn đề. `numericSampleFields(workflow, catalog)` (0013 F) đọc `refs` để biết field nào của Query được dùng như số.
+  `code` khi có vấn đề.
+- Biến của bước Đặt biến (0015): mỗi bước `set` là một nguồn `kind: "value"` (`namespace: "var"`, `name` = tên biến,
+  `valueType` `string` / `number`), được đẩy lên chuỗi trạng thái như nguồn `downstream` khác (nên `always`/`last`/`maybe`,
+  `after`, `otherBranch`, `disabled` tính như Record) nhưng **không** vào không gian tên alias. `var.<x>` xét mọi bước đặt `x`
+  (trừ chính bước đang xét): `source` = bước gần nhất thấy được, `certainty` = tốt nhất trong các bước thấy được (một lần gán
+  `always` phía trên là đủ), `valueType` chung (khác nhau ⇒ `any`); ref có thêm `namespace` và `varName`. Không bước nào thấy
+  được: chỉ chính bước này (hoặc các bước khác đều chạy sau) ⇒ `varUnset`, còn lại lý do của bước đầu theo thứ tự `disabled` >
+  `otherBranch` > `after`; không có bước nào ⇒ `unknownName` có gợi ý `var.<tên gần nhất>`; `var` một mình ⇒ `wholeRecord`,
+  `var.x.y` ⇒ `unknownMember`. `at.hidden` của nguồn này có ghi chú `Đặt biến chạy sau bước này`. Giá trị của bước Đặt biến
+  Số hoặc Cộng thêm tính là "dùng như số" cho `numericSampleFields`. `numericSampleFields(workflow, catalog)` (0013 F) đọc `refs` để biết field nào của Query được dùng như số.
 
 Trạng thái của một nguồn tại một bước:
 
@@ -318,6 +338,11 @@ Tham chiếu hỏng là **lỗi** (chặn Xem trước và Insert, HTTP 422 khi 
 | `numberVarEmpty`, `numberVarClamped` | cảnh báo (khi chạy) | Biến số trống/âm/không phải số (lặp 0 lần), hoặc lớn hơn 100 000 (dùng 100 000); một cảnh báo mỗi bước + ô, có số lần (0013) |
 | `eachFilterEmpty` | cảnh báo (khi chạy) | Lọc của Lặp `each` không khớp bản ghi nào ở mọi lần chạy qua; gắn `filterValue` (0013) |
 | `pickWeightZero` | cảnh báo (khi chạy) | Chọn bản ghi `weighted`: mọi trọng số 0 ở một số lần chọn nên đã chọn đều; gắn `weightField` (0013) |
+| `setVarName`, `setVarNotNumber`, `setVarTooLong` | lỗi | (0015) Tên biến trống/sai; giá trị Số hoặc Cộng thêm không phải số và không có `{{`; giá trị dài quá 10 000 ký tự. Gắn `name` / `value` |
+| `varReserved` | lỗi | (0015) Alias, `itemAlias` hay biến lặp tên `var` khi workflow có bước Đặt biến |
+| `varUnset` | lỗi | (0015) `value` của bước Đặt biến đọc chính biến nó gán (`{{var.s}}-x`) mà không có lần gán nào thấy được phía trên (các bước khác cùng tên, nếu có, đều chạy sau). Gắn `value` |
+| `setVarType` | cảnh báo | (0015) Các bước Đặt biến cùng tên khác kiểu (Chữ / Số; Cộng thêm là Số), báo ở bước thứ hai trở đi theo thứ tự đọc; gắn `valueType` (Cộng thêm: `mode`) |
+| `setVarNotNumber` | cảnh báo (khi chạy) | (0015) Giá trị không ra số ở một số lần chạy qua (biến trống, hoặc cộng 0); gắn `value` |
 
 Kiểm tra riêng của Query và Chọn bản ghi (0006, câu chữ theo bảng "Thông báo" của doc đó, "node" đổi thành "bước"):
 Query builder (`sobject`, `fields` là API name hoặc `Owner.Name`, `limit` 1–2000, không `{{…}}`, không ORDER BY/LIMIT trong
@@ -531,7 +556,8 @@ workflow, `{ $ref }` ghi thành ref. `json`: mảng bản ghi, mỗi bản ghi m
   fetchedAt, count, totalSize, truncated, fingerprint, fields, records }`. Các dòng này **không** nằm trong `records`/`stats`
   và không bao giờ được insert. `samples`: field của bản ghi đầu tiên của **mọi bước Record** (0013 F) và bản ghi đầu tiên mỗi
   bước Chọn bản ghi đã chọn (giá trị mẫu cho bảng chọn biến), theo id bước; lần xem trước bị Dừng vẫn trả các mẫu đã có.
-  `stats.byStep` của Query có `rows`, của Chọn bản ghi có `picked` và `skipped`.
+  `stats.byStep` của Query có `rows`, của Chọn bản ghi có `picked` và `skipped`, của Đặt biến (0015) có `value` (giá trị cuối)
+  và `notNumber`; `samples` có `{ <tên biến>: <giá trị lần gán đầu> }` của mỗi bước Đặt biến đã chạy.
 
 Request `/api/run` có thêm: `org` (org để Query đọc khi **xem trước**; bị bỏ qua khi có `target` vì lúc insert Query luôn đọc
 `target.org`; không có thì dùng dòng mẫu), `refreshQueries` (`true`: bỏ qua cache, đọc lại org), `expectQueries`

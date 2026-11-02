@@ -19,9 +19,11 @@ let uid = 0;
  *                 Options declaring `vars` get the variable picker (var-picker.js) for `ctx.vars`.
  *                 Options declaring `suggest` (design 0006: help from the org) get it from
  *                 `ctx.suggest` = { org, sobjects(purpose) → Promise<[{ name, label }]>,
- *                 pickFields(def, values, apply(list)), poolFields(poolAlias) → [path] }:
+ *                 pickFields(def, values, apply(list)), poolFields(poolAlias) → [path],
+ *                 varNames() → [{ value, label }] }:
  *                 kind 'sobject' → a datalist, 'fields' → a "Chọn field…" button (needs an org),
- *                 'poolFields' → a datalist of the pool's fields.
+ *                 'poolFields' → a datalist of the pool's fields, 'varNames' → a datalist of
+ *                 the variables of the workflow (Đặt biến, design 0015).
  */
 export function renderOptions(defs, values, onChange, ctx = {}) {
   const root = h('div', { class: 'options' });
@@ -191,7 +193,7 @@ let dlSeq = 0;
 /** The org helper of an option with `suggest` (see renderOptions). */
 function suggestHelper(def, control, id, sg, current) {
   const kind = def.suggest.kind;
-  if (kind === 'sobject' || kind === 'poolFields') {
+  if (kind === 'sobject' || kind === 'poolFields' || kind === 'varNames') {
     const list = h('datalist', { id: `dl-${id}-${++dlSeq}` });
     control.setAttribute('list', list.id);
     control.setAttribute('autocomplete', 'off');
@@ -200,7 +202,9 @@ function suggestHelper(def, control, id, sg, current) {
       try {
         items = kind === 'sobject'
           ? (sg.org ? await sg.sobjects(def.suggest.purpose) : []).map((x) => ({ value: x.name, label: x.label }))
-          : (sg.poolFields?.(current[def.suggest.poolKey]) ?? []).map((x) => ({ value: x, label: '' }));
+          : kind === 'varNames'
+            ? sg.varNames?.() ?? []
+            : (sg.poolFields?.(current[def.suggest.poolKey]) ?? []).map((x) => ({ value: x, label: '' }));
       } catch {
         items = [];
       }

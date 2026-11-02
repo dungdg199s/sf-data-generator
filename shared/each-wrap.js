@@ -40,6 +40,8 @@ export function eachWrapPlan(wf, catalog, id, { slotKeys, scope = analyzeScope(w
   const hits = new Map();
   for (const r of scope.refs) {
     if (r.hidden || !inside.has(r.nodeId)) continue;
+    // A variable of Đặt biến (design 0015) is no pool, even when it shares a pool's name.
+    if (scope.sources[r.source]?.kind === 'value') continue;
     const name = target(scope.sources[r.source]?.name);
     if (name) hits.set(name, (hits.get(name) ?? 0) + 1);
   }

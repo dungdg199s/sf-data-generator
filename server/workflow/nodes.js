@@ -44,7 +44,15 @@ export const LIMITS = {
   bulkJobTimeoutMs: BULK_DEFAULTS.bulkJobTimeoutMs,
   historyMaxRuns: 100,
   historyMaxBytes: 256 * 1024 * 1024,
+  // Đặt biến (design 0015): longest text a variable may hold (a value appended to itself in a
+  // loop stops the run instead of growing without bound).
+  maxVarLength: 10000,
 };
+
+/** Namespace of the variables of Đặt biến steps (design 0015): `{{var.<name>}}` (meta.syntax.varNamespace). */
+export const VAR_NAMESPACE = 'var';
+/** Names of Đặt biến variables: like an alias, at most 40 characters (design 0015). */
+export const VAR_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,39}$/;
 
 /**
  * Builder defaults per sObject (naming conventions, so they live on the server and are served as
@@ -121,6 +129,7 @@ const SOQL = { key: 'mode', in: ['soql'] };
 const FILTER = { key: 'filter', in: ['compare'] };
 const EACH = { key: 'mode', in: ['each'] };
 const VALUES = { key: 'mode', in: ['values'] };
+const SET_ASSIGN = { key: 'mode', in: ['set'] };
 const NUM_HELP = 'Số nguyên 0–100000, hoặc bấm {x} để lấy từ biến kiểu Số, ví dụ {{acc.NumberOfEmployees}} hay {{accs.$count}}.';
 
 /**
@@ -414,6 +423,50 @@ export const NODE_TYPES = [
       { key: 'left', label: 'Giá trị', kind: 'string', vars: 'path', default: 'loop.index', help: 'Bấm {x} để chọn biến, ví dụ acc.Industry hoặc loop.index.', showIf: { key: 'kind', in: ['compare'] } },
       { key: 'op', label: 'Phép so sánh', kind: 'select', default: 'eq', choices: CONDITION_OPS, showIf: { key: 'kind', in: ['compare'] } },
       { key: 'right', label: 'So với', kind: 'string', vars: 'template', default: '', showIf: { key: 'kind', in: ['compare'] }, help: 'Giá trị cố định (100000, Banking), hoặc bấm {x} để so với biến, ví dụ {{opp.Amount}}.' },
+    ],
+  },
+  {
+    type: 'set',
+    label: 'Đặt biến',
+    category: 'control',
+    description: 'Gán một giá trị cho biến có tên, hoặc cộng thêm vào biến số. Các bước phía dưới dùng {{var.<tên>}}.',
+    slots: [],
+    flow: { kind: 'sequence' },
+    // Design 0015: a named value in the `var` namespace, visible downstream for the whole run like
+    // a record alias (shared/scope.js: `kind: 'value'`, never in the alias namespace).
+    exposes: {
+      kind: 'value',
+      namespace: VAR_NAMESPACE,
+      name: { key: 'name' },
+      label: 'Biến',
+      visibleIn: 'downstream',
+      valueType: { key: 'valueType', map: { text: 'string', number: 'number' }, whenMode: { add: 'number' } },
+    },
+    options: [
+      {
+        key: 'name', label: 'Tên biến', kind: 'string', default: '', suggest: { kind: 'varNames' },
+        help: 'Bước phía dưới dùng {{var.<tên>}}. Đặt cùng tên ở một bước Đặt biến khác để đổi giá trị (ví dụ trong vòng lặp). Chữ không dấu, số, "_".',
+      },
+      {
+        key: 'mode', label: 'Cách đặt', kind: 'select', default: 'set',
+        choices: [
+          { value: 'set', label: 'Gán giá trị' },
+          { value: 'add', label: 'Cộng thêm (số)' },
+        ],
+        help: 'Cộng thêm: cộng Giá trị vào biến số hiện tại (chưa có thì từ 0), dùng để tính tổng hoặc đếm trong vòng lặp.',
+      },
+      {
+        key: 'valueType', label: 'Kiểu', kind: 'select', default: 'text', showIf: SET_ASSIGN,
+        choices: [
+          { value: 'text', label: 'Chữ' },
+          { value: 'number', label: 'Số' },
+        ],
+        help: 'Số: dùng được trong ô số như "Số lần lặp" ({{var.n}}). Giá trị không ra số thì biến trống.',
+      },
+      {
+        key: 'value', label: 'Giá trị', kind: 'string', vars: 'template', default: '',
+        help: 'Chữ cố định (TEST-01), số (5), hoặc bấm {x} để chèn biến: TEST-{{run.today}}, {{opp.Amount}}. Cộng thêm: một số hoặc biến số.',
+      },
     ],
   },
 ];

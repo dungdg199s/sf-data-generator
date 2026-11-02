@@ -21,7 +21,7 @@ flows
 
 **Speed (since design 0009).** The flows are grouped into seven independent functions that run **in parallel**, each in
 its own browser context (so storage, routes and dialogs never leak between them): `flowEditing` (1–5), `flowPicker`
-(5b), `flowFiles` (5c–10), `flowDark` (12), `flowLayoutWide` and `flowLayoutNarrow` (11, 13), `flowEach` (14), `flowCanvas` (15), `flowProductivity` (16), `flowLibrary` (17), `flowMinimap` (18), `flowVarsLoops` (19), `flowHistory` and `flowHistoryProd` (20). The browser launches
+(5b), `flowFiles` (5c–10), `flowDark` (12), `flowLayoutWide` and `flowLayoutNarrow` (11, 13), `flowEach` (14), `flowCanvas` (15), `flowProductivity` (16), `flowLibrary` (17), `flowMinimap` (18), `flowVarsLoops` (19), `flowHistory` and `flowHistoryProd` (20), `flowSetVar` (21). The browser launches
 while the server starts; a fresh context starts with empty storage, so no `localStorage.clear()` + reload; storage a flow
 needs before its first load is written by `addInitScript` (once, guarded by a marker key, so reloads keep it); layout
 checks resize one page (`setViewportSize`) instead of opening a context per width; waits for the sheet or toast
@@ -281,6 +281,14 @@ storage and reloading (one app boot less; flow 5b).
       ` DEV-PROD ` is typed (`dev-pro` keeps it locked); the request carries `typedOrg: "DEV-PROD"`. At 390 px the header button is a
       32 px icon (`aria-label="Lịch sử insert"`) and the dialog fills the screen with no horizontal scroll (`smoke-390-history.png`,
       `smoke-390-history-dark.png`).
+21. **Đặt biến (design 0015), `flowSetVar`, own context (parallel).** A saved workflow (Record `acc` with a Template `Name`, a
+    Lặp around `con`). The "+" above `acc` → **Đặt biến**: the new card is copper (its `--c` differs from Record's) and selected, the
+    name box is focused with `bien1` selected; typing `lo` and the value `TEST-{{run.today}}` gives the card the name `var.lo`
+    and the summary `= TEST-{{run.today}}`. On `acc.Name`, `{{lo` opens the picker with the group `var · Biến` (`data-type="set"`) and `var.lo` active;
+    Enter inserts `{{var.lo}}` with a copper chip. Ctrl+Enter: the card chip reads `đặt 1 lần · = "TEST-<today>"` and the Account table
+    holds `TEST-<today>`. Renaming `lo` → `ma` (then Tab) turns the template into `{{var.ma}}` and toasts `Đã đổi tên biến lo → ma ở 1
+    bước Đặt biến và 1 chỗ dùng.`; with the value `2`, `{{var.ma}}` as the loop's "Số lần lặp" shows the quick fix `Đổi Kiểu thành
+    Số`, which sets `valueType: "number"` (`smoke-1440-set-var.png`).
 
 It also fails on any page error or a run over the **time budget**: `SMOKE_BUDGET_MS` when set, else
 `20 000 × max(1, 4 / os.availableParallelism())` ms (20 s on 4 or more CPUs, 40 s on 2). The flows run in parallel and are
@@ -297,7 +305,7 @@ Screenshots (only when a directory is given): `smoke-1440.png`, `smoke-390.png`,
 `smoke-390-dark.png`, `smoke-390-topbar.png`, `smoke-1280-issues.png`, `smoke-1440-dark.png`, `smoke-1440-dark-insert.png`,
 `smoke-1440-canvas.png`, `smoke-1440-canvas-dark.png`, `smoke-390-canvas.png`, `smoke-1440-minimap.png`,
 `smoke-1440-minimap-dark.png`, `smoke-1440-insert-bulk.png`, `smoke-1440-history.png`, `smoke-390-history.png`,
-`smoke-390-history-dark.png`.
+`smoke-390-history-dark.png`, `smoke-1440-set-var.png`.
 Requires Playwright with Chromium (`require('playwright')`); exit code 2 means it is not installed.
 
 Extend the script when you add a UI flow worth guarding (keep it fast: see "Speed" above).
