@@ -37,6 +37,7 @@ loại bước cách đều nhau và cách xa màu trạng thái (xem §8).
 | olive (Chọn bản ghi) | 50 `#f5f7e8` · 100 `#e8ebc9` · 200 `#c5dc8e` · 300 `#b4d35c` · 600 `#656902` · 700 `#5a5d04` |
 | violet (Lặp) | 50 `#f6f3ff` · 100 `#ebe3ff` · 200 `#dec3fe` · 300 `#b484e8` · 600 `#6941a1` · 700 `#663e9e` |
 | magenta (Rẽ nhánh) | 50 `#fef1f6` · 100 `#ffddeb` · 200 `#ffbad7` · 300 `#f08dba` · 600 `#b33879` · 700 `#981c62` |
+| copper (Đặt biến, 0015) | 50 `#fff2ec` · 100 `#fde1d1` · 200 `#f3cbb5` · 300 `#e2a989` · 600 `#754427` · 700 `#6d4025` |
 
 Tên CSS: `--gray-50`, `--blue-600`, `--teal-300`, … Bậc 300/200 của các họ loại bước dành cho theme tối.
 
@@ -113,6 +114,7 @@ Mỗi loại có 4 token. Thành phần không dùng trực tiếp `--step-recor
 | `pick` (0006) | Chọn bản ghi | ◎ hồng tâm | olive | `#656902` / `#b4d35c` | `#f5f7e8` / mix 10% | `#e8ebc9` / mix 20% | `#5a5d04` / `#c5dc8e` |
 | `loop` | Lặp | ⟲ hai mũi tên vòng | violet | `#6941a1` / `#b484e8` | `#f6f3ff` / mix 10% | `#ebe3ff` / mix 20% | `#663e9e` / `#dec3fe` |
 | `branch` | Rẽ nhánh | nhánh tách đôi | magenta | `#b33879` / `#f08dba` | `#fef1f6` / mix 10% | `#ffddeb` / mix 20% | `#981c62` / `#ffbad7` |
+| `set` (0015) | Đặt biến | ngoặc nhọn `{ }` có dấu `=` | copper | `#754427` / `#e2a989` | `#fff2ec` / mix 10% | `#fde1d1` / mix 20% | `#6d4025` / `#f3cbb5` |
 
 (Giá trị dạng sáng / tối. "mix 10%" = `color-mix(in srgb, var(--<họ>-300) 10%, var(--gray-850))`.)
 
@@ -120,8 +122,12 @@ Bắt đầu là trung tính vì nó không phải loại bước người dùng
 server mới hơn) không có luật `[data-type]` nên rơi về `--c: var(--color-border-strong)`, icon ⓘ.
 
 **Chip biến (0005)** dùng màu theo **nguồn** của biến: `this.*` → màu của chính bước đang sửa (Record), `<alias>.*` → màu
-loại của bước có alias đó (Record, Query, Chọn bản ghi), biến lặp → `loop`, `$n` và biến lần chạy `run.*` (0013) → `start`
-(trung tính; nhóm "Lần chạy" của bảng chọn cũng vậy).
+loại của bước có alias đó (Record, Query, Chọn bản ghi), biến lặp → `loop`, biến `var.*` của bước Đặt biến (0015) → `set`
+(nhóm "var · Biến" của bảng chọn cũng vậy), `$n` và biến lần chạy `run.*` (0013) → `start` (trung tính; nhóm "Lần chạy" của
+bảng chọn cũng vậy).
+
+Đặt biến (0015) dùng họ **copper** (nâu đồng, hue ≈ 50°): vòng hue đã kín nên không còn hue cách mọi hue ≥ 35°; copper cách
+đỏ/hổ phách khoảng 23° nhưng độ bão hòa thấp (C 0.08) và tối hơn hẳn màu trạng thái, kèm icon và nhãn. Kết quả đo ở §8.1, §8.2.
 
 ## 4. Thang đo
 
@@ -180,6 +186,7 @@ Icon chỉ để trang trí (`aria-hidden="true"`), nhãn chữ luôn có.
 | `pick` | hồng tâm | Chọn bản ghi |
 | `loop` | hai mũi tên vòng | Lặp |
 | `branch` | nhánh tách đôi | Rẽ nhánh |
+| `set` | ngoặc nhọn `{ }` có dấu `=` ở giữa | Đặt biến ([0015](design/0015-buoc-dat-bien.md)) |
 | `error` | ⊗ vòng tròn có dấu × | Badge lỗi, chip lỗi, dòng lỗi |
 | `warning` | ▲ tam giác có dấu ! | Badge cảnh báo, hộp cảnh báo, dòng cảnh báo |
 | `success` | vòng tròn có dấu ✓ | Insert thành công |
@@ -481,7 +488,7 @@ che thẻ đang được nói tới hay đang chọn.
 ### 8.1 Tương phản (WCAG 2.2 AA)
 
 Chữ ≥ 4.5:1; nét giao diện (viền ô nhập, vòng focus, sọc, icon, viền lỗi) ≥ 3:1. Tính bằng script trong design doc 0008; `test/css-tokens.test.js` tính lại mọi cặp dưới đây (và 6 cặp mỗi loại bước) từ giá trị thật trong `app.css` (giải `var()` và `color-mix(in srgb)`), nên đổi token mà làm hỏng tương phản thì test đỏ.
-**75 cặp mỗi theme (39 cặp trong bảng + 6 cặp × 6 loại bước), 0 cặp không đạt ở cả hai theme.** Thấp nhất: sáng `focus-ring`/`bg` 3.40, `border-control`/`surface-sunken`
+**81 cặp mỗi theme (39 cặp trong bảng + 6 cặp × 7 loại bước, Đặt biến của 0015 là loại thứ 7), 0 cặp không đạt ở cả hai theme.** Thấp nhất: sáng `focus-ring`/`bg` 3.40, `border-control`/`surface-sunken`
 3.48; tối `border-control`/`surface-raised` 3.39.
 
 | Chữ/nét | Nền | Dùng cho | Ngưỡng | Sáng | Tối |
@@ -532,7 +539,9 @@ Chữ ≥ 4.5:1; nét giao diện (viền ô nhập, vòng focus, sọc, icon, v
 | `--color-text` | `--step-*-subtle` | Chữ trong thân khung | 4.5 | 14.62–16.16 | 11.55–12.51 |
 | `--color-text-muted` | `--step-*-subtle` | Chữ phụ trong thân khung | 4.5 | 5.68–6.27 | 5.46–5.91 |
 
-Bảng đủ từng loại bước nằm trong 0008 (phần Kiểm chứng).
+Bảng đủ từng loại bước nằm trong 0008 (phần Kiểm chứng). Đặt biến (0015, copper): sọc/icon trên thẻ 8.04 / 7.72, icon trên ô
+icon 7.34 / 6.37, chữ `-text` trên `surface` 8.71 / 11.67, trên `-subtle` 7.95 / 8.70, chữ chính / chữ phụ trên thân 15.95 /
+6.19 (sáng) và 11.93 / 5.64 (tối).
 
 **Cặp thêm bởi [0014](design/0014-hoan-thien-giao-dien.md)** (các cặp mới đã có trong `css-tokens.test.js`). 24 cặp có
 ngưỡng mỗi theme, 0 không đạt; bảng đủ trong 0014 §11. Thấp nhất:
@@ -557,6 +566,11 @@ nhỏ). Mô phỏng theo Machado 2009, mức nặng nhất.
 | Protanopia | Record/Query 8.5 | Chọn/lỗi 7.1 | Query/Rẽ nhánh 8.9 | Chọn/warning-fill 2.6 |
 
 (Bảng màu cũ: Record/accent, Rẽ nhánh/cảnh báo, Bắt đầu/thành công đều là **0**, tức trùng hẳn.)
+
+Đặt biến (0015, copper) so với mọi loại bước và trạng thái/accent: mắt thường gần nhất sáng Chọn bản ghi 11.9, tối
+warning 10.4 (cảnh báo nền đặc 11.0); deuteranopia sáng Chọn 6.9, tối lỗi 5.8; protanopia sáng **lỗi 3.4**, tối thành công 3.7;
+tritanopia sáng Lặp 9.8, tối warning-fill 4.4. Mọi cặp ≥ cặp thấp nhất đã chấp nhận ở bảng trên (2.6), nên không cần phương án
+dự phòng slate.
 
 Với người mù màu đỏ–lục, vài cặp chỉ còn khác về độ sáng. Vì vậy loại bước luôn có **icon + nhãn**, lỗi/cảnh báo có
 **hình khác nhau** (⊗ tròn, ▲ tam giác) và cách thể hiện khác nhau (badge nền đặc trên thẻ, so với sọc trái của loại).

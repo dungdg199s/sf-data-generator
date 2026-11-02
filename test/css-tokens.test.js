@@ -20,7 +20,7 @@ const COMPONENTS = stripComments(COMPONENTS_RAW ?? '');
 // and the synthetic Start card.
 const TYPES = [...new Set(['start', ...NODE_TYPES.map((t) => t.type), 'query', 'pick'])];
 
-const PRIMITIVE = /^--(?:gray|blue|red|amber|green|teal|cyan|olive|violet|magenta)-\d+$/;
+const PRIMITIVE = /^--(?:gray|blue|red|amber|green|teal|cyan|olive|violet|magenta|copper)-\d+$/;
 const HEX = /#[0-9a-fA-F]{3,8}(?![\w-])/;
 const FUNC = /\b(?:rgba?|hsla?|hwb|lab|lch|oklab|oklch|color)\(/i;
 const NAMED = /(?<![\w-])(?:white|black|red|green|blue|gray|grey|silver|orange|yellow|purple|pink|brown|navy|teal|olive|maroon|lime|aqua|cyan|magenta|fuchsia|gold|indigo|violet|beige|crimson|tomato|coral|salmon)(?![\w-])/i;
@@ -78,7 +78,7 @@ function jsColourIssues(src) {
   return [
     [/['"`]#[0-9a-fA-F]{3}(?:[0-9a-fA-F]{3}(?:[0-9a-fA-F]{2})?)?['"`]/, 'hex colour'],
     [FUNC, 'colour function'],
-    [/var\(--(?:step|node|color|gray|blue|red|amber|green|teal|cyan|olive|violet|magenta)-/, 'colour token'],
+    [/var\(--(?:step|node|color|gray|blue|red|amber|green|teal|cyan|olive|violet|magenta|copper)-/, 'colour token'],
     [/NODE_COLORS/, 'NODE_COLORS'],
     [/['"]--c['"]/, 'inline --c'],
     [STYLE_NAMED, 'named colour in a style'],
