@@ -33,7 +33,9 @@ const drive = async (opts) => {
 
 test('preview emits start, progress, done with the first 200 rows per sObject', async () => {
   const run = createRun(accCon(600), { seed: 5, now: NOW });
-  const { events, end } = await drive({ run, start: { runId: 'r1', queries: [] } });
+  // A clock that stands still: only the every-1 000-records yields emit progress (under load the
+  // 50 ms time budget added extra ones and made this count flaky in parallel runs).
+  const { events, end } = await drive({ run, start: { runId: 'r1', queries: [] }, clock: () => 0 });
   assert.deepEqual(events.map((e) => e.type).filter((t, i, a) => t !== a[i - 1]), ['start', 'progress', 'done']);
   assert.deepEqual([events[0].runId, events[0].seed, events[0].now], ['r1', 5, NOW]);
   const progress = events.filter((e) => e.type === 'progress');

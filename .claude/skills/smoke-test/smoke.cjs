@@ -64,10 +64,16 @@ try {
  * stale server on a fixed port can never answer instead. The sf CLI is a stub that fails like a
  * machine without `sf` (503), so the smoke can never reach a real org.
  */
+let smokeTmp = null; // temporary dir of the run (insert history of design 0011, files to open), removed at the end
+
 async function startServer() {
   const { createApp, allowedHostsFor } = await import(pathToFileURL(path.join(root, 'server/index.js')).href);
+  const { createHistory } = await import(pathToFileURL(path.join(root, 'server/history.js')).href);
   const noCli = async () => { throw Object.assign(new Error('smoke: không dùng sf CLI'), { status: 503 }); };
-  const server = http.createServer(createApp({ cli: { listOrgs: noCli, getConnection: noCli }, allowedHosts: allowedHostsFor('127.0.0.1') }));
+  // Never the user's real data directory: the history goes to a temporary one.
+  smokeTmp = fs.mkdtempSync(path.join(os.tmpdir(), 'sfdg-smoke-'));
+  const history = createHistory({ dir: path.join(smokeTmp, 'history') });
+  const server = http.createServer(createApp({ cli: { listOrgs: noCli, getConnection: noCli }, history, allowedHosts: allowedHostsFor('127.0.0.1') }));
   await new Promise((res, rej) => server.once('error', rej).listen(0, '127.0.0.1', res));
   return server;
 }
@@ -472,14 +478,14 @@ async function flowFiles() {
   check(stored[0] === broken && stored[1] === broken, 'broken autosave was overwritten or not backed up');
 
   // A malformed v2 file is refused.
-  const badFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'sfdg-smoke-')), 'bad.json');
+  const badFile = path.join(fs.mkdtempSync(path.join(smokeTmp, 'f-')), 'bad.json');
   fs.writeFileSync(badFile, JSON.stringify({ version: 2, steps: [{ id: 'a', type: 'record', config: {} }, 3] }));
   await page.setInputFiles('#file-input', badFile);
   await page.waitForFunction(() => /Không mở được file: steps\[1\]/.test(document.getElementById('toast').textContent));
   check(await page.isVisible('.step-card[data-id="con"]'), 'malformed file replaced the workflow');
 
   // Opening a v1 file with an unconnected node → report dialog.
-  const tmp = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'sfdg-smoke-')), 'old.json');
+  const tmp = path.join(fs.mkdtempSync(path.join(smokeTmp, 'f-')), 'old.json');
   fs.writeFileSync(tmp, JSON.stringify(V1_ORPHAN));
   page.removeAllListeners('dialog');
   page.on('dialog', (d) => d.accept());
@@ -850,7 +856,8 @@ async function flowLayoutNarrow() {
   await m.setViewportSize({ width: 800, height: 900 });
   await m.click('#btn-more');
   const groups = await m.$$eval('.popup .popup-group', (n) => n.map((x) => x.textContent));
-  check(groups.join() === 'Mẫu', `800px: ⋯ menu groups ${groups} (only Mẫu)`);
+  // 0011: "Lịch sử insert" sits in a Chạy group of the ⋯ menu (≤ 900 px).
+  check(groups.join() === 'Chạy,Mẫu', `800px: ⋯ menu groups ${groups} (Chạy with Lịch sử insert, then Mẫu)`);
   await m.keyboard.press('Escape');
   await m.setViewportSize({ width: 390, height: 844 });
 
@@ -1196,6 +1203,145 @@ async function flowCanvas() {
   await m.context().close();
 }
 
+// ---------- 16. insert history and delete (design 0011) ----------
+
+const H1 = 'h20261028T103200Z-a1b2c3';
+const H2 = 'h20261028T091500Z-d4e5f6';
+const H3 = 'h20261027T080200Z-0a0b0c';
+const HIST_ORGS = [
+  { alias: 'dev-sb', username: 'me@example.com', isSandbox: true, isScratch: false, connectedStatus: 'Connected' },
+  { alias: 'dev-prod', username: 'admin@prod.example.com', isSandbox: false, isScratch: false, connectedStatus: 'Connected' },
+];
+const histRun = (id, { org, kind, inserted, status = 'done', startedAt }) => ({
+  id, status, startedAt, finishedAt: startedAt, org: { alias: org, username: HIST_ORGS.find((o) => o.alias === org).username, orgId: '00D000000000001AAA', kind },
+  workflowName: 'Account + Contact', seed: 42, total: inserted, inserted, failed: 0, notSent: 0, bySobject: { Account: 5, Contact: inserted - 5 },
+  steps: [{ nodeId: 'acc', alias: 'acc', sobject: 'Account', mode: 'collections', total: 5, inserted: 5, failed: 0 }, { nodeId: 'con', alias: 'con', sobject: 'Contact', mode: 'bulk', total: inserted - 5, inserted: inserted - 5, failed: 0 }],
+  bulkJobs: 0, stopped: null, deletion: { status: 'none', deleted: 0, gone: 0, failed: 0, remaining: inserted, lastAt: null },
+});
+const HIST_RUNS = [
+  histRun(H1, { org: 'dev-sb', kind: 'sandbox', inserted: 12005, startedAt: '2026-10-28T10:32:00.000Z' }),
+  histRun(H2, { org: 'dev-prod', kind: 'production', inserted: 8, startedAt: '2026-10-28T09:15:00.000Z' }),
+  histRun(H3, { org: 'dev-sb', kind: 'sandbox', inserted: 1200, status: 'interrupted', startedAt: '2026-10-27T08:02:00.000Z' }),
+];
+
+/** Flow 16 (0011): Bulk in the Insert confirmation, Tải Id / Lịch sử links, "Xóa dữ liệu này…", production name, history dialog. */
+async function flowHistory() {
+  const page = await newPage('history');
+  const sent = { inserts: [], deletes: [], forgets: [] };
+  await page.addInitScript(() => { if (!localStorage.getItem('smoke.h')) { localStorage.setItem('sfdg.org', 'dev-sb'); localStorage.setItem('smoke.h', '1'); } });
+  // Everything that would touch an org is answered here; nothing reaches the server's (absent) sf CLI.
+  await page.route('**/api/**', (r) => {
+    const url = new URL(r.request().url());
+    const p = url.pathname;
+    const json = (body, status = 200) => r.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
+    const nd = (events) => r.fulfill({ status: 200, contentType: 'application/x-ndjson', body: events.map((e) => JSON.stringify(e)).join('\n') + '\n' });
+    if (p === '/api/orgs') return json(HIST_ORGS);
+    if (/^\/api\/orgs\/[^/]+\/limits$/.test(p)) return json({ api: { max: 15000, remaining: 30 }, bulkBatches: { max: 15000, remaining: 14980 } });
+    if (p.startsWith('/api/orgs/')) return json({ error: 'smoke: org giả lập' }, 404);
+    if (p === '/api/run') {
+      const body = r.request().postDataJSON();
+      const stats = { total: 12005, bySobject: { Account: 5, Contact: 12000 }, byStep: { loopAcc: { runs: 1, records: 12005, iterations: 5 }, acc: { runs: 5, records: 5 }, loopCon: { runs: 5, records: 12000, iterations: 12000 }, con: { runs: 12000, records: 12000 } }, durationMs: 1, previewRows: 200, truncated: true };
+      const base = { runId: 'rsmoke16', seed: body.seed ?? 42, now: body.now ?? 1761645120000, warnings: [], records: [], samples: {}, stats };
+      if (!body.target) return nd([{ type: 'start', runId: 'rsmoke16', seed: base.seed, now: base.now, warnings: [] }, { type: 'done', result: base }]);
+      sent.inserts.push(body);
+      const insert = { inserted: 12005, failed: 0, errorsTotal: 0, errors: [], errorGroups: [], errorGroupsOther: null, ids: {}, bySobject: { Account: { inserted: 5, failed: 0 }, Contact: { inserted: 12000, failed: 0 } }, notSent: 0, cancelled: false, stopped: null, total: 12005, historyId: H1, bulk: [] };
+      return nd([{ type: 'start', runId: 'rsmoke16', seed: base.seed, now: base.now, warnings: [] }, { type: 'plan', total: 12005, bySobject: stats.bySobject, apiCalls: 41, historyId: H1 }, { type: 'done', result: { ...base, insert } }]);
+    }
+    if (p === '/api/history') return json({ enabled: true, dir: '/home/me/.local/share/sf-data-generator/history', maxRuns: 100, runs: HIST_RUNS });
+    let m;
+    if ((m = /^\/api\/history\/([^/]+)\/delete$/.exec(p))) {
+      sent.deletes.push({ hid: m[1], body: r.request().postDataJSON() });
+      return nd([{ type: 'start', runId: 'rsmoked', historyId: m[1], total: 12005, bySobject: { Contact: 12000, Account: 5 } }, { type: 'done', result: { total: 12005, deleted: 12005, gone: 0, failed: 0, errorGroups: [], errorGroupsOther: null, bySobject: {}, remaining: 0, cancelled: false, stopped: null, bulkAborted: null } }]);
+    }
+    if ((m = /^\/api\/history\/([^/]+)\/forget$/.exec(p))) {
+      sent.forgets.push(m[1]);
+      return json({ ok: true });
+    }
+    if ((m = /^\/api\/history\/([^/]+)$/.exec(p))) {
+      const run = HIST_RUNS.find((x) => x.id === m[1]);
+      return json({ ...run, workflowName: run.workflowName, remaining: { total: run.inserted, bySobject: { Contact: run.inserted - 5, Account: 5 }, bySteps: [{ nodeId: 'con', sobject: 'Contact', count: run.inserted - 5 }, { nodeId: 'acc', sobject: 'Account', count: 5 }] }, pendingBulkJobs: [], hasParents: true, errorGroups: [], bulkJobs: [] });
+    }
+    return r.continue();
+  });
+  await page.goto(base);
+  await page.waitForSelector('.step-card[data-id="con"]');
+  await page.waitForFunction(() => document.getElementById('org-select').value === 'dev-sb');
+
+  // 16a. Insert confirmation: Bulk checkbox on, the step line, calls change when unticked, the limit warning.
+  await page.click('#btn-insert');
+  await page.waitForSelector('dialog[open] .bulk-check input');
+  check(await page.isChecked('dialog[open] .bulk-check input'), '16a: Bulk checkbox not ticked by default');
+  check(/con \(Contact\) 12 000: 200 bản ghi đầu gửi thử bằng sObject Collections, phần còn lại 2 job Bulk\./.test(await page.textContent('dialog[open] .bulk-steps')), '16a: no Bulk step line');
+  const callsOn = await page.textContent('dialog[open] .insert-calls');
+  // 30 calls left: enough with Bulk (26), not without (61) — the warning follows the checkbox.
+  await page.waitForSelector('dialog[open] .insert-limits:not([hidden])', { timeout: 3000 }).catch(() => errors.push('16a: no "Org còn …" line'));
+  check(await page.isHidden('dialog[open] .limits-warn'), '16a: limit warning although Bulk fits the 30 calls left');
+  await page.click('dialog[open] .bulk-check input');
+  const callsOff = await page.textContent('dialog[open] .insert-calls');
+  const num = (t) => Number((/Khoảng ([\d ]+) lời gọi/.exec(t)?.[1] ?? '0').replace(/ /g, ''));
+  check(num(callsOff) > num(callsOn) && num(callsOn) > 0, `16a: calls did not grow when Bulk was unticked (${callsOn} → ${callsOff})`);
+  await page.waitForSelector('dialog[open] .limits-warn:not([hidden])', { timeout: 3000 }).catch(() => errors.push('16a: no API limit warning with 30 calls left and Bulk off'));
+  check(await page.isVisible('dialog[open] .insert-history'), '16a: no history line');
+  await page.click('dialog[open] [data-action="confirm-insert"]');
+  await page.waitForSelector('#results-summary [data-action="ids"]');
+  check(sent.inserts.length === 1 && sent.inserts[0].target.bulk === 'off', `16a: insert request target ${JSON.stringify(sent.inserts[0]?.target)}`);
+  check(await page.isVisible('#results-summary [data-action="history"]'), '16a: no Lịch sử link in the summary');
+  check((await page.textContent('#toast .toast-action').catch(() => '')) === 'Xóa dữ liệu này…', '16a: no "Xóa dữ liệu này…" on the toast');
+
+  // 16b. Delete from the toast: Hủy has focus, the count, the request carries the confirmation.
+  await page.click('#toast .toast-action');
+  await page.waitForSelector('dialog[open] [data-action="confirm-delete"]');
+  check(await page.evaluate(() => document.activeElement?.dataset.action) === 'cancel', '16b: focus is not on Hủy');
+  const delBtn = await page.$('dialog[open] [data-action="confirm-delete"]');
+  if (outDir) await page.screenshot({ path: path.join(outDir, 'smoke-1440-delete.png') });
+  check((await delBtn.textContent()) === 'Xóa 12 005 bản ghi' && await delBtn.evaluate((b) => b.matches('.danger.solid') && !b.disabled), '16b: delete button text / style / state');
+  await delBtn.click();
+  await page.waitForFunction(() => /Đã xóa 12 005 bản ghi khỏi dev-sb/.test(document.getElementById('results-summary').textContent));
+  check(sent.deletes[0]?.hid === H1 && sent.deletes[0].body.confirm.username === 'me@example.com' && sent.deletes[0].body.confirm.count === 12005, `16b: delete request ${JSON.stringify(sent.deletes[0])}`);
+
+  // 16d (1440). History dialog: filtered on the selected org, interrupted run explained, forget asks first.
+  await page.click('#btn-history');
+  await page.waitForSelector('dialog.history[open] .history-row');
+  check(await page.isChecked('#history-filter'), '16d: org filter not on by default');
+  if (outDir) await page.screenshot({ path: path.join(outDir, 'smoke-1440-history.png') });
+  const shown = await page.$$eval('dialog.history .history-row', (rows) => rows.map((r) => r.dataset.hid));
+  check(shown.join() === [H1, H3].join(), `16d: filtered rows ${shown}`);
+  check(/Server dừng giữa lúc insert/.test(await page.getAttribute(`.history-row[data-hid="${H3}"] [title^="Server"]`, 'title').catch(() => '') ?? ''), '16d: no title on "Bị gián đoạn"');
+  await page.click(`.history-row[data-hid="${H3}"] .history-more`);
+  await page.click('.popup [role="menuitem"]:has-text("Quên lần insert này")');
+  await page.waitForSelector('#modal[open] [data-action="forget"]');
+  check(/Chỉ xóa ghi chép trên máy này, không xóa gì trong org/.test(await page.textContent('#modal[open]')), '16d: forget confirmation text');
+  await page.click('#modal[open] [data-action="forget"]');
+  await page.waitForFunction(() => !document.querySelector('#modal[open]'));
+  check(sent.forgets.join() === H3, `16d: forget request ${sent.forgets}`);
+
+  // 16c. Production: the delete button stays locked until the org name is typed.
+  await page.uncheck('#history-filter');
+  await page.click(`.history-row[data-hid="${H2}"] [data-action="delete"]`);
+  await page.waitForSelector('#modal[open] .typed-org');
+  const locked = () => page.$eval('#modal[open] [data-action="confirm-delete"]', (b) => b.disabled);
+  check(await locked(), '16c: production delete not locked before typing');
+  await page.fill('#modal[open] .typed-org', 'dev-pro');
+  check(await locked(), '16c: unlocked by a wrong name');
+  await page.fill('#modal[open] .typed-org', 'dev-prod');
+  check(!(await locked()), '16c: still locked after typing the alias');
+  await page.click('#modal[open] [data-action="confirm-delete"]');
+  await page.waitForFunction(() => /Đã xóa/.test(document.getElementById('results-summary').textContent) && document.getElementById('btn-stop').hidden);
+  check(sent.deletes[1]?.hid === H2 && sent.deletes[1].body.confirm.typedOrg === 'dev-prod', `16c: production request ${JSON.stringify(sent.deletes[1])}`);
+
+  // 16d (390). Full-screen dialog, no sideways overflow.
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.click('#btn-history');
+  await page.waitForSelector('dialog.history[open] .history-row');
+  const box = await page.evaluate(() => {
+    const d = document.querySelector('dialog.history').getBoundingClientRect();
+    return { w: d.width, h: d.height, sw: document.documentElement.scrollWidth, iw: innerWidth, ih: innerHeight, inner: document.querySelector('dialog.history').scrollWidth - document.querySelector('dialog.history').clientWidth };
+  });
+  check(Math.abs(box.w - box.iw) <= 1 && Math.abs(box.h - box.ih) <= 1 && box.sw === box.iw && box.inner <= 0, `16d 390px: history dialog not full screen or overflowing ${JSON.stringify(box)}`);
+  if (outDir) await page.screenshot({ path: path.join(outDir, 'smoke-390-history.png') });
+  await page.context().close();
+}
+
 (async () => {
   // A Playwright error outside a flow's promise (e.g. in an event handler) fails the run.
   process.on('uncaughtException', (e) => { console.error('SMOKE FAILED\n' + e); process.exit(1); });
@@ -1210,7 +1356,7 @@ async function flowCanvas() {
     check(orgs.status === 503 && /smoke:/.test((await orgs.json()).error), 'the smoke server is not using the sf CLI stub');
     // Independent flows, one context each, in parallel. A flow that throws (timed-out wait) is
     // reported and the others still finish.
-    let flows = { flowEditing, flowPicker, flowFiles, flowDark, flowLayoutWide, flowLayoutNarrow, flowEach, flowCanvas };
+    let flows = { flowEditing, flowPicker, flowFiles, flowDark, flowLayoutWide, flowLayoutNarrow, flowEach, flowCanvas, flowHistory };
     // SMOKE_ONLY=flowCanvas,flowEach runs only those flows (while working on one area).
     const only = process.env.SMOKE_ONLY?.split(',').filter(Boolean);
     if (only?.length) flows = Object.fromEntries(Object.entries(flows).filter(([n]) => only.includes(n)));
@@ -1223,6 +1369,7 @@ async function flowCanvas() {
     server?.closeAllConnections();
     server?.close();
     await browser?.close();
+    if (smokeTmp) fs.rmSync(smokeTmp, { recursive: true, force: true });
   }
   const ms = Date.now() - t0;
   console.log(`duration=${ms}ms`);
