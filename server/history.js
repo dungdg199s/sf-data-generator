@@ -3,9 +3,12 @@
 //
 // Where: <dataDir>/history/, dataDir = $SFDG_DATA_DIR, else per OS (Linux $XDG_DATA_HOME or
 // ~/.local/share, macOS ~/Library/Application Support, Windows %APPDATA%) + /sf-data-generator.
-// Directories are created 0700, files 0600. A directory that cannot be written turns the history
-// off (`enabled: false`, `reason`): previews still work, inserts are refused (nothing could be
-// deleted again through the app).
+// Directories are created 0700, files 0600; a symlinked or foreign-owned directory or file is never
+// used, and `<dir>/.lock` (pid) keeps a second server off the same directory. A directory that
+// cannot be used turns the history off (`enabled: false`, `reason`): previews still work, inserts
+// are refused (nothing could be deleted again through the app). Pruning removes only runs with
+// nothing left in the org; when only runs with records would have to go, a new insert is refused
+// (`code: 'HISTORY_FULL'`) instead of silently forgetting Ids.
 //
 //   <hid>.json          the run (rewritten whole: temp file + rename)
 //   <hid>.ids.csv       Ids inserted, append only: sobject,step,ref,id
@@ -19,8 +22,8 @@
 import os from 'node:os';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
-import { createReadStream } from 'node:fs';
-import { mkdir, readdir, readFile, writeFile, appendFile, rename, rm, stat, chmod, unlink } from 'node:fs/promises';
+import { createReadStream, readFileSync, unlinkSync } from 'node:fs';
+import { mkdir, readdir, readFile, writeFile, appendFile, rename, rm, stat, lstat, chmod, unlink } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
 import { LIMITS } from './workflow/nodes.js';
 
@@ -69,11 +72,34 @@ function splitLine(line) {
   return out;
 }
 
+const IS_WIN = process.platform === 'win32';
+
+/**
+ * Review nit: history files and the directory are never followed through a symlink nor read when
+ * another user owns them (lstat, uid). → false when `p` does not exist; throws when it is unsafe.
+ */
+export async function checkOwned(p, { directory = false } = {}) {
+  let st;
+  try {
+    st = await lstat(p);
+  } catch (e) {
+    if (e.code === 'ENOENT') return false;
+    throw e;
+  }
+  const what = directory ? 'thư mục' : 'file';
+  if (st.isSymbolicLink()) throw new Error(`${what} ${p} là symlink; app không dùng symlink cho Lịch sử`);
+  if (directory ? !st.isDirectory() : !st.isFile()) throw new Error(`${p} không phải ${what}`);
+  if (!IS_WIN && typeof process.getuid === 'function' && st.uid !== process.getuid()) {
+    throw new Error(`${what} ${p} thuộc user khác (uid ${st.uid}); app chỉ dùng ${what} của chính user chạy server`);
+  }
+  return true;
+}
+
 /** Lines of a file after its header (none when the file does not exist). */
 async function* lines(file) {
+  if (!(await checkOwned(file))) return;
   let stream;
   try {
-    await stat(file);
     stream = createReadStream(file, { encoding: 'utf8' });
   } catch {
     return;
@@ -88,6 +114,32 @@ async function* lines(file) {
     if (line) yield splitLine(line);
   }
 }
+
+// One lock per history directory and process (review nit): `<dir>/.lock` holds the pid, so two
+// servers on one data directory do not break each other's running / deleting state.
+const heldLocks = new Set();
+let exitHook = false;
+function releaseLocksOnExit() {
+  if (exitHook) return;
+  exitHook = true;
+  process.once('exit', () => {
+    for (const f of heldLocks) {
+      try {
+        if (readFileSync(f, 'utf8').trim() === String(process.pid)) unlinkSync(f);
+      } catch {
+        // already gone
+      }
+    }
+  });
+}
+const alive = (pid) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return e.code === 'EPERM';
+  }
+};
 
 const compactIso = (t) => new Date(t).toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
 
@@ -124,25 +176,46 @@ export function createHistory({ dir = path.join(dataDir(), 'history'), clock = (
 
   async function readJson(hid) {
     try {
-      return JSON.parse(await readFile(file(hid, '.json'), 'utf8'));
+      const f = file(hid, '.json');
+      if (!(await checkOwned(f))) return null;
+      return JSON.parse(await readFile(f, 'utf8'));
     } catch {
       return null;
     }
   }
 
-  async function countLines(f) {
-    let n = 0;
-    for await (const _ of lines(f)) n++; // eslint-disable-line no-unused-vars
-    return n;
+  /** Appends to a history file that is missing or a regular file of this user (never a symlink). */
+  async function appendSafe(f, text) {
+    await checkOwned(f);
+    await appendFile(f, text, { mode: 0o600 });
+  }
+
+  async function takeLock() {
+    const lock = path.join(dir, '.lock');
+    try {
+      await writeFile(lock, String(process.pid), { mode: 0o600, flag: 'wx' });
+    } catch (e) {
+      if (e.code !== 'EEXIST') throw e;
+      await checkOwned(lock);
+      const pid = Number((await readFile(lock, 'utf8')).trim());
+      if (pid && pid !== process.pid && alive(pid)) {
+        throw new Error(`thư mục Lịch sử ${dir} đang được một server khác dùng (pid ${pid}). Dừng server đó, hoặc đặt SFDG_DATA_DIR khác cho server này`);
+      }
+      await writeFile(lock, String(process.pid), { mode: 0o600 }); // ours already, or a stale lock
+    }
+    heldLocks.add(lock);
+    releaseLocksOnExit();
   }
 
   const ready = (async () => {
     try {
       await mkdir(dir, { recursive: true, mode: 0o700 });
-      if (process.platform !== 'win32') await chmod(dir, 0o700);
+      await checkOwned(dir, { directory: true });
+      if (!IS_WIN) await chmod(dir, 0o700);
       const probe = path.join(dir, `.probe-${random()}`);
-      await writeFile(probe, '', { mode: 0o600 });
+      await writeFile(probe, '', { mode: 0o600, flag: 'wx' });
       await unlink(probe);
+      await takeLock();
       state.enabled = true;
     } catch (e) {
       state.enabled = false;
@@ -157,7 +230,15 @@ export function createHistory({ dir = path.join(dataDir(), 'history'), clock = (
       if (data?.status !== 'running' && data?.deletion?.status !== 'running') continue;
       if (data.status === 'running') {
         data.status = 'interrupted';
-        data.inserted = await countLines(file(m[1], '.ids.csv'));
+        // The counts of the json lag behind the Ids file: recount (total and per step).
+        const perStep = new Map();
+        let total = 0;
+        for await (const [, step] of lines(file(m[1], '.ids.csv'))) {
+          total++;
+          perStep.set(step, (perStep.get(step) ?? 0) + 1);
+        }
+        data.inserted = total;
+        data.steps = (data.steps ?? []).map((st) => ({ ...st, inserted: perStep.get(st.nodeId) ?? 0 }));
       }
       if (data.deletion?.status === 'running') data.deletion.status = 'interrupted';
       await writeJson(m[1], data).catch(() => {});
@@ -182,6 +263,9 @@ export function createHistory({ dir = path.join(dataDir(), 'history'), clock = (
   const isRunning = (run) => inserting.has(run.id) || deleting.has(run.id);
   /** Inserted records still in the org, from the counters (the files are the truth: see remaining). */
   const leftOf = (run) => Math.max(0, (run.inserted ?? 0) - (run.deletion?.deleted ?? 0) - (run.deletion?.gone ?? 0));
+  /** Bulk insert jobs whose Ids were never read: the run may still have records (review S3/S4). */
+  const unreadJobs = (run) => (run.bulkJobs ?? []).filter((j) => j?.jobId && !j.idsCollected && !j.neverProcessed);
+  const hasRecords = (run) => leftOf(run) > 0 || unreadJobs(run).length > 0;
 
   async function folderBytes() {
     let n = 0;
@@ -189,23 +273,33 @@ export function createHistory({ dir = path.join(dataDir(), 'history'), clock = (
     return n;
   }
 
-  /** Keeps at most maxRuns − 1 runs and maxBytes before a new one: emptied runs go first, running ones never. */
-  async function prune() {
+  /**
+   * Room for one more run (review S4): only runs with nothing left in the org (deleted, or no
+   * record ever inserted) are removed, oldest first, never a running one. → { full, runs, bytes }
+   * after that; with `apply: false` nothing is removed (the Insert confirmation asks first).
+   */
+  async function makeRoom({ apply }) {
     const runs = (await allRuns()).reverse(); // oldest first
-    const candidates = [
-      ...runs.filter((r) => !isRunning(r) && leftOf(r) === 0),
-      ...runs.filter((r) => !isRunning(r) && leftOf(r) > 0),
-    ];
     let count = runs.length;
     let bytes = await folderBytes();
-    for (const r of candidates) {
+    for (const r of runs) {
       if (count < maxRuns && bytes < maxBytes) break;
-      const before = await folderBytes();
-      await removeFiles(r.id);
-      bytes -= before - (await folderBytes());
+      if (isRunning(r) || hasRecords(r)) continue;
+      const own = await runBytes(r.id);
+      if (apply) await removeFiles(r.id);
+      bytes -= own;
       count--;
     }
+    return { full: count >= maxRuns || bytes >= maxBytes, runs: count, bytes };
   }
+
+  async function runBytes(hid) {
+    let n = 0;
+    for (const ext of ['.json', '.ids.csv', '.deleted.csv']) n += (await stat(file(hid, ext)).catch(() => ({ size: 0 }))).size;
+    return n;
+  }
+
+  const fullMessage = () => `Lịch sử đã đủ ${maxRuns} lần insert còn bản ghi trong org (hoặc ${Math.round(maxBytes / 1048576)} MB), nên chưa ghi gì vào org: app không tự quên một lần insert còn bản ghi. Mở Lịch sử, bấm "Xóa khỏi org…" hoặc "Quên lần insert này" ở các lần cũ rồi insert lại.`;
 
   async function removeFiles(hid) {
     for (const ext of ['.json', '.ids.csv', '.deleted.csv']) await rm(file(hid, ext), { force: true });
@@ -217,17 +311,18 @@ export function createHistory({ dir = path.join(dataDir(), 'history'), clock = (
       id: hid,
       data,
       /** Inserted Ids: [{ sobject, step, ref, id }] — awaited before the next write to the org. */
-      appendIds: (rows) => queued(hid, () => appendFile(file(hid, '.ids.csv'), rows.map((r) => `${cell(r.sobject)},${cell(r.step)},${cell(r.ref)},${cell(r.id)}\n`).join(''), { mode: 0o600 })),
+      appendIds: (rows) => queued(hid, () => appendSafe(file(hid, '.ids.csv'), rows.map((r) => `${cell(r.sobject)},${cell(r.step)},${cell(r.ref)},${cell(r.id)}\n`).join(''))),
       /** Delete outcomes: [{ id, outcome: 'deleted' | 'gone' }]. */
       appendDeleted: (rows) => queued(hid, async () => {
         const f = file(hid, '.deleted.csv');
-        const exists = await stat(f).then(() => true, () => false);
-        await appendFile(f, `${exists ? '' : DELETED_HEADER}${rows.map((r) => `${cell(r.id)},${cell(r.outcome)}\n`).join('')}`, { mode: 0o600 });
+        const exists = await checkOwned(f);
+        await appendSafe(f, `${exists ? '' : DELETED_HEADER}${rows.map((r) => `${cell(r.id)},${cell(r.outcome)}\n`).join('')}`);
       }),
       /** Merges `patch` into the json and rewrites it. */
-      save: (patch = {}) => queued(hid, () => {
+      save: (patch = {}) => queued(hid, async () => {
+        // Written first, applied after: a failed write leaves the run as it was (review nit).
+        await writeJson(hid, { ...data, ...patch });
         Object.assign(data, patch);
-        return writeJson(hid, data);
       }),
     };
   }
@@ -253,7 +348,7 @@ export function createHistory({ dir = path.join(dataDir(), 'history'), clock = (
     async create({ org, workflow, seed, now, bulk, steps, total, warnings = [] }) {
       await ready;
       if (!state.enabled) throw new Error(state.reason ?? 'Lịch sử đang tắt');
-      await prune();
+      if ((await makeRoom({ apply: true })).full) throw Object.assign(new Error(fullMessage()), { code: 'HISTORY_FULL' });
       const t = clock();
       let hid;
       do hid = `h${compactIso(t)}-${random()}`; while (await stat(file(hid, '.json')).then(() => true, () => false));
@@ -313,6 +408,17 @@ export function createHistory({ dir = path.join(dataDir(), 'history'), clock = (
       };
     },
 
+    /**
+     * Cheap state for the Insert confirmation: on/off, and whether a new run would be refused
+     * because only runs with records left would have to be forgotten.
+     */
+    async status() {
+      await ready;
+      if (!state.enabled) return { enabled: false, reason: state.reason, dir, maxRuns };
+      const room = await makeRoom({ apply: false });
+      return { enabled: true, dir, maxRuns, full: room.full, ...(room.full ? { fullMessage: fullMessage() } : {}) };
+    },
+
     /** Handle of an existing run (delete), or null. */
     async open(hid) {
       await ready;
@@ -342,7 +448,7 @@ export function createHistory({ dir = path.join(dataDir(), 'history'), clock = (
           steps: (r.steps ?? []).map(({ nodeId, alias, sobject, mode, total, inserted, failed }) => ({ nodeId, alias, sobject, mode, total, inserted, failed })),
           bulkJobs: (r.bulkJobs ?? []).length,
           stopped: r.stopped,
-          deletion: { status: deleting.has(r.id) ? 'running' : r.deletion?.status ?? 'none', deleted: r.deletion?.deleted ?? 0, gone: r.deletion?.gone ?? 0, failed: r.deletion?.failed ?? 0, remaining: leftOf(r), lastAt: r.deletion?.lastAt ?? null },
+          deletion: { status: deleting.has(r.id) ? 'running' : r.deletion?.status ?? 'none', deleted: r.deletion?.deleted ?? 0, gone: r.deletion?.gone ?? 0, failed: r.deletion?.failed ?? 0, remaining: leftOf(r), unreadJobs: unreadJobs(r).length, lastAt: r.deletion?.lastAt ?? null },
         };
       });
     },

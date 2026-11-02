@@ -4,13 +4,25 @@
 // geolocations are split into __Latitude__s / __Longitude__s), in order of first appearance; never
 // a column that is not a field of the step (Salesforce refuses the whole job for an unknown column).
 // null / missing → empty cell (Salesforce leaves the field unset on insert); booleans true / false;
-// numbers String(n); strings as generated, quoted when they hold `"`, `,` or a line break.
+// numbers in plain digits (never exponent form); strings as generated, quoted when they hold `"`, `,` or a line break.
 // Line ending LF and comma delimiter (the job is created with lineEnding LF, columnDelimiter COMMA).
+
+/**
+ * A number as Salesforce reads it: plain digits, never exponent form (String(1e21) is "1e+21",
+ * String(1e-7) is "1e-7"; review nit).
+ */
+export function numberText(n) {
+  const s = String(n);
+  if (!/e/i.test(s) || !Number.isFinite(n)) return s;
+  return n.toLocaleString('en-US', { useGrouping: false, maximumFractionDigits: 100 });
+}
+
+const text = (v) => (typeof v === 'boolean' ? (v ? 'true' : 'false') : typeof v === 'number' ? numberText(v) : typeof v === 'object' ? JSON.stringify(v) : String(v));
 
 /** One CSV cell. */
 export function csvValue(v) {
   if (v === null || v === undefined) return '';
-  const s = typeof v === 'boolean' ? (v ? 'true' : 'false') : typeof v === 'object' ? JSON.stringify(v) : String(v);
+  const s = text(v);
   return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
@@ -53,7 +65,7 @@ export function rowKey(row, cols) {
   return cols.map((c) => {
     const v = row[c];
     if (v === null || v === undefined) return '';
-    return typeof v === 'boolean' ? (v ? 'true' : 'false') : typeof v === 'object' ? JSON.stringify(v) : String(v);
+    return text(v);
   }).join('\u0000');
 }
 

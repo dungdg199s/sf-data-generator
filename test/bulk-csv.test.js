@@ -40,3 +40,15 @@ test('a failed result line is matched back to the uploaded row by content', () =
   const echoed = dataOf({ sf__Id: '', sf__Error: 'X:y: --', LastName: 'A', DoNotCall: 'true', N: '3', Email: '' });
   assert.equal(rowKey(echoed, cols), rowKey(row, cols));
 });
+
+test('review nit: numbers never in exponent form (CSV and the line key)', async () => {
+  const { numberText, csvValue } = await import('../server/sf/bulk-csv.js');
+  assert.equal(numberText(1e21), '1000000000000000000000');
+  assert.equal(numberText(1e-7), '0.0000001');
+  assert.equal(numberText(-2.5e-8), '-0.000000025');
+  assert.equal(numberText(12.5), '12.5');
+  const { csv } = toBulkCsv([{ Amount__c: 1e21, Rate__c: 1e-7 }]);
+  assert.equal(csv, 'Amount__c,Rate__c\n1000000000000000000000,0.0000001\n');
+  assert.equal(csvValue(3e25), '30000000000000000000000000');
+  assert.equal(rowKey({ A: '0.0000001' }, ['A']), rowKey({ A: 1e-7 }, ['A']));
+});

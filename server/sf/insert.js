@@ -473,6 +473,7 @@ export function createInserter(client, target, {
       stopped ??= { reason: 'history', message: e.message };
       try { await job.abort(); } catch { /* nothing uploaded yet */ }
       entry.state = 'Aborted';
+      entry.neverProcessed = true;
       notSent += rows.length;
       return undefined;
     }
@@ -511,6 +512,7 @@ export function createInserter(client, target, {
   /** Upload, close, follow and read the results of one job (runs alongside the Collections calls). */
   async function runJob(step, job, records, rows, entry, info) {
     const { columns, csv } = toBulkCsv(rows);
+    let closing = false;
     try {
       await job.upload(csv);
       if (signal?.aborted || forceSignal?.aborted) {
@@ -518,16 +520,21 @@ export function createInserter(client, target, {
         try { await job.abort(); } catch { /* best effort */ }
         entry.state = 'Aborted';
         entry.idsCollected = true;
+        entry.neverProcessed = true;
         notSent += records.length;
         cancelled = true;
         await saveEntry(entry);
         return;
       }
+      closing = true;
       await job.close();
     } catch (e) {
       try { await job.abort(); } catch { /* best effort */ }
       entry.state = 'Failed';
-      entry.idsCollected = true;
+      // A failed upload never reached Salesforce's queue; a failed close might have: then the
+      // job stays "unread" and a delete looks at it first (review S3).
+      entry.idsCollected = !closing;
+      if (!closing) entry.neverProcessed = true;
       for (const r of records) fail(r, e.message, { bulkJobId: job.id });
       step.stats.failed += records.length;
       afterJob(step, 0, records.length, e.message);
@@ -574,9 +581,9 @@ export function createInserter(client, target, {
     counts(step.sobject).inserted += okRows.length;
     stepCounts(step.nodeId).inserted += okRows.length;
     step.stats.inserted += okRows.length;
-    entry.idsCollected = ok !== null;
     entry.inserted = okRows.length;
-    await recordIds(okRows);
+    // Review S2: "collected" only once the Ids are on disk; otherwise a delete reads them again.
+    entry.idsCollected = ok !== null && (await recordIds(okRows));
     let failedCount = 0;
     let firstMessage = null;
     if (end.state === 'Failed') {

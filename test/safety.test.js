@@ -28,8 +28,21 @@ test('only server/sf/client.js touches jsforce write APIs (.bulk2, .destroy(, .s
   assert.deepEqual(using(/hardDelete/i).filter((f) => f !== 'server/sf/client.js'), [], 'hardDelete is only named where it is refused');
 });
 
-test('only the inserter and the delete module call client.create / client.destroy / client.bulkJob', () => {
-  const callers = using(/\bclient\.(create|destroy|bulkJob)\(/);
+/**
+ * Review S6: a write call through any receiver named like a client (`client`, `sfClient`,
+ * `this.client`, `opts.sfClient`…), and any `.bulkJob(` call whatever the receiver.
+ */
+const WRITE_CALL = /(?:\b\w*[cC]lient\s*\??\.\s*(?:create|destroy|bulkJob)\s*\()|(?:\.\s*bulkJob\s*\()/;
+
+test('the write-call pattern catches every receiver spelling', () => {
+  for (const src of ['client.create(t, s, r)', 'sfClient.destroy(t, s, ids)', 'this.sfClient.bulkJob(t, o)', 'opts.client?.create(x)', 'foo.bulkJob(t, o)', 'myClient . destroy (a)']) {
+    assert.ok(WRITE_CALL.test(src), src);
+  }
+  for (const src of ['client.query(t, q)', 'function bulkJob(target) {', 'sfClient.limits(t)']) assert.ok(!WRITE_CALL.test(src), src);
+});
+
+test('only the inserter and the delete module call create / destroy / bulkJob on a client', () => {
+  const callers = using(WRITE_CALL);
   assert.deepEqual(callers.sort(), ['server/sf/delete.js', 'server/sf/insert.js']);
 });
 

@@ -336,3 +336,150 @@ test('NDJSON insert with Bulk through the app: plan steps, every Id in ids.csv (
     await app.close();
   }
 });
+
+// ---------- 0011 "Sửa sau review" ----------
+
+test('review B1: Dừng / closing the tab while the delete checks run (slow sf org display) deletes nothing', async () => {
+  const app = await appOnFakeSf();
+  try {
+    const ins = await (await postJson(`${app.url}/api/run`, { workflow: accConWf(3, 2), seed: 1, target: { kind: 'org', org: 'dev' } })).json();
+    const hid = ins.insert.historyId;
+    const base = cliFor(app.sf).getConnection;
+    let entered;
+    let finished;
+    const lookup = new Promise((r) => { entered = r; });
+    const lookupDone = new Promise((r) => { finished = r; });
+    app.cli.getConnection = async (t, o = {}) => {
+      if (o.refresh) {
+        entered();
+        await new Promise((r) => setTimeout(r, 300));
+        setImmediate(finished);
+      }
+      return base(t, o);
+    };
+    const before = app.sf.writes().length;
+    const ctl = new AbortController();
+    const req = fetch(`${app.url}/api/history/${hid}/delete`, { method: 'POST', signal: ctl.signal, headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson' }, body: JSON.stringify({ confirm: { username: 'me@x.com', count: 9 } }) }).catch((e) => e.name);
+    await lookup;
+    ctl.abort();
+    assert.equal(await req, 'AbortError');
+    // The checks end after the slow lookup; watch for writes for a while after that (the old code
+    // deleted everything within a few ms here).
+    await lookupDone;
+    for (let t = 0; t < 25 && app.sf.writes().length === before; t++) await new Promise((r) => setTimeout(r, 20));
+    while (app.history.deleting.has(hid)) await new Promise((r) => setTimeout(r, 20));
+    assert.equal(app.sf.writes().length, before, 'no DELETE after the client left');
+    assert.equal(app.sf.deleted.size, 0);
+    const run = await (await fetch(`${app.url}/api/history/${hid}`)).json();
+    assert.deepEqual([run.deletion.status, run.remaining.total], ['none', 9], 'the run is as it was');
+  } finally {
+    await app.close();
+  }
+});
+
+test('review B2: an alias re-pointed to another org after the Connection was cached — insert, history and delete all use the new org', async () => {
+  const A = await startFakeSalesforce();
+  const B = await startFakeSalesforce();
+  let cur = { accessToken: 't', instanceUrl: A.url, apiVersion: '62.0', username: 'me@x.com', orgId: '00D00000000000AAAA' };
+  const cli = { getConnection: async () => cur, listOrgs: async () => [{ alias: 'dev', username: 'me@x.com', isSandbox: true }] };
+  const history = createHistory({ dir: path.join(mkdtempSync(path.join(TEST_DATA_DIR, 's-')), 'history') });
+  const server = http.createServer(createApp({ cli, history, deleteOptions: sleepless }));
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const url = `http://127.0.0.1:${server.address().port}`;
+  try {
+    await fetch(`${url}/api/orgs/dev/limits`); // the Connection to A is cached
+    cur = { ...cur, instanceUrl: B.url, orgId: '00D00000000000BBBB' }; // sf org login web --alias dev → org B
+    const ins = await (await postJson(`${url}/api/run`, { workflow: accConWf(2, 2), seed: 1, target: { kind: 'org', org: 'dev' } })).json();
+    assert.equal(ins.insert.inserted, 6);
+    assert.deepEqual([A.records.size, B.records.size], [0, 6], 'written to the org the CLI names now');
+    const run = await (await fetch(`${url}/api/history/${ins.insert.historyId}`)).json();
+    assert.deepEqual([run.org.orgId, run.org.instanceUrl], ['00D00000000000BBBB', B.url]);
+    const del = await (await postJson(`${url}/api/history/${ins.insert.historyId}/delete`, { confirm: { username: 'me@x.com', count: 6 } })).json();
+    assert.deepEqual([del.deleted, del.gone, B.deleted.size], [6, 0, 6]);
+    assert.equal(A.writes().length, 0);
+  } finally {
+    server.close();
+    await A.close();
+    await B.close();
+  }
+});
+
+test('review B2: a token refresh that lands in another org is refused (no retried write); no orgId ⇒ no insert', async () => {
+  const sf = await startFakeSalesforce({ token: 'fresh' });
+  try {
+    let orgId = '00D00000000000AAAA';
+    const cli = { getConnection: async (_t, { refresh = false } = {}) => ({ accessToken: refresh ? 'fresh' : 'stale', instanceUrl: sf.url, apiVersion: '62.0', username: 'me@x.com', orgId }) };
+    const client = createSfClient({ cli });
+    assert.deepEqual(await client.orgOf('dev'), { username: 'me@x.com', orgId: '00D00000000000AAAA', instanceUrl: sf.url });
+    orgId = '00D00000000000BBBB'; // the refresh says: another org
+    await assert.rejects(client.create('dev', 'Contact', [{ LastName: 'A' }]), (e) => e.status === 502 && /bây giờ là org khác/.test(e.message));
+    assert.equal(sf.writes().filter((w) => w.auth === 'Bearer fresh').length, 0, 'the write was not retried with the other org\'s token');
+    assert.equal(sf.records.size, 0);
+
+    const app = await appOnFakeSf({ cli: { getConnection: async () => ({ accessToken: 't', instanceUrl: sf.url, apiVersion: '62.0', username: 'me@x.com' }) } });
+    try {
+      const res = await postJson(`${app.url}/api/run`, { workflow: accConWf(1, 1), seed: 1, target: { kind: 'org', org: 'dev' } });
+      assert.equal(res.status, 502);
+      assert.match((await res.json()).error, /^sf CLI không cho biết org "dev" là org nào \(thiếu orgId hoặc username\), nên chưa ghi gì vào org\./);
+      assert.equal(app.sf.writes().length, 0);
+      assert.equal((await (await fetch(`${app.url}/api/history`)).json()).runs.length, 0);
+    } finally {
+      await app.close();
+    }
+  } finally {
+    await sf.close();
+  }
+});
+
+test('review S1: two deletes of one run at once — one runs (200), the other gets 409; each Id is deleted once', async () => {
+  const app = await appOnFakeSf();
+  try {
+    const ins = await (await postJson(`${app.url}/api/run`, { workflow: accConWf(3, 2), seed: 1, target: { kind: 'org', org: 'dev' } })).json();
+    const hid = ins.insert.historyId;
+    const base = cliFor(app.sf).getConnection;
+    app.cli.getConnection = async (t, o) => { await new Promise((r) => setTimeout(r, 50)); return base(t, o); };
+    const before = app.sf.writes().length;
+    const body = { confirm: { username: 'me@x.com', count: 9 } };
+    const [a, b] = await Promise.all([postJson(`${app.url}/api/history/${hid}/delete`, body), postJson(`${app.url}/api/history/${hid}/delete`, body)]);
+    assert.deepEqual([a.status, b.status].sort(), [200, 409]);
+    const refused = a.status === 409 ? a : b;
+    assert.equal((await refused.json()).error, 'Đang xóa dữ liệu của lần insert này ở một tab khác. Chờ lần đó xong.');
+    const ids = app.sf.writes().slice(before).flatMap((w) => new URL(`http://x${w.url}`).searchParams.get('ids')?.split(',') ?? []);
+    assert.equal(ids.length, 9);
+    assert.equal(new Set(ids).size, 9, 'no Id sent twice');
+    assert.equal(app.history.deleting.size, 0, 'the claim is released');
+  } finally {
+    await app.close();
+  }
+});
+
+test('review nits: /limits with a malformed escape is 404; production refusal carries code typedOrgRequired; a failing first save keeps the status and deletes nothing; /api/history/status', async () => {
+  const app = await appOnFakeSf({ orgs: [{ alias: 'dev', username: 'me@x.com', isSandbox: false }] });
+  try {
+    assert.equal((await fetch(`${app.url}/api/orgs/%E0%A4%A/limits`)).status, 404);
+    const status = await (await fetch(`${app.url}/api/history/status`)).json();
+    assert.deepEqual([status.enabled, status.full, status.maxRuns, 'runs' in status], [true, false, 100, false]);
+    const ins = await (await postJson(`${app.url}/api/run`, { workflow: accConWf(1, 1), seed: 1, target: { kind: 'org', org: 'dev' } })).json();
+    const hid = ins.insert.historyId;
+    const res = await postJson(`${app.url}/api/history/${hid}/delete`, { confirm: { username: 'me@x.com', count: 2 } });
+    assert.equal(res.status, 400);
+    assert.equal((await res.json()).code, 'typedOrgRequired');
+    // The first "deleting" save fails once (disk full…): no delete, the status stays "none".
+    const open = app.history.open.bind(app.history);
+    let failOnce = true;
+    app.history.open = async (h) => {
+      const e = await open(h);
+      const save = e.save;
+      return { ...e, save: (patch) => { if (failOnce) { failOnce = false; return Promise.reject(new Error('ENOSPC: no space left on device')); } return save(patch); } };
+    };
+    const before = app.sf.writes().length;
+    const bad = await postJson(`${app.url}/api/history/${hid}/delete`, { confirm: { username: 'me@x.com', count: 2, typedOrg: 'dev' } });
+    assert.equal(bad.status, 500);
+    assert.equal(app.sf.writes().length, before);
+    const run = await (await fetch(`${app.url}/api/history/${hid}`)).json();
+    assert.equal(run.deletion.status, 'none');
+    assert.equal(app.history.deleting.size, 0);
+  } finally {
+    await app.close();
+  }
+});

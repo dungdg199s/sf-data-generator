@@ -10,12 +10,14 @@ import { W, rec, E } from './fixtures/v1-cases.js';
 let server;
 let base;
 const inserted = [];
+// 0011 review B2: an insert needs the org's identity from the sf CLI (orgId and username).
+const ORG = { username: 'a@x.com', orgId: '00D000000000001AAA', instanceUrl: 'https://x.my.salesforce.com' };
 // Fake org data read by Query steps; tests change it to simulate the org changing.
 let orgAccounts = [{ attributes: { type: 'Account' }, Id: '001000000000001AAA', Name: 'Acme' }, { attributes: { type: 'Account' }, Id: '001000000000002AAA', Name: 'Globex' }];
 const queried = [];
 
 before(async () => {
-  const cli = { listOrgs: async () => [{ alias: 'dev', username: 'a@x.com' }], getConnection: async () => ({}) };
+  const cli = { listOrgs: async () => [{ alias: 'dev', username: 'a@x.com' }], getConnection: async () => ORG };
   const client = {
     create: async (_t, _sobject, recs) => {
       inserted.push(...recs);
@@ -324,7 +326,7 @@ test('POST /api/runs/:id/cancel stops an insert after the call in flight', async
       return recs.map((_, i) => ({ success: true, id: `001${calls}${i}` }));
     },
   };
-  const app = http.createServer(createApp({ cli: { listOrgs: async () => [] }, client }));
+  const app = http.createServer(createApp({ cli: { listOrgs: async () => [], getConnection: async () => ORG }, client }));
   await new Promise((r) => app.listen(0, '127.0.0.1', r));
   try {
     const url = `http://127.0.0.1:${app.address().port}`;
@@ -399,7 +401,7 @@ test('a client that leaves while Query steps are read gets no run (nothing inser
     },
     create: async (_t, _s, recs) => { created += recs.length; return recs.map(() => ({ success: true, id: '001x' })); },
   };
-  const app = http.createServer(createApp({ cli: { listOrgs: async () => [] }, client }));
+  const app = http.createServer(createApp({ cli: { listOrgs: async () => [], getConnection: async () => ORG }, client }));
   await new Promise((r) => app.listen(0, '127.0.0.1', r));
   try {
     const controller = new AbortController();
@@ -423,7 +425,7 @@ import { requestGuard } from '../server/index.js';
 
 /** A throwaway app on its own port with a given client; → { url, close }. */
 async function appWith(client, opts = {}) {
-  const app = http.createServer(createApp({ cli: { listOrgs: async () => [{ alias: 'dev', username: 'a@x.com' }], getConnection: async () => ({}) }, client, ...opts }));
+  const app = http.createServer(createApp({ cli: { listOrgs: async () => [{ alias: 'dev', username: 'a@x.com' }], getConnection: async () => ORG }, client, ...opts }));
   await new Promise((r) => app.listen(0, '127.0.0.1', r));
   return { url: `http://127.0.0.1:${app.address().port}`, close: () => app.close() };
 }

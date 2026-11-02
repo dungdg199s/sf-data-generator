@@ -720,3 +720,29 @@ test('sf org display gives the orgId (design 0011)', async () => {
   const c = await createSfCli({ run }).getConnection('dev');
   assert.deepEqual([c.orgId, c.instanceUrl, c.username], ['00D5g000000AbCdEAK', 'https://x.my.salesforce.com', 'me@x.com']);
 });
+
+test('review S2: a Bulk job whose Ids could not be written to the history stays "not collected" (a delete reads it again)', async () => {
+  let n = 0;
+  const client = {
+    create: async (_t, _s, rows) => rows.map(() => ({ success: true, id: `003${String(++n).padStart(15, '0')}` })),
+    bulkJob: () => {
+      let rows = 0;
+      return {
+        id: '7504x0000000001', open: async () => {}, upload: async (csv) => { rows = csv.trim().split('\n').length - 1; }, close: async () => {},
+        check: async () => ({ state: 'JobComplete', numberRecordsProcessed: rows, numberRecordsFailed: 0 }), abort: async () => {},
+        successfulResults: async () => Array.from({ length: rows }, () => ({ sf__Id: `003${String(++n).padStart(15, '0')}` })), failedResults: async () => [],
+      };
+    },
+  };
+  const logged = [];
+  let appends = 0;
+  const ins = createInserter(client, 'dev', {
+    plan: { c: { mode: 'bulk', sobject: 'Contact', jobs: 1 } }, bulk: { sleep: async () => {}, jobRecords: 500 },
+    onInserted: async () => { if (++appends > 1) throw new Error('ENOSPC: no space left on device'); },
+    onBulkJob: async (e) => { logged.push({ ...e }); },
+  });
+  for (let i = 1; i <= 800; i++) await ins.push({ ref: `con#${i}`, sobject: 'Contact', nodeId: 'c', fields: { LastName: `L${i}` } });
+  const res = await ins.end();
+  assert.equal(res.stopped.reason, 'history');
+  assert.deepEqual([logged.at(-1).state, logged.at(-1).idsCollected], ['JobComplete', false]);
+});

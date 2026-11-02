@@ -25,10 +25,16 @@ import { BATCH_SIZE } from '../../shared/insert-plan.js';
 export const GONE_CODES = new Set(['ENTITY_IS_DELETED', 'INVALID_CROSS_REFERENCE_KEY', 'NOT_FOUND']);
 const RETRY_CODE = 'DELETE_FAILED';
 
-/** Bulk insert jobs of a run whose Ids were not collected (nothing to fetch for a job aborted before it ran). */
+/**
+ * Bulk insert jobs of a run whose Ids were not collected. Only a job the app itself knows never
+ * reached Salesforce's queue (`neverProcessed`: aborted before its close) is left out — a Failed
+ * job can have processed part of its records (review S3).
+ */
 export function pendingBulkJobs(run) {
-  return (run?.bulkJobs ?? []).filter((j) => j.jobId && !j.idsCollected && j.state !== 'Failed');
+  return (run?.bulkJobs ?? []).filter((j) => j?.jobId && !j.idsCollected && !j.neverProcessed);
 }
+
+const DONE_STATES = new Set(['JobComplete', 'Failed', 'Aborted']);
 
 /**
  * @param client   server/sf/client.js client (destroy, bulkJob)
@@ -51,9 +57,17 @@ export async function deleteRun({
 
   // Ids of Bulk insert jobs never read: fetched (read only) before anything is deleted.
   let fetched = 0;
+  const stillRunning = []; // jobs not finished in Salesforce yet: left pending, the user tries later
   for (const job of pendingBulkJobs(run)) {
     try {
       const h = client.bulkJob(target, { id: job.jobId, operation: 'insert' });
+      // Results of a job still running are partial: read them only once the job has ended.
+      const st = await h.check();
+      if (!DONE_STATES.has(st?.state)) {
+        stillRunning.push({ jobId: job.jobId, sobject: job.sobject, state: st?.state ?? '?' });
+        continue;
+      }
+      job.state = st.state;
       const ok = await h.successfulResults();
       const rows = (ok ?? []).filter((l) => l?.sf__Id).map((l) => ({ sobject: job.sobject, step: job.nodeId, ref: '', id: l.sf__Id }));
       if (rows.length) await entry.appendIds(rows);
@@ -62,9 +76,13 @@ export async function deleteRun({
       job.inserted = rows.length;
       await entry.save({ bulkJobs: run.bulkJobs, inserted: (run.inserted ?? 0) + rows.length });
     } catch {
-      // Not readable (job deleted by Salesforce after 7 days…): its records stay unknown to the app.
+      // Not readable now (network, job deleted by Salesforce after 7 days…): stays pending.
+      stillRunning.push({ jobId: job.jobId, sobject: job.sobject, state: 'unreadable' });
     }
   }
+  const pendingMessage = stillRunning.length
+    ? `Job Bulk ${stillRunning.map((j) => `${j.jobId} (${j.sobject})`).join(', ')} chưa xong hoặc chưa đọc được nên chưa lấy được Id của nó; bản ghi của job đó chưa bị xóa. Thử lại sau bằng "Xóa phần còn lại…" trong Lịch sử.`
+    : null;
 
   const rem = await history.remaining(entry.id, { withIds: true });
   const total = rem.total;
@@ -286,5 +304,7 @@ export async function deleteRun({
     stopped,
     bulkAborted,
     fetched,
+    pendingJobs: stillRunning,
+    pendingMessage,
   };
 }

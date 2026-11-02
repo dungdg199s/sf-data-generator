@@ -15,29 +15,58 @@ import { Connection } from 'jsforce';
 /** Bulk API 2.0 operations this app may run. */
 export const BULK_OPERATIONS = Object.freeze(['insert', 'delete']);
 
-export function createSfClient({ cli, createConnection = (options) => new Connection(options) }) {
-  const connections = new Map(); // target -> Promise<Connection>
+/** The identity of an org from an `sf org display` result: never the token. */
+export const orgIdentity = (info) => ({ username: info?.username ?? null, orgId: info?.orgId ?? null, instanceUrl: info?.instanceUrl ?? null });
 
-  function connectionFor(target) {
-    if (!connections.has(target)) {
-      const pending = cli.getConnection(target).then((info) =>
-        createConnection({
-          instanceUrl: info.instanceUrl,
-          accessToken: info.accessToken,
-          version: info.apiVersion,
-          refreshFn: (_conn, callback) => {
-            cli.getConnection(target, { refresh: true }).then(
-              (fresh) => callback(null, fresh.accessToken),
-              (err) => callback(err),
-            );
+export function createSfClient({ cli, createConnection = (options) => new Connection(options) }) {
+  // target -> Promise<{ conn, info }>: the Connection and the sf CLI lookup it was built from, so
+  // the org a write goes to is always the org the history records (design 0011 review B2).
+  const connections = new Map();
+
+  function build(target, info) {
+    const conn = createConnection({
+      instanceUrl: info.instanceUrl,
+      accessToken: info.accessToken,
+      version: info.apiVersion,
+      refreshFn: (_conn, callback) => {
+        cli.getConnection(target, { refresh: true }).then(
+          (fresh) => {
+            // The alias now names another org (re-login, sandbox refresh): never retry a call
+            // built for one org with a token of another.
+            const moved = (info.orgId && fresh.orgId && fresh.orgId !== info.orgId)
+              || (info.instanceUrl && fresh.instanceUrl && fresh.instanceUrl !== info.instanceUrl);
+            if (moved) {
+              callback(Object.assign(new Error(`Org "${target}" bây giờ là org khác (${fresh.orgId ?? fresh.instanceUrl}) so với lúc kết nối (${info.orgId ?? info.instanceUrl}). Dừng lại để không ghi nhầm org. Chạy lại thao tác.`), { errorCode: 'ORG_CHANGED' }));
+            } else callback(null, fresh.accessToken);
           },
-        }),
-      );
+          (err) => callback(err),
+        );
+      },
+    });
+    return { conn, info };
+  }
+
+  function entryFor(target) {
+    if (!connections.has(target)) {
+      const pending = cli.getConnection(target).then((info) => build(target, info));
       // Don't cache a failed lookup (e.g. org not logged in yet) — the next call should retry.
       pending.catch(() => connections.delete(target));
       connections.set(target, pending);
     }
     return connections.get(target);
+  }
+
+  const connectionFor = async (target) => (await entryFor(target)).conn;
+
+  /**
+   * Reads the org again from the sf CLI (`sf org display`, not the 10-minute cache) and rebuilds
+   * the Connection from that very lookup. Every insert and delete starts with this, so its writes
+   * go where its history says. → { username, orgId, instanceUrl } (no token)
+   */
+  async function refreshOrg(target) {
+    const info = await cli.getConnection(target, { refresh: true });
+    connections.set(target, Promise.resolve(build(target, info)));
+    return orgIdentity(info);
   }
 
   async function call(target, fn) {
@@ -88,8 +117,9 @@ export function createSfClient({ cli, createConnection = (options) => new Connec
 
   return {
     connection: connectionFor,
-    /** Drops the cached Connection (the next call builds one from a fresh sf CLI lookup). */
-    reset: (target) => { connections.delete(target); },
+    refreshOrg,
+    /** Identity of the org the cached Connection of `target` writes to (no token). */
+    orgOf: async (target) => orgIdentity((await entryFor(target)).info),
     describeGlobal: (target) => call(target, (conn) => conn.describeGlobal()),
     describe: (target, sobject) => call(target, (conn) => conn.describe(sobject)),
     /** Cache identity of an org target (server/sf/query.js): instance URL + username from the sf CLI. */

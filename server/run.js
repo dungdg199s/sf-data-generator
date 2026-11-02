@@ -171,7 +171,9 @@ export async function executeRun({
     } catch (e) {
       const ev = {
         type: 'error',
-        error: `Không ghi được Lịch sử (${e.message}), nên chưa ghi gì vào org. Kiểm tra quyền ghi thư mục ${record.history.dir} hoặc đặt SFDG_DATA_DIR.`,
+        error: e.code === 'HISTORY_FULL'
+          ? e.message
+          : `Không ghi được Lịch sử (${e.message}), nên chưa ghi gì vào org. Kiểm tra quyền ghi thư mục ${record.history.dir} hoặc đặt SFDG_DATA_DIR.`,
         insert: null,
       };
       emit(ev);

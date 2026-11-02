@@ -112,3 +112,32 @@ test('Bulk delete after a probe; ids of an unread Bulk insert job are fetched fi
   assert.ok(jobs.every((j) => ['insert', 'delete'].includes(j.operation)));
   assert.equal((await history.read(entry.id)).bulkJobs[0].idsCollected, true);
 });
+
+test('review S3: a Failed insert job is still read; a job still running is left pending (not marked collected)', async () => {
+  const { pendingBulkJobs } = await import('../server/sf/delete.js');
+  assert.deepEqual(pendingBulkJobs({ bulkJobs: [
+    { jobId: 'F', state: 'Failed', idsCollected: false },
+    { jobId: 'N', state: 'Aborted', idsCollected: true, neverProcessed: true },
+    { jobId: 'U', state: 'Failed', idsCollected: false, neverProcessed: true },
+    { jobId: 'D', state: 'JobComplete', idsCollected: true },
+  ] }).map((j) => j.jobId), ['F']);
+  const { history, entry } = await recorded({ a: 1, c: 2 }, { bulkJobs: [
+    { jobId: '7504xRUN', nodeId: 'c', sobject: 'Contact', records: 5, state: 'InProgress', idsCollected: false },
+    { jobId: '7504xFAIL', nodeId: 'c', sobject: 'Contact', records: 5, state: 'Failed', idsCollected: false },
+  ] });
+  const read = [];
+  const client = destroyClient();
+  client.bulkJob = (_t, { id }) => ({
+    id,
+    async check() { return { state: id === '7504xRUN' ? 'InProgress' : 'Failed' }; },
+    async successfulResults() { read.push(id); return id === '7504xFAIL' ? [{ sf__Id: '003CPART1' }] : []; },
+  });
+  const out = await deleteRun({ client, target: 'dev', entry, history, options: sleepless });
+  assert.deepEqual(read, ['7504xFAIL'], 'only the finished job is read');
+  assert.equal(out.fetched, 1);
+  assert.deepEqual(out.pendingJobs.map((j) => j.jobId), ['7504xRUN']);
+  assert.match(out.pendingMessage, /^Job Bulk 7504xRUN \(Contact\) chưa xong hoặc chưa đọc được nên chưa lấy được Id của nó; .* Thử lại sau bằng "Xóa phần còn lại…" trong Lịch sử\.$/);
+  assert.equal(out.deleted, 4, 'the partial Id of the Failed job was deleted too');
+  const saved = (await history.read(entry.id)).bulkJobs;
+  assert.deepEqual(saved.map((j) => [j.jobId, j.idsCollected]), [['7504xRUN', false], ['7504xFAIL', true]]);
+});

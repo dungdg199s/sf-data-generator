@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import path from 'node:path';
-import { mkdtempSync, writeFileSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readdirSync, readFileSync, statSync, symlinkSync, mkdirSync, chownSync, rmSync } from 'node:fs';
 import { createHistory, dataDir } from '../server/history.js';
 import { createApp } from '../server/index.js';
 import { wf, record, query, pick, loop } from './helpers.js';
@@ -49,7 +49,7 @@ test('create, append, finish; remaining in delete order; ids.csv rows; 0700 / 06
   assert.equal(csv, 'sobject,id,ref,step,status\r\nAccount,0010,acc#1,a,inserted\r\nAccount,0011,acc#2,a,inserted\r\nContact,0032,,c,inserted\r\nContact,0033,,c,gone\r\nContact,0034,,c,deleted\r\n');
   if (process.platform !== 'win32') {
     assert.equal(statSync(h.dir).mode & 0o777, 0o700);
-    for (const f of readdirSync(h.dir)) assert.equal(statSync(path.join(h.dir, f)).mode & 0o777, 0o600, f);
+    for (const f of readdirSync(h.dir)) assert.equal(statSync(path.join(h.dir, f)).mode & 0o777, 0o600, f); // .lock included
   }
   for (const f of readdirSync(h.dir)) assert.ok(!readFileSync(path.join(h.dir, f), 'utf8').includes('SECRET-TOKEN-123'), f);
 });
@@ -67,12 +67,17 @@ test('a run still "running" when the server stops is "interrupted" on the next s
   const h = createHistory({ dir });
   const e = await h.create({ org, workflow: wf([]), seed: 1, now: 2, bulk: 'auto', steps, total: 5 });
   await e.appendIds([{ sobject: 'Account', step: 'a', ref: 'acc#1', id: '0010' }]);
+  await e.appendIds([{ sobject: 'Contact', step: 'c', ref: '', id: '0030' }, { sobject: 'Contact', step: 'c', ref: '', id: '0031' }]);
   const again = createHistory({ dir });
   const run = await again.read(e.id);
-  assert.deepEqual([run.status, run.inserted], ['interrupted', 1]);
+  assert.deepEqual([run.status, run.inserted], ['interrupted', 3]);
+  // Review nit: the per-step counts are recounted from the Ids file too.
+  assert.deepEqual(run.steps.map((st) => [st.nodeId, st.inserted]), [['a', 1], ['c', 2]]);
 });
 
-test('pruning: emptied runs go first, then the oldest; a running insert is never pruned', async () => {
+// Review S4: only runs with nothing left in the org are pruned; a run with records (or with an
+// unread Bulk job) is never forgotten silently — the next insert is refused instead.
+test('pruning: only emptied runs go; when only runs with records are left the insert is refused (HISTORY_FULL)', async () => {
   let t = Date.parse('2026-10-01T00:00:00Z');
   const h = createHistory({ dir: path.join(freshDir(), 'history'), maxRuns: 3, clock: () => (t += 60000) });
   const running = await h.create({ org, workflow: wf([]), seed: 1, now: 2, bulk: 'auto', steps, total: 5 });
@@ -80,14 +85,22 @@ test('pruning: emptied runs go first, then the oldest; a running insert is never
   const emptied = await insertRun(h);
   const em = await h.open(emptied.id);
   await em.save({ deletion: { status: 'done', deleted: 5, gone: 0 } });
-  await insertRun(h); // 4th: one must go → the emptied one (not the older one with records, not the running one)
+  assert.equal((await h.status()).full, false, 'the emptied run can make room');
+  await insertRun(h); // 4th: the emptied one goes (not the older one with records, not the running one)
   const ids = (await h.list()).map((r) => r.id);
   assert.ok(!ids.includes(emptied.id));
   assert.ok(ids.includes(old.id) && ids.includes(running.id));
-  await insertRun(h); // next: the oldest with records (still not the running one)
-  const ids2 = (await h.list()).map((r) => r.id);
-  assert.ok(!ids2.includes(old.id) && ids2.includes(running.id));
-  assert.equal(ids2.length, 3);
+  const status = await h.status();
+  assert.equal(status.full, true);
+  await assert.rejects(insertRun(h), (e) => e.code === 'HISTORY_FULL' && /^Lịch sử đã đủ 3 lần insert còn bản ghi trong org/.test(e.message));
+  assert.equal((await h.list()).length, 3, 'nothing was forgotten');
+  // A run whose records were deleted but that still has an unread Bulk job keeps its place.
+  const o = await h.open(old.id);
+  await o.save({ deletion: { status: 'done', deleted: 5, gone: 0 }, bulkJobs: [{ jobId: '7504x1', idsCollected: false }] });
+  await assert.rejects(insertRun(h), (e) => e.code === 'HISTORY_FULL');
+  await o.save({ bulkJobs: [{ jobId: '7504x1', idsCollected: false, neverProcessed: true }] });
+  await insertRun(h);
+  assert.ok(!(await h.list()).some((r) => r.id === old.id), 'emptied for good: pruned');
 });
 
 test('a directory that cannot be written turns the history off (create refuses)', async () => {
@@ -121,9 +134,9 @@ test('scan: after an insert through the app no file holds a token, an Authorizat
     const body = await res.json();
     assert.equal(body.insert.inserted, 3);
     assert.match(body.insert.historyId, /^h\d{8}T/);
-    const files = readdirSync(dir);
-    assert.equal(files.length, 2, 'json + ids.csv');
-    for (const f of files) {
+    const files = readdirSync(dir).filter((f) => !f.startsWith('.'));
+    assert.equal(files.length, 2, 'json + ids.csv (+ the .lock of this process)');
+    for (const f of readdirSync(dir)) {
       const text = readFileSync(path.join(dir, f), 'utf8');
       for (const bad of ['SECRET-TOKEN-123', 'accessToken', 'refreshToken', 'Authorization', 'Row-From-The-Org-XYZ']) assert.ok(!text.includes(bad), `${f} contains ${bad}`);
     }
@@ -131,5 +144,51 @@ test('scan: after an insert through the app no file holds a token, an Authorizat
     assert.deepEqual(run.org, { alias: 'dev', username: 'me@x.com', orgId: '00D000000000001AAA', instanceUrl: 'https://x', kind: 'sandbox' });
   } finally {
     server.close();
+  }
+});
+
+// ---------- 0011 "Sửa sau review" ----------
+
+test('review nit: one server per history directory (.lock with the pid); a stale lock is taken over', async () => {
+  const dir = path.join(freshDir(), 'history');
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  writeFileSync(path.join(dir, '.lock'), String(process.ppid), { mode: 0o600 }); // a live process: the test runner
+  const h = createHistory({ dir });
+  await h.ready;
+  assert.equal(h.enabled, false);
+  assert.match(h.reason, new RegExp(`đang được một server khác dùng \\(pid ${process.ppid}\\)`));
+  let dead = 4194000;
+  for (; dead > 1000; dead--) { try { process.kill(dead, 0); } catch (e) { if (e.code === 'ESRCH') break; } }
+  writeFileSync(path.join(dir, '.lock'), String(dead));
+  const h2 = createHistory({ dir });
+  await h2.ready;
+  assert.equal(h2.enabled, true);
+  assert.equal(readFileSync(path.join(dir, '.lock'), 'utf8'), String(process.pid));
+});
+
+test('review nit: a symlinked history directory or file is never used; files of another user neither', async () => {
+  const base = freshDir();
+  const real = path.join(base, 'elsewhere');
+  mkdirSync(real, { mode: 0o700 });
+  symlinkSync(real, path.join(base, 'history'));
+  const h = createHistory({ dir: path.join(base, 'history') });
+  await h.ready;
+  assert.equal(h.enabled, false);
+  assert.match(h.reason, /là symlink/);
+
+  const ok = createHistory({ dir: path.join(freshDir(), 'history') });
+  const e = await insertRun(ok);
+  const outside = path.join(freshDir(), 'secret.csv');
+  writeFileSync(outside, 'sobject,step,ref,id\nAccount,a,,001OUTSIDE\n');
+  rmSync(path.join(ok.dir, `${e.id}.ids.csv`));
+  symlinkSync(outside, path.join(ok.dir, `${e.id}.ids.csv`));
+  await assert.rejects(ok.remaining(e.id), /là symlink/);
+  const h2 = await ok.open(e.id);
+  await assert.rejects(h2.appendIds([{ sobject: 'Account', step: 'a', ref: '', id: '001X' }]), /là symlink/);
+  assert.ok(!readFileSync(outside, 'utf8').includes('001X'), 'nothing written through the link');
+  if (process.getuid?.() === 0) {
+    const e2 = await insertRun(ok);
+    chownSync(path.join(ok.dir, `${e2.id}.ids.csv`), 65534, 65534);
+    await assert.rejects(ok.remaining(e2.id), /thuộc user khác/);
   }
 });
