@@ -135,7 +135,8 @@ export function openPopup(anchor, { title, items, search = false, onClose = null
       order.find((b) => b.textContent.replace(/^✓/, '').trim().toLowerCase().startsWith(k))?.focus();
     }
   });
-  document.body.append(el);
+  // Inside a modal dialog (Lịch sử insert, design 0011) the popup must be in the dialog's top layer.
+  (anchor.closest('dialog[open]') ?? document.body).append(el);
   const r = anchor.getBoundingClientRect();
   const w = el.offsetWidth;
   const hgt = el.offsetHeight;

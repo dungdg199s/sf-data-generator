@@ -18,10 +18,14 @@ import { openPopup, closePopup, popupAnchor } from './popup.js';
 
 const QUERY_TAB = 'q:'; // activeTab of a Query tab: `q:<stepId>`
 const ERRORS_TAB = '__errors';
+const DELETE_ERRORS_TAB = '__deleteErrors';
+const STOP_TITLE = 'Dừng sau lô đang gửi. Bản ghi đã insert vẫn ở lại trong org.';
 let activeTab = null;
-let panel, body, summary, progressBar, stopBtn, dlJson, dlCsv, dlMenu, toggle;
+let panel, body, summary, progressBar, stopBtn, dlJson, dlCsv, dlMenu, toggle, historyBtn;
 let onRefresh = null;
 let onGoTo = null;
+let onHistory = null; // (hid?) → opens the history dialog (design 0011)
+let onIds = null; // (hid) → downloads the Ids of a run
 let busyDownload = false;
 
 /** Thousands with a space, as in the design docs: 200 000. */
@@ -32,9 +36,13 @@ const previewRows = () => state.meta?.limits?.previewRows ?? 200;
  * opts.onRefresh: "⟳ Đọc lại" (preview again, reading the org instead of the query cache).
  * opts.onGoTo(issue): select the step (and field) of an insert error group.
  */
-export function initResults({ onRefresh: refresh, onGoTo: goTo } = {}) {
+export function initResults({ onRefresh: refresh, onGoTo: goTo, onHistory: history, onIds: ids } = {}) {
   onRefresh = refresh ?? null;
   onGoTo = goTo ?? null;
+  onHistory = history ?? null;
+  onIds = ids ?? null;
+  historyBtn = document.getElementById('btn-history');
+  historyBtn.onclick = () => onHistory?.();
   panel = document.getElementById('results');
   body = document.getElementById('results-body');
   summary = document.getElementById('results-summary');
@@ -97,8 +105,11 @@ async function exportFile(format, sobject) {
   }
 }
 
-/** Header while a run goes on: summary nodes, progress (value/max, or indeterminate), Dừng. */
-export function showProgress({ parts, value, max, onStop, stopping = false }) {
+/**
+ * Header while a run goes on: summary nodes, progress (value/max, or indeterminate), Dừng.
+ * stopLabel / stopTitle: "Dừng ngay" while a Bulk job is waited for (design 0011).
+ */
+export function showProgress({ parts, value, max, onStop, stopping = false, stopLabel = 'Dừng', stopTitle = STOP_TITLE }) {
   setOpen(true);
   summary.replaceChildren(...parts);
   progressBar.hidden = false;
@@ -106,9 +117,11 @@ export function showProgress({ parts, value, max, onStop, stopping = false }) {
     progressBar.max = max;
     progressBar.value = Math.min(value ?? 0, max);
   } else progressBar.removeAttribute('value');
-  dlJson.hidden = dlCsv.hidden = dlMenu.hidden = true;
+  dlJson.hidden = dlCsv.hidden = dlMenu.hidden = historyBtn.hidden = true;
   if (popupAnchor() === dlMenu) closePopup();
   stopBtn.hidden = false;
+  stopBtn.textContent = stopLabel;
+  stopBtn.title = stopTitle;
   stopBtn.disabled = stopping || !onStop;
   stopBtn.onclick = onStop ?? null;
 }
@@ -120,7 +133,9 @@ export function endProgress() {
   progressBar.hidden = true;
   stopBtn.hidden = true;
   stopBtn.onclick = null;
-  dlJson.hidden = dlCsv.hidden = dlMenu.hidden = false;
+  stopBtn.textContent = 'Dừng';
+  stopBtn.title = STOP_TITLE;
+  dlJson.hidden = dlCsv.hidden = dlMenu.hidden = historyBtn.hidden = false;
   updateButtons();
   if (hadFocus) document.getElementById('btn-preview').focus();
 }
@@ -183,8 +198,17 @@ function updateButtons() {
 
 function insertSummary(ins) {
   if (!ins) return '';
-  const note = ins.stopped?.reason === 'allFailing' ? ' · đã dừng vì lỗi hàng loạt' : ins.cancelled ? ' · đã dừng' : '';
-  return h('span', {}, ' · ', h('span', { class: 'ok' }, `insert ${fmt(ins.inserted)}`), ins.failed ? h('span', { class: 'err' }, ` · lỗi ${fmt(ins.failed)}`) : '', note);
+  const note = ins.stopped?.reason === 'allFailing' || ins.stopped?.reason === 'bulkFailing' ? ' · đã dừng vì lỗi hàng loạt' : ins.stopped ? ' · đã dừng' : ins.cancelled ? ' · đã dừng' : '';
+  // Design 0011: the Ids of this insert and the history (only when it was recorded).
+  const links = ins.historyId
+    ? [
+      ' · ',
+      h('button', { class: 'link', 'data-action': 'ids', title: 'Tải mọi Id đã insert của lần chạy này (CSV)', onclick: () => onIds?.(ins.historyId) }, 'Tải Id'),
+      ' · ',
+      h('button', { class: 'link', 'data-action': 'history', title: 'Mở Lịch sử insert ở lần chạy này', onclick: () => onHistory?.(ins.historyId) }, 'Lịch sử'),
+    ]
+    : [];
+  return h('span', {}, ' · ', h('span', { class: 'ok' }, `insert ${fmt(ins.inserted)}`), ins.failed ? h('span', { class: 'err' }, ` · lỗi ${fmt(ins.failed)}`) : '', note, ...links);
 }
 
 function render() {
@@ -192,7 +216,15 @@ function render() {
   updateButtons();
   if (!r) {
     summary.textContent = 'Chưa chạy.';
-    body.replaceChildren();
+    const del = state.deleteResult;
+    // A delete from the history with nothing run yet in this tab: only its error tab (design 0011).
+    if (del?.failed) {
+      setOpen(true);
+      body.replaceChildren(
+        h('div', { class: 'tabs' }, h('button', { class: 'tab-issues tab-delete-errors active' }, `Lỗi xóa (${fmt(del.failed)})`)),
+        errorGroupsView({ errorGroups: del.errorGroups, errorGroupsOther: del.errorGroupsOther, errors: [], errorsTotal: del.failed }, { exampleLabel: 'Id ví dụ' }),
+      );
+    } else body.replaceChildren();
     return;
   }
   setOpen(true);
@@ -211,7 +243,9 @@ function render() {
   const sobjects = Object.keys(r.stats.bySobject);
   const queryTabs = (r.queries ?? []).map((q) => `${QUERY_TAB}${q.nodeId}`);
   const errorsTotal = r.insert?.errorsTotal ?? r.insert?.errors?.length ?? 0;
-  if (!sobjects.includes(activeTab) && !queryTabs.includes(activeTab) && !(activeTab === ERRORS_TAB && errorsTotal)) activeTab = sobjects[0] ?? queryTabs[0] ?? null;
+  const del = state.deleteResult; // last delete of the history (design 0011), shown with this run
+  const deleteErrors = del?.failed ?? 0;
+  if (!sobjects.includes(activeTab) && !queryTabs.includes(activeTab) && !(activeTab === ERRORS_TAB && errorsTotal) && !(activeTab === DELETE_ERRORS_TAB && deleteErrors)) activeTab = sobjects[0] ?? queryTabs[0] ?? null;
   const tabs = h(
     'div',
     { class: 'tabs' },
@@ -221,10 +255,12 @@ function render() {
       return h('button', { class: `tab-query${key === activeTab ? ' active' : ''}`, 'data-query': q.nodeId, 'data-type': 'query', title: 'Bản ghi đọc từ org (chỉ để xem, không insert)', onclick: () => { activeTab = key; render(); } }, `↓ ${q.alias} · ${q.sobject} (${q.count})`);
     }),
     errorsTotal ? h('button', { class: `tab-issues${activeTab === ERRORS_TAB ? ' active' : ''}`, onclick: () => { activeTab = ERRORS_TAB; render(); } }, `Lỗi insert (${fmt(errorsTotal)})`) : null,
+    deleteErrors ? h('button', { class: `tab-issues tab-delete-errors${activeTab === DELETE_ERRORS_TAB ? ' active' : ''}`, onclick: () => { activeTab = DELETE_ERRORS_TAB; render(); } }, `Lỗi xóa (${fmt(deleteErrors)})`) : null,
   );
   const q = activeQuery();
   let content;
   if (activeTab === ERRORS_TAB) content = errorGroupsView(r.insert);
+  else if (activeTab === DELETE_ERRORS_TAB) content = errorGroupsView({ errorGroups: del.errorGroups, errorGroupsOther: del.errorGroupsOther, errors: [], errorsTotal: del.failed }, { exampleLabel: 'Id ví dụ' });
   else if (q) {
     const when = q.fetchedAt ? new Date(q.fetchedAt).toLocaleTimeString('vi-VN') : '';
     content = h('div', {},
@@ -232,7 +268,11 @@ function render() {
         ? 'Bản ghi mẫu (Id giả) vì chưa chọn org. Chọn org để đọc dữ liệu thật.'
         : `Đọc từ org "${q.org}" lúc ${when}, chỉ để xem, không insert. SOQL: ${q.soql}`),
       dataTable(queryRecords(q), null, q.records.length));
-  } else content = dataTable(r.records.filter((x) => x.sobject === activeTab), r.insert?.ids, r.stats.bySobject[activeTab] ?? 0);
+  } else {
+    // Records of a Bulk step (design 0011) have no ref → Id mapping: their Ids are in "Tải Id".
+    const viaBulk = (r.insert?.bulk ?? []).some((b) => b.sobject === activeTab);
+    content = dataTable(r.records.filter((x) => x.sobject === activeTab), r.insert?.ids, r.stats.bySobject[activeTab] ?? 0, { viaBulk, failedRefs: new Set((r.insert?.errors ?? []).map((e) => e.ref)) });
+  }
   body.replaceChildren(tabs, content);
 }
 
@@ -243,14 +283,28 @@ function keepSeed(seed) {
   input.dispatchEvent(new Event('input', { bubbles: true }));
 }
 
-function dataTable(records, ids, total) {
+/** Re-renders the panel (a delete finished: its error tab). */
+export function renderResults() {
+  render();
+}
+
+/** Opens the "Lỗi xóa" tab (design 0011). */
+export function showDeleteErrors() {
+  activeTab = DELETE_ERRORS_TAB;
+  render();
+}
+
+function dataTable(records, ids, total, { viaBulk = false, failedRefs = new Set() } = {}) {
+  const idCell = (x) => ids[x.ref] ?? (viaBulk && !failedRefs.has(x.ref)
+    ? h('span', { class: 'null', title: 'Gửi bằng Bulk API 2.0: Id có trong "Tải Id" (Bulk không trả Id theo từng dòng).' }, 'Bulk')
+    : h('span', { class: 'err' }, '✕'));
   const cols = [...new Set(records.flatMap((x) => Object.keys(x.fields)))];
   const rows = records.slice(0, previewRows());
   const table = h(
     'table',
     { class: 'data' },
     h('thead', {}, h('tr', {}, h('th', {}, 'ref'), ids ? h('th', {}, 'Id') : null, cols.map((c) => h('th', {}, c)))),
-    h('tbody', {}, rows.map((x) => h('tr', {}, h('td', {}, h('span', { class: 'ref' }, x.ref)), ids ? h('td', {}, ids[x.ref] ?? h('span', { class: 'err' }, '✕')) : null, cols.map((c) => h('td', { title: display(x.fields[c]) }, cell(x.fields[c], ids)))))),
+    h('tbody', {}, rows.map((x) => h('tr', {}, h('td', {}, h('span', { class: 'ref' }, x.ref)), ids ? h('td', {}, idCell(x)) : null, cols.map((c) => h('td', { title: display(x.fields[c]) }, cell(x.fields[c], ids)))))),
   );
   return h('div', {}, table, total > rows.length ? h('p', { class: 'hint table-more' }, `Hiển thị ${fmt(rows.length)}/${fmt(total)} dòng đầu. Tải CSV/JSON để lấy đủ.`) : null);
 }
@@ -258,7 +312,7 @@ function dataTable(records, ids, total) {
 const DETAIL_ROWS = 200; // rows of "Chi tiết từng bản ghi" drawn (the server sends at most 1 000)
 
 /** Insert failures grouped by (sObject, step, field, message pattern); a row selects the step / field. */
-function errorGroupsView(ins) {
+function errorGroupsView(ins, { exampleLabel = 'Ví dụ' } = {}) {
   const groups = ins?.errorGroups ?? [];
   const other = ins?.errorGroupsOther;
   const errors = ins?.errors ?? [];
@@ -271,7 +325,7 @@ function errorGroupsView(ins) {
   const total = ins?.errorsTotal ?? errors.length;
   return h('div', {},
     h('table', { class: 'data error-groups' },
-      h('thead', {}, h('tr', {}, h('th', {}, 'sObject'), h('th', {}, 'Bước'), h('th', {}, 'Lỗi'), h('th', {}, 'Số bản ghi'), h('th', {}, 'Ví dụ'))),
+      h('thead', {}, h('tr', {}, h('th', {}, 'sObject'), h('th', {}, 'Bước'), h('th', {}, 'Lỗi'), h('th', {}, 'Số bản ghi'), h('th', {}, exampleLabel))),
       h('tbody', {},
         groups.map((g) => h('tr', {
           class: g.nodeId ? 'clickable' : '',

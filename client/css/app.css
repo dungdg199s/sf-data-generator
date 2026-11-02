@@ -1094,3 +1094,44 @@ textarea.mono { font-family: var(--font-mono); font-size: var(--text-sm); }
 .query-hint { margin: var(--space-1) var(--space-2); }
 .dialog-filter { width: 100%; margin: var(--space-2) 0; }
 dialog .list .rel-check { font-size: var(--text-xs); color: var(--color-text-muted); white-space: nowrap; }
+
+/* ---------- insert history and delete (design 0011) ---------- */
+.results-head > button.ghost { background: transparent; border-color: transparent; color: var(--color-text-muted); }
+.results-head > button.ghost:hover:not(:disabled) { background: var(--color-surface-hover); color: var(--color-text); }
+button.small { min-height: var(--control-h-sm); padding: 0 var(--space-2); font-size: var(--text-sm); }
+.warning-text { color: var(--color-warning-text); }
+.bulk-box { margin: var(--space-2) 0; }
+.bulk-check { display: flex; align-items: center; gap: var(--space-2); font-weight: var(--weight-medium); }
+.bulk-box .hint { margin: var(--space-1) 0 var(--space-1) var(--space-6); }
+.bulk-steps { margin-left: var(--space-6); font-size: var(--text-sm); }
+.bulk-steps.off { color: var(--color-text-muted); }
+.warn-box .typed-org { display: block; margin-top: var(--space-2); width: min(320px, 100%); }
+dialog.history {
+  max-width: min(960px, calc(100vw - 2 * var(--space-4))); max-height: 80dvh;
+  display: none; flex-direction: column; gap: var(--space-2); padding: var(--space-4) var(--space-6);
+}
+dialog.history[open] { display: flex; }
+.history-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
+.history-head h2 { margin: 0; }
+.history-where { margin: 0; font-size: var(--text-xs); }
+.history-filter { display: flex; align-items: center; gap: var(--space-2); font-size: var(--text-sm); }
+.history-scroll { flex: 1; min-height: 0; overflow: auto; }
+.history-scroll table.data th { top: 0; }
+table.history-table tr.history-row { cursor: pointer; }
+table.history-table tr.history-row:focus-visible td { background: var(--color-accent-subtle); }
+table.history-table td.history-actions { white-space: nowrap; }
+table.history-table td.history-actions button + button { margin-left: var(--space-1); }
+table.history-table tr.history-detail td { background: var(--color-surface-sunken); font-size: var(--text-xs); }
+.history-errors { margin: var(--space-1) 0 0; padding-left: var(--space-4); }
+@media (max-width: 720px) {
+  dialog.history { max-width: 100vw; width: 100vw; max-height: 100dvh; height: 100dvh; margin: 0; border-radius: 0; padding: var(--space-3); }
+  table.history-table, table.history-table tbody { display: block; width: 100%; min-width: 0; }
+  table.history-table thead { display: none; }
+  table.history-table tr.history-row, table.history-table tr.history-detail { display: grid; grid-template-columns: auto auto 1fr; border-bottom: 1px solid var(--color-border); }
+  table.history-table tr.history-row td { border: none; max-width: none; }
+  table.history-table tr.history-row td:nth-child(3), table.history-table tr.history-row td:nth-child(4) { grid-row: 2; }
+  table.history-table tr.history-row td:nth-child(4) { grid-column: 2 / 4; text-align: left; }
+  table.history-table tr.history-row td:nth-child(5) { grid-column: 3; }
+  table.history-table td.history-actions { grid-column: 1 / -1; grid-row: 3; white-space: normal; }
+  table.history-table tr.history-detail td { grid-column: 1 / -1; max-width: none; }
+}

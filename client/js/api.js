@@ -1,5 +1,6 @@
 // Thin fetch wrappers. Errors carry `issues` (workflow validation) when the server sends them.
-// Runs stream NDJSON events (design 0004): `runStream` reads them as they arrive.
+// Runs stream NDJSON events (design 0004): `runStream` reads them as they arrive; deletes of the
+// insert history (design 0011) stream the same way.
 
 async function call(method, path, body) {
   const res = await fetch(path, {
@@ -24,8 +25,13 @@ async function errorOf(res) {
  * thrown with `issues` and `insert` (what was written before it). A connection lost mid-run
  * throws with `lost: true`.
  */
-async function runStream(body, { onEvent, onResponse, signal } = {}) {
-  const res = await fetch('/api/run', {
+function runStream(body, opts) {
+  return ndjsonStream('/api/run', body, opts);
+}
+
+/** POST `path` and read its NDJSON events (runs and deletes, design 0011). */
+async function ndjsonStream(path, body, { onEvent, onResponse, signal } = {}) {
+  const res = await fetch(path, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson' },
     body: JSON.stringify(body),
@@ -74,8 +80,28 @@ export const api = {
   run: (workflow, { seed, target, org, refreshQueries, expectQueries } = {}) => call('POST', '/api/run', { workflow, seed, target, org, refreshQueries, expectQueries }),
   /** Streaming run (design 0004): body { workflow, seed, now?, target?, org?, refreshQueries?, expectQueries? }. */
   runStream,
-  /** Stops a run after the Salesforce call in flight (404 once it is over). */
-  cancelRun: (runId) => call('POST', `/api/runs/${encodeURIComponent(runId)}/cancel`, {}),
+  /**
+   * Stops a run (insert, delete) after the Salesforce call in flight (404 once it is over).
+   * force (Dừng ngay, design 0011): also aborts the Bulk job being processed.
+   */
+  cancelRun: (runId, { force = false } = {}) => call('POST', `/api/runs/${encodeURIComponent(runId)}/cancel`, force ? { force: true } : {}),
+  /** Insert history (design 0011): { enabled, reason?, dir, maxRuns, runs }. */
+  history: () => call('GET', '/api/history'),
+  /** One run of the history, with `remaining` (what is left to delete) and `pendingBulkJobs`. */
+  historyRun: (hid) => call('GET', `/api/history/${encodeURIComponent(hid)}`),
+  /** The Ids of a run as CSV → { blob, filename }. */
+  historyIds: async (hid, { sobject } = {}) => {
+    const res = await fetch(`/api/history/${encodeURIComponent(hid)}/ids.csv${sobject ? `?sobject=${encodeURIComponent(sobject)}` : ''}`);
+    if (!res.ok) throw await errorOf(res);
+    const filename = /filename="([^"]+)"/.exec(res.headers.get('content-disposition') ?? '')?.[1] ?? 'ids.csv';
+    return { blob: await res.blob(), filename };
+  },
+  /** Removes a run from the history (nothing in the org). */
+  forgetRun: (hid) => call('POST', `/api/history/${encodeURIComponent(hid)}/forget`, {}),
+  /** Deletes what a run inserted (streamed like a run): body { confirm: { username, count, typedOrg? }, bulk }. */
+  deleteStream: (hid, body, opts) => ndjsonStream(`/api/history/${encodeURIComponent(hid)}/delete`, body, opts),
+  /** API limits of an org: { api: { max, remaining }, bulkBatches }. */
+  limits: (org) => call('GET', `/api/orgs/${encodeURIComponent(org)}/limits`),
   /** Regenerates the run on the server (same seed + now) → { blob, filename }. */
   exportFile: async (body) => {
     const res = await fetch('/api/export', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });

@@ -92,6 +92,7 @@
     <div class="results-head">
       <button id="btn-results-toggle" class="link" aria-expanded="false" aria-controls="results-body">Kết quả <span class="caret" aria-hidden="true">▴</span></button>
       <div id="results-summary" class="summary" aria-live="polite">Chưa chạy.</div>
+      <button id="btn-history" class="ghost" title="Các lần insert vào org: tải Id, xóa dữ liệu đã insert">Lịch sử</button>
       <button id="btn-dl-json" disabled>Tải JSON</button>
       <button id="btn-dl-csv" disabled>Tải CSV (tab hiện tại)</button>
       <button id="btn-dl-menu" class="dl-menu" disabled aria-haspopup="menu" aria-expanded="false" title="Tải JSON hoặc CSV của tab hiện tại">⤓ Tải</button>
@@ -102,6 +103,7 @@
   </section>
 
   <dialog id="modal"></dialog>
+  <dialog id="history-dialog" class="history" aria-labelledby="history-title"></dialog>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
   <script type="module" src="/js/main.js"></script>
