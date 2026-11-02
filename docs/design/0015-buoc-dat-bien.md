@@ -1,6 +1,6 @@
 # 0015 — Bước Đặt biến (`set`)
 
-- **Trạng thái:** Đã duyệt (2026-11-02, người điều phối duyệt thay người dùng theo ủy quyền; các quyết định ở [Đã chốt](#đã-chốt-2026-11-02))
+- **Trạng thái:** Đã làm (2026-11-02; duyệt 2026-11-02, người điều phối duyệt thay người dùng theo ủy quyền; các quyết định ở [Đã chốt](#đã-chốt-2026-11-02))
 - **Ngày:** 2026-11-02
 - **Liên quan:** [0005](0005-variable-picker.md) (`analyzeScope`, bảng chọn biến, "Ý tưởng để sau"),
   [0006](0006-query-pick-nodes.md) ("Các node khác": Đặt biến), [0010](0010-lap-theo-ban-ghi.md) (Lặp `each`),
@@ -378,8 +378,9 @@ Theo bảng đồng bộ hợp đồng của `.claude/agents/implementer.md` và
 
 ## Câu hỏi mở
 
-1. **Màu.** Copper (hue ≈ 50°) có qua ngưỡng ΔE của 0008 so với badge cảnh báo ở cả hai theme và khi mù màu không? Nếu không:
-   slate (gần trung tính, gần `start`) — người làm báo lại kết quả đo.
+1. ~~**Màu.** Copper (hue ≈ 50°) có qua ngưỡng ΔE của 0008 so với badge cảnh báo ở cả hai theme và khi mù màu không? Nếu không:
+   slate (gần trung tính, gần `start`) — người làm báo lại kết quả đo.~~ Đã trả lời ở [Đã làm](#đã-làm): copper qua, không cần
+   slate.
 2. **"Tách thành biến"**: chọn một đoạn trong ô template → menu "Tạo biến từ đoạn này" (thêm bước Đặt biến ở đầu quy trình, thay mọi
    chỗ có đúng đoạn đó). Hữu ích cho luồng mã lô; để design sau nếu người dùng muốn.
 3. **Kiểu Ngày** (`var.d = {{run.today}}` rồi dùng trong option from/to của Date) phụ thuộc mục "Option số/ngày của generator nhận
@@ -390,4 +391,48 @@ Theo bảng đồng bộ hợp đồng của `.claude/agents/implementer.md` và
 
 ## Đã làm
 
-(Cập nhật khi code xong: commit hoặc PR, chỗ nào khác với thiết kế và vì sao.)
+Nhánh `feature/set-variable`, 4 commit sau commit thiết kế `2438657`:
+
+- `a9a28fa` — màu và icon: họ copper, 4 token `--step-set*` ở theme sáng và hai khối tối, `--ico-set`, luật
+  `[data-type="set"]`, bảng §2 / §3.4 / §5 / §8.1 / §8.2 của `docs/ui-design-system.md`.
+- `933a0aa` — hợp đồng và lõi: loại bước `set` trong `server/workflow/nodes.js` (`LIMITS.maxVarLength`, `VAR_NAMESPACE`,
+  `meta.syntax.varNamespace`), `shared/scope.js` (nguồn `kind: 'value'`, `byVar`, `resolveValue`), `server/workflow/schema.js`
+  (mọi mã ở bảng Thông báo), executor / `paths.js` (`scope.var`, `case 'set'`, cảnh báo và lỗi khi chạy), `shared/estimate.js`,
+  `shared/workflow-tree.js` (`renameVariable`, `setVariableName`, `suggestVarName`, `collectVariables`), test.
+- `127f852` — UI: thêm bước (tên `bien1` chọn sẵn, focus), đổi tên cả biến, datalist, help khi trùng tên, sửa nhanh
+  `setVarType`, nhóm `var · Biến` của bảng chọn, chip, tóm tắt thẻ, chip số liệu; smoke flow 21 (`flowSetVar`).
+- Commit tài liệu (commit này): `workflow-schema.md` (bỏ "dự kiến"), `architecture.md`, `field-types.md`, `CLAUDE.md`, README.
+
+Kiểm tra: `npm test` 529 test (16 test mới), 0 lỗi; `node .claude/skills/smoke-test/smoke.cjs` SMOKE OK (cả 15 flow; flow 21 riêng ~3–4 s).
+Hash vàng của `test/stream.test.js` không đổi (bước `set` không rút `rng`).
+
+**Màu (Câu hỏi mở 1).** Đo bằng script OKLCH → sRGB, tương phản WCAG và ΔE OKLab (×100) với mô phỏng Machado 2009 (mức nặng
+nhất). Copper hue 50°: 600 `#754427` (L 0.44, C 0.08), 700 `#6d4025`, 50 `#fff2ec`, 100 `#fde1d1`, 300 `#e2a989`
+(L 0.78), 200 `#f3cbb5`. Tương phản: 6 cặp của loại bước đều đạt, thấp nhất 5.64 (chữ phụ trên thân, tối). ΔE gần nhất: mắt
+thường 11.9 (sáng, Chọn bản ghi) / 10.4 (tối, warning; badge cảnh báo nền đặc 11.0); protanopia sáng với lỗi 3.4; tritanopia
+tối với warning-fill 4.4. Mọi cặp ≥ cặp thấp nhất 0008 đã chấp nhận (2.6), nên giữ copper, không dùng slate. L của bậc 600 thấp
+hơn đề xuất (0.44 thay vì 0.48) vì L 0.48–0.50 làm protanopia sáng với lỗi xuống 2.5.
+
+**Khác với thiết kế:**
+
+1. `varUnset` cũng áp khi các bước khác cùng tên đều chạy **sau** bước đang đọc (không chỉ khi chính bước này là nguồn duy nhất):
+   `s = {{var.s}}-x` trong vòng lặp với một bước `s` khác sau vòng lặp trước đây sẽ ra `after` ("kéo lên trên"), câu sai hướng;
+   `varUnset` nói đúng cách sửa (đặt giá trị ban đầu phía trên).
+2. Bảng chọn: ghi chú "có thể trống" / "giá trị lần lặp cuối" nằm ở **dòng** của từng biến (dòng help), không phải badge của
+   nhóm, vì một nhóm `var · Biến` gộp nhiều tên có độ chắc khác nhau. Dòng biến có kiểu `Bất kỳ` khi các bước cùng tên khác kiểu.
+3. Tên hiển thị của bước (`stepAlias`) là `var.<tên>`, nên `stepLabel` (toast, hộp xóa) là `Đặt biến "var.total"`. Trên thẻ,
+   chip tên `var.total` đứng trước câu tóm tắt vẫn bắt đầu bằng `var.total` như bảng thiết kế (lặp tên; có thể rút gọn sau).
+4. Cảnh báo `notNumber` của biến Chữ dùng nhãn `valueType` sẵn có ("Chuỗi") và giữ câu "Nên chọn biến kiểu Số bằng {x}." của
+   0013 trước câu mới; sửa nhanh có `data-fix="setVarType"`, chữ `Đổi Kiểu thành Số`, đổi mọi bước **Gán** cùng tên, một bước undo.
+5. Datalist của ô Tên biến được khai báo ở server (`suggest: { kind: 'varNames' }` trên option `name`), `client/js/forms.js` thêm
+   kind này; danh sách chỉ có biến mà bước khác đặt, nhãn `Số · 2 bước`.
+6. Toast đổi tên hiện khi rời ô Tên biến (`change`) hoặc sau 1,5 s ngừng gõ, và chỉ khi có bước khác hoặc chỗ dùng đổi theo
+   (đổi `bien1` → `lo` của bước mới, chưa ai dùng, thì im lặng).
+7. Xóa bước Đặt biến: toast "đang được dùng ở … chỗ" bỏ qua chỗ dùng của biến mà bước khác (không bị xóa) vẫn đặt.
+8. `varReserved` cũng báo Record **không có alias** có id `var` (nó được gọi bằng id), gắn `alias`.
+9. Ước tính: hằng số của biến được cắt về 0…`maxCountPerNode` và lấy phần nguyên như executor.
+10. `numericSampleFields`: mọi tham chiếu trong `value` của bước Số / Cộng thêm (không chỉ khi đúng một token).
+11. Tên biến không phải chuỗi (số JSON) là lỗi `setVarName`; `value` là object/mảng là lỗi gắn `value` (`"Giá trị" phải là chữ
+    hoặc số…`). `mode` / `valueType` lạ là lỗi gắn đúng ô.
+
+Không làm (như thiết kế): hàm trong template, kiểu Ngày, "Tách thành biến", bảng Biến trong panel kết quả (Câu hỏi mở 2–5).
