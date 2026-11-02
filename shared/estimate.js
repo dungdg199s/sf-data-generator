@@ -13,6 +13,8 @@
 // trị trong danh sách" runs once per value (exact); a Lặp `each` with a filter is not exact: an
 // `eq` filter is taken to split the pool between the visits (parent–child: every Contact once
 // over all the Accounts), another operator to keep half; "Tối đa số bản ghi" caps every visit.
+// Design 0015: `{{var.n}}` set by exactly one enabled Đặt biến (Gán, Số, a constant value) counts
+// as that number, exact like a number typed in the box.
 
 import { maxFetchFor } from './soql.js';
 import { numberVarPath, valueList } from './scope.js';
@@ -37,9 +39,39 @@ export function estimateSteps(wf, catalog, { queryCounts = {} } = {}) {
   };
   const num = (v, fallback = 0) => (Number.isFinite(Number(v)) ? Number(v) : fallback);
   const cap = catalog?.limits?.maxCountPerNode ?? 100000;
-  /** Iterations given by a number variable (never exact). */
+  // Đặt biến (design 0015): variable name → the steps (turned on) setting it.
+  const varNs = catalog?.syntax?.varNamespace ?? 'var';
+  const setters = new Map();
+  const collectSetters = (list) => {
+    for (const step of Array.isArray(list) ? list : []) {
+      if (!isStep(step) || step.disabled === true) continue;
+      if (step.type === 'set') {
+        const n = String(step.config?.name ?? '');
+        if (!setters.has(n)) setters.set(n, []);
+        setters.get(n).push(step);
+      }
+      for (const k of types.get(step.type)?.slots?.map((x) => x.key) ?? []) collectSetters(step.slots?.[k]);
+    }
+  };
+  collectSetters(wf?.steps);
+  /** The constant of `{{var.<name>}}` when one Đặt biến (Gán, Số, no `{{`) sets it, else null. */
+  const varConstant = (name) => {
+    const list = setters.get(name) ?? [];
+    if (list.length !== 1) return null;
+    const c = list[0].config ?? {};
+    const raw = c.value === undefined || c.value === null ? '' : String(c.value);
+    if ((c.mode ?? 'set') !== 'set' || c.valueType !== 'number' || raw.includes('{{') || raw.trim() === '') return null;
+    const n = Number(raw);
+    // Like the executor's count: not a number → 0, clamped to 0…maxCountPerNode, whole.
+    return Number.isFinite(n) ? Math.min(cap, Math.max(0, Math.trunc(n))) : null;
+  };
+  /** Iterations given by a number variable (never exact, but a constant Đặt biến is). */
   const varCount = (path) => {
     const [name, member, ...more] = path.split('.');
+    if (name === varNs && member !== undefined && !more.length) {
+      const k = varConstant(member);
+      if (k !== null) return { e: k, min: k, max: k, exact: true };
+    }
     const p = member === '$count' && !more.length ? pools.get(name) : null;
     return p ? { e: p.size, min: p.min, max: p.max, exact: false } : { e: 1, min: 0, max: cap, exact: false };
   };

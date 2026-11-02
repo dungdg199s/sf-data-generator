@@ -11,7 +11,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { describeGenerators, VALUE_TYPES } from './generators/index.js';
-import { serializableNodeTypes, STEP_CATEGORIES, LIMITS, QUERY_PRESETS, RECORD_PRESETS, RECORD_DEFAULT_FIELDS, WORKFLOW_GLOBALS } from './workflow/nodes.js';
+import { serializableNodeTypes, STEP_CATEGORIES, LIMITS, QUERY_PRESETS, RECORD_PRESETS, RECORD_DEFAULT_FIELDS, WORKFLOW_GLOBALS, VAR_NAMESPACE } from './workflow/nodes.js';
 import { TEMPLATE_TOKEN } from './workflow/paths.js';
 import { validateWorkflow, prepareWorkflow, insertBlockedReason, WorkflowError } from './workflow/schema.js';
 import { createRun, isValidNow } from './workflow/executor.js';
@@ -294,7 +294,7 @@ export function createApp({
         recordPresets: RECORD_PRESETS,
         recordDefaultFields: RECORD_DEFAULT_FIELDS,
         globals: WORKFLOW_GLOBALS,
-        syntax: { templateToken: TEMPLATE_TOKEN, valueTypes: VALUE_TYPES },
+        syntax: { templateToken: TEMPLATE_TOKEN, valueTypes: VALUE_TYPES, varNamespace: VAR_NAMESPACE },
       }),
     ],
     ['POST', /^\/api\/validate$/, (_m, body) => validateWorkflow(body?.workflow, { derived: true })],

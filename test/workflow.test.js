@@ -1352,3 +1352,124 @@ test('a numeric step id is refused (review 2 of 0011, item 2); the issue names t
   // final review N1: the pattern issue names the field too.
   assert.ok(validateWorkflow(wf([record('a b', 'Account', 'acc')])).errors.some((e) => e.nodeId === 'a b' && e.field === 'id'));
 });
+
+// ---------- Đặt biến (design 0015) ----------
+
+import { setVar } from './helpers.js';
+
+const r = (id, alias = id, fields = []) => record(id, 'Account', alias, fields);
+const tpl = (name, template) => ({ name, type: 'template', options: { template } });
+const run = (steps, opts = {}) => runWorkflow(wf(steps), { seed: 7, now: NOW, ...opts });
+
+test('set variable validation: messages carry nodeId and field (setVarName, setVarNotNumber, setVarType, varReserved, scope codes)', () => {
+  const issues = (w) => { const v = validateWorkflow(w); return [...v.errors, ...v.warnings]; };
+  const pick1 = (w, code) => issues(w).find((i) => i.code === code);
+  assert.deepEqual(pick1(wf([setVar('s', '')]), 'setVarName'), { message: 'Đặt tên biến (chữ không dấu, số, "_"), ví dụ total. Bước phía dưới dùng {{var.total}}.', nodeId: 's', field: 'name', code: 'setVarName' });
+  assert.match(pick1(wf([setVar('s', '1x')]), 'setVarName').message, /^Tên biến "1x" không hợp lệ/);
+  assert.match(pick1(wf([setVar('s', 'a'.repeat(41))]), 'setVarName').message, /tối đa 40 ký tự/);
+  assert.equal(pick1(wf([setVar('s', 'n', 'abc', { valueType: 'number' })]), 'setVarNotNumber').field, 'value');
+  assert.match(pick1(wf([setVar('s', 'n', '', { mode: 'add' })]), 'setVarNotNumber').message, /biến số \{\{…\}\}\.$/);
+  assert.equal(pick1(wf([setVar('s', 'n', '{{run.seed}}', { valueType: 'number' })]), 'setVarNotNumber'), undefined);
+  assert.equal(pick1(wf([setVar('s', 'n', 12.5, { valueType: 'number' })]), 'setVarNotNumber'), undefined, 'a JSON number is a value too');
+  assert.equal(pick1(wf([setVar('s', 'n', 'x'.repeat(10001))]), 'setVarTooLong').field, 'value');
+  const type = pick1(wf([setVar('a', 'n', '1', { valueType: 'number' }), setVar('b', 'n', 'x'), setVar('c', 'n', '1', { mode: 'add' })]), 'setVarType');
+  assert.deepEqual([type.nodeId, type.field], ['b', 'valueType']);
+  assert.match(type.message, /^Biến var\.n được đặt kiểu Số ở bước khác; ở đây là Chữ\./);
+  const reserved = issues(wf([record('r', 'Account', 'var'), { ...setVar('s', 'x'), disabled: true }])).find((i) => i.code === 'varReserved');
+  assert.deepEqual([reserved.nodeId, reserved.field], ['r', 'alias']);
+  assert.equal(issues(wf([record('r', 'Account', 'var')])).find((i) => i.code === 'varReserved'), undefined, 'alias var stays valid without a Đặt biến');
+  const loopVar = issues(wf([loop('l', { count: 1, alias: 'var' }, [r('acc')]), setVar('s', 'x')])).find((i) => i.code === 'varReserved');
+  assert.match(loopVar.message, /^Tên biến lặp "var"/);
+  const after = pick1(wf([r('acc', 'acc', [tpl('Name', '{{var.x}}')]), setVar('s', 'x', '1')]), 'after');
+  assert.deepEqual([after.nodeId, after.field, after.message], ['acc', 'fields.Name', 'Field "Name": bước Đặt biến "x" chạy sau bước này nên {{var.x}} chưa có giá trị khi chạy tới đây. Kéo bước Đặt biến "x" lên phía trên.']);
+  const unknown = pick1(wf([setVar('s', 'total', '1'), r('acc', 'acc', [tpl('Name', '{{var.totl}}')])]), 'unknownName');
+  assert.equal(unknown.message, 'Field "Name": chưa có biến var.totl. Ý bạn là var.total? Thêm bước Đặt biến tên totl ở phía trên, hoặc bấm {x} để chọn biến có sẵn.');
+  assert.deepEqual(unknown.suggestion, { option: 'template', from: 'var.totl', to: 'var.total' });
+  const unset = pick1(wf([setVar('s', 's', '{{var.s}}-x')]), 'varUnset');
+  assert.deepEqual([unset.nodeId, unset.field], ['s', 'value']);
+  const notNumber = pick1(wf([setVar('s', 'n', '5'), loop('l', { count: '{{var.n}}' }, [r('acc')])]), 'notNumber');
+  assert.deepEqual([notNumber.field, notNumber.fix], ['count', { kind: 'setVarType', name: 'n', to: 'number' }]);
+  assert.match(notNumber.message, /Đổi "Kiểu" của bước Đặt biến "n" thành Số\.$/);
+  const maybe = pick1(wf([branch('b', {}, [setVar('s', 'x', '1')]), r('acc', 'acc', [tpl('Name', '{{var.x}}')])]), 'maybe');
+  assert.match(maybe.message, /^Field "Name": biến var\.x chỉ được đặt trên một số nhánh/);
+  assert.equal(validateWorkflow(wf([setVar('s', 'bien1')])).errors.length, 0, 'a new step (empty Chữ) is valid');
+});
+
+test('set variable: Gán Chữ renders a template once; Gán Số keeps a number; the step yields no record and draws nothing', () => {
+  const out = run([
+    setVar('s1', 'lo', 'TEST-{{run.today}}'), setVar('s2', 'n', '{{run.seed}}', { valueType: 'number' }),
+    r('acc', 'acc', [tpl('Name', '{{var.lo}} {{this.$n}}'), { name: 'NumberOfEmployees', type: 'copy', options: { path: 'var.n' } }]),
+  ]);
+  assert.equal(out.records.length, 1);
+  assert.equal(out.records[0].fields.Name, 'TEST-2025-06-15 1');
+  assert.strictEqual(out.records[0].fields.NumberOfEmployees, 7, '"Lấy từ biến" keeps the number');
+  assert.deepEqual(out.stats.byStep.s1, { runs: 1, records: 0, value: 'TEST-2025-06-15' });
+  assert.deepEqual(out.stats.byStep.s2, { runs: 1, records: 0, value: 7 });
+  assert.deepEqual(out.samples.s1, { lo: 'TEST-2025-06-15' });
+  // No rng: the same workflow without the Đặt biến steps gives the same generated values.
+  const plain = [r('acc', 'acc', [{ name: 'Phone', type: 'phone' }])];
+  const withSet = [setVar('s', 'x', 'a'), ...plain, setVar('s2', 'y', '1', { mode: 'add' })];
+  assert.deepEqual(run(withSet).records, run(plain).records);
+});
+
+test('set variable: Cộng thêm sums across a Lặp each, is read after the loop, 0.1 + 0.2 = 0.3, and drives a count and a branch', () => {
+  const out = run([
+    setVar('init', 'total', '0', { valueType: 'number' }),
+    loop('l0', { count: 3 }, [r('acc', 'acc', [{ name: 'NumberOfEmployees', type: 'number', options: { min: 1, max: 9, scale: 0 } }])]),
+    loop('each', { mode: 'each', from: 'acc', itemAlias: 'a' }, [setVar('add', 'total', '{{a.NumberOfEmployees}}', { mode: 'add' })]),
+    setVar('f', 'f', '0', { valueType: 'number' }),
+    loop('l1', { count: 3 }, [setVar('fadd', 'f', '0.1', { mode: 'add' })]),
+    setVar('n', 'n', '2', { valueType: 'number' }),
+    loop('l2', { count: '{{var.n}}', alias: 'i' }, [r('con', 'con', [tpl('LastName', 'C{{i.index}}')])]),
+    branch('b', { kind: 'compare', left: 'var.n', op: 'eq', right: '2' }, [r('yes', 'yes')], [r('no', 'no')]),
+    r('sum', 'sum', [tpl('Name', 'Tổng {{var.total}} {{var.f}}')]),
+  ]);
+  const accs = out.records.filter((x) => x.alias === 'acc');
+  const total = accs.reduce((a, x) => a + x.fields.NumberOfEmployees, 0);
+  const sum = out.records.find((x) => x.alias === 'sum');
+  assert.equal(sum.fields.Name, `Tổng ${total} 0.3`);
+  assert.equal(out.stats.byStep.add.runs, 3);
+  assert.equal(out.stats.byStep.l2.iterations, 2);
+  assert.equal(out.stats.byStep.b.true, 1);
+  assert.equal(out.stats.byStep.fadd.value, 0.3);
+});
+
+test('set variable: Gán in a loop body keeps the last value; a turned-off step changes nothing; __proto__ is just a name', () => {
+  const out = run([
+    setVar('s0', 'x', 'start'),
+    loop('l', { count: 3 }, [setVar('s1', 'x', 'v{{loop.index}}')]),
+    { ...setVar('off', 'x', 'off'), disabled: true },
+    setVar('p', '__proto__', 'proto'),
+    r('acc', 'acc', [tpl('Name', '{{var.x}} {{var.__proto__}}')]),
+  ]);
+  assert.equal(out.records[0].fields.Name, 'v3 proto');
+  // `constructor` is no variable either (validation says so: no prototype behind `var`).
+  assert.match(validateWorkflow(wf([r('acc', 'acc', [tpl('Name', '{{var.constructor}}')])])).errors[0].message, /chưa có biến var\.constructor/);
+  assert.equal(out.stats.byStep.off, undefined);
+});
+
+test('set variable: a number that does not come out empties the variable (Gán) or adds 0 (Cộng thêm), with one warning per step', () => {
+  const out = run([
+    setVar('s', 'n', '{{run.today}}', { valueType: 'number' }),
+    setVar('t', 't', '5', { valueType: 'number' }),
+    loop('l', { count: 2 }, [setVar('a', 't', '{{run.now}}', { mode: 'add' })]),
+    r('acc', 'acc', [tpl('Name', '[{{var.n}}] {{var.t}}')]),
+  ]);
+  assert.equal(out.records[0].fields.Name, '[] 5');
+  const w = out.warnings.filter((x) => x.code === 'setVarNotNumber');
+  assert.deepEqual(w.map((x) => [x.nodeId, x.field]), [['s', 'value'], ['a', 'value']]);
+  assert.equal(w[0].message, 'Bước Đặt biến "n": giá trị không ra số ở 1/1 lần chạy qua nên biến trống ở các lần đó. Kiểm tra biến trong "Giá trị" hoặc đổi "Kiểu" thành Chữ.');
+  assert.equal(w[1].message, 'Bước Đặt biến "t": giá trị không ra số ở 2/2 lần chạy qua nên đã cộng 0 ở các lần đó. Kiểm tra biến trong "Giá trị".');
+});
+
+test('set variable: a Chữ value growing past 10 000 characters stops the run on `value`', () => {
+  const steps = [setVar('s0', 's', 'x'.repeat(4000)), loop('l', { count: 5 }, [setVar('s1', 's', '{{var.s}}{{var.s}}')])];
+  assert.throws(() => run(steps), (e) => e instanceof WorkflowError && e.issues[0].nodeId === 's1' && e.issues[0].field === 'value'
+    && e.issues[0].message === 'Bước Đặt biến "s": giá trị dài quá 10.000 ký tự ở lần chạy qua thứ 2. Kiểm tra "Giá trị" (có đang nối thêm vào chính biến này trong vòng lặp?).');
+});
+
+test('set variable: the same seed and now give the same records', () => {
+  const steps = [setVar('s', 'lo', 'B-{{run.seed}}'), loop('l', { count: 3 }, [r('acc', 'acc', [tpl('Name', '{{var.lo}}-{{this.$n}}'), { name: 'Phone', type: 'phone' }])])];
+  assert.deepEqual(run(steps).records, run(steps).records);
+  assert.equal(run(steps).records[2].fields.Name, 'B-7-3');
+});

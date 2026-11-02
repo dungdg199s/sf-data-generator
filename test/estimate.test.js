@@ -134,3 +134,25 @@ test('0013: a values loop runs once per value; an each filter and limit are esti
   assert.equal(e.t.exact, false);
   assert.deepEqual(e.u, { records: 60, min: 60, max: 60, exact: true });
 });
+
+// Design 0015: a count from a Đặt biến kiểu Số set once to a constant is exact.
+import { setVar } from './helpers.js';
+
+test('a count from {{var.n}} set once to a constant number is exact; any other Đặt biến is not', () => {
+  const body = [record('r', 'Account', 'acc')];
+  const exact = est(wf([setVar('s', 'n', '5', { valueType: 'number' }), loop('l1', { count: '{{var.n}}' }, [loop('l2', { count: '{{var.n}}', alias: 'loop2' }, body)])]));
+  assert.deepEqual(exact.byStep.r, { records: 25, min: 25, max: 25, exact: true });
+  const run = runWorkflow(wf([setVar('s', 'n', '5', { valueType: 'number' }), loop('l1', { count: '{{var.n}}' }, [loop('l2', { count: '{{var.n}}', alias: 'loop2' }, body)])]), { seed: 1, now: NOW });
+  assert.equal(run.stats.byStep.r.records, 25);
+  // Two steps, a template, Chữ, Cộng thêm or a turned-off step: the old guess (1, not exact).
+  const guess = { records: 1, min: 0, max: LIMITS.maxCountPerNode, exact: false };
+  for (const sets of [
+    [setVar('s', 'n', '5', { valueType: 'number' }), setVar('s2', 'n', '6', { valueType: 'number' })],
+    [setVar('s', 'n', '{{run.seed}}', { valueType: 'number' })],
+    [setVar('s', 'n', '5')],
+    [setVar('s', 'n', '5', { mode: 'add' })],
+    [{ ...setVar('s', 'n', '5', { valueType: 'number' }), disabled: true }],
+  ]) assert.deepEqual(est(wf([...sets, loop('l', { count: '{{var.n}}' }, body)])).byStep.r, guess);
+  // A turned-off second step does not count.
+  assert.equal(est(wf([setVar('s', 'n', '3', { valueType: 'number' }), { ...setVar('s2', 'n', '9', { valueType: 'number' }), disabled: true }, loop('l', { count: '{{var.n}}' }, body)])).byStep.r.records, 3);
+});

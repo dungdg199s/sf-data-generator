@@ -54,19 +54,27 @@ const post = (path, body) => fetch(base + path, { method: 'POST', headers: { 'Co
 test('GET /api/meta lists field types and step types with slots and categories', async () => {
   const meta = await (await fetch(base + '/api/meta')).json();
   assert.ok(meta.fieldTypes.some((f) => f.type === 'multipicklist'));
-  assert.deepEqual(meta.nodeTypes.map((n) => n.type), ['record', 'query', 'pick', 'loop', 'branch']);
-  assert.deepEqual(meta.nodeTypes.map((n) => n.slots.map((s) => s.key)), [[], [], [], ['body'], ['true', 'false']]);
-  assert.deepEqual(meta.nodeTypes.map((n) => n.category), ['data', 'data', 'data', 'control', 'control']);
+  // 0015: Đặt biến (`set`) joins the control category, after Rẽ nhánh.
+  assert.deepEqual(meta.nodeTypes.map((n) => n.type), ['record', 'query', 'pick', 'loop', 'branch', 'set']);
+  assert.deepEqual(meta.nodeTypes.map((n) => n.slots.map((s) => s.key)), [[], [], [], ['body'], ['true', 'false'], []]);
+  assert.deepEqual(meta.nodeTypes.map((n) => n.category), ['data', 'data', 'data', 'control', 'control', 'control']);
   assert.ok(meta.nodeTypes.every((n) => !('outputs' in n) && !('inputs' in n)));
   assert.deepEqual(meta.stepCategories.map((c) => c.key), ['data', 'control']);
   assert.equal(meta.limits.maxDepth, 32);
   const ref = meta.fieldTypes.find((f) => f.type === 'lookup').options.find((o) => o.key === 'ref');
   assert.equal(ref.label, 'Bản ghi cha / pool (alias)');
   // Variables (0005): every step type says how its slots run; record and loop expose variables.
-  assert.deepEqual(meta.nodeTypes.map((n) => n.flow.kind), ['sequence', 'sequence', 'sequence', 'loop', 'branch']);
+  assert.deepEqual(meta.nodeTypes.map((n) => n.flow.kind), ['sequence', 'sequence', 'sequence', 'loop', 'branch', 'sequence']);
   // `exposes` may be a list (0010: the loop's variables, then the record of an each-loop).
-  assert.deepEqual(meta.nodeTypes.map((n) => [n.exposes ?? []].flat().map((x) => x.kind).join('+') || null), ['record', 'record', 'record', 'vars+record', null]);
+  assert.deepEqual(meta.nodeTypes.map((n) => [n.exposes ?? []].flat().map((x) => x.kind).join('+') || null), ['record', 'record', 'record', 'vars+record', null, 'value']);
   assert.ok(meta.nodeTypes.every((n) => Object.values(n).every((v) => typeof v !== 'function')));
+  // 0015: the variables of Đặt biến live in their own namespace, {{var.<name>}}.
+  const setType = meta.nodeTypes.find((n) => n.type === 'set');
+  assert.equal(meta.syntax.varNamespace, 'var');
+  assert.deepEqual([setType.label, setType.exposes.namespace, setType.exposes.name.key], ['Đặt biến', 'var', 'name']);
+  assert.deepEqual(setType.options.map((o) => [o.key, o.kind, o.default]), [['name', 'string', ''], ['mode', 'select', 'set'], ['valueType', 'select', 'text'], ['value', 'string', '']]);
+  assert.deepEqual([setType.options[2].showIf, setType.options[3].vars], [{ key: 'mode', in: ['set'] }, 'template']);
+  assert.equal(meta.limits.maxVarLength, 10000);
   const loopType = meta.nodeTypes.find((n) => n.type === 'loop');
   assert.ok(!('minIterations' in loopType), 'function keys are not served');
   const re = new RegExp(meta.syntax.templateToken, 'g');

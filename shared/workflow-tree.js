@@ -337,7 +337,8 @@ export const isAliasName = (name) => typeof name === 'string' && /^[A-Za-z_][A-Z
 
 /**
  * Options holding references, without a catalogue: the built-in ones (template, ref, branch
- * left / right, pick and each-loop from / filterValue, loop counts holding a variable).
+ * left / right, pick and each-loop from / filterValue, loop counts holding a variable, the value
+ * of a Đặt biến).
  */
 function legacyReferenceOptions(step) {
   const out = [];
@@ -350,6 +351,7 @@ function legacyReferenceOptions(step) {
   const keys = [];
   if (step.type === 'branch') keys.push(['left', 'path'], ['right', 'template']);
   if (step.type === 'pick') keys.push(['from', 'ref'], ['filterValue', 'template']);
+  if (step.type === 'set') keys.push(['value', 'template']); // Đặt biến (design 0015)
   if (step.type === 'loop') {
     // Design 0013: counts may hold one {{path}}; an each loop has a filter value.
     keys.push(['count', 'number'], ['min', 'number'], ['max', 'number']);
@@ -524,6 +526,105 @@ export function setStepAlias(wf, id, value, { memo = new Map(), slotKeys, catalo
   renameAlias(inside ? step.slots?.[inside] ?? [] : wf.steps, from, to, { catalog, only });
   memo.set(memoKey, to);
   return true;
+}
+
+// ---------- variables of Đặt biến (design 0015) ----------
+
+/** A usable variable name (same rule as server/workflow/nodes.js VAR_NAME). */
+export const isVarName = (name) => typeof name === 'string' && /^[A-Za-z_][A-Za-z0-9_]{0,39}$/.test(name);
+
+/** Namespace of the variables of Đặt biến in `catalog` (meta.syntax.varNamespace), default `var`. */
+const varNamespace = (catalog) => catalog?.syntax?.varNamespace ?? 'var';
+
+/** The Đặt biến steps of `wf` setting variable `name` (all of them, turned off or not). */
+export function variableSteps(wf, name, slotKeys) {
+  const out = [];
+  walkSteps(wf?.steps, (s) => { if (s.type === 'set' && (s.config?.name ?? '') === name) out.push(s); }, slotKeys);
+  return out;
+}
+
+/**
+ * Variables of `wf` (design 0015): Map name → { steps: [step], type: 'text' | 'number' | 'mixed' }
+ * in reading order (Cộng thêm counts as Số). Steps without a name are left out.
+ */
+export function collectVariables(wf, slotKeys) {
+  const out = new Map();
+  walkSteps(wf?.steps, (s) => {
+    if (s.type !== 'set') return;
+    const name = String(s.config?.name ?? '');
+    if (!name) return;
+    const type = (s.config?.mode ?? 'set') === 'add' ? 'number' : s.config?.valueType ?? 'text';
+    const v = out.get(name);
+    if (!v) out.set(name, { steps: [s], type });
+    else {
+      v.steps.push(s);
+      if (v.type !== type) v.type = 'mixed';
+    }
+  }, slotKeys);
+  return out;
+}
+
+/**
+ * Rename variable `from` → `to` everywhere (design 0015 "đổi tên = đổi cả biến"): the `name` of
+ * every Đặt biến step called `from`, and every `{{var.from…}}` (template, path and number options;
+ * with `catalog`: every option declaring `vars`). → { steps, refs } (how many of each changed).
+ */
+export function renameVariable(wf, from, to, { catalog, slotKeys } = {}) {
+  const none = { steps: 0, refs: 0 };
+  if (!from || from === to || !isVarName(to)) return none;
+  let steps = 0;
+  for (const s of variableSteps(wf, from, slotKeys)) {
+    s.config.name = to;
+    steps++;
+  }
+  const ns = varNamespace(catalog);
+  let refs = 0;
+  walkSteps(wf.steps, (s) => {
+    const options = catalog ? referenceOptions(s, catalog, { includeHidden: true }) : legacyReferenceOptions(s);
+    for (const o of options) {
+      if (o.mode === 'ref') continue;
+      const [next, n] = renameInValue(o.mode, storedValue(o), `${ns}.${from}`, `${ns}.${to}`);
+      if (!n) continue;
+      o.set(next);
+      refs += n;
+    }
+  }, slotKeys);
+  return { steps, refs };
+}
+
+/**
+ * Set the variable name of Đặt biến step `id` to `value` while the user types, and rename the whole
+ * variable along (every step setting it, every use) — but only to a valid name that is not another
+ * variable's, so typing `s` → `su` → `sum` never merges into a variable `s`. While the name is
+ * empty, invalid or another variable's, the other steps and the uses stay on the last good name,
+ * remembered in `memo` (Map stepId → name); this step alone carries what was typed (typing the
+ * name of an existing variable on purpose makes this step set that one). → { renamed, from?, to?,
+ * steps?, refs? } (`steps` counts this step too).
+ */
+export function setVariableName(wf, id, value, { memo = new Map(), catalog, slotKeys } = {}) {
+  const at = findStep(wf, id, slotKeys);
+  if (!at) return { renamed: false };
+  const c = (at.step.config ??= {});
+  const current = String(c.name ?? '');
+  if (!memo.has(id) && isVarName(current)) memo.set(id, current);
+  const from = memo.get(id);
+  // Another variable: a Đặt biến called `name` that is not this step and not one of `from`'s.
+  const taken = (name) => variableSteps(wf, name, slotKeys).some((s) => s !== at.step);
+  if (!from || from === value || !isVarName(value) || taken(value)) {
+    c.name = value;
+    return { renamed: false };
+  }
+  const others = variableSteps(wf, from, slotKeys).filter((s) => s !== at.step).length;
+  const { refs } = renameVariable(wf, from, value, { catalog, slotKeys });
+  c.name = value;
+  memo.set(id, value);
+  return { renamed: true, from, to: value, steps: others + 1, refs };
+}
+
+/** `bien1`, `bien2`, … the first name no Đặt biến step of `wf` uses (a new step's name). */
+export function suggestVarName(wf, slotKeys) {
+  const used = collectVariables(wf, slotKeys);
+  for (let i = 1; ; i++) if (!used.has(`bien${i}`)) return `bien${i}`;
 }
 
 /**

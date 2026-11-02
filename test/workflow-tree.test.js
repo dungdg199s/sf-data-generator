@@ -720,3 +720,57 @@ test('final review N2: normalizeStepIds never duplicates a name nor loses a refe
   const names = workflow.steps.map((s) => s.config.alias ?? s.id);
   assert.equal(new Set(names).size, names.length);
 });
+
+// ---------- Đặt biến (design 0015): rename the whole variable ----------
+
+import { renameVariable, setVariableName, suggestVarName, collectVariables } from '../shared/workflow-tree.js';
+
+const sv = (id, name, value = '', config = {}) => ({ id, type: 'set', config: { name, value, ...config } });
+const tplField = (name, template) => ({ name, type: 'template', options: { template } });
+
+test('renameVariable: every Đặt biến of that name and every {{var.x}} in templates, paths and number options', () => {
+  const catalog = scopeCatalog();
+  const wf = tree([
+    sv('s1', 'total', '0', { valueType: 'number' }),
+    loop('l', [sv('s2', 'total', '{{var.total}}', { mode: 'add' })], { count: '{{var.total}}' }),
+    { id: 'b', type: 'branch', config: { kind: 'compare', left: 'var.total', right: '{{var.total}}' }, slots: { true: [], false: [] } },
+    r('acc', 'acc', [tplField('Name', 'Tổng {{var.total}} {{var.totalx}} {{total.x}}')]),
+    sv('o', 'other', '{{var.total}}'),
+  ]);
+  const res = renameVariable(wf, 'total', 'sum', { catalog, slotKeys });
+  assert.deepEqual(res, { steps: 2, refs: 6 });
+  assert.deepEqual(collectVariables(wf, slotKeys).get('sum').steps.map((s) => s.id), ['s1', 's2']);
+  assert.equal(findStep(wf, 's2', slotKeys).step.config.value, '{{var.sum}}');
+  assert.equal(findStep(wf, 'l', slotKeys).step.config.count, '{{var.sum}}');
+  assert.deepEqual([findStep(wf, 'b', slotKeys).step.config.left, findStep(wf, 'b', slotKeys).step.config.right], ['var.sum', '{{var.sum}}']);
+  assert.equal(findStep(wf, 'acc', slotKeys).step.config.fields[0].options.template, 'Tổng {{var.sum}} {{var.totalx}} {{total.x}}');
+  assert.equal(findStep(wf, 'o', slotKeys).step.config.value, '{{var.sum}}');
+  assert.deepEqual(renameVariable(wf, 'sum', '1bad', { catalog, slotKeys }), { steps: 0, refs: 0 }, 'never to an unusable name');
+});
+
+test('setVariableName: typing s → su → sum never merges into another variable s; refs wait on the last good name', () => {
+  const catalog = scopeCatalog();
+  const wf = tree([
+    sv('a', 's', '1'), sv('t1', 'total', '0', { valueType: 'number' }), sv('t2', 'total', '1', { mode: 'add' }),
+    r('acc', 'acc', [tplField('Name', '{{var.total}} {{var.s}}')]),
+  ]);
+  const memo = new Map();
+  const tpl = () => findStep(wf, 'acc', slotKeys).step.config.fields[0].options.template;
+  assert.deepEqual(setVariableName(wf, 't1', 's', { memo, catalog, slotKeys }), { renamed: false });
+  assert.equal(tpl(), '{{var.total}} {{var.s}}');
+  assert.equal(findStep(wf, 't2', slotKeys).step.config.name, 'total', 'the other step waits');
+  const res = setVariableName(wf, 't1', 'su', { memo, catalog, slotKeys });
+  assert.deepEqual(res, { renamed: true, from: 'total', to: 'su', steps: 2, refs: 1 });
+  setVariableName(wf, 't1', '', { memo, catalog, slotKeys });
+  setVariableName(wf, 't1', 'sum', { memo, catalog, slotKeys });
+  assert.equal(tpl(), '{{var.sum}} {{var.s}}');
+  assert.deepEqual(['a', 't1', 't2'].map((id) => findStep(wf, id, slotKeys).step.config.name), ['s', 'sum', 'sum']);
+});
+
+test('suggestVarName: bien1, bien2… not used by any Đặt biến; copies keep the variable name (not an alias)', () => {
+  assert.equal(suggestVarName(tree([]), slotKeys), 'bien1');
+  assert.equal(suggestVarName(tree([sv('a', 'bien1'), loop('l', [sv('b', 'bien2')])]), slotKeys), 'bien3');
+  const { steps } = cloneSteps([sv('a', 'total', '1')], { ids: new Set(['a']), aliases: new Set(['total']), catalog: scopeCatalog() });
+  assert.equal(steps[0].config.name, 'total');
+  assert.deepEqual(stepNames(sv('a', 'total'), scopeCatalog()), []);
+});
