@@ -295,7 +295,7 @@ export async function openDeleteConfirm(hid) {
   });
   const names = [target, run.org?.username, listed?.alias, listed?.username].filter(Boolean).map((x) => String(x).toLowerCase());
   const sync = () => {
-    const ok = !missing && count > 0 && (!production || names.includes(typed.value.trim().toLowerCase()));
+    const ok = !missing && (count > 0 || run.pendingBulkJobs?.length > 0) && (!production || names.includes(typed.value.trim().toLowerCase()));
     confirmBtn.disabled = !ok;
   };
   const bySo = Object.entries(run.remaining?.bySobject ?? {}).map(([s, n]) => `${s} ${fmt(n)}`).join(', ');

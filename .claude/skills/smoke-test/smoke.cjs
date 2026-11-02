@@ -38,6 +38,9 @@
 //  15. Sơ đồ view (0003 đợt B): M switches with the selection kept, focused and inside the viewport; "+" on a
 //      connector adds a Record there; Delete removes it; ↑ walks the tree; M back; dark screenshot; at 390 px
 //      the saved Sơ đồ is not applied, the ⋯ menu switches (not saved) and a tap opens the sheet above the card
+//  16. insert history and delete (0011, every org call mocked in the page): Bulk checkbox and limit warning in the
+//      Insert confirmation, Tải Id / Lịch sử links, "Xóa dữ liệu này…" opens the delete confirmation (Hủy focused),
+//      production needs the org name typed, the history dialog (org filter, interrupted title, forget, 390 px)
 // The flows run in parallel, one browser context each (independent storage): see SKILL.md.
 // Usage: node .claude/skills/smoke-test/smoke.cjs [screenshotDir]
 // Needs Playwright with a Chromium build available (require('playwright')).
