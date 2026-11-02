@@ -420,19 +420,47 @@ hơn đề xuất (0.44 thay vì 0.48) vì L 0.48–0.50 làm protanopia sáng v
    `varUnset` nói đúng cách sửa (đặt giá trị ban đầu phía trên).
 2. Bảng chọn: ghi chú "có thể trống" / "giá trị lần lặp cuối" nằm ở **dòng** của từng biến (dòng help), không phải badge của
    nhóm, vì một nhóm `var · Biến` gộp nhiều tên có độ chắc khác nhau. Dòng biến có kiểu `Bất kỳ` khi các bước cùng tên khác kiểu.
-3. Tên hiển thị của bước (`stepAlias`) là `var.<tên>`, nên `stepLabel` (toast, hộp xóa) là `Đặt biến "var.total"`. Trên thẻ,
-   chip tên `var.total` đứng trước câu tóm tắt vẫn bắt đầu bằng `var.total` như bảng thiết kế (lặp tên; có thể rút gọn sau).
+3. Tên hiển thị của bước (`stepAlias`) là `var.<tên>`, nên `stepLabel` (toast, hộp xóa) là `Đặt biến "var.total"`. Câu tóm
+   tắt trên thẻ bắt đầu từ phép gán (`= TEST-…`), xem [Sửa sau review](#sửa-sau-review) S4.
 4. Cảnh báo `notNumber` của biến Chữ dùng nhãn `valueType` sẵn có ("Chuỗi") và giữ câu "Nên chọn biến kiểu Số bằng {x}." của
    0013 trước câu mới; sửa nhanh có `data-fix="setVarType"`, chữ `Đổi Kiểu thành Số`, đổi mọi bước **Gán** cùng tên, một bước undo.
 5. Datalist của ô Tên biến được khai báo ở server (`suggest: { kind: 'varNames' }` trên option `name`), `client/js/forms.js` thêm
    kind này; danh sách chỉ có biến mà bước khác đặt, nhãn `Số · 2 bước`.
 6. Toast đổi tên hiện khi rời ô Tên biến (`change`) hoặc sau 1,5 s ngừng gõ, và chỉ khi có bước khác hoặc chỗ dùng đổi theo
    (đổi `bien1` → `lo` của bước mới, chưa ai dùng, thì im lặng).
-7. Xóa bước Đặt biến: toast "đang được dùng ở … chỗ" bỏ qua chỗ dùng của biến mà bước khác (không bị xóa) vẫn đặt.
+7. Xóa bước: toast "đang được dùng ở … chỗ" chỉ kể chỗ dùng thật sự hỏng sau khi xóa (xem Sửa sau review S3).
 8. `varReserved` cũng báo Record **không có alias** có id `var` (nó được gọi bằng id), gắn `alias`.
 9. Ước tính: hằng số của biến được cắt về 0…`maxCountPerNode` và lấy phần nguyên như executor.
 10. `numericSampleFields`: mọi tham chiếu trong `value` của bước Số / Cộng thêm (không chỉ khi đúng một token).
 11. Tên biến không phải chuỗi (số JSON) là lỗi `setVarName`; `value` là object/mảng là lỗi gắn `value` (`"Giá trị" phải là chữ
     hoặc số…`). `mode` / `valueType` lạ là lỗi gắn đúng ô.
+
+### Sửa sau review
+
+Review của người điều phối (2026-11-02), mọi mục đã sửa; test mới cho B1, S1, S2, S3 (và N1, N2):
+
+- **B1** (`shared/workflow-tree.js`): `memo` của `setVariableName` giữ `{ from, wrote }` (tên tốt cuối và giá trị hàm này ghi
+  lần cuối); tên của bước đã đổi ở nơi khác (bước khác đổi tên cả biến, Hoàn tác, workflow khác cùng id bước) ⇒ bắt đầu lại từ
+  tên hiện tại. Trước đó: v1, v2 cùng `total`; đổi v1 → `sum`, rồi v2 → `count`, rồi gõ `countx` ở v1 thì chỉ v1 đổi, biến bị
+  tách đôi; workflow khác có bước cùng id thì đổi tên nhầm biến không liên quan. `setStepAlias` có cùng lỗi (memo cũ sau Hoàn
+  tác khi ô alias trống / trùng) và được sửa giống vậy (`{ name, wrote }`). Inspector xóa `aliasMemo` và `varMemo` khi đổi
+  workflow (sự kiện `replace`: thư viện, mở file, mẫu).
+- **S1** (`shared/scope.js`): mỗi bước Đặt biến còn đặt một khóa chuỗi chung theo tên biến; độ chắc của `var.<x>` lấy từ khóa
+  đó (không tệ hơn lần gán tốt nhất), nên gán ở cả hai nhánh của Rẽ nhánh là `always`, không còn cảnh báo `maybe` sai. Khóa này
+  không phải nguồn: `visible` bỏ qua nó.
+- **S2** (`shared/estimate.js`): hằng số chỉ chắc chắn khi bước Đặt biến chắc chắn chạy trước (dãy chứa nó luôn chạy ≥ 1 lần);
+  trong nhánh rẽ hay vòng lặp có thể chạy 0 lần thì `{ e: k, min: 0, max: k, exact: false }`.
+- **S3** (`client/js/ops.js`, `shared/scope.js` `brokenRefs`, `sourceLabel`): toast xóa (một bước, bỏ vỏ, nhiều bước) chạy
+  `analyzeScope` sau khi xóa và chỉ kể tham chiếu trước hợp lệ, sau là lỗi (bước còn lại đặt biến nhưng nằm sau chỗ dùng hoặc
+  đang tắt thì vẫn tính là hỏng); nhãn nguồn là `var.lo`, không phải `lo`.
+- **S4** (`client/js/summary.js`): câu tóm tắt bắt đầu từ phép gán: `= TEST-{{run.today}}`, `= 5 · Số`, `+= {{opp.Amount}}`;
+  vẫn `Chưa đặt tên biến` khi trống. Khác bảng [Thẻ](#thẻ-quy-trình-và-sơ-đồ): tên đã có ở chip tên `var.lo` ngay trước.
+- **N1** (executor): Cộng thêm vượt số lớn nhất (`Infinity`) giữ giá trị cũ và tính vào cảnh báo `setVarNotNumber`, không còn âm
+  thầm quay về 0. `workflow-schema.md` ghi giới hạn của `toPrecision(15)` (tổng ~10¹³ mất phần xu).
+- **N2** (`schema.js`): câu `varUnset` không gợi ý "chọn Cộng thêm" khi bước đã là Cộng thêm.
+- **N3**: nhãn kiểu (Chữ / Số) ở inspector (datalist, help, sửa nhanh), câu tóm tắt và `setVarType` của server đọc từ lựa chọn
+  "Kiểu" trong danh mục; `varType()` của inspector dùng `collectVariables`.
+
+Sau sửa: `npm test` 535 test, 0 lỗi; smoke SMOKE OK (15 flow). Hash vàng không đổi.
 
 Không làm (như thiết kế): hàm trong template, kiểu Ngày, "Tách thành biến", bảng Biến trong panel kết quả (Câu hỏi mở 2–5).
