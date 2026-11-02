@@ -15,6 +15,7 @@ import { state, subscribe, stepById } from './store.js';
 import { stepAlias } from './summary.js';
 import { api } from './api.js';
 import { openPopup, closePopup, popupAnchor } from './popup.js';
+import { groupTarget } from './history-text.js';
 
 const QUERY_TAB = 'q:'; // activeTab of a Query tab: `q:<stepId>`
 const ERRORS_TAB = '__errors';
@@ -320,7 +321,9 @@ function errorGroupsView(ins, { exampleLabel = 'Ví dụ' } = {}) {
     const step = id ? stepById(id) : null;
     return step ? stepAlias(step) || id : id ?? '';
   };
-  const go = (g) => g.nodeId && onGoTo?.({ nodeId: g.nodeId, field: g.field });
+  // Review nit: a group of a step no longer in the workflow (deleted since the run) is not a button.
+  const target = (g) => groupTarget(g, (id) => Boolean(stepById(id)));
+  const go = (g) => target(g) && onGoTo?.({ nodeId: g.nodeId, field: g.field });
   const shown = errors.slice(0, DETAIL_ROWS);
   const total = ins?.errorsTotal ?? errors.length;
   return h('div', {},
@@ -328,10 +331,10 @@ function errorGroupsView(ins, { exampleLabel = 'Ví dụ' } = {}) {
       h('thead', {}, h('tr', {}, h('th', {}, 'sObject'), h('th', {}, 'Bước'), h('th', {}, 'Lỗi'), h('th', {}, 'Số bản ghi'), h('th', {}, exampleLabel))),
       h('tbody', {},
         groups.map((g) => h('tr', {
-          class: g.nodeId ? 'clickable' : '',
-          role: g.nodeId ? 'button' : null,
-          tabindex: g.nodeId ? '0' : null,
-          title: g.nodeId ? 'Bấm để chọn bước' : '',
+          class: target(g) ? 'clickable' : '',
+          role: target(g) ? 'button' : null,
+          tabindex: target(g) ? '0' : null,
+          title: target(g) ? 'Bấm để chọn bước' : g.nodeId ? 'Bước này không còn trong workflow.' : '',
           onclick: () => go(g),
           onkeydown: (e) => {
             if (e.key === 'Enter' || e.key === ' ') {

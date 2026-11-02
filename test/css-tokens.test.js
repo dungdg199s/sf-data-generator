@@ -302,3 +302,9 @@ test('layout tokens of design 0009 are defined and documented in docs/ui-design-
   for (const t of ['--canvas-tail', '--issues-max-h', '--sheet-h']) assert.ok(doc.includes(`\`${t}\``), `${t} missing from the scale table`);
   assert.match(doc, /\| `theme` \|/, 'the theme icon is missing from the icon table');
 });
+
+test('0011 review: the ghost Lịch sử button of the results header uses the text token (§6.2 ghost)', () => {
+  const rule = blocks(COMPONENTS, '.results-head > button.ghost')[0];
+  assert.equal(rule?.color, 'var(--color-text)');
+  assert.equal(rule?.background, 'transparent');
+});

@@ -834,9 +834,10 @@ async function deleteRun(run, body, { org }) {
     } else if (result.failed) {
       msg = `Đã xóa ${fmt(result.deleted)} bản ghi; ${fmt(result.failed)} bản ghi không xóa được. Xem nhóm lỗi trong Lịch sử, sửa rồi bấm "Xóa phần còn lại…".`;
     } else msg = `Đã xóa ${fmt(result.deleted)} bản ghi khỏi ${org} (vào Thùng rác).${gone}`;
+    if (result.pendingMessage) msg += ` ${result.pendingMessage}`;
     if (result.failed) showDeleteErrors();
     showRunning(msg);
-    toast(msg, result.failed || s || result.cancelled ? 12000 : 8000);
+    toast(msg, result.failed || s || result.cancelled || result.pendingMessage ? 12000 : 8000);
   } catch (e) {
     if (e.name === 'AbortError') {
       showRunning('Đã dừng. Chưa xóa bản ghi nào.');
@@ -844,7 +845,8 @@ async function deleteRun(run, body, { org }) {
     } else {
       const msg = e.lost ? 'Mất kết nối với server khi đang xóa. Xem Lịch sử để biết đã xóa bao nhiêu.' : e.message;
       showRunning(`Lỗi: ${msg}`);
-      toast(msg, 10000);
+      // Review nit: the server sees a production (or unknown) org the dialog did not ask a name for.
+      toast(msg, 10000, e.code === 'typedOrgRequired' ? { label: 'Mở lại hộp xác nhận', onClick: () => openDeleteConfirm(run.id) } : null);
     }
   } finally {
     window.removeEventListener('beforeunload', leaveGuard);
@@ -957,11 +959,12 @@ function confirmInsert(org, previewed) {
       remainingCalls = l.api;
       update();
     }, () => {});
-    api.history().then((hist) => {
-      const off = historyOffText(hist);
+    api.historyStatus().then((hist) => {
+      // The server refuses an insert it cannot record (off), and one that would make it forget a
+      // run with records still in the org (full, review S4).
+      const off = historyOffText(hist) ?? (hist?.full ? hist.fullMessage : null);
       if (!off || !modal.open) return;
-      // The server refuses an insert it cannot record (no Ids to download or delete later).
-      historyLine.replaceWith(h('div', { class: 'warn-box history-off' }, off));
+      historyLine.replaceWith(h('div', { class: `warn-box ${hist.full ? 'history-full' : 'history-off'}` }, off));
       confirmBtn.disabled = true;
     }, () => {});
   });

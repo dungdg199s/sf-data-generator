@@ -1096,7 +1096,7 @@ textarea.mono { font-family: var(--font-mono); font-size: var(--text-sm); }
 dialog .list .rel-check { font-size: var(--text-xs); color: var(--color-text-muted); white-space: nowrap; }
 
 /* ---------- insert history and delete (design 0011) ---------- */
-.results-head > button.ghost { background: transparent; border-color: transparent; color: var(--color-text-muted); }
+.results-head > button.ghost { background: transparent; border-color: transparent; color: var(--color-text); }
 .results-head > button.ghost:hover:not(:disabled) { background: var(--color-surface-hover); color: var(--color-text); }
 button.small { min-height: var(--control-h-sm); padding: 0 var(--space-2); font-size: var(--text-sm); }
 .warning-text { color: var(--color-warning-text); }

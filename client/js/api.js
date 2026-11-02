@@ -9,13 +9,13 @@ async function call(method, path, body) {
     body: body ? JSON.stringify(body) : undefined,
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw Object.assign(new Error(data.error || res.statusText), { status: res.status, issues: data.issues });
+  if (!res.ok) throw Object.assign(new Error(data.error || res.statusText), { status: res.status, issues: data.issues, code: data.code });
   return data;
 }
 
 async function errorOf(res) {
   const data = await res.json().catch(() => ({}));
-  return Object.assign(new Error(data.error || res.statusText), { status: res.status, issues: data.issues });
+  return Object.assign(new Error(data.error || res.statusText), { status: res.status, issues: data.issues, code: data.code });
 }
 
 /**
@@ -87,6 +87,8 @@ export const api = {
   cancelRun: (runId, { force = false } = {}) => call('POST', `/api/runs/${encodeURIComponent(runId)}/cancel`, force ? { force: true } : {}),
   /** Insert history (design 0011): { enabled, reason?, dir, maxRuns, runs }. */
   history: () => call('GET', '/api/history'),
+  /** Cheap history state for the Insert confirmation: { enabled, reason?, dir, maxRuns, full, fullMessage? }. */
+  historyStatus: () => call('GET', '/api/history/status'),
   /** One run of the history, with `remaining` (what is left to delete) and `pendingBulkJobs`. */
   historyRun: (hid) => call('GET', `/api/history/${encodeURIComponent(hid)}`),
   /** The Ids of a run as CSV → { blob, filename }. */

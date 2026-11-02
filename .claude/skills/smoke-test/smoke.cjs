@@ -204,9 +204,15 @@ async function flowEditing() {
   // The request is held until Dừng was clicked (no fixed delay: a slow machine cannot finish the run first).
   let releaseRun;
   const runGate = new Promise((res) => { releaseRun = res; });
-  await page.route('**/api/run', async (r) => { await runGate; await r.continue().catch(() => {}); });
+  // The held request must be the one this Ctrl+Enter sends: wait for it to reach the route and for
+  // the header to say so (one snapshot right after #btn-stop showed was racy under CPU load, review 0011).
+  let routedRun;
+  const runRouted = new Promise((res) => { routedRun = res; });
+  await page.route('**/api/run', async (r) => { routedRun(); await runGate; await r.continue().catch(() => {}); });
   await page.keyboard.press('Control+Enter');
-  await page.waitForSelector('#btn-stop:not([hidden])');
+  await Promise.race([runRouted, new Promise((res) => setTimeout(res, 10000))]);
+  await page.waitForFunction(() => /Đang sinh dữ liệu/.test(document.getElementById('results-summary').textContent) && !document.getElementById('btn-stop').hidden, null, { timeout: 10000 })
+    .catch(() => errors.push('3b: the held preview never showed its running state (Ctrl+Enter lost or the request was not held)'));
   const during = await page.evaluate(() => {
     const head = document.querySelector('.results-head').getBoundingClientRect();
     const bar = document.getElementById('run-progress').getBoundingClientRect();
@@ -1251,10 +1257,14 @@ async function flowHistory() {
       return nd([{ type: 'start', runId: 'rsmoke16', seed: base.seed, now: base.now, warnings: [] }, { type: 'plan', total: 12005, bySobject: stats.bySobject, apiCalls: 41, historyId: H1 }, { type: 'done', result: { ...base, insert } }]);
     }
     if (p === '/api/history') return json({ enabled: true, dir: '/home/me/.local/share/sf-data-generator/history', maxRuns: 100, runs: HIST_RUNS });
+    if (p === '/api/history/status') return json({ enabled: true, dir: '/home/me/.local/share/sf-data-generator/history', maxRuns: 100, full: false });
     let m;
     if ((m = /^\/api\/history\/([^/]+)\/delete$/.exec(p))) {
       sent.deletes.push({ hid: m[1], body: r.request().postDataJSON() });
-      return nd([{ type: 'start', runId: 'rsmoked', historyId: m[1], total: 12005, bySobject: { Contact: 12000, Account: 5 } }, { type: 'done', result: { total: 12005, deleted: 12005, gone: 0, failed: 0, errorGroups: [], errorGroupsOther: null, bySobject: {}, remaining: 0, cancelled: false, stopped: null, bulkAborted: null } }]);
+      // The production delete leaves one failure on a step that is not in the workflow any more.
+      const failed = m[1] === H2 ? 1 : 0;
+      const errorGroups = failed ? [{ sobject: 'Contact', nodeId: 'removedStep', message: 'DELETE_FAILED: smoke', count: 1, refs: ['003000000000001AAA'] }] : [];
+      return nd([{ type: 'start', runId: 'rsmoked', historyId: m[1], total: 12005, bySobject: { Contact: 12000, Account: 5 } }, { type: 'done', result: { total: 12005, deleted: 12005 - failed, gone: 0, failed, errorGroups, errorGroupsOther: null, bySobject: {}, remaining: failed, cancelled: false, stopped: null, bulkAborted: null } }]);
     }
     if ((m = /^\/api\/history\/([^/]+)\/forget$/.exec(p))) {
       sent.forgets.push(m[1]);
@@ -1262,7 +1272,7 @@ async function flowHistory() {
     }
     if ((m = /^\/api\/history\/([^/]+)$/.exec(p))) {
       const run = HIST_RUNS.find((x) => x.id === m[1]);
-      return json({ ...run, workflowName: run.workflowName, remaining: { total: run.inserted, bySobject: { Contact: run.inserted - 5, Account: 5 }, bySteps: [{ nodeId: 'con', sobject: 'Contact', count: run.inserted - 5 }, { nodeId: 'acc', sobject: 'Account', count: 5 }] }, pendingBulkJobs: [], hasParents: true, errorGroups: [], bulkJobs: [] });
+      return json({ ...run, workflowName: run.workflowName, remaining: { total: run.inserted, bySobject: { Contact: run.inserted - 5, Account: 5 }, bySteps: [{ nodeId: 'con', sobject: 'Contact', count: run.inserted - 5 }, { nodeId: 'acc', sobject: 'Account', count: 5 }] }, pendingBulkJobs: [], hasParents: false, errorGroups: [], bulkJobs: [] });
     }
     return r.continue();
   });
@@ -1297,6 +1307,8 @@ async function flowHistory() {
   check(await page.evaluate(() => document.activeElement?.dataset.action) === 'cancel', '16b: focus is not on Hủy');
   const delBtn = await page.$('dialog[open] [data-action="confirm-delete"]');
   if (outDir) await page.screenshot({ path: path.join(outDir, 'smoke-1440-delete.png') });
+  // Review S5: the cascade warning is always there (the mock says no parent steps).
+  check(/có thể làm Salesforce tự xóa cả bản ghi con/.test(await page.textContent('#modal[open] .cascade-line').catch(() => '')), '16b: no cascade warning');
   check((await delBtn.textContent()) === 'Xóa 12 005 bản ghi' && await delBtn.evaluate((b) => b.matches('.danger.solid') && !b.disabled), '16b: delete button text / style / state');
   await delBtn.click();
   await page.waitForFunction(() => /Đã xóa 12 005 bản ghi khỏi dev-sb/.test(document.getElementById('results-summary').textContent));
@@ -1331,6 +1343,10 @@ async function flowHistory() {
   await page.click('#modal[open] [data-action="confirm-delete"]');
   await page.waitForFunction(() => /Đã xóa/.test(document.getElementById('results-summary').textContent) && document.getElementById('btn-stop').hidden);
   check(sent.deletes[1]?.hid === H2 && sent.deletes[1].body.confirm.typedOrg === 'dev-prod', `16c: production request ${JSON.stringify(sent.deletes[1])}`);
+  // "Lỗi xóa" tab: a group of a step not in the workflow is not a button (review nit).
+  await page.waitForSelector('table.error-groups tbody tr');
+  check(await page.$eval('.tabs .tab-delete-errors.active', (b) => /Lỗi xóa \(1\)/.test(b.textContent)).catch(() => false), '16c: no active "Lỗi xóa (1)" tab');
+  check(!(await page.$('table.error-groups tr.clickable, table.error-groups tr[role="button"]')), '16c: an error row of a removed step is still a button');
 
   // 16d (390). Full-screen dialog, no sideways overflow.
   await page.setViewportSize({ width: 390, height: 844 });

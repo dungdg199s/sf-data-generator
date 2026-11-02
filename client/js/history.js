@@ -12,6 +12,7 @@ import { h, toast, download } from './dom.js';
 import { state } from './store.js';
 import { openPopup, closePopup } from './popup.js';
 import { planDelete } from '/shared/insert-plan.js';
+import { runStatus, dataStatus, canDelete, deleteButtonLabel } from './history-text.js';
 
 const fmt = (n) => String(n ?? 0).replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
 const pad = (n) => String(n).padStart(2, '0');
@@ -47,28 +48,7 @@ export function initHistory(h0) {
 
 export const isHistoryOpen = () => Boolean(dialog?.open);
 
-/** Status of the run itself. */
-export function runStatus(run) {
-  if (run.status === 'running') return { text: 'Đang insert' };
-  if (run.status === 'done') return { text: 'Xong' };
-  if (run.status === 'cancelled') return { text: 'Đã dừng' };
-  if (run.status === 'stopped') return { text: ['allFailing', 'bulkFailing'].includes(run.stopped?.reason) ? 'Tự dừng (lỗi hàng loạt)' : 'Tự dừng' };
-  if (run.status === 'error') return { text: 'Lỗi' };
-  if (run.status === 'interrupted') {
-    return { text: 'Bị gián đoạn', cls: 'warning-text', title: `Server dừng giữa lúc insert. Đã ghi được ${fmt(run.inserted)} Id; có thể thiếu Id của lô cuối hoặc job Bulk đang chạy.` };
-  }
-  return { text: run.status ?? '?' };
-}
-
-/** Status of the data in the org. */
-export function dataStatus(run) {
-  const d = run.deletion ?? {};
-  if (d.status === 'running') return 'Đang xóa';
-  if (!run.inserted) return 'Không có bản ghi nào trong org';
-  if (!d.remaining) return 'Đã xóa';
-  if ((d.deleted ?? 0) + (d.gone ?? 0) > 0) return `Đã xóa một phần (còn ${fmt(d.remaining)})`;
-  return 'Còn trong org';
-}
+export { runStatus, dataStatus };
 
 /** Downloads the Ids of a run (CSV). */
 export async function downloadIds(hid) {
@@ -146,6 +126,7 @@ function rowOf(r) {
   const st = runStatus(r);
   const left = r.deletion?.remaining ?? 0;
   const busy = r.status === 'running' || r.deletion?.status === 'running';
+  const deletable = canDelete(r);
   const records = `${fmt(r.inserted)}${r.total && r.inserted + (r.failed ?? 0) < r.total ? `/${fmt(r.total)}` : ''}`;
   const expanded = openRun === r.id;
   const toggle = () => {
@@ -155,10 +136,10 @@ function rowOf(r) {
   };
   const actions = h('td', { class: 'history-actions' },
     r.inserted ? h('button', { class: 'small', 'data-action': 'ids', title: 'Tải mọi Id đã insert của lần chạy này (CSV)', onclick: (e) => { e.stopPropagation(); downloadIds(r.id); } }, 'Tải Id') : null,
-    left || busy ? h('button', {
+    deletable || busy ? h('button', {
       class: 'danger small', 'data-action': 'delete',
       disabled: busy || hooks.isRunning(),
-      title: busy ? 'Lần insert này đang chạy.' : hooks.isRunning() ? 'Đang chạy. Bấm "Dừng" nếu muốn xóa.' : `Xóa ${fmt(left)} bản ghi khỏi ${orgName(r.org)}`,
+      title: busy ? 'Lần insert này đang chạy.' : hooks.isRunning() ? 'Đang chạy. Bấm "Dừng" nếu muốn xóa.' : left ? `Xóa ${fmt(left)} bản ghi khỏi ${orgName(r.org)}` : 'Lấy Id của job Bulk chưa lấy kết quả rồi xóa',
       onclick: (e) => { e.stopPropagation(); openDeleteConfirm(r.id); },
     }, (r.deletion?.deleted ?? 0) + (r.deletion?.gone ?? 0) > 0 ? 'Xóa phần còn lại…' : 'Xóa khỏi org…') : null,
     h('button', {
@@ -288,14 +269,15 @@ export async function openDeleteConfirm(hid) {
       : `Khoảng ${fmt(p.apiCalls.total)} lời gọi API (200 bản ghi mỗi lời gọi), tính vào giới hạn API 24 giờ của org.`;
   };
   updateCalls();
-  const confirmBtn = h('button', { class: 'danger solid', 'data-action': 'confirm-delete', disabled: true }, `Xóa ${fmt(count)} bản ghi`);
+  const pending = run.pendingBulkJobs?.length ?? 0;
+  const confirmBtn = h('button', { class: 'danger solid', 'data-action': 'confirm-delete', disabled: true }, deleteButtonLabel(count, pending));
   const typed = h('input', {
     type: 'text', class: 'typed-org', placeholder: target, 'aria-label': 'Gõ tên org để xác nhận xóa', autocomplete: 'off', spellcheck: 'false',
     oninput: () => sync(),
   });
   const names = [target, run.org?.username, listed?.alias, listed?.username].filter(Boolean).map((x) => String(x).toLowerCase());
   const sync = () => {
-    const ok = !missing && (count > 0 || run.pendingBulkJobs?.length > 0) && (!production || names.includes(typed.value.trim().toLowerCase()));
+    const ok = !missing && (count > 0 || pending > 0) && (!production || names.includes(typed.value.trim().toLowerCase()));
     confirmBtn.disabled = !ok;
   };
   const bySo = Object.entries(run.remaining?.bySobject ?? {}).map(([s, n]) => `${s} ${fmt(n)}`).join(', ');
@@ -312,7 +294,8 @@ export async function openDeleteConfirm(hid) {
     h('p', { class: 'delete-count' }, `Sẽ xóa ${fmt(count)} bản ghi${partial ? ' còn lại' : ''} do lần insert lúc ${longTime(run.startedAt)} (workflow "${run.workflowName || '—'}") tạo ra:`),
     h('p', {}, `${bySo}. Xóa bản ghi con trước, bản ghi cha sau.`),
     h('p', { class: 'hint' }, 'Chỉ xóa đúng các Id app đã ghi lúc insert, kể cả bản ghi đã bị sửa sau đó. Bản ghi đã bị xóa trước đó được bỏ qua.'),
-    run.hasParents ? h('p', { class: 'hint' }, 'Xóa bản ghi cha có thể làm Salesforce tự xóa bản ghi con của nó (ví dụ Contact, Opportunity của Account), kể cả bản ghi con không do app tạo.') : null,
+    // Review S5: always — any deleted record can be the parent of records the app did not create.
+    h('p', { class: 'hint cascade-line' }, 'Xóa một bản ghi là cha của bản ghi khác có thể làm Salesforce tự xóa cả bản ghi con của nó (ví dụ Contact, Opportunity của Account), kể cả bản ghi con không do app tạo.'),
     h('p', { class: 'hint' }, 'Bản ghi bị xóa vào Thùng rác của org (khôi phục được trong 15 ngày nếu Thùng rác chưa đầy).'),
     run.pendingBulkJobs?.length ? h('p', { class: 'hint' }, `Lấy Id của ${run.pendingBulkJobs.length} job Bulk chưa lấy kết quả (${run.pendingBulkJobs.map((j) => j.jobId).join(', ')}) trước khi xóa.`) : null,
     canBulk ? h('label', { class: 'bulk-check', title: 'Nhanh hơn và ít lời gọi API hơn.' }, h('input', {
