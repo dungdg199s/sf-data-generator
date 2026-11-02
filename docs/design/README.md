@@ -25,6 +25,7 @@ viết và cập nhật các file này theo skill `design-doc`; người viết 
 | [0012](0012-nang-suat-soan-thao.md) | Năng suất soạn thảo: thư viện workflow, chọn nhiều bước, copy/paste, sửa nhanh | Đã làm |
 | [0013](0013-mo-rong-bien-va-lap.md) | Mở rộng biến và lặp | Đã làm |
 | [0014](0014-hoan-thien-giao-dien.md) | Hoàn thiện giao diện: icon SVG, đổi cao panel kết quả, sheet hai nấc, dấu hiệu cuộn ngang, minimap, phím chọn biến | Đã làm |
+| [0015](0015-buoc-dat-bien.md) | Bước Đặt biến (`set`, `{{var.<tên>}}`) | Đã duyệt |
 
 ## Nguyên tắc tiện dụng
 
@@ -88,7 +89,8 @@ Các mục "Câu hỏi mở" / "Việc tiếp theo" / "Chưa làm" của 0001–
 | Record: đổi sObject thì thay field `Name` bằng name field thật (Task → `Subject`) | [0012](0012-nang-suat-soan-thao.md) | 0003; lỗi thật, làm đầu tiên (phần G) |
 | Biến cấp workflow `{{run.seed}}`, `{{run.now}}`, `{{run.today}}` | [0013](0013-mo-rong-bien-va-lap.md) | 0005 "Ý tưởng để sau" |
 | Khung nhiều nhánh kiểu Switch (`slots` động) | **Hoãn** | 0003; 0013: cần đổi hợp đồng `slots` cố định theo loại bước |
-| Hàm trong template; bước Đặt biến | **Hoãn** | 0005, 0006; 0013: cần design riêng vì đổi ngữ pháp token |
+| Bước Đặt biến | [0015](0015-buoc-dat-bien.md) | 0006, 0013: không cần đổi ngữ pháp token (`{{var.<tên>}}` là đường dẫn hai đoạn như `{{run.seed}}`) |
+| Hàm trong template (`upper`, `pad`, phép tính) | **Hoãn** | 0005, 0013 mục 18; 0015: cần design riêng vì đổi ngữ pháp token; Cộng thêm của 0015 thay phần cộng dồn |
 | `{{acc.Id}}` thành Id thật lúc insert | **Hoãn** | 0005; 0013: cần giữ Id qua cửa sổ insert, xem trước sẽ khác insert |
 | Option số của generator nhận biến; `count` của Record nhận biến | **Hoãn** | 0013: cần design riêng; bọc Record trong Lặp thay thế |
 | Option phạm vi pool (chỉ bản ghi của lượt hiện tại) | **Hoãn** | 0010, 0013 |
