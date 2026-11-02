@@ -1473,3 +1473,13 @@ test('set variable: the same seed and now give the same records', () => {
   assert.deepEqual(run(steps).records, run(steps).records);
   assert.equal(run(steps).records[2].fields.Name, 'B-7-3');
 });
+
+test('set variable after review (N1, N2): an add past the largest number keeps the value and warns; varUnset of a Cộng thêm does not suggest Cộng thêm', () => {
+  const out = run([setVar('s', 'big', '1e308', { valueType: 'number' }), loop('l', { count: 2 }, [setVar('a', 'big', '1e308', { mode: 'add' })]), r('acc', 'acc', [tpl('Name', '{{var.big}}')])]);
+  assert.equal(out.records[0].fields.Name, '1e+308');
+  assert.deepEqual(out.warnings.filter((w) => w.code === 'setVarNotNumber').map((w) => [w.nodeId, w.message.includes('2/2')]), [['a', true]]);
+  const add = validateWorkflow(wf([setVar('s', 's', '{{var.s}}', { mode: 'add' })])).errors.find((e) => e.code === 'varUnset');
+  assert.match(add.message, /\(ví dụ trước vòng lặp\)\.$/);
+  const set = validateWorkflow(wf([setVar('s', 's', '{{var.s}}-x')])).errors.find((e) => e.code === 'varUnset');
+  assert.match(set.message, /hoặc chọn "Cộng thêm" nếu muốn cộng dồn\.$/);
+});

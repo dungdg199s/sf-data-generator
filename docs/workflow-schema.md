@@ -222,7 +222,9 @@ chỉ thấy các field ở phía trên.
   thân vòng lặp dùng chung nên giá trị gán trong vòng lặp còn sau vòng lặp). `text`: `value` thay `{{…}}` như template (dài hơn
   10 000 ký tự ⇒ lỗi gắn `value`); `number`: đúng một token ⇒ giá trị của biến, không thì chuỗi đã thay, qua `toNumber`; không ra
   số ⇒ `null` và **một** cảnh báo `setVarNotNumber` mỗi bước cuối lần chạy; `add`: giá trị cũ (không phải số ⇒ 0) cộng số mới
-  (không ra số ⇒ 0, có cảnh báo), làm tròn `toPrecision(15)`. Không dùng `rng`, không sinh bản ghi. `byStep`: `{ runs, records: 0,
+  (không ra số ⇒ 0, có cảnh báo), làm tròn `toPrecision(15)` (15 chữ số có nghĩa: `0.1 + 0.2` ra `0.3`; tổng từ khoảng 10¹³ trở lên mất phần xu, ví dụ
+  12 345 678 901 234,56 thành 12 345 678 901 234,6); tổng vượt số lớn nhất (`Infinity`) thì giữ giá trị cũ và tính vào cảnh báo
+  `setVarNotNumber`. Không dùng `rng`, không sinh bản ghi. `byStep`: `{ runs, records: 0,
   value, notNumber? }` (`value` = giá trị cuối, chữ cắt ở 100 ký tự). `samples[<id>] = { <name>: <giá trị lần gán đầu> }`
   (mẫu cho bảng chọn biến). Bước tắt không chạy, biến giữ nguyên.
 - Bản ghi đã sinh (`<alias>` hiện tại và danh sách mọi bản ghi của alias) dùng chung cho cả lần chạy; biến lặp theo phạm vi.

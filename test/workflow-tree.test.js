@@ -774,3 +774,35 @@ test('suggestVarName: bien1, bien2… not used by any Đặt biến; copies keep
   assert.equal(steps[0].config.name, 'total');
   assert.deepEqual(stepNames(sv('a', 'total'), scopeCatalog()), []);
 });
+
+test('setVariableName after review (B1): a name changed elsewhere (another step, undo, another workflow) restarts the memo', () => {
+  const catalog = scopeCatalog();
+  const wf = tree([sv('v1', 'total', '0', { valueType: 'number' }), sv('v2', 'total', '1', { mode: 'add' }), r('r1', 'r1', [tplField('Name', '{{var.total}}')])]);
+  const memo = new Map();
+  const name = (id) => findStep(wf, id, slotKeys).step.config.name;
+  setVariableName(wf, 'v1', 'sum', { memo, catalog, slotKeys });
+  setVariableName(wf, 'v2', 'count', { memo, catalog, slotKeys });
+  assert.deepEqual([name('v1'), name('v2')], ['count', 'count']);
+  // v1's memo still says "sum", but v1 is called "count" now: the whole variable follows, no split.
+  const res = setVariableName(wf, 'v1', 'countx', { memo, catalog, slotKeys });
+  assert.deepEqual(res, { renamed: true, from: 'count', to: 'countx', steps: 2, refs: 1 });
+  assert.deepEqual([name('v1'), name('v2')], ['countx', 'countx']);
+  assert.equal(findStep(wf, 'r1', slotKeys).step.config.fields[0].options.template, '{{var.countx}}');
+  // Another workflow with the same step ids: the memo of the first one never renames its variables.
+  const other = tree([sv('v1', 'lo', 'A'), sv('v9', 'countx', '1'), r('r9', 'r9', [tplField('Name', '{{var.countx}} {{var.lo}}')])]);
+  setVariableName(other, 'v1', 'lot', { memo, catalog, slotKeys });
+  assert.equal(findStep(other, 'v9', slotKeys).step.config.name, 'countx');
+  assert.equal(findStep(other, 'r9', slotKeys).step.config.fields[0].options.template, '{{var.countx}} {{var.lot}}');
+});
+
+test('setStepAlias after review (B1): an alias changed elsewhere (undo) is not taken for the last good name', () => {
+  const memo = new Map();
+  const wf = tree([r('a', 'acc'), r('b', 'con', [tplField('T', '{{acc.Name}} {{x.Name}}')])]);
+  setStepAlias(wf, 'a', 'account', { memo, slotKeys });
+  // Undo puts "acc" back (memo still says "account"); typing an empty alias then "x" moves {{acc.…}}, not {{account.…}}.
+  findStep(wf, 'a', slotKeys).step.config.alias = 'acc';
+  findStep(wf, 'b', slotKeys).step.config.fields[0].options.template = '{{acc.Name}}';
+  setStepAlias(wf, 'a', '', { memo, slotKeys });
+  setStepAlias(wf, 'a', 'k', { memo, slotKeys });
+  assert.equal(findStep(wf, 'b', slotKeys).step.config.fields[0].options.template, '{{k.Name}}');
+});

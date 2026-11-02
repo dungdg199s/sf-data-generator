@@ -2452,7 +2452,7 @@ async function flowSetVar() {
   check(colours.set && colours.set !== colours.rec, `Đặt biến card colour ${JSON.stringify(colours)}`);
   await page.keyboard.type('lo');
   await page.fill(opt('value'), 'TEST-{{run.today}}');
-  check(await until(page, (x) => document.querySelector(`.step-card[data-id="${x}"] .sum`)?.textContent === 'var.lo = TEST-{{run.today}}', id),
+  check(await until(page, (x) => document.querySelector(`.step-card[data-id="${x}"] .sum`)?.textContent === '= TEST-{{run.today}}', id),
     `Đặt biến card summary: ${await page.textContent(`.step-card[data-id="${id}"] .sum`)}`);
 
   // acc.Name: "{{lo" opens the picker on the var group; Enter inserts {{var.lo}} (a copper chip).

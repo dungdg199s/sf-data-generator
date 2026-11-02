@@ -283,8 +283,8 @@ storage and reloading (one app boot less; flow 5b).
       `smoke-390-history-dark.png`).
 21. **Đặt biến (design 0015), `flowSetVar`, own context (parallel).** A saved workflow (Record `acc` with a Template `Name`, a
     Lặp around `con`). The "+" above `acc` → **Đặt biến**: the new card is copper (its `--c` differs from Record's) and selected, the
-    name box is focused with `bien1` selected; typing `lo` and the value `TEST-{{run.today}}` gives the card `var.lo =
-    TEST-{{run.today}}`. On `acc.Name`, `{{lo` opens the picker with the group `var · Biến` (`data-type="set"`) and `var.lo` active;
+    name box is focused with `bien1` selected; typing `lo` and the value `TEST-{{run.today}}` gives the card the name `var.lo`
+    and the summary `= TEST-{{run.today}}`. On `acc.Name`, `{{lo` opens the picker with the group `var · Biến` (`data-type="set"`) and `var.lo` active;
     Enter inserts `{{var.lo}}` with a copper chip. Ctrl+Enter: the card chip reads `đặt 1 lần · = "TEST-<today>"` and the Account table
     holds `TEST-<today>`. Renaming `lo` → `ma` (then Tab) turns the template into `{{var.ma}}` and toasts `Đã đổi tên biến lo → ma ở 1
     bước Đặt biến và 1 chỗ dùng.`; with the value `2`, `{{var.ma}}` as the loop's "Số lần lặp" shows the quick fix `Đổi Kiểu thành

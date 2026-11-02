@@ -65,12 +65,13 @@ export function stepSummary(step) {
       return `${c.left ?? ''} ${opLabel('branch', 'op', c.op)} ${c.right ?? ''}`;
     }
     case 'set': {
-      // Design 0015: "var.lo = TEST-{{run.today}}", "var.n = 5 · Số", "var.total += {{opp.Amount}}".
+      // Design 0015, after review: the name is already on the card (stepAlias `var.lo`), so the
+      // summary starts at the operator: "= TEST-{{run.today}}", "= 5 · Số", "+= {{opp.Amount}}".
       if (!c.name) return 'Chưa đặt tên biến';
       const raw = c.value === undefined || c.value === null ? '' : String(c.value);
       const value = raw === '' ? '(trống)' : raw.length > 48 ? `${raw.slice(0, 48)}…` : raw;
-      if (c.mode === 'add') return `${varPath(c.name)} += ${value}`;
-      return `${varPath(c.name)} = ${value}${c.valueType === 'number' ? ' · Số' : ''}`;
+      if (c.mode === 'add') return `+= ${value}`;
+      return `= ${value}${c.valueType === 'number' ? ` · ${opLabel('set', 'valueType', 'number')}` : ''}`;
     }
     default: {
       const defs = (nodeType(step.type)?.options ?? []).filter((o) => o.summary);

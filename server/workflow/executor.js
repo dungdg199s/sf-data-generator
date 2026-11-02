@@ -434,6 +434,11 @@ function generate(workflow, { seed, now, maxRecords, queryResults, keptPools, ti
           const prev = finite(toNumber(scope.var[name])) ?? 0;
           // 15 significant digits: 0.1 + 0.2 is 0.3, the same on every machine.
           v = Number((prev + (x ?? 0)).toPrecision(15));
+          // Past the largest number (Infinity): keep the previous value and warn, never restart at 0.
+          if (!Number.isFinite(v)) {
+            if (x !== null) stat.notNumber = (stat.notNumber ?? 0) + 1;
+            v = prev;
+          }
         } else v = x;
       }
       scope.var[name] = v;

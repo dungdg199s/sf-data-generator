@@ -408,6 +408,9 @@ const VALUE_NOTES = {
   disabled: 'đang tắt',
 };
 
+/** Chain key of a variable name (design 0015): set by every step setting that name. */
+const valueKey = (ns, name) => `\u0000${ns}.${name}`;
+
 /** Namespaces of named values in the catalogue (design 0015: `var`). */
 function valueNamespaces(cat) {
   const out = new Set();
@@ -611,7 +614,12 @@ export function analyzeScope(wf, catalog) {
       // Turned-off containers contribute nothing to the steps after them.
       if (added && !stepOff) for (const [id, e] of added) head = push(head, id, mark(e));
       const own = sources[step.id];
-      if (own && own.visibleIn === 'downstream' && !stepOff) head = push(head, step.id, mark({ certainty: 'always', seq: ++seq }));
+      if (own && own.visibleIn === 'downstream' && !stepOff) {
+        head = push(head, step.id, mark({ certainty: 'always', seq: ++seq }));
+        // A named value (0015) also sets the chain key of its name, shared by every step setting
+        // it: set on both sides of a Rẽ nhánh, the join sees it `always`.
+        if (own.kind === 'value' && own.name) head = push(head, valueKey(own.namespace, own.name), mark({ certainty: 'always', seq }));
+      }
       const skipFn = typeof type?.maySkip === 'function' ? type.maySkip : MAY_SKIP[step.type];
       if (!stepOff && skipFn?.(step.config ?? {}, { poolNonEmpty: (name) => poolNonEmptyAt(head, name) })) {
         cut = true;
@@ -714,7 +722,7 @@ export function analyzeScope(wf, catalog) {
           list.push({ source: v.id, certainty: 'always', seq: v.seq });
         }
         for (let n = r.head; n && n !== ROOT; n = n.prev) {
-          if (seen.has(n.id)) continue;
+          if (seen.has(n.id) || !sources[n.id]) continue; // (name keys of named values are no source)
           seen.add(n.id);
           list.push({ source: n.id, certainty: n.entry.certainty, seq: n.entry.seq, ...(n.entry.why ? { why: n.entry.why } : {}) });
         }
@@ -943,14 +951,18 @@ function resolveValue({ step, here, o, sources, byVar, base, fail, ns, rest }) {
   const seen = others.map((s) => ({ s, st: here.state(s.id), e: here.entry(s.id) })).filter((v) => v.st.certainty);
   if (seen.length) {
     const nearest = seen.reduce((a, b) => ((b.e?.seq ?? 0) > (a.e?.seq ?? 0) ? b : a));
-    const certainty = seen.map((v) => v.st.certainty).reduce((a, b) => (RANK[a] <= RANK[b] ? a : b));
+    // Certainty of the name (every step setting it, joined like one source: one assignment on each
+    // side of a Rẽ nhánh is `always`), never worse than the best single assignment.
+    const byName = here.entry(valueKey(ns, x));
+    const best = seen.map((v) => v.st.certainty).reduce((a, b) => (RANK[a] <= RANK[b] ? a : b));
+    const certainty = byName && RANK[byName.certainty] < RANK[best] ? byName.certainty : best;
     const types = new Set(seen.map((v) => v.s.valueType));
     const valueType = types.size === 1 ? [...types][0] : 'any';
     const withSrc = { ...extra, source: nearest.s.id };
     if (rest.length > 1) return fail('unknownMember', { ...withSrc, missing: rest.slice(1).join('.') });
     let out = { ...base, ...withSrc, certainty, valueType };
     if (certainty === 'maybe') {
-      const why = seen.find((v) => v.st.certainty === 'maybe' && v.st.why)?.st.why;
+      const why = byName?.why ?? seen.find((v) => v.st.certainty === 'maybe' && v.st.why)?.st.why;
       out = { ...out, code: 'maybe', level: 'warning', ...(why ? { why } : {}) };
     }
     // A number option (design 0013 B): Chữ is a warning (may not be a number), `any` is fine.
@@ -1006,6 +1018,25 @@ export function sourceStep(scope, sourceId) {
 export function refsToRecords(scope, stepId, member, opts) {
   const via = Object.values(scope?.sources ?? {}).filter((x) => x.root === stepId && (x.current === 'picked' || x.current === 'item')).map((x) => x.id);
   return [stepId, ...via].flatMap((id) => refsTo(scope, id, member, opts));
+}
+
+/**
+ * References that removing steps breaks (delete toasts): the references of `before` (analyzeScope of
+ * the workflow before the change) that resolved there and are errors in `after` (the same place:
+ * step, field, option, path), outside the steps `removed`. Whatever kept them valid — a Đặt biến
+ * still setting the name above (design 0015), another source — is taken into account.
+ */
+export function brokenRefs(before, after, { removed = new Set() } = {}) {
+  const key = (r) => `${r.nodeId}|${r.field}|${r.option}|${r.path}`;
+  const errors = new Set((after?.refs ?? []).filter((r) => r.level === 'error').map(key));
+  return (before?.refs ?? []).filter((r) => !removed.has(r.nodeId) && r.level !== 'error' && errors.has(key(r)));
+}
+
+/** Name of the source of a reference as the user writes it: `acc`, `loop`, `var.total` (0015). */
+export function sourceLabel(scope, sourceId) {
+  const s = scope?.sources?.[sourceId];
+  if (!s) return String(sourceId ?? '');
+  return s.kind === 'value' ? `${s.namespace}.${s.name}` : s.name;
 }
 
 /** References (from analyzeScope) that point at `sourceId`, optionally at one member. */

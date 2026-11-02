@@ -451,6 +451,7 @@ test('a skipping Chọn bản ghi before the Record in a loop body: its pool is 
 // ---------- Đặt biến (design 0015): {{var.<name>}} ----------
 
 import { setVar } from './helpers.js';
+import * as scopeFns from '../shared/scope.js';
 
 const refOf = (scope, nodeId, path) => scope.refs.find((x) => x.nodeId === nodeId && x.path === path);
 
@@ -534,4 +535,41 @@ test('set variable: a Query field read into a Số variable counts as numeric fo
   const w = wf([query('q', 'accs', { fields: ['Id', 'NumberOfEmployees', 'Name'] }), pick('p', 'acc', 'accs'),
     setVar('s', 'n', '{{acc.NumberOfEmployees}}', { valueType: 'number' }), setVar('s2', 'name', '{{acc.Name}}')]);
   assert.deepEqual(numericSampleFields(w, catalog), { q: ['NumberOfEmployees'] });
+});
+
+test('set variable after review (S1): set on both sides of a Rẽ nhánh is always; on one side maybe; in a 0-times loop too', () => {
+  const both = scopeOf(wf([branch('b', {}, [setVar('s1', 'lo', 'A')], [setVar('s2', 'lo', 'B')]), r('acc', 'acc', [tpl('Name', '{{var.lo}}')])]));
+  const ref = refOf(both, 'acc', 'var.lo');
+  assert.deepEqual([ref.certainty, ref.code, ref.source], ['always', undefined, 's2']);
+  const nested = scopeOf(wf([branch('b', {}, [branch('b2', {}, [setVar('s1', 'lo', 'A')], [setVar('s3', 'lo', 'C')])], [setVar('s2', 'lo', 'B')]), r('acc', 'acc', [tpl('Name', '{{var.lo}}')])]));
+  assert.equal(refOf(nested, 'acc', 'var.lo').certainty, 'always');
+  const one = scopeOf(wf([branch('b', {}, [setVar('s1', 'lo', 'A')], [setVar('s2', 'other', 'B')]), r('acc', 'acc', [tpl('Name', '{{var.lo}}')])]));
+  assert.equal(refOf(one, 'acc', 'var.lo').code, 'maybe');
+  // The name keys never show as sources in the picker's list.
+  assert.ok(both.at.acc.visible.every((v) => both.sources[v.source]));
+});
+
+test('brokenRefs (S3): only references that resolved before and are errors after the removal', () => {
+  const { brokenRefs, sourceLabel } = scopeFns;
+  const steps = (keep) => wf([
+    ...keep, r('acc', 'acc', [tpl('Name', '{{var.lo}}')]), setVar('late', 'lo', 'Z'),
+  ]);
+  const before = scopeOf(steps([setVar('s1', 'lo', 'A')]));
+  // Only a step after the reader still sets `lo`: the reference breaks (after).
+  const after = scopeOf(steps([]));
+  const broken = brokenRefs(before, after, { removed: new Set(['s1']) });
+  assert.deepEqual(broken.map((x) => [x.nodeId, x.path]), [['acc', 'var.lo']]);
+  assert.equal(sourceLabel(before, broken[0].source), 'var.lo');
+  // Another step above still sets it: nothing breaks.
+  const two = wf([setVar('s0', 'lo', 'A'), setVar('s1', 'lo', 'B'), r('acc', 'acc', [tpl('Name', '{{var.lo}}')])]);
+  const twoAfter = wf([setVar('s0', 'lo', 'A'), r('acc', 'acc', [tpl('Name', '{{var.lo}}')])]);
+  assert.deepEqual(brokenRefs(scopeOf(two), scopeOf(twoAfter), { removed: new Set(['s1']) }), []);
+  // A turned-off one does not keep it valid.
+  const offAfter = wf([{ ...setVar('s0', 'lo', 'A'), disabled: true }, r('acc', 'acc', [tpl('Name', '{{var.lo}}')])]);
+  const offBefore = wf([{ ...setVar('s0', 'lo', 'A'), disabled: true }, setVar('s1', 'lo', 'B'), r('acc', 'acc', [tpl('Name', '{{var.lo}}')])]);
+  assert.equal(brokenRefs(scopeOf(offBefore), scopeOf(offAfter), { removed: new Set(['s1']) }).length, 1);
+  // A record alias as before: a Lookup / template to a removed Record breaks.
+  const recBefore = wf([r('a1', 'acc', [tpl('Name', 'x')]), r('c', 'con', [tpl('T', '{{acc.Name}}')])]);
+  const recAfter = wf([r('c', 'con', [tpl('T', '{{acc.Name}}')])]);
+  assert.equal(sourceLabel(scopeOf(recBefore), brokenRefs(scopeOf(recBefore), scopeOf(recAfter), { removed: new Set(['a1']) })[0].source), 'acc');
 });

@@ -45,6 +45,11 @@ export function initInspector() {
   subscribe(({ source, kind }) => {
     if (kind === 'issues') return markIssues();
     if (kind === 'view' || kind === 'result') return undefined;
+    // Another workflow (library, file, sample): the remembered names belong to the old one.
+    if (source === 'replace') {
+      aliasMemo.clear();
+      varMemo.clear();
+    }
     // Typing a field name can complete the required fields (0012 F2): the hint follows in place.
     if (source === 'inspector') return refreshRequiredHint();
     render();
@@ -403,7 +408,7 @@ function suggestContext(step) {
       const out = [];
       for (const [name, v] of collectVariables(state.workflow, slotKeys)) {
         const others = v.steps.filter((x) => x.id !== step.id);
-        if (others.length) out.push({ value: name, label: `${VAR_TYPE_TEXT[varType(others)]} · ${others.length} bước` });
+        if (others.length) out.push({ value: name, label: `${varTypeText(varType(others))} · ${others.length} bước` });
       }
       return out;
     },
@@ -632,12 +637,13 @@ function onStepOption(step, key, v, form, meta) {
 // ---------- Đặt biến (design 0015) ----------
 
 const isValueStep = (step) => exposesList(nodeType(step?.type)).some((ex) => ex.kind === 'value');
-const VAR_TYPE_TEXT = { text: 'Chữ', number: 'Số', mixed: 'nhiều kiểu' };
-/** Type of the variable set by `steps`: text, number or mixed (Cộng thêm is Số). */
-function varType(steps) {
-  const types = new Set(steps.map((s) => ((s.config?.mode ?? 'set') === 'add' ? 'number' : s.config?.valueType ?? 'text')));
-  return types.size === 1 ? [...types][0] : 'mixed';
+/** Label of a variable type (the catalogue's "Kiểu" choices: Chữ / Số), `mixed` → "nhiều kiểu". */
+function varTypeText(type) {
+  if (type === 'mixed') return 'nhiều kiểu';
+  return nodeType('set')?.options.find((o) => o.key === 'valueType')?.choices?.find((c) => c.value === type)?.label ?? type;
 }
+/** Type of the variable set by `steps` (one name): text, number or mixed (Cộng thêm is Số). */
+const varType = (steps) => [...collectVariables({ steps }, slotKeys).values()][0]?.type ?? 'text';
 
 /**
  * Help line of "Tên biến": the catalogue's help, or — when other steps already set that name —
@@ -650,7 +656,7 @@ function refreshVarNameHelp(step, form) {
   const name = String(step.config?.name ?? '');
   const others = isVarName(name) ? variableSteps(state.workflow, name, slotKeys).filter((s) => s.id !== step.id) : [];
   help.textContent = others.length
-    ? `Đặt lại biến có sẵn "${name}" (${VAR_TYPE_TEXT[varType(others)]}, ${others.length} bước). Giá trị mới thay giá trị cũ từ bước này trở xuống.`
+    ? `Đặt lại biến có sẵn "${name}" (${varTypeText(varType(others))}, ${others.length} bước). Giá trị mới thay giá trị cũ từ bước này trở xuống.`
     : def?.help ?? '';
 }
 
@@ -1028,7 +1034,7 @@ function fillErrors(box, issues) {
 function fixText(fix) {
   if (fix.kind === 'renameField') return `Đổi thành ${fix.to}`;
   if (fix.kind === 'addSelectField') return `Thêm ${fix.field} vào SELECT của "${stepById(fix.stepId)?.config?.alias || fix.stepId}"`;
-  if (fix.kind === 'setVarType') return `Đổi Kiểu thành ${fix.to === 'number' ? 'Số' : 'Chữ'}`;
+  if (fix.kind === 'setVarType') return `Đổi Kiểu thành ${varTypeText(fix.to)}`;
   return null;
 }
 
@@ -1065,7 +1071,7 @@ function applyQuickFix(fix) {
       }
       return n > 0;
     }, { source: 'inspector-structure' });
-    if (n) toast(`Đã đổi Kiểu của biến ${varPath(fix.name)} thành ${fix.to === 'number' ? 'Số' : 'Chữ'} ở ${n} bước Đặt biến. Ctrl+Z để hoàn tác.`);
+    if (n) toast(`Đã đổi Kiểu của biến ${varPath(fix.name)} thành ${varTypeText(fix.to)} ở ${n} bước Đặt biến. Ctrl+Z để hoàn tác.`);
   } else if (fix.kind === 'addSelectField') {
     // The Query is another step: its builder list or its hand-written SOQL gets the field.
     const q = stepById(fix.stepId);

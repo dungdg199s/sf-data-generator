@@ -472,7 +472,7 @@ export function renameField(wf, stepId, from, to, { catalog } = {}) {
  * Set the alias of a record step, or the variable of a loop step (empty = "loop"), to `value`
  * while the user types, and move references along — but only to a name that is valid and not
  * used by another step. While the field is empty, invalid or equal to another name (mid-typing),
- * references stay on the last good name, remembered in `memo` (Map stepId → name), and follow
+ * references stay on the last good name, remembered in `memo` (Map stepId → { name, wrote }: a name changed elsewhere since is forgotten), and follow
  * again once the name is good. Record references are renamed in the whole workflow, loop
  * variables only inside the loop body — and, with `catalog`, only where they resolve to this
  * loop (not inside a nested loop of the same name). A record without alias is referenced by its
@@ -500,14 +500,19 @@ export function setStepAlias(wf, id, value, { memo = new Map(), slotKeys, catalo
   // shadows an enclosing one still owns the references inside its body.
   const owns = (name) => isAliasName(name) && (isLoop || !aliasTaken(wf, at, name, slotKeys, catalog, key));
   const current = effective(c[key]);
-  if (good(current) || (!memo.has(memoKey) && owns(current))) memo.set(memoKey, current);
+  // `memo` holds { name, wrote }: the last good name and the value this function last wrote. A
+  // name changed elsewhere since (undo, another workflow with the same step ids) is forgotten.
+  if (memo.has(memoKey) && memo.get(memoKey).wrote !== c[key]) memo.delete(memoKey);
+  const remember = (name) => memo.set(memoKey, { name, wrote: c[key] });
+  if (good(current) || (!memo.has(memoKey) && owns(current))) remember(current);
   // A record without alias is referenced by its id (like the executor): the first alias takes them along.
   const byId = key === 'alias' && (catalog ? entries[0]?.name?.fallback === 'id' : step.type === 'record');
-  if (byId && !c.alias && !memo.has(memoKey) && owns(String(step.id))) memo.set(memoKey, String(step.id));
-  const from = memo.get(memoKey);
+  if (byId && !c.alias && !memo.has(memoKey) && owns(String(step.id))) remember(String(step.id));
+  const from = memo.get(memoKey)?.name;
   const to = effective(value);
   if (!from || from === to || !good(to) || !owns(from)) {
     c[key] = value;
+    if (memo.has(memoKey)) memo.get(memoKey).wrote = value;
     return false;
   }
   let only;
@@ -524,7 +529,7 @@ export function setStepAlias(wf, id, value, { memo = new Map(), slotKeys, catalo
   }
   c[key] = value;
   renameAlias(inside ? step.slots?.[inside] ?? [] : wf.steps, from, to, { catalog, only });
-  memo.set(memoKey, to);
+  memo.set(memoKey, { name: to, wrote: value });
   return true;
 }
 
@@ -597,7 +602,7 @@ export function renameVariable(wf, from, to, { catalog, slotKeys } = {}) {
  * variable along (every step setting it, every use) — but only to a valid name that is not another
  * variable's, so typing `s` → `su` → `sum` never merges into a variable `s`. While the name is
  * empty, invalid or another variable's, the other steps and the uses stay on the last good name,
- * remembered in `memo` (Map stepId → name); this step alone carries what was typed (typing the
+ * remembered in `memo` (Map stepId → { from, wrote }); this step alone carries what was typed (typing the
  * name of an existing variable on purpose makes this step set that one). → { renamed, from?, to?,
  * steps?, refs? } (`steps` counts this step too).
  */
@@ -606,18 +611,26 @@ export function setVariableName(wf, id, value, { memo = new Map(), catalog, slot
   if (!at) return { renamed: false };
   const c = (at.step.config ??= {});
   const current = String(c.name ?? '');
-  if (!memo.has(id) && isVarName(current)) memo.set(id, current);
-  const from = memo.get(id);
+  // `memo` holds { from, wrote }: the last good name and what this function last wrote. A name
+  // changed elsewhere since (another step renamed the variable, undo, another workflow with the
+  // same step ids) starts over from the name the step has now.
+  let m = memo.get(id);
+  if (!m || m.wrote !== current) {
+    m = { from: isVarName(current) ? current : null, wrote: current };
+    memo.set(id, m);
+  }
+  const from = m.from;
   // Another variable: a Đặt biến called `name` that is not this step and not one of `from`'s.
   const taken = (name) => variableSteps(wf, name, slotKeys).some((s) => s !== at.step);
   if (!from || from === value || !isVarName(value) || taken(value)) {
     c.name = value;
+    m.wrote = value;
     return { renamed: false };
   }
   const others = variableSteps(wf, from, slotKeys).filter((s) => s !== at.step).length;
   const { refs } = renameVariable(wf, from, value, { catalog, slotKeys });
   c.name = value;
-  memo.set(id, value);
+  memo.set(id, { from: value, wrote: value });
   return { renamed: true, from, to: value, steps: others + 1, refs };
 }
 

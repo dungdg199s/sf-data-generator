@@ -438,7 +438,8 @@ function validatePick(step, c, { err }) {
 }
 
 const SET_MODES = new Set(['set', 'add']);
-const SET_TYPES = { text: 'Chữ', number: 'Số' };
+/** Labels of the "Kiểu" choices of Đặt biến (the catalogue's): { text: 'Chữ', number: 'Số' }. */
+const SET_TYPES = Object.fromEntries(nodeTypeMap.get('set').options.find((o) => o.key === 'valueType').choices.map((c) => [c.value, c.label]));
 
 /**
  * Đặt biến (design 0015). `varTypes` (name → { type, id }) remembers the type of the first step
@@ -623,7 +624,8 @@ export function referenceIssue(ref, scope, step, stepOf = () => undefined) {
         message = `bước Đặt biến "${x}" đang tắt. Bật lại bước đó (Ctrl+/) hoặc chọn biến khác.`;
         break;
       case 'varUnset':
-        message = `{{${ns}.${x}}} chưa có giá trị trước bước này (chính bước này đang đặt nó). Thêm bước Đặt biến "${x}" phía trên để đặt giá trị ban đầu (ví dụ trước vòng lặp), hoặc chọn "Cộng thêm" nếu muốn cộng dồn.`;
+        // (A Cộng thêm already starts from 0: no need to suggest it.)
+        message = `{{${ns}.${x}}} chưa có giá trị trước bước này (chính bước này đang đặt nó). Thêm bước Đặt biến "${x}" phía trên để đặt giá trị ban đầu (ví dụ trước vòng lặp)${step?.type === 'set' && (step.config?.mode ?? 'set') === 'add' ? '.' : ', hoặc chọn "Cộng thêm" nếu muốn cộng dồn.'}`;
         break;
       case 'wholeRecord':
         message = `{{${ns}}} là cả nhóm biến; chọn một biến, ví dụ {{${ns}.${ref.example ?? 'total'}}}.`;

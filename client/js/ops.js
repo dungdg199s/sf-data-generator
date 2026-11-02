@@ -7,7 +7,7 @@ import {
   state, subscribe, updateWorkflow, select, undo, nodeType, slotKeys, locate, stepById, newId, suggestAlias, workflowRevision, currentScope,
   suggestPoolAlias, suggestPickAlias, suggestVarName,
 } from './store.js';
-import { analyzeScope, refChoices, sourceStep } from '/shared/scope.js';
+import { analyzeScope, refChoices, brokenRefs, sourceLabel } from '/shared/scope.js';
 import { eachWrapPlan as planEachWrap, applyEachRewire } from '/shared/each-wrap.js';
 import {
   insertStep, removeStep, moveStep, wrapStep, cloneSteps, collectIds, collectAliases,
@@ -212,13 +212,6 @@ function focusInspectorField(key, { selectAll = false } = {}) {
   if (selectAll) input.select?.();
 }
 
-/** References from outside `step` to variables it (or a step inside it) provides. */
-function outsideRefs(step) {
-  const inside = subtreeIds(step, slotKeys);
-  const scope = currentScope();
-  return scope.refs.filter((r) => inside.has(sourceStep(scope, r.source)) && !inside.has(r.nodeId));
-}
-
 /** The step to select after removing `id`: next sibling, else previous, else the parent. */
 function selectionAfterRemove(at) {
   return at.list[at.index + 1]?.id ?? at.list[at.index - 1]?.id ?? at.parentId ?? null;
@@ -260,21 +253,18 @@ function doRemove(at, keepChildren) {
   const step = at.step;
   const nextSel = keepChildren ? (slotKeys(step.type).flatMap((k) => slotList(step, k))[0]?.id ?? selectionAfterRemove(at)) : selectionAfterRemove(at);
   const scope = currentScope();
-  // Bỏ vỏ: references to what the container provided (its loop variable, the record a Lặp
-  // `each` loops over) break.
+  // The references that resolved before and are errors after the removal (Bỏ vỏ: those to what
+  // the container provided — its loop variable, the record a Lặp `each` loops over; a variable of
+  // Đặt biến another step still sets above is fine, design 0015).
   const removed = keepChildren ? new Set([step.id]) : subtreeIds(step, slotKeys);
-  // A variable of Đặt biến (design 0015) another kept step still sets is not broken by the removal.
-  const stillSet = (src) => src?.kind === 'value' && Object.values(scope.sources).some((x) => x.kind === 'value' && x.name === src.name && !removed.has(x.nodeId));
-  const refs = (keepChildren ? scope.refs.filter((r) => sourceStep(scope, r.source) === step.id && r.nodeId !== step.id) : outsideRefs(step))
-    .filter((r) => !stillSet(scope.sources[r.source]));
-  const srcName = refs.length ? scope.sources[refs[0].source]?.name ?? refs[0].source : '';
   updateWorkflow((wf) => removeStep(wf, step.id, { keepChildren, slotKeys }));
+  const refs = brokenRefs(scope, currentScope(), { removed });
+  const labels = new Set(refs.map((r) => sourceLabel(scope, r.source)));
   select(nextSel ? { kind: 'step', id: nextSel } : null);
   if (nextSel) reveal(nextSel);
   const places = placesText(refs);
-  const sources = new Set(refs.map((r) => r.source));
   const used = places.length
-    ? ` ${sources.size === 1 ? `Bước "${srcName}"` : 'Các bước vừa xóa'} đang được dùng ở ${places.length} chỗ: ${places.join(', ')}. ${places.length > 1 ? 'Các chỗ đó' : 'Chỗ đó'} sẽ báo lỗi cho tới khi sửa.`
+    ? ` ${labels.size === 1 ? `Bước "${[...labels][0]}"` : 'Các bước vừa xóa'} đang được dùng ở ${places.length} chỗ: ${places.join(', ')}. ${places.length > 1 ? 'Các chỗ đó' : 'Chỗ đó'} sẽ báo lỗi cho tới khi sửa.`
     : '';
   toastWithUndo(keepChildren ? `Đã bỏ vỏ ${stepLabel(step)}.${used}` : `Đã xóa bước ${stepLabel(step)}.${used}`);
 }
@@ -457,13 +447,13 @@ function removeMany(ids, { cut = false } = {}) {
   if (!ids.length) return;
   const inside = new Set(ids.flatMap((id) => [...subtreeIds(stepById(id), slotKeys)]));
   const scope = currentScope();
-  const refs = scope.refs.filter((r) => inside.has(sourceStep(scope, r.source)) && !inside.has(r.nodeId));
   const first = locate(ids[0]);
   const last = locate(ids.at(-1));
   const nextSel = last.list.slice(last.index + 1).find((s) => s?.id && !inside.has(s.id))?.id
     ?? first.list.slice(0, first.index).reverse().find((s) => s?.id && !inside.has(s.id))?.id
     ?? first.parentId;
   updateWorkflow((wf) => removeSteps(wf, ids, { slotKeys }));
+  const refs = brokenRefs(scope, currentScope(), { removed: inside });
   select(nextSel ? { kind: 'step', id: nextSel } : null);
   if (nextSel) reveal(nextSel);
   if (cut) {

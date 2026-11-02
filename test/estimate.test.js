@@ -156,3 +156,13 @@ test('a count from {{var.n}} set once to a constant number is exact; any other �
   // A turned-off second step does not count.
   assert.equal(est(wf([setVar('s', 'n', '3', { valueType: 'number' }), { ...setVar('s2', 'n', '9', { valueType: 'number' }), disabled: true }, loop('l', { count: '{{var.n}}' }, body)])).byStep.r.records, 3);
 });
+
+test('after review (S2): a constant Đặt biến that may not run before the loop is at most that number, not exact', () => {
+  const body = [record('r', 'Account', 'acc')];
+  const n = (extra = {}) => setVar('s', 'n', '4', { valueType: 'number', ...extra });
+  const maybe = { records: 4, min: 0, max: 4, exact: false };
+  assert.deepEqual(est(wf([branch('b', { probability: 0.5 }, [n()], []), loop('l', { count: '{{var.n}}' }, body)])).byStep.r, maybe);
+  assert.deepEqual(est(wf([loop('l0', { mode: 'range', min: 0, max: 2, alias: 'l0' }, [n()]), loop('l', { count: '{{var.n}}' }, body)])).byStep.r, maybe);
+  // In a loop that always runs (count 2) it is surely set: exact.
+  assert.deepEqual(est(wf([loop('l0', { count: 2, alias: 'l0' }, [n()]), loop('l', { count: '{{var.n}}' }, body)])).byStep.r, { records: 4, min: 4, max: 4, exact: true });
+});

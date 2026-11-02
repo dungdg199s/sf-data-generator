@@ -14,7 +14,8 @@
 // `eq` filter is taken to split the pool between the visits (parent–child: every Contact once
 // over all the Accounts), another operator to keep half; "Tối đa số bản ghi" caps every visit.
 // Design 0015: `{{var.n}}` set by exactly one enabled Đặt biến (Gán, Số, a constant value) counts
-// as that number, exact like a number typed in the box.
+// as that number, exact like a number typed in the box — when that step surely ran before (not in a
+// branch, nor in a loop that may run 0 times); otherwise it is at most that number, not exact.
 
 import { maxFetchFor } from './soql.js';
 import { numberVarPath, valueList } from './scope.js';
@@ -54,6 +55,8 @@ export function estimateSteps(wf, catalog, { queryCounts = {} } = {}) {
     }
   };
   collectSetters(wf?.steps);
+  // Đặt biến steps met so far in reading order (= run order): name → true when surely reached.
+  const setReached = new Map();
   /** The constant of `{{var.<name>}}` when one Đặt biến (Gán, Số, no `{{`) sets it, else null. */
   const varConstant = (name) => {
     const list = setters.get(name) ?? [];
@@ -68,9 +71,9 @@ export function estimateSteps(wf, catalog, { queryCounts = {} } = {}) {
   /** Iterations given by a number variable (never exact, but a constant Đặt biến is). */
   const varCount = (path) => {
     const [name, member, ...more] = path.split('.');
-    if (name === varNs && member !== undefined && !more.length) {
+    if (name === varNs && member !== undefined && !more.length && setReached.has(member)) {
       const k = varConstant(member);
-      if (k !== null) return { e: k, min: k, max: k, exact: true };
+      if (k !== null) return setReached.get(member) ? { e: k, min: k, max: k, exact: true } : { e: k, min: 0, max: k, exact: false };
     }
     const p = member === '$count' && !more.length ? pools.get(name) : null;
     return p ? { e: p.size, min: p.min, max: p.max, exact: false } : { e: 1, min: 0, max: cap, exact: false };
@@ -182,6 +185,12 @@ export function estimateSteps(wf, catalog, { queryCounts = {} } = {}) {
           const size = known ? num(queryCounts[step.id]) : limit;
           if (step.config?.alias) pools.set(step.config.alias, { size, min: known ? size : 0, max: size, exact: known, grownIn: new Set() });
           e.rows = size;
+          break;
+        }
+        case 'set': {
+          // Surely reached when the list it is in runs at least once on every path (ctx.min ≥ 1).
+          const n = String(step.config?.name ?? '');
+          setReached.set(n, Boolean(setReached.get(n)) || ctx.min >= 1);
           break;
         }
         case 'pick': {
