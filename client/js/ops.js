@@ -5,7 +5,7 @@
 import { h, toast } from './dom.js';
 import {
   state, subscribe, updateWorkflow, select, undo, nodeType, slotKeys, locate, stepById, newId, suggestAlias, workflowRevision, currentScope,
-  suggestPoolAlias, suggestPickAlias,
+  suggestPoolAlias, suggestPickAlias, suggestVarName,
 } from './store.js';
 import { analyzeScope, refChoices, sourceStep } from '/shared/scope.js';
 import { eachWrapPlan as planEachWrap, applyEachRewire } from '/shared/each-wrap.js';
@@ -81,7 +81,7 @@ export function recordPreset(sobject) {
 export function newStep(type, target, around = []) {
   const def = nodeType(type);
   const step = {
-    id: newId({ record: 'r', loop: 'l', branch: 'b', query: 'q', pick: 'p' }[type] ?? 's'),
+    id: newId({ record: 'r', loop: 'l', branch: 'b', query: 'q', pick: 'p', set: 'v' }[type] ?? 's'),
     type,
     // `initial` (a new step's value) wins over `default` (the value used when the key is missing).
     config: Object.fromEntries((def?.options ?? []).map((o) => [o.key, o.initial ?? o.default]).filter(([, v]) => v !== '' && v !== undefined).map(([k, v]) => [k, structuredClone(v)])),
@@ -92,6 +92,8 @@ export function newStep(type, target, around = []) {
     step.config.fields = recordPresetFields(step.config.sobject);
   }
   if (type === 'query') step.config.alias = suggestPoolAlias(step.config.sobject);
+  // Đặt biến (design 0015): bien1, bien2… a name no Đặt biến uses yet.
+  if (type === 'set') step.config.name = suggestVarName();
   if (type === 'loop') {
     // Do not shadow the variable of an enclosing loop: loop, loop2, loop3…
     // …nor a loop inside the steps it wraps, nor a record alias.
@@ -196,8 +198,18 @@ export function addStep(type, target = defaultTarget()) {
   });
   if (ok === false) return null;
   select({ kind: 'step', id: step.id });
+  // Đặt biến (design 0015): the name is typed first, its suggestion selected to type over it.
+  if (type === 'set') focusInspectorField('name', { selectAll: true });
   reveal(step.id, { flash: true });
   return step;
+}
+
+/** Focus an option of the step shown in the inspector (after the "+" menu gave focus back). */
+function focusInspectorField(key, { selectAll = false } = {}) {
+  const input = document.querySelector(`#inspector .options [data-key="${CSS.escape(key)}"]`);
+  if (!input) return;
+  input.focus();
+  if (selectAll) input.select?.();
 }
 
 /** References from outside `step` to variables it (or a step inside it) provides. */
@@ -225,7 +237,7 @@ export function deleteStep(id = selectedId()) {
  * workflow (another edit, undo or redo), the button is removed — Ctrl+Z still works.
  */
 let dropUndoWatch = null;
-function toastWithUndo(message) {
+export function toastWithUndo(message) {
   dropUndoWatch?.();
   const rev = workflowRevision();
   const t = toast(message, 4000, {
@@ -250,7 +262,11 @@ function doRemove(at, keepChildren) {
   const scope = currentScope();
   // Bỏ vỏ: references to what the container provided (its loop variable, the record a Lặp
   // `each` loops over) break.
-  const refs = keepChildren ? scope.refs.filter((r) => sourceStep(scope, r.source) === step.id && r.nodeId !== step.id) : outsideRefs(step);
+  const removed = keepChildren ? new Set([step.id]) : subtreeIds(step, slotKeys);
+  // A variable of Đặt biến (design 0015) another kept step still sets is not broken by the removal.
+  const stillSet = (src) => src?.kind === 'value' && Object.values(scope.sources).some((x) => x.kind === 'value' && x.name === src.name && !removed.has(x.nodeId));
+  const refs = (keepChildren ? scope.refs.filter((r) => sourceStep(scope, r.source) === step.id && r.nodeId !== step.id) : outsideRefs(step))
+    .filter((r) => !stillSet(scope.sources[r.source]));
   const srcName = refs.length ? scope.sources[refs[0].source]?.name ?? refs[0].source : '';
   updateWorkflow((wf) => removeStep(wf, step.id, { keepChildren, slotKeys }));
   select(nextSel ? { kind: 'step', id: nextSel } : null);

@@ -3,7 +3,7 @@
 // Views subscribe and receive the change `source` so a view can skip re-rendering
 // for edits it made itself (keeps input focus while typing in the inspector).
 
-import { findStep, collectAliases, allSteps, normalizeStepIds } from '/shared/workflow-tree.js';
+import { findStep, collectAliases, allSteps, normalizeStepIds, suggestVarName as suggestVarNameIn } from '/shared/workflow-tree.js';
 import { analyzeScope } from '/shared/scope.js';
 import { estimateSteps } from '/shared/estimate.js';
 
@@ -317,6 +317,11 @@ function uniqueAlias(name, exceptStepId, key = 'alias') {
   if (own) taken.delete(own);
   if (!taken.has(name)) return name;
   for (let i = 2; ; i++) if (!taken.has(`${name}${i}`)) return `${name}${i}`;
+}
+
+/** Name of a new Đặt biến step (design 0015): bien1, bien2… not used by any Đặt biến yet. */
+export function suggestVarName() {
+  return suggestVarNameIn(state.workflow, slotKeys);
 }
 
 /** The last preview's result of a Query step (`queries[]` of /api/run), or null. */

@@ -68,6 +68,10 @@
 //      insert stream in the page; Bulk checkbox and calls, limits warn-box, target.bulk "off", Bulk progress, Dừng ngay, ⤓ Id, the
 //      "Xóa dữ liệu này…" toast, delete confirmation (Hủy focused, 409 new count needs a new click), Lỗi xóa tab, history off ⇒
 //      Insert locked; production name typed (typedOrg), history dialog filter / interrupted title / Quên, full screen at 390 px
+//  21. Đặt biến (0015, flowSetVar): "+" at the top → Đặt biến (copper card, name bien1 selected and focused), typing lo
+//      and TEST-{{run.today}}; on acc.Name "{{lo" opens the picker with the "var · Biến" group, Enter inserts {{var.lo}}
+//      (copper chip); Ctrl+Enter: card chip "đặt 1 lần · = "TEST-…"", Name in the results table; renaming lo → ma
+//      renames {{var.ma}} (toast with Hoàn tác); a Chữ variable in "Số lần lặp" offers "Đổi Kiểu thành Số".
 //  0014 also adds: SVG icons and aria-labels (1), Alt+↓ opens the picker (5b), Quy trình cards never overflow at 390 px,
 //      fades of sideways rows (13d, 13e), the results panel's height handle (13, wide), the sheet's two snaps (11, 13d).
 // The flows run in parallel, one browser context each (independent storage): see SKILL.md.
@@ -2409,6 +2413,102 @@ async function flowHistoryProd() {
   await page.context().close();
 }
 
+/**
+ * Flow 21 (design 0015, flowSetVar): the Đặt biến step from the "+" menu to the results table,
+ * the variable picker group, the whole-variable rename and the setVarType quick fix.
+ */
+const SET_VAR = {
+  version: 2, name: 'Đặt biến',
+  steps: [
+    { id: 'acc', type: 'record', config: { sobject: 'Account', alias: 'acc', count: 2, fields: [{ name: 'Name', type: 'template', options: { template: 'A' } }] } },
+    { id: 'lp', type: 'loop', config: { count: 2, alias: 'loop' }, slots: { body: [{ id: 'con', type: 'record', config: { sobject: 'Contact', alias: 'con', fields: [{ name: 'LastName', type: 'text', options: { mode: 'lastName' } }] } }] } },
+  ],
+};
+
+async function flowSetVar() {
+  const page = await newPage('set-var');
+  await seedStorage(page, { workflow: SET_VAR });
+  await page.goto(base);
+  await page.waitForSelector('.step-card[data-id="acc"]');
+  const opt = (key) => `#inspector .options [data-key="${key}"]`;
+  const tplOf = () => page.evaluate(() => smokeSaved().steps.find((x) => x.id === 'acc').config.fields[0].options.template);
+
+  // "+" above acc → Đặt biến: selected, copper, the suggested name selected in the focused name box.
+  await page.click('.add-point[data-parent=""][data-index="0"] .add-btn');
+  await page.click('.popup .popup-item[data-type="set"]');
+  await page.waitForSelector('[data-type="set"] > .step-card.selected, [data-type="set"].step-card.selected');
+  const id = await page.$eval('.step-card.selected', (c) => c.dataset.id);
+  const focus = await page.evaluate(() => {
+    const el = document.activeElement;
+    return { key: el?.dataset.key, value: el?.value, sel: el ? el.value.slice(el.selectionStart, el.selectionEnd) : null };
+  });
+  check(focus.key === 'name' && focus.value === 'bien1' && focus.sel === 'bien1', `new Đặt biến: focus ${JSON.stringify(focus)}`);
+  const colours = await page.evaluate((x) => {
+    const c = getComputedStyle(document.querySelector(`.step-card[data-id="${x}"]`));
+    // (--c is set by [data-type] on the step around the card.)
+    const r = getComputedStyle(document.querySelector('.step-card[data-id="acc"]'));
+    return { set: c.getPropertyValue('--c').trim(), rec: r.getPropertyValue('--c').trim() };
+  }, id);
+  check(colours.set && colours.set !== colours.rec, `Đặt biến card colour ${JSON.stringify(colours)}`);
+  await page.keyboard.type('lo');
+  await page.fill(opt('value'), 'TEST-{{run.today}}');
+  check(await until(page, (x) => document.querySelector(`.step-card[data-id="${x}"] .sum`)?.textContent === 'var.lo = TEST-{{run.today}}', id),
+    `Đặt biến card summary: ${await page.textContent(`.step-card[data-id="${id}"] .sum`)}`);
+
+  // acc.Name: "{{lo" opens the picker on the var group; Enter inserts {{var.lo}} (a copper chip).
+  await page.click('.step-card[data-id="acc"] .type');
+  const name = '#inspector .field-card[data-field="fields.Name"]';
+  await page.click(`${name} .actions button[title="Tùy chọn"]`);
+  const tpl = `${name} input[data-key="template"]`;
+  await page.waitForSelector(tpl);
+  await page.fill(tpl, '');
+  await page.focus(tpl);
+  await page.keyboard.type('{{lo');
+  await page.waitForSelector('.var-picker .vp-item');
+  const picker = await page.evaluate(() => ({
+    groups: [...document.querySelectorAll('.var-picker .vp-group')].map((g) => `${g.getAttribute('aria-label')}:${g.dataset.type}`),
+    active: document.querySelector('.var-picker .vp-item.active')?.dataset.path,
+  }));
+  check(picker.groups.includes('var · Biến:set') && picker.active === 'var.lo', `picker for "{{lo": ${JSON.stringify(picker)}`);
+  await page.keyboard.press('Enter');
+  check((await page.inputValue(tpl)) === '{{var.lo}}', `insert gave ${await page.inputValue(tpl)}`);
+  check(await page.waitForSelector(`${name} .var-chip[data-path="var.lo"][data-type="set"]`, { timeout: 2000 }).catch(() => null), 'no copper chip for var.lo');
+
+  // Preview: the chip on the Đặt biến card and the value in the Account table.
+  await page.keyboard.press('Control+Enter');
+  const chipSel = `.step-card[data-id="${id}"] .stat:not(.est):not(.live)`;
+  check(await until(page, (s) => /^đặt 1 lần · = "TEST-\d{4}-\d\d-\d\d"$/.test(document.querySelector(s)?.textContent ?? ''), chipSel),
+    `Đặt biến stat chip: ${await page.textContent(chipSel).catch(() => null)}`);
+  await page.waitForSelector('table.data tbody tr');
+  const cells = await page.$$eval('table.data tbody td', (tds) => tds.map((t) => t.textContent));
+  check(cells.some((t) => /^TEST-\d{4}-\d\d-\d\d$/.test(t)), `no TEST-<today> in the results table (${cells.slice(0, 6).join(' | ')})`);
+  check((await page.textContent('#issues').catch(() => '')).trim() === '' || !(await page.$('#issues .issue.error')), 'validation errors after the preview');
+
+  // Rename lo → ma: {{var.lo}} follows (one toast with Hoàn tác).
+  await page.click(`.step-card[data-id="${id}"] .type`);
+  await page.waitForSelector(opt('name'));
+  await page.fill(opt('name'), 'ma');
+  await page.press(opt('name'), 'Tab'); // leaving the box announces the rename
+  check(await until(page, () => smokeSaved().steps.find((x) => x.id === 'acc').config.fields[0].options.template === '{{var.ma}}'), `template after the rename: ${await tplOf()}`);
+  check(await until(page, () => /Đã đổi tên biến lo → ma ở 1 bước Đặt biến và 1 chỗ dùng\./.test(document.getElementById('toast')?.textContent ?? '')),
+    `rename toast: ${await page.textContent('#toast').catch(() => null)}`);
+
+  // A Chữ variable as "Số lần lặp": the quick fix "Đổi Kiểu thành Số" on the loop (the value 2 is a number).
+  await page.fill(opt('value'), '2');
+  await page.click('.step-card[data-id="lp"] .type');
+  await page.waitForSelector(opt('count'));
+  await page.fill(opt('count'), '{{var.ma}}');
+  const fix = '#inspector .quick-fix[data-fix="setVarType"]';
+  check(await page.waitForSelector(fix, { timeout: 4000 }).catch(() => null), 'no "Đổi Kiểu thành Số" quick fix on the loop count');
+  if (await page.$(fix)) {
+    check((await page.textContent(fix)) === 'Đổi Kiểu thành Số', `quick fix text: ${await page.textContent(fix)}`);
+    await page.click(fix);
+    check(await until(page, (x) => smokeSaved().steps.find((s) => s.id === x)?.config.valueType === 'number', id), 'the quick fix did not set Kiểu = Số');
+  }
+  if (outDir) await page.screenshot({ path: path.join(outDir, 'smoke-1440-set-var.png') });
+  await page.context().close();
+}
+
 (async () => {
   // A Playwright error outside a flow's promise (e.g. in an event handler) fails the run.
   process.on('uncaughtException', (e) => { console.error('SMOKE FAILED\n' + e); process.exit(1); });
@@ -2424,7 +2524,7 @@ async function flowHistoryProd() {
     check(orgs.status === 503 && /smoke:/.test((await orgs.json()).error), 'the smoke server is not using the sf CLI stub');
     // Independent flows, one context each, in parallel. A flow that throws (timed-out wait) is
     // reported and the others still finish.
-    let flows = { flowEditing, flowPicker, flowFiles, flowDark, flowLayoutWide, flowLayoutNarrow, flowEach, flowCanvas, flowProductivity, flowLibrary, flowMinimap, flowVarsLoops, flowHistory, flowHistoryProd };
+    let flows = { flowEditing, flowPicker, flowFiles, flowDark, flowLayoutWide, flowLayoutNarrow, flowEach, flowCanvas, flowProductivity, flowLibrary, flowMinimap, flowVarsLoops, flowHistory, flowHistoryProd, flowSetVar };
     // SMOKE_ONLY=flowCanvas,flowEach runs only those flows (while working on one area).
     const only = process.env.SMOKE_ONLY?.split(',').filter(Boolean);
     if (only?.length) flows = Object.fromEntries(Object.entries(flows).filter(([n]) => only.includes(n)));

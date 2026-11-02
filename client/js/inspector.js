@@ -12,17 +12,17 @@ import {
   state, subscribe, select, updateWorkflow, stepById, nodeType, fieldType, suggestAlias, currentScope, slotKeys,
   suggestPoolAlias, suggestPickAlias, queryResultOf,
 } from './store.js';
-import { setStepAlias, renameField, insertStep } from '/shared/workflow-tree.js';
+import { setStepAlias, renameField, insertStep, setVariableName, collectVariables, variableSteps, isVarName } from '/shared/workflow-tree.js';
 import { refChoices, refsToRecords, referenceOptions, exposesList } from '/shared/scope.js';
 import { buildSoql, QUERY_DEFAULTS, SAMPLE_ROWS, addSelectField } from '/shared/soql.js';
-import { deleteStep, duplicateStep, toggleDisabled, newStep, fillEach, fillParentFilter, reveal, recordPresetFields, recordPreset } from './ops.js';
+import { deleteStep, duplicateStep, toggleDisabled, newStep, fillEach, fillParentFilter, reveal, recordPresetFields, recordPreset, toastWithUndo } from './ops.js';
 import { START_ID } from './layout.js';
 import { placesText } from './variables.js';
 import { applySuggestion, closePicker } from './var-picker.js';
 import { samplesRow } from './field-samples.js';
 import { selectedIds, selectionInfo, inSelectMode } from './selection.js';
 import { wrapItems, editItems, offDeleteItems } from './menus.js';
-import { stepLabel } from './summary.js';
+import { stepLabel, varPath } from './summary.js';
 import { missingRequired, requiredHintText } from './required-fields.js';
 import { isMac, pickerKeys } from './keys.js';
 import { snapSheet, sheetSnaps, dragVelocity, SHEET_DRAG_START } from './sizing.js';
@@ -34,6 +34,10 @@ let sheetFull = false; // narrow screens: the sheet is at its tall snap (design 
 let lastSelectionKey = null;
 // Last good alias per step: references wait there while the alias field is empty or clashing.
 const aliasMemo = new Map();
+// Đặt biến (design 0015): last good variable name per step (setVariableName), and the rename
+// being typed, announced once the typing stops.
+const varMemo = new Map();
+let varToast = null;
 
 export function initInspector() {
   root = document.getElementById('inspector');
@@ -339,6 +343,10 @@ function renderStep(step) {
     suggest: suggestContext(step),
   });
   wrap.append(form);
+  if (isValueStep(step)) {
+    refreshVarNameHelp(step, form);
+    form.querySelector('.options [data-key="name"]')?.addEventListener('change', flushVarRename);
+  }
   if (step.type === 'record') wrap.append(renderFields(step));
   if (step.type === 'query') wrap.append(renderSoqlBox(step));
   return wrap;
@@ -390,6 +398,15 @@ function suggestContext(step) {
       return sobjectLists.get(key);
     },
     pickFields: (def, values, apply) => openFieldPicker(values[def.suggest.sobjectKey], values[def.key], apply),
+    // Đặt biến (design 0015): the variables of the workflow, to set an existing one again in one pick.
+    varNames: () => {
+      const out = [];
+      for (const [name, v] of collectVariables(state.workflow, slotKeys)) {
+        const others = v.steps.filter((x) => x.id !== step.id);
+        if (others.length) out.push({ value: name, label: `${VAR_TYPE_TEXT[varType(others)]} · ${others.length} bước` });
+      }
+      return out;
+    },
     poolFields: (alias) => {
       const scope = currentScope();
       const src = Object.values(scope.sources).find((x) => x.pool && x.name === alias);
@@ -533,6 +550,7 @@ function onStepOption(step, key, v, form, meta) {
   let filled = null;
   let parentFilter = null;
   let fieldsChanged = false;
+  let varRename = null;
   updateWorkflow((wf) => {
     const c = (step.config ??= {});
     const follow = (next, nameKey = 'alias') => {
@@ -571,6 +589,10 @@ function onStepOption(step, key, v, form, meta) {
       const auto = !c.itemAlias || c.itemAlias === suggestPickAlias(c.from, step.id, 'itemAlias');
       c.from = v;
       if (auto && v) follow(suggestPickAlias(v, step.id, 'itemAlias'), 'itemAlias');
+    } else if (exposesList(nodeType(step.type)).some((ex) => ex.kind === 'value' && ex.name?.key === key)) {
+      // Đặt biến (design 0015): renaming renames the whole variable (every step setting it, every
+      // use), only to a valid name that is not another variable's.
+      varRename = setVariableName(wf, step.id, v, { memo: varMemo, catalog: state.meta, slotKeys });
     } else if (exposesList(nodeType(step.type)).some((ex) => ex.name?.key === key)) {
       // References follow only to a valid, free name (a loop variable or the record looped over:
       // inside its body only); while the field is empty or matches another alias mid-typing,
@@ -580,6 +602,10 @@ function onStepOption(step, key, v, form, meta) {
   }, { source: 'inspector', coalesceKey: meta?.coalesceKey ?? `${step.id}:${key}` });
   // Card summary/alias changed; the process view re-renders, the inspector keeps focus.
   fillPathDefaults(step, key, form);
+  if (isValueStep(step) && key === 'name') {
+    refreshVarNameHelp(step, form);
+    if (varRename?.renamed) noteVarRename(step.id, varRename);
+  }
   // Only the field list is redrawn, so the sObject input keeps focus while typing.
   if (fieldsChanged) refreshFieldsSection(step);
   // Pool / record names filled in: show them (the mode select loses nothing by a re-render).
@@ -601,6 +627,53 @@ function onStepOption(step, key, v, form, meta) {
     // Switching between builder and SOQL shows / hides the "SOQL sẽ chạy" line.
     if (key === 'mode') updateWorkflow(() => {}, { source: 'inspector-structure', history: false });
   }
+}
+
+// ---------- Đặt biến (design 0015) ----------
+
+const isValueStep = (step) => exposesList(nodeType(step?.type)).some((ex) => ex.kind === 'value');
+const VAR_TYPE_TEXT = { text: 'Chữ', number: 'Số', mixed: 'nhiều kiểu' };
+/** Type of the variable set by `steps`: text, number or mixed (Cộng thêm is Số). */
+function varType(steps) {
+  const types = new Set(steps.map((s) => ((s.config?.mode ?? 'set') === 'add' ? 'number' : s.config?.valueType ?? 'text')));
+  return types.size === 1 ? [...types][0] : 'mixed';
+}
+
+/**
+ * Help line of "Tên biến": the catalogue's help, or — when other steps already set that name —
+ * what setting it here does. Changed in place (typing keeps focus).
+ */
+function refreshVarNameHelp(step, form) {
+  const help = form.querySelector('.options [data-key="name"]')?.closest('.form-row')?.querySelector('.help');
+  if (!help) return;
+  const def = nodeType(step.type)?.options.find((o) => o.key === 'name');
+  const name = String(step.config?.name ?? '');
+  const others = isVarName(name) ? variableSteps(state.workflow, name, slotKeys).filter((s) => s.id !== step.id) : [];
+  help.textContent = others.length
+    ? `Đặt lại biến có sẵn "${name}" (${VAR_TYPE_TEXT[varType(others)]}, ${others.length} bước). Giá trị mới thay giá trị cũ từ bước này trở xuống.`
+    : def?.help ?? '';
+}
+
+/**
+ * A whole-variable rename while typing: one toast (with Hoàn tác) when the name box is left
+ * (`change`), or after a pause in the typing.
+ */
+function noteVarRename(stepId, res) {
+  if (varToast?.stepId !== stepId) {
+    flushVarRename();
+    varToast = { stepId, from: res.from };
+  }
+  Object.assign(varToast, { to: res.to, steps: res.steps, refs: res.refs });
+  clearTimeout(varToast.timer);
+  varToast.timer = setTimeout(flushVarRename, 1500);
+}
+function flushVarRename() {
+  const t = varToast;
+  varToast = null;
+  if (!t) return;
+  clearTimeout(t.timer);
+  if (t.from === t.to || (t.steps < 2 && !t.refs)) return;
+  toastWithUndo(`Đã đổi tên biến ${t.from} → ${t.to} ở ${t.steps} bước Đặt biến và ${t.refs} chỗ dùng.`);
 }
 
 /**
@@ -955,6 +1028,7 @@ function fillErrors(box, issues) {
 function fixText(fix) {
   if (fix.kind === 'renameField') return `Đổi thành ${fix.to}`;
   if (fix.kind === 'addSelectField') return `Thêm ${fix.field} vào SELECT của "${stepById(fix.stepId)?.config?.alias || fix.stepId}"`;
+  if (fix.kind === 'setVarType') return `Đổi Kiểu thành ${fix.to === 'number' ? 'Số' : 'Chữ'}`;
   return null;
 }
 
@@ -980,6 +1054,18 @@ function applyQuickFix(fix) {
       return out;
     }, { source: 'inspector-structure' });
     toast(`Đã đổi field ${fix.from} thành ${fix.to}${res?.count ? ` và cập nhật ${res.count} tham chiếu` : ''}. Ctrl+Z để hoàn tác.`);
+  } else if (fix.kind === 'setVarType') {
+    // Đặt biến (design 0015): every step that assigns (Gán) this variable takes the type.
+    let n = 0;
+    updateWorkflow((wf) => {
+      for (const s of variableSteps(wf, fix.name, slotKeys)) {
+        if ((s.config?.mode ?? 'set') === 'add' || (s.config.valueType ?? 'text') === fix.to) continue;
+        s.config.valueType = fix.to;
+        n++;
+      }
+      return n > 0;
+    }, { source: 'inspector-structure' });
+    if (n) toast(`Đã đổi Kiểu của biến ${varPath(fix.name)} thành ${fix.to === 'number' ? 'Số' : 'Chữ'} ở ${n} bước Đặt biến. Ctrl+Z để hoàn tác.`);
   } else if (fix.kind === 'addSelectField') {
     // The Query is another step: its builder list or its hand-written SOQL gets the field.
     const q = stepById(fix.stepId);
