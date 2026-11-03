@@ -558,3 +558,20 @@ test('pasteSteps keeps free aliases, renames clashes with the references inside,
   pasteSteps(out, { parentId: null, slot: null, index: 0 }, [r('c2', 'c2', [{ name: 'OwnerId', type: 'lookup', options: { ref: 'users' } }])], { catalog, slotKeys });
   assert.equal(out.steps[0].config.fields[0].options.ref, 'users');
 });
+
+test('pasteSteps follows a renamed alias into the 0013 options: number variables, branch right, pick from / filterValue; field-name options stay', () => {
+  const host = tree([r('acc')]);
+  const copied = [
+    r('acc'),
+    loop('l', [r('x', 'x')], { count: '{{acc.NumberOfEmployees}}' }),
+    { id: 'b', type: 'branch', config: { kind: 'compare', left: 'acc.Industry', op: 'eq', right: '{{acc.Name}}' }, slots: { true: [r('y', 'y')], false: [] } },
+    { id: 'p', type: 'pick', config: { from: 'acc', alias: 'pk', filter: 'compare', filterField: 'Industry', filterValue: '{{acc.Industry}}', mode: 'weighted', weightField: 'NumberOfEmployees' } },
+  ];
+  const res = pasteSteps(host, { parentId: null, slot: null, index: 1 }, structuredClone(copied), { catalog, slotKeys });
+  assert.deepEqual(res.renamed.find((x) => x.from === 'acc'), { from: 'acc', to: 'acc2' });
+  const [, l, b, p] = res.ids.map((id) => findStep(host, id, slotKeys).step);
+  assert.equal(l.config.count, '{{acc2.NumberOfEmployees}}');
+  assert.deepEqual([b.config.left, b.config.right], ['acc2.Industry', '{{acc2.Name}}']);
+  assert.deepEqual([p.config.from, p.config.filterValue], ['acc2', '{{acc2.Industry}}']);
+  assert.deepEqual([p.config.filterField, p.config.weightField], ['Industry', 'NumberOfEmployees'], 'field names of the pool are not aliases');
+});
