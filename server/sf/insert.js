@@ -242,15 +242,19 @@ export function createInserter(client, target, {
     const a = active?.info;
     let ins = inserted;
     let bySo = bySobject;
+    // Design 0012 D: per Record step too (bounded by the number of steps), for the live card chips.
+    let bySt = Object.fromEntries(Object.entries(byStep).filter(([id]) => id).map(([id, c]) => [id, { ...c }]));
     if (a && a.state === 'processing') {
       const extra = Math.max(0, a.processed - a.failed);
       ins += extra;
       bySo = { ...bySobject, [a.sobject]: { inserted: (bySobject[a.sobject]?.inserted ?? 0) + extra, failed: bySobject[a.sobject]?.failed ?? 0 } };
+      if (a.nodeId) bySt = { ...bySt, [a.nodeId]: { inserted: (bySt[a.nodeId]?.inserted ?? 0) + extra, failed: bySt[a.nodeId]?.failed ?? 0 } };
     }
     onBatch({
       inserted: ins,
       failed: errorsTotal,
       bySobject: bySo,
+      byStep: bySt,
       bulk: a ? { nodeId: a.nodeId, sobject: a.sobject, jobId: a.jobId, job: a.job, jobs: a.jobs, processed: a.processed, failed: a.failed, records: a.records } : null,
       waitingBulk: a && a.state === 'processing' && (signal?.aborted || cancelled) ? { jobId: a.jobId, sobject: a.sobject, processed: a.processed, records: a.records, forced: Boolean(forceSignal?.aborted) } : null,
     });

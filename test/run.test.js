@@ -330,3 +330,24 @@ test('a cancelled preview still returns the samples it has', async () => {
   assert.deepEqual(Object.keys(end.result.samples).sort(), ['a', 'c']);
   assert.equal(typeof end.result.samples.a.Name, 'string');
 });
+
+test('insert progress events and the result carry byStep counts per record step (design 0012 D)', async () => {
+  // Every third Account is refused: its Contacts are skipped ("Bỏ qua vì bản ghi cha lỗi") and count as failed on `c`.
+  let accounts = 0;
+  const client = fakeClient({ fail: (_r, sobject) => sobject === 'Account' && ++accounts % 3 === 0 });
+  const run = createRun(accCon(30, 2), { seed: 4, now: NOW });
+  const { events, end } = await drive({ run, target: 'dev', sfClient: client });
+  const ins = events.filter((e) => e.phase === 'insert');
+  assert.ok(ins.length >= 2);
+  for (const e of ins) {
+    assert.deepEqual(Object.keys(e.byStep).sort(), Object.keys(e.byStep).filter((id) => ['a', 'c'].includes(id)).sort());
+    const sum = (k) => Object.values(e.byStep).reduce((n, x) => n + x[k], 0);
+    assert.equal(sum('inserted'), e.inserted);
+    assert.equal(sum('failed'), e.failed);
+  }
+  const last = ins.at(-1);
+  assert.deepEqual(last.byStep, { a: { inserted: 20, failed: 10 }, c: { inserted: 40, failed: 20 } });
+  // Per step and per sObject agree (one step per sObject here).
+  assert.deepEqual([last.byStep.a.inserted + last.byStep.a.failed, last.byStep.c.inserted + last.byStep.c.failed], [last.bySobject.Account.total, last.bySobject.Contact.total]);
+  assert.deepEqual(end.result.insert.byStep, last.byStep);
+});

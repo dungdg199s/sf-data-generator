@@ -11,10 +11,11 @@
 import { h, icoTile } from './dom.js';
 import { state, subscribe, select, nodeType, fieldType, slotKeys, stepById, setCollapsed, currentScope } from './store.js';
 import { linkRefTarget, refSourceStep, sourceTitle } from './ref-target.js';
+import { chipFor, insertErrorTag, innerInsertErrors, paintRunInfo } from './run-info.js';
+import { showInsertErrorsFor } from './results.js';
 import { allSteps, slotList } from '/shared/workflow-tree.js';
 import {
-  stepSummary, stepAlias, statChip, stepLabel, addPointLabel, issuesByStep, innerIssues, innerCount, emptySlotLabel,
-  estimateChip, startEstimate,
+  stepSummary, stepAlias, stepLabel, addPointLabel, issuesByStep, innerIssues, innerCount, emptySlotLabel, startEstimate,
 } from './summary.js';
 import * as ops from './ops.js';
 import { openField, openSheet } from './inspector.js';
@@ -43,6 +44,7 @@ export function initProcess() {
     if (kind === 'workflow' && source === 'inspector') scheduleRender();
     else if (kind === 'workflow' || kind === 'all' || kind === 'view' || kind === 'result') render();
     else if (kind === 'selection' || kind === 'issues') decorate();
+    else if (kind === 'live') paintLive();
   });
   ops.onReveal((id, opts) => { if (active()) revealStep(id, opts); });
   // The first render is done by main.js (emit 'all'), which can recover from a broken autosave.
@@ -166,9 +168,7 @@ function renderStep(step, level, at) {
   const collapsed = container && state.collapsed.has(step.id);
   const alias = stepAlias(step);
   const summary = stepSummary(step);
-  const est = !state.result || staleStats ? estimateChip(step) : null;
-  const chip = state.result && !est ? statChip(step, state.result.stats?.byStep) : null;
-  const stale = staleStats;
+  const chip = chipFor(step, { stale: staleStats });
   const showDetails = !container && detailsOpen.has(step.id);
 
   const card = h(
@@ -193,8 +193,8 @@ function renderStep(step, level, at) {
     h('span', { class: 'type' }, icoTile(), type?.label ?? step.type),
     alias ? h('span', { class: 'alias' }, alias) : null,
     h('span', { class: 'sum', title: summary }, summary),
-    chip ? h('span', { class: `stat${stale ? ' stale' : ''}`, 'data-stat': step.id, title: stale ? 'Số liệu của lần xem trước gần nhất; workflow đã đổi sau đó.' : 'Số liệu của lần xem trước gần nhất.' }, chip) : null,
-    est ? h('span', { class: 'stat est', title: est.title }, est.text) : null,
+    chip ? h('span', { class: chip.class, title: chip.title }, chip.text) : null,
+    step.type === 'record' ? insertErrorTag(step.id, { stale: staleStats, onOpen: showInsertErrorsFor }) : null,
     h('span', { class: 'badges' }),
     step.disabled ? h('span', { class: 'tag-off', title: 'Bước này đang tắt: không chạy và không được kiểm tra. Ctrl+/ để bật lại.' }, 'Đã tắt') : null,
     type?.needsOrg && !state.org && !step.disabled ? h('span', { class: 'tag-sample', title: 'Chưa chọn org: Xem trước dùng bản ghi mẫu (Id giả). Chọn org ở thanh trên để đọc dữ liệu thật.' }, 'chưa chọn org') : null,
@@ -312,12 +312,7 @@ function decorate() {
       warnings ? h('button', { class: 'badge warn', title: `${warnings} cảnh báo — bấm để xem`, onclick: jump }, String(warnings)) : '',
     );
     const note = stepEl.querySelector(':scope > .collapsed-note');
-    if (note) {
-      const parts = [`${note.dataset.count} bước bên trong`];
-      if (inner.errors) parts.push(`${inner.errors} lỗi`);
-      else if (inner.warnings) parts.push(`${inner.warnings} cảnh báo`);
-      note.textContent = parts.join(' · ');
-    }
+    if (note) note.textContent = collapsedNote(note.dataset.count, inner, id);
     // Field chips and slots of this step.
     const fieldIssues = [...own.errors, ...own.warnings];
     for (const chip of stepEl.querySelectorAll(':scope > .details .field-chip')) {
@@ -335,6 +330,31 @@ function decorate() {
     }
   }
   (focusable ?? root.querySelector('.start-card')).tabIndex = 0;
+}
+
+/** "3 bước bên trong · 1 lỗi · lỗi insert 12" of a collapsed frame. */
+export function collapsedNote(count, inner, id) {
+  const parts = [`${count} bước bên trong`];
+  if (inner.errors) parts.push(`${inner.errors} lỗi`);
+  else if (inner.warnings) parts.push(`${inner.warnings} cảnh báo`);
+  const failed = innerInsertErrors(id);
+  if (failed) parts.push(`lỗi insert ${String(failed).replace(/\B(?=(\d{3})+(?!\d))/g, ' ')}`);
+  return parts.join(' · ');
+}
+
+/** Design 0012 D: chips and insert-error tags patched in place while a run goes on. */
+function paintLive() {
+  if (!root) return;
+  paintRunInfo(root, {
+    stale: staleStats,
+    onOpen: showInsertErrorsFor,
+    // Chip before the insert tag and the badges (the order render() uses).
+    place: (card, el, kind) => card.querySelector(kind === 'chip' ? ':scope > .tag-insert-err, :scope > .badges' : ':scope > .badges').before(el),
+  });
+  for (const note of root.querySelectorAll('.collapsed-note')) {
+    const id = note.parentElement.dataset.step;
+    note.textContent = collapsedNote(note.dataset.count, innerIssues(id, issuesByStep()), id);
+  }
 }
 
 // ---------- selection helpers ----------

@@ -399,6 +399,8 @@ test('failure cascades across windows, grouped, with the parent ref and the fiel
   assert.equal(res.errors[0].field, undefined, 'Phone is not a field of the record');
   assert.deepEqual(res.errorGroups.map((g) => [g.sobject, g.nodeId, g.count, g.refs]), [['Contact', 'c', 2, ['con#1', 'con#3']], ['Account', 'a', 1, ['acc#2']]]);
   assert.deepEqual(res.bySobject, { Account: { inserted: 1, failed: 1 }, Contact: { inserted: 1, failed: 2 } });
+  // Design 0012 D: the children skipped because of their parent count on the child step.
+  assert.deepEqual(res.byStep, { a: { inserted: 1, failed: 1 }, c: { inserted: 1, failed: 2 } });
 
   const named = fakeClient({ fail: (r) => (r.LastName === 'C1' ? [{ statusCode: 'X', message: 'bad', fields: ['lastname'] }] : null) });
   const one = await insertRecords(named, 'dev', [acc(1), con(1, 1)]);

@@ -32,7 +32,7 @@ export function initInspector() {
   wireSheet();
   subscribe(({ source, kind }) => {
     if (kind === 'issues') return markIssues();
-    if (kind === 'view' || kind === 'result') return undefined;
+    if (kind === 'view' || kind === 'result' || kind === 'live') return undefined;
     if (source === 'inspector') return undefined;
     render();
   });

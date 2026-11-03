@@ -289,6 +289,26 @@ export function renderResults() {
   render();
 }
 
+/**
+ * The insert-error tag of a card (design 0012 D): the "Lỗi insert" tab with the first error group
+ * of that step highlighted (.current) and focused; past the 100 groups, the tab only.
+ */
+export function showInsertErrorsFor(nodeId) {
+  const ins = state.result?.insert;
+  if (!ins) {
+    toast('Đang insert: nhóm lỗi hiện ở tab "Lỗi insert" khi insert xong.', 4000);
+    return;
+  }
+  if (!(ins.errorsTotal ?? ins.errors?.length)) return;
+  activeTab = ERRORS_TAB;
+  render();
+  const row = body.querySelector(`table.error-groups tr[data-node="${CSS.escape(nodeId)}"]`);
+  if (!row) return;
+  row.classList.add('current');
+  row.scrollIntoView({ block: 'nearest' });
+  row.focus({ preventScroll: true });
+}
+
 /** Opens the "Lỗi xóa" tab (design 0011). */
 export function showDeleteErrors() {
   activeTab = DELETE_ERRORS_TAB;
@@ -332,6 +352,7 @@ function errorGroupsView(ins, { exampleLabel = 'Ví dụ' } = {}) {
       h('tbody', {},
         groups.map((g) => h('tr', {
           class: target(g) ? 'clickable' : '',
+          'data-node': g.nodeId,
           role: target(g) ? 'button' : null,
           tabindex: target(g) ? '0' : null,
           title: target(g) ? 'Bấm để chọn bước' : g.nodeId ? 'Bước này không còn trong workflow.' : '',

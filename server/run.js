@@ -198,6 +198,8 @@ export async function executeRun({
     failed: s.failed,
     total,
     bySobject: Object.fromEntries(Object.entries(bySobject).map(([so, t]) => [so, { inserted: s.bySobject[so]?.inserted ?? 0, failed: s.bySobject[so]?.failed ?? 0, total: t }])),
+    // Design 0012 D: { [nodeId]: { inserted, failed } } of the Record steps with records sent so far.
+    byStep: Object.fromEntries(Object.entries(s.byStep ?? {}).filter(([id]) => id)),
     ...(s.bulk ? { bulk: s.bulk } : {}),
   });
   const inserter = createInserter(sfClient, target, {

@@ -15,9 +15,11 @@ import { h, icoTile } from './dom.js';
 import { state, subscribe, select, nodeType, stepById, setCollapsed } from './store.js';
 import { layout, START_ID } from './layout.js';
 import {
-  stepSummary, stepAlias, statChip, stepLabel, addPointLabel, issuesByStep, innerIssues, innerCount, emptySlotLabel,
-  estimateChip, startEstimate,
+  stepSummary, stepAlias, stepLabel, addPointLabel, issuesByStep, innerIssues, innerCount, emptySlotLabel, startEstimate,
 } from './summary.js';
+import { chipFor, insertErrorTag, paintRunInfo } from './run-info.js';
+import { showInsertErrorsFor } from './results.js';
+import { collapsedNote } from './process.js';
 import * as ops from './ops.js';
 import { openSheet } from './inspector.js';
 import { openAddMenu, openStepMenu } from './menus.js';
@@ -118,6 +120,7 @@ export function initCanvas() {
     if (kind === 'workflow' && source === 'inspector') scheduleRender();
     else if (kind === 'workflow' || kind === 'all' || kind === 'view' || kind === 'result') render();
     else if (kind === 'selection' || kind === 'issues') decorate();
+    else if (kind === 'live') paintLive();
   });
   ops.onReveal((id, opts) => { if (active()) revealStep(id, opts); });
 }
@@ -325,15 +328,14 @@ function cardEl(n) {
   const type = nodeType(step.type);
   const alias = stepAlias(step);
   const summary = stepSummary(step);
-  const est = !state.result || staleStats ? estimateChip(step) : null;
-  const chip = state.result && !est ? statChip(step, state.result.stats?.byStep) : null;
+  const chip = chipFor(step, { stale: staleStats });
   const head = n.kind === 'frame';
   const parts = {
     type: h('span', { class: 'type' }, icoTile(), h('span', { class: 'type-label' }, typeLabel(step))),
     alias: alias ? h('span', { class: 'alias', title: alias }, alias) : null,
     sum: h('span', { class: `sum${head ? '' : ' dg-sum'}`, title: summary }, summary),
-    chip: chip ? h('span', { class: `stat${staleStats ? ' stale' : ''}`, 'data-stat': step.id, title: staleStats ? 'Số liệu của lần xem trước gần nhất; workflow đã đổi sau đó.' : 'Số liệu của lần xem trước gần nhất.' }, chip)
-      : est ? h('span', { class: 'stat est', title: est.title }, est.text) : null,
+    chip: chip ? h('span', { class: chip.class, title: chip.title }, chip.text) : null,
+    errTag: step.type === 'record' ? insertErrorTag(step.id, { stale: staleStats, onOpen: showInsertErrorsFor }) : null,
     badges: h('span', { class: 'badges' }),
     off: step.disabled ? h('span', { class: 'tag-off', title: 'Bước này đang tắt: không chạy và không được kiểm tra. Ctrl+/ để bật lại.' }, 'Đã tắt') : null,
     sample: type?.needsOrg && !state.org && !step.disabled ? h('span', { class: 'tag-sample', title: 'Chưa chọn org: Xem trước dùng bản ghi mẫu (Id giả). Chọn org ở thanh trên để đọc dữ liệu thật.' }, 'chưa chọn org') : null,
@@ -356,14 +358,14 @@ function cardEl(n) {
     onclick: (e) => cardClick(e, step.id),
   };
   // A frame header is one row, like a Quy trình card; other cards have three short rows.
-  if (head) return h('div', attrs, parts.type, parts.alias, parts.sum, parts.chip, parts.badges, parts.off, parts.sample, parts.menu, parts.toggle);
+  if (head) return h('div', attrs, parts.type, parts.alias, parts.sum, parts.chip, parts.errTag, parts.badges, parts.off, parts.sample, parts.menu, parts.toggle);
   // The alias goes on the summary row, so the type label keeps the first row ("Query (đọc org)").
   return h(
     'div',
     attrs,
     h('div', { class: 'dg-row' }, parts.type, parts.badges, parts.menu, parts.toggle),
     h('div', { class: 'dg-row' }, parts.alias, parts.sum),
-    h('div', { class: 'dg-tags' }, parts.note, parts.chip, parts.off, parts.sample),
+    h('div', { class: 'dg-tags' }, parts.note, parts.chip, parts.errTag, parts.off, parts.sample),
   );
 }
 
@@ -467,12 +469,26 @@ function decorateCard(card) {
     warnings ? h('button', { class: 'badge warn', tabindex: '-1', title: `${warnings} cảnh báo — bấm để xem`, onclick: jump }, String(warnings)) : '',
   );
   const note = card.querySelector('.dg-note[data-count]');
-  if (note) {
-    const parts = [`${note.dataset.count} bước bên trong`];
-    if (inner.errors) parts.push(`${inner.errors} lỗi`);
-    else if (inner.warnings) parts.push(`${inner.warnings} cảnh báo`);
-    note.textContent = parts.join(' · ');
-  }
+  if (note) note.textContent = collapsedNote(note.dataset.count, inner, id);
+}
+
+/** Design 0012 D: chips and insert-error tags patched in place while a run goes on (culled cards read them when made). */
+function paintLive() {
+  if (!lay) return;
+  paintRunInfo(over, {
+    stale: staleStats,
+    onOpen: showInsertErrorsFor,
+    place: (card, el, kind) => {
+      if (card.classList.contains('dg-head')) card.querySelector(kind === 'chip' ? ':scope > .tag-insert-err, :scope > .badges' : ':scope > .badges').before(el);
+      else {
+        const tags = card.querySelector('.dg-tags');
+        const after = kind === 'chip' ? tags.querySelector('.dg-note') : tags.querySelector('.stat') ?? tags.querySelector('.dg-note');
+        if (after) after.after(el);
+        else tags.prepend(el);
+      }
+    },
+  });
+  for (const el of els.values()) if (el.classList.contains('step-card')) decorateCard(el);
 }
 
 function decorateSlot(el) {

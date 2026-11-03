@@ -21,6 +21,7 @@ import { initIssues, renderIssues, expandIssues, goToNextIssue } from './issues.
 import { openPopup, closePopup, popupAnchor } from './popup.js';
 import { SAMPLES } from './samples.js';
 import { stepAlias } from './summary.js';
+import { startLiveRun, liveProgress, endLiveRun } from './run-info.js';
 
 const $ = (id) => document.getElementById(id);
 const ORG_KEY = 'sfdg.org';
@@ -591,6 +592,7 @@ async function preview({ seed, refresh = false, auto = false }) {
   });
   setRunning(r);
   r.render();
+  startLiveRun();
   const workflow = structuredClone(state.workflow);
   try {
     const result = await api.runStream({ workflow, seed, org: state.org || undefined, refreshQueries: refresh || undefined }, {
@@ -602,9 +604,11 @@ async function preview({ seed, refresh = false, auto = false }) {
           r.generated = ev.generated;
           r.bySobject = ev.bySobject;
           r.render();
+          if (liveProgress(ev)) emit('run', 'live');
         }
       },
     });
+    endLiveRun();
     acceptResult(result, workflow);
     if (result.cancelled) toast('Đã dừng xem trước.');
     return !result.cancelled;
@@ -618,7 +622,14 @@ async function preview({ seed, refresh = false, auto = false }) {
   } finally {
     setRunning(null);
     endProgress();
+    finishLive();
   }
+}
+
+/** The live card chips of a run that ended without a result (stopped, failed) go back to the last result. */
+function finishLive() {
+  endLiveRun();
+  emit('run', 'live');
 }
 
 /** Shows a finished run and remembers what produced it (downloads regenerate from this snapshot). */
@@ -693,6 +704,8 @@ async function insertRun(base, { bulk = 'auto' } = {}) {
   };
   setRunning(r);
   r.render();
+  // Design 0012 D: "insert n/total" on Record cards, total from the confirmed preview.
+  startLiveRun({ totals: Object.fromEntries(Object.entries(base.stats.byStep ?? {}).map(([id, x]) => [id, x.records ?? 0])) });
   window.addEventListener('beforeunload', leaveGuard);
   const workflow = structuredClone(state.workflow);
   const preview = state.resultRun;
@@ -719,8 +732,10 @@ async function insertRun(base, { bulk = 'auto' } = {}) {
           Object.assign(r, { inserted: ev.inserted ?? r.inserted, failed: ev.failed ?? r.failed });
         }
         if (ev.type !== 'start') r.render();
+        if (liveProgress(ev)) emit('run', 'live');
       },
     });
+    endLiveRun();
     acceptResult(result, workflow);
     const ins = result.insert;
     // A later Insert with the same seed would create the same data again: the confirmation says so.
@@ -772,6 +787,7 @@ async function insertRun(base, { bulk = 'auto' } = {}) {
     window.removeEventListener('beforeunload', leaveGuard);
     setRunning(null);
     endProgress();
+    finishLive();
   }
 }
 
