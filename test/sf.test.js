@@ -77,6 +77,12 @@ test('mapDescribe picks sensible defaults and skips non-createable fields', () =
   assert.ok(!byName.Id);
 });
 
+test('mapDescribe returns nameField (design 0012 G)', () => {
+  const task = mapDescribe({ name: 'Task', fields: [{ name: 'Subject', type: 'combobox', createable: true, nillable: true, nameField: true }, { name: 'Id', type: 'id' }] });
+  assert.equal(task.nameField, 'Subject');
+  assert.equal(mapDescribe({ name: 'X__c', fields: [{ name: 'A__c', type: 'string', createable: true }] }).nameField, null);
+});
+
 function fakeJsforce() {
   const made = [];
   const createConnection = (options) => {

@@ -25,7 +25,9 @@ export function mapDescribe(describe) {
   }
   // Required first, then alphabetical, so the import dialog's pre-selected rows sit on top.
   fields.sort((a, b) => Number(b.required) - Number(a.required) || a.name.localeCompare(b.name));
-  return { sobject: describe.name, label: describe.label, fields };
+  // The field Salesforce shows as the record's name (Name, Subject, CaseNumber…), or null (design 0012 G).
+  const nameField = (describe.fields ?? []).find((f) => f.nameField)?.name ?? null;
+  return { sobject: describe.name, label: describe.label, nameField, fields };
 }
 
 function mapField(f, sobject) {

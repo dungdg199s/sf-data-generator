@@ -1203,3 +1203,42 @@ test('0013 review N4: list values are one per line, commas kept, the same on the
   const { selectFields } = await import('../shared/soql.js');
   assert.deepEqual(selectFields({ fields: ['Name, Industry', 'Owner.Name'] }).fields, ['Id', 'Name', 'Industry', 'Owner.Name']);
 });
+
+test('a Task record with a Name field warns with a renameField fix; Account and custom objects do not (design 0012 G)', () => {
+  const name = { name: 'Name', type: 'text', options: { mode: 'name' } };
+  const w = (so, fields = [name]) => wf([record('t', so, 'task', fields)]);
+  const task = warningsOf(w('Task')).find((i) => i.code === 'noNameField');
+  assert.equal(task.nodeId, 't');
+  assert.equal(task.field, 'fields.Name');
+  assert.match(task.message, /^Task không có field Name nên insert sẽ lỗi\. Đổi thành Subject hoặc xóa field này\.$/);
+  assert.deepEqual(task.fix, { kind: 'renameField', stepId: 't', from: 'Name', to: 'Subject' });
+  const contact = warningsOf(w('Contact')).find((i) => i.code === 'noNameField');
+  assert.match(contact.message, /Đổi thành LastName/);
+  assert.equal(contact.fix.to, 'LastName');
+  // The target already exists: no rename offered, only "Xóa".
+  const both = warningsOf(w('Case', [name, { name: 'Subject', type: 'text', options: {} }])).find((i) => i.code === 'noNameField');
+  assert.equal(both.fix, undefined);
+  assert.match(both.message, /Xóa field này\./);
+  for (const so of ['Account', 'Opportunity', 'My_Object__c']) assert.ok(!warningsOf(w(so)).some((i) => i.code === 'noNameField'), so);
+  // A warning does not block a preview.
+  assert.ok(runWorkflow(w('Task'), { seed: 1, now: NOW }).records.length);
+  // Turned off: not checked.
+  assert.ok(!warningsOf(wf([{ ...record('t', 'Task', 'task', [name]), disabled: true }])).some((i) => i.code === 'noNameField'));
+});
+
+test('unknownMember of a Query source carries an addSelectField fix, also through Chọn bản ghi and the record looped over (design 0012 F1)', () => {
+  const title = (tpl) => [{ name: 'LastName', type: 'text', options: {} }, { name: 'Title', type: 'template', options: { template: tpl } }];
+  const fixOf = (w) => errorsOf(w).find((i) => i.code === 'unknownMember')?.fix;
+  const q = query('q', 'accs', { fields: ['Id', 'Name'] });
+  assert.deepEqual(fixOf(wf([q, pick('p', 'acc', 'accs'), record('c', 'Contact', 'con', title('{{acc.Industry}}'))])), { kind: 'addSelectField', stepId: 'q', field: 'Industry' });
+  assert.deepEqual(fixOf(wf([q, loop('l', { mode: 'each', from: 'accs', itemAlias: 'acc' }, [record('c', 'Contact', 'con', title('{{acc.Owner.Name}}'))])])), { kind: 'addSelectField', stepId: 'q', field: 'Owner.Name' });
+  const issue = errorsOf(wf([q, pick('p', 'acc', 'accs'), record('c', 'Contact', 'con', title('{{acc.Industry}}'))])).find((i) => i.code === 'unknownMember');
+  assert.equal(issue.nodeId, 'c');
+  assert.equal(issue.field, 'fields.Title');
+  // Hand-written SOQL: a fix when it can be edited, none with a subquery.
+  const soql = (text) => query('q', 'accs', { mode: 'soql', soql: text });
+  assert.deepEqual(fixOf(wf([soql('SELECT Id, Name FROM Account ORDER BY Id'), pick('p', 'acc', 'accs'), record('c', 'Contact', 'con', title('{{acc.Industry}}'))])), { kind: 'addSelectField', stepId: 'q', field: 'Industry' });
+  assert.equal(fixOf(wf([soql('SELECT Id, Name, (SELECT Id FROM Contacts) FROM Account ORDER BY Id'), pick('p', 'acc', 'accs'), record('c', 'Contact', 'con', title('{{acc.Industry}}'))])), undefined);
+  // A generated record pool: the field is added on the Record step, no SELECT fix.
+  assert.equal(fixOf(wf([record('a', 'Account', 'acc', accountFields), record('c', 'Contact', 'con', title('{{acc.Industry}}'))])), undefined);
+});

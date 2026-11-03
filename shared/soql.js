@@ -184,6 +184,29 @@ export const SOQL_MESSAGES = {
 };
 
 /**
+ * "Thêm Industry vào SELECT" (design 0012 F1): `soql` with `, <field>` after the last item of
+ * the outer SELECT list (before FROM); unchanged when the field is already selected (ignoring
+ * case). null when the statement cannot be edited safely: not a valid SELECT, a subquery,
+ * FIELDS(…) / TYPEOF / a function in the SELECT list, a template, or `field` not a field path.
+ */
+export function addSelectField(soql, field) {
+  const raw = String(soql ?? '');
+  const name = String(field ?? '').trim();
+  if (!isFieldPath(name)) return null;
+  const p = parseSoql(raw);
+  if (!p.select || !p.sobject || p.subquery || p.open || p.template) return null;
+  if (checkSoql(raw).some((i) => i.level === 'error')) return null;
+  if (p.fields.some((f) => f.toLowerCase() === name.toLowerCase())) return raw;
+  const s = blankStrings(raw);
+  const head = /^\s*SELECT\s/i.exec(s);
+  const from = topLevel(s, /\bFROM\s+([A-Za-z][A-Za-z0-9_]*)/i, head[0].length);
+  if (!from) return null;
+  let end = from.index;
+  while (end > head[0].length && /\s/.test(raw[end - 1])) end--;
+  return `${raw.slice(0, end)}, ${name}${raw.slice(end)}`;
+}
+
+/**
  * Problems of a hand-written SOQL statement: [{ code, level: 'error' | 'warning', message }].
  * Errors make the step invalid (nothing is sent to Salesforce); warnings do not.
  */

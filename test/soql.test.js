@@ -2,6 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildSoql, checkSoql, checkBuilder, selectFields, soqlSobject, sampleRows, normalizeRow, parseSoql, maxFetchFor, rekeyRow } from '../shared/soql.js';
+import { addSelectField } from '../shared/soql.js';
 
 test('buildSoql adds Id once, ORDER BY and LIMIT', () => {
   assert.equal(buildSoql({}), 'SELECT Id, Name FROM Account ORDER BY Id LIMIT 200');
@@ -99,4 +100,18 @@ test('rekeyRow and sampleRows use the spelling of the SELECT list, case-insensit
   assert.deepEqual(rekeyRow(row, ['id', 'name', 'owner.name', 'Owner.email']), { id: '001', name: 'Acme', owner: { name: 'Lan', email: 'l@x' }, Industry: 'Banking' });
   const sample = sampleRows({ mode: 'soql', soql: 'SELECT id, name, owner.Name, OWNER.Email FROM Contact LIMIT 1' }, 'cons')[0];
   assert.deepEqual(sample, { id: 'mẫu:cons#1', name: 'Contact mẫu 1', owner: { Name: 'owner.Name mẫu 1', Email: 'OWNER.Email mẫu 1' } });
+});
+
+test('addSelectField adds a field to the outer SELECT list (design 0012 F1)', () => {
+  assert.equal(addSelectField('SELECT Id, Name FROM Account', 'Industry'), 'SELECT Id, Name, Industry FROM Account');
+  assert.equal(addSelectField("SELECT Id FROM Account WHERE Name = 'FROM x' ORDER BY Id LIMIT 5", 'Industry'), "SELECT Id, Industry FROM Account WHERE Name = 'FROM x' ORDER BY Id LIMIT 5");
+  assert.equal(addSelectField('SELECT Id,\n  Name\nFROM Contact', 'Account.Type'), 'SELECT Id,\n  Name, Account.Type\nFROM Contact');
+  assert.equal(addSelectField('SELECT Id, industry FROM Account', 'Industry'), 'SELECT Id, industry FROM Account', 'already selected: unchanged');
+  assert.equal(addSelectField('SELECT Id, toLabel(Status) FROM Case', 'Subject'), 'SELECT Id, toLabel(Status), Subject FROM Case');
+  assert.equal(addSelectField('SELECT Id, (SELECT Id FROM Contacts) FROM Account', 'Industry'), null, 'subquery');
+  assert.equal(addSelectField('SELECT FIELDS(ALL) FROM Account LIMIT 200', 'Industry'), null, 'FIELDS(ALL)');
+  assert.equal(addSelectField('SELECT Id FROM Account WHERE Id = {{acc.Id}}', 'Name'), null, 'template');
+  assert.equal(addSelectField('SELECT Id FROM', 'Name'), null, 'no FROM');
+  assert.equal(addSelectField('DELETE FROM Account', 'Name'), null);
+  assert.equal(addSelectField('SELECT Id FROM Account', 'bad field'), null);
 });

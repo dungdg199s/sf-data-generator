@@ -214,6 +214,22 @@ export function fieldType(type) {
   return state.meta?.fieldTypes.find((t) => t.type === type);
 }
 
+/**
+ * Default fields of a Record step for `sobject` (design 0012 G): the server's preset
+ * (meta.recordPresets: Task → Subject, Contact → FirstName + LastName…), else `Name` (Họ tên).
+ * A fresh copy each call.
+ */
+export function recordPresetOf(sobject) {
+  const presets = state.meta?.recordPresets ?? {};
+  if (typeof sobject !== 'string' || !sobject) return null;
+  if (Object.hasOwn(presets, sobject)) return presets[sobject];
+  const key = Object.keys(presets).find((k) => k.toLowerCase() === sobject.toLowerCase());
+  return key ? presets[key] : null;
+}
+export function recordDefaultFields(sobject) {
+  return structuredClone(recordPresetOf(sobject)?.fields ?? [{ name: 'Name', type: 'text', options: { mode: 'name' } }]);
+}
+
 /** Slot keys of a step type in reading order, from /api/meta (for shared/workflow-tree.js). */
 export const slotKeys = (type) => nodeType(type)?.slots?.map((s) => s.key) ?? [];
 

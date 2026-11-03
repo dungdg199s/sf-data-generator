@@ -73,6 +73,30 @@ test('GET /api/meta lists field types and step types with slots and categories',
   assert.deepEqual(meta.fieldTypes.find((f) => f.type === 'geolocation').members.map((m) => m.key), ['latitude', 'longitude']);
 });
 
+test('GET /api/meta has recordPresets; Task has Subject and noName (design 0012 G)', async () => {
+  const meta = await (await fetch(`${base}/api/meta`)).json();
+  const p = meta.recordPresets;
+  assert.deepEqual(p.Task.fields.map((f) => f.name), ['Subject']);
+  assert.equal(p.Task.noName, true);
+  assert.equal(p.Task.nameField, 'Subject');
+  assert.deepEqual(p.Task.fields[0].options.values, ['Call', 'Send Letter', 'Send Quote', 'Other']);
+  assert.deepEqual(p.Contact.fields.map((f) => f.name), ['FirstName', 'LastName']);
+  assert.equal(p.Contact.nameField, 'LastName');
+  assert.deepEqual(p.Lead.fields.map((f) => f.name), ['FirstName', 'LastName', 'Company']);
+  assert.deepEqual(p.Event.fields.map((f) => [f.name, f.type]), [['Subject', 'text'], ['ActivityDateTime', 'datetime'], ['DurationInMinutes', 'number']]);
+  assert.deepEqual(p.Opportunity.fields.map((f) => f.name), ['Name', 'StageName', 'CloseDate']);
+  assert.ok(!p.Opportunity.noName && !p.Account.noName);
+  assert.deepEqual(p.Account.fields, [{ name: 'Name', type: 'text', options: { mode: 'company' } }], 'a new Account Record is unchanged (samples, golden hashes)');
+  // Every preset field is a known field type, so a new step validates.
+  const types = new Set(meta.fieldTypes.map((t) => t.type));
+  for (const [so, preset] of Object.entries(p)) for (const f of preset.fields) assert.ok(types.has(f.type), `${so}.${f.name}`);
+  for (const [so, preset] of Object.entries(p)) {
+    const res = await (await post('/api/validate', { workflow: wf([record('r', so, 'r', preset.fields)]) })).json();
+    assert.deepEqual(res.errors, [], so);
+    assert.ok(!res.warnings.some((w) => w.code === 'noNameField'), so);
+  }
+});
+
 test('GET /api/meta: loop has mode each with from and itemAlias shown only for each', async () => {
   const meta = await (await fetch(base + '/api/meta')).json();
   const loopType = meta.nodeTypes.find((n) => n.type === 'loop');

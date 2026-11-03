@@ -61,6 +61,58 @@ export const QUERY_PRESETS = {
   Event: { fields: ['Id', 'Subject'] },
 };
 
+/**
+ * Default fields of a Record step per standard sObject (design 0012 G), served as
+ * meta.recordPresets: objects without a createable `Name` (`noName: true`, with `nameField` the
+ * field that plays its part: the rename the `noNameField` warning offers) or with other required
+ * fields. Any other sObject starts with `Name` (Họ tên), Account with `Name` (Tên công ty).
+ * Naming conventions of Salesforce, so they live on the server next to QUERY_PRESETS.
+ */
+const SUBJECTS = ['Call', 'Send Letter', 'Send Quote', 'Other'];
+export const RECORD_PRESETS = {
+  Account: { fields: [{ name: 'Name', type: 'text', options: { mode: 'company' } }] },
+  Contact: {
+    noName: true,
+    nameField: 'LastName',
+    fields: [{ name: 'FirstName', type: 'text', options: { mode: 'firstName' } }, { name: 'LastName', type: 'text', options: { mode: 'lastName' } }],
+  },
+  Lead: {
+    noName: true,
+    nameField: 'LastName',
+    fields: [
+      { name: 'FirstName', type: 'text', options: { mode: 'firstName' } },
+      { name: 'LastName', type: 'text', options: { mode: 'lastName' } },
+      { name: 'Company', type: 'text', options: { mode: 'company' } },
+    ],
+  },
+  Task: { noName: true, nameField: 'Subject', fields: [{ name: 'Subject', type: 'text', options: { mode: 'list', values: SUBJECTS } }] },
+  Event: {
+    noName: true,
+    nameField: 'Subject',
+    fields: [
+      { name: 'Subject', type: 'text', options: { mode: 'list', values: SUBJECTS } },
+      { name: 'ActivityDateTime', type: 'datetime', options: { from: 'now', to: '+30d' } },
+      { name: 'DurationInMinutes', type: 'number', options: { min: 30, max: 90, scale: 0 } },
+    ],
+  },
+  Case: { noName: true, nameField: 'Subject', fields: [{ name: 'Subject', type: 'text', options: { mode: 'words', minWords: 3, maxWords: 6 } }] },
+  Opportunity: {
+    fields: [
+      { name: 'Name', type: 'text', options: { mode: 'words' } },
+      { name: 'StageName', type: 'text', options: { mode: 'list', values: ['Prospecting'] } },
+      { name: 'CloseDate', type: 'date', options: { from: 'today', to: '+90d' } },
+    ],
+  },
+};
+
+/** The preset of an sObject name (exact, else ignoring case), or null. */
+export function recordPreset(sobject) {
+  if (typeof sobject !== 'string' || !sobject) return null;
+  if (Object.hasOwn(RECORD_PRESETS, sobject)) return RECORD_PRESETS[sobject];
+  const key = Object.keys(RECORD_PRESETS).find((k) => k.toLowerCase() === sobject.toLowerCase());
+  return key ? RECORD_PRESETS[key] : null;
+}
+
 const BUILDER = { key: 'mode', in: ['builder'] };
 const SOQL = { key: 'mode', in: ['soql'] };
 const FILTER = { key: 'filter', in: ['compare'] };

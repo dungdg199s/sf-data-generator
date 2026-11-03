@@ -5,7 +5,7 @@
 import { h, toast } from './dom.js';
 import {
   state, subscribe, updateWorkflow, select, undo, nodeType, slotKeys, locate, stepById, newId, suggestAlias, workflowRevision, currentScope,
-  suggestPoolAlias, suggestPickAlias,
+  suggestPoolAlias, suggestPickAlias, recordDefaultFields,
 } from './store.js';
 import { analyzeScope, refChoices, sourceStep } from '/shared/scope.js';
 import {
@@ -69,7 +69,8 @@ export function newStep(type, target, around = []) {
   if (def?.slots?.length) step.slots = Object.fromEntries(def.slots.map((s) => [s.key, []]));
   if (type === 'record') {
     step.config.alias = suggestAlias(step.config.sobject);
-    step.config.fields = [{ name: 'Name', type: 'text', options: { mode: step.config.sobject === 'Account' ? 'company' : 'name' } }];
+    // The server's preset for the sObject (meta.recordPresets, design 0012 G); Account ⇒ Name (company).
+    step.config.fields = recordDefaultFields(step.config.sobject);
   }
   if (type === 'query') step.config.alias = suggestPoolAlias(step.config.sobject);
   if (type === 'loop') {

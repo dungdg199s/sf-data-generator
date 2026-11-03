@@ -6,8 +6,8 @@
 // Version 2 (tree of steps) is the current format. Version 1 (graph) is still accepted: it is
 // migrated with shared/migrate-v1.js first, and the conversion is reported as warnings.
 
-import { NODE_TYPES, nodeTypeMap, CONDITION_OPS, LIMITS, WORKFLOW_GLOBALS } from './nodes.js';
-import { checkSoql, checkBuilder, isFieldPath, buildSoql, soqlSobject, selectFields, builderLimit } from '../../shared/soql.js';
+import { NODE_TYPES, nodeTypeMap, CONDITION_OPS, LIMITS, WORKFLOW_GLOBALS, recordPreset } from './nodes.js';
+import { checkSoql, checkBuilder, isFieldPath, buildSoql, soqlSobject, selectFields, builderLimit, addSelectField } from '../../shared/soql.js';
 import { getGenerator, describeGenerators, VALUE_TYPES } from '../generators/index.js';
 import { migrateV1, describeReport, reportNeedsReview } from '../../shared/migrate-v1.js';
 import { analyzeScope, referenceOptions, hasUnclosed, optionShown, numberVarPath, valueList, poolFieldOptions } from '../../shared/scope.js';
@@ -278,7 +278,7 @@ export function prepareWorkflow(wf) {
       const key = `${ref.nodeId}|${ref.field}|${ref.path}|${ref.code}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      const issue = referenceIssue(ref, scope, stepById.get(ref.nodeId));
+      const issue = referenceIssue(ref, scope, stepById.get(ref.nodeId), (id) => stepById.get(id));
       if (!issue) continue;
       (ref.level === 'warning' ? warn : err)(issue.message, ref.nodeId, ref.field, issue.extra);
     }
@@ -370,6 +370,20 @@ function validateRecord(step, c, { err, warn, scope }) {
       }
     }
   }
+  // Design 0012 G: a standard sObject without a createable Name (Task, Contact…) still holding
+  // the old default field: every insert would fail with INVALID_FIELD.
+  const preset = recordPreset(c.sobject);
+  const nameAt = fields.find((f) => f?.name === 'Name');
+  if (preset?.noName && nameAt) {
+    const to = preset.nameField;
+    const free = to && !fields.some((f) => String(f?.name ?? '').toLowerCase() === to.toLowerCase());
+    warn(
+      `${c.sobject} không có field Name nên insert sẽ lỗi. ${free ? `Đổi thành ${to} hoặc xóa field này.` : 'Xóa field này.'}`,
+      step.id,
+      'fields.Name',
+      { code: 'noNameField', ...(free ? { fix: { kind: 'renameField', stepId: step.id, from: 'Name', to } } : {}) },
+    );
+  }
 }
 
 /** Query step (design 0006): builder or hand-written SOQL, read-only, within LIMITS. */
@@ -455,7 +469,7 @@ function checkReferenceTo(step, f, key, { warn, scope }) {
  * Issue for one problem reference found by analyzeScope: { message, extra: { code, path, option, suggestion? } }.
  * Field options get the `Field "<Name>": ` prefix; step options (branch `left`) do not.
  */
-export function referenceIssue(ref, scope, step) {
+export function referenceIssue(ref, scope, step, stepOf = () => null) {
   const src = ref.source !== undefined ? scope.sources[ref.source] : null;
   const fieldName = ref.field.startsWith('fields.') ? ref.field.slice('fields.'.length) : null;
   // A number option (design 0013) and the own-loop case name the option: `"Số lần lặp": …`.
@@ -638,8 +652,29 @@ export function referenceIssue(ref, scope, step) {
   }
   const extra = { code: ref.code, path: ref.path, option: ref.option };
   if (ref.suggestion) extra.suggestion = ref.suggestion;
+  const fix = ref.code === 'unknownMember' ? addSelectFix(ref, src, scope, stepOf) : null;
+  if (fix) extra.fix = fix;
   return { message: prefix + message, extra };
 }
+
+/**
+ * Design 0012 F1: a field missing from what a Query reads (directly, or through a Chọn bản ghi /
+ * the record a Lặp `each` loops over whose records come from it) can be added to that Query's
+ * SELECT in one click: { kind: 'addSelectField', stepId: <Query id>, field }. None when the
+ * hand-written SOQL cannot be edited safely (shared/soql.js addSelectField → null).
+ */
+function addSelectFix(ref, src, scope, stepOf) {
+  if (!src || src.kind !== 'record' || ref.when) return null;
+  const root = src.root !== undefined ? scope.sources[src.root] : src;
+  if (root?.nodeType !== 'query') return null;
+  const field = String(ref.member ?? '');
+  if (!field || field.startsWith('$') || !isFieldPath(field)) return null;
+  const step = stepOf(root.nodeId);
+  const c = step?.config ?? {};
+  if ((c.mode ?? 'builder') === 'soql' && addSelectField(c.soql ?? '', field) === null) return null;
+  return { kind: 'addSelectField', stepId: root.nodeId, field };
+}
+
 
 function maybeMessage(ref, s, isLookup, isMD) {
   if (ref.why?.skip) {

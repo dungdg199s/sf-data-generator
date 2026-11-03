@@ -12,7 +12,7 @@ import { malformedSteps, allSteps } from '/shared/workflow-tree.js';
 import { initViews, focusSelected, openAddMenuAtDefault, paletteDragStart, paletteDragEnd, toggleView, setView, VIEWS } from './views.js';
 import { openStepMenu } from './menus.js';
 import * as ops from './ops.js';
-import { initInspector, openField, openSheet, closeSheet } from './inspector.js';
+import { initInspector, openField, openSheet, closeSheet, clearDescribeCache } from './inspector.js';
 import { initResults, showRunning, showProgress, endProgress, sobjectChips, renderResults, showDeleteErrors } from './results.js';
 import { initHistory, openHistory, openDeleteConfirm, downloadIds, refreshHistory, historyOffText } from './history.js';
 import { planInsert } from '/shared/insert-plan.js';
@@ -206,7 +206,10 @@ function wireToolbar() {
   $('btn-redo').onclick = () => redo() || toast('Không còn gì để làm lại.');
   $('btn-preview').onclick = () => run(false);
   $('btn-insert').onclick = () => run(true);
-  $('btn-orgs').onclick = () => loadOrgs(true);
+  $('btn-orgs').onclick = () => {
+    clearDescribeCache(); // ⟳: describe and sObject lists are read again (design 0012 F2)
+    loadOrgs(true);
+  };
   $('org-select').onchange = (e) => {
     state.org = e.target.value;
     try { localStorage.setItem(ORG_KEY, state.org); } catch { /* optional */ }
