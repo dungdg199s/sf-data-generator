@@ -101,3 +101,25 @@ export function generateValue(field, ctx) {
     `Field ${field.name}: không tạo được giá trị duy nhất sau ${UNIQUE_ATTEMPTS} lần thử (đã có ${seen.size} giá trị). Hãy nới rộng option hoặc tắt "Giá trị duy nhất".`,
   );
 }
+
+/**
+ * Integer / number options of a field outside their declared `min` / `max` (review 0012 S3: a
+ * run and POST /api/field-samples refuse them, so a huge word count cannot block the server).
+ * → [{ key, message }]
+ */
+export function optionRangeIssues(field) {
+  const gen = registry.get(field?.type);
+  const out = [];
+  for (const d of gen ? allOptions(gen) : []) {
+    if (d.kind !== 'integer' && d.kind !== 'number') continue;
+    const raw = field.options?.[d.key];
+    if (raw === undefined || raw === null || raw === '' || typeof raw === 'boolean') continue;
+    const v = Number(raw);
+    if (!Number.isFinite(v)) continue;
+    if ((d.min !== undefined && v < d.min) || (d.max !== undefined && v > d.max)) {
+      const range = d.min !== undefined && d.max !== undefined ? `từ ${d.min} đến ${d.max}` : d.max !== undefined ? `tối đa ${d.max}` : `ít nhất ${d.min}`;
+      out.push({ key: d.key, message: `Field "${field.name}": "${d.label}" phải ${range} (đang là ${raw}). Sửa ô này trong tùy chọn của field.` });
+    }
+  }
+  return out;
+}

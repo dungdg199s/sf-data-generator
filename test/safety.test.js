@@ -52,9 +52,9 @@ test('client.js allows Bulk insert and delete only', async () => {
   assert.ok(Object.isFrozen(BULK_OPERATIONS));
 });
 
-test('POST /api/field-samples never reaches the org or the disk: server/workflow/samples.js imports only generators and the rng (design 0012 E)', () => {
+test('POST /api/field-samples never reaches the org or the disk: server/workflow/samples.js imports only generators, the rng and the executor (its now rule) (design 0012 E)', () => {
   const src = readFileSync(path.join(ROOT, 'server/workflow/samples.js'), 'utf8');
   const imports = [...src.matchAll(/^import .* from '([^']+)';$/gm)].map((m) => m[1]);
-  assert.deepEqual(imports.sort(), ['../generators/index.js', '../random.js']);
+  assert.deepEqual(imports.sort(), ['../generators/index.js', '../random.js', './executor.js']);
   assert.ok(!/\b(?:fetch|require|process|Date\.now)\b/.test(strip(src)));
 });

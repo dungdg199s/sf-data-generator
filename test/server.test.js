@@ -665,3 +665,16 @@ test('POST /api/field-samples returns 3 deterministic values; {{this.X}} sees th
   const d = await call({ fields: [{ name: 'D', type: 'date', options: { from: 'today', to: 'today' } }], index: 0, now });
   assert.deepEqual(d.body.values, ['2026-10-28', '2026-10-28', '2026-10-28']);
 });
+
+test('review 0012 S3 / S4: /api/field-samples refuses word counts over the cap and a now a Date cannot hold (422, not 500); a run refuses the cap too', async () => {
+  const call = async (body) => { const res = await post('/api/field-samples', body); return { status: res.status, body: await res.json() }; };
+  const huge = await call({ fields: [{ name: 'X', type: 'text', options: { mode: 'words', minWords: 1e7, maxWords: 1e7 } }], index: 0, now: 0 });
+  assert.equal(huge.status, 422);
+  assert.ok(huge.body.issues.length && huge.body.issues.every((i) => i.field === 'fields.X'));
+  assert.match(huge.body.error, /"Số từ tối thiểu" phải từ 1 đến 1000/);
+  const far = await call({ fields: [{ name: 'X', type: 'text', options: {} }], index: 0, now: 9e15 });
+  assert.equal(far.status, 422);
+  assert.match(far.body.error, /^Tham số now không hợp lệ: phải là số mili giây/);
+  const v = await (await post('/api/validate', { workflow: wf([record('a', 'Account', 'acc', [{ name: 'D', type: 'textarea', options: { maxSentences: 5000 } }])]) })).json();
+  assert.ok(v.errors.some((e) => e.nodeId === 'a' && e.field === 'fields.D' && /tối đa|đến 1000/.test(e.message)));
+});

@@ -8,7 +8,7 @@
 
 import { NODE_TYPES, nodeTypeMap, CONDITION_OPS, LIMITS, WORKFLOW_GLOBALS, recordPreset } from './nodes.js';
 import { checkSoql, checkBuilder, isFieldPath, buildSoql, soqlSobject, selectFields, builderLimit, addSelectField } from '../../shared/soql.js';
-import { getGenerator, describeGenerators, VALUE_TYPES } from '../generators/index.js';
+import { getGenerator, describeGenerators, VALUE_TYPES, optionRangeIssues } from '../generators/index.js';
 import { migrateV1, describeReport, reportNeedsReview } from '../../shared/migrate-v1.js';
 import { analyzeScope, referenceOptions, hasUnclosed, optionShown, numberVarPath, valueList, poolFieldOptions } from '../../shared/scope.js';
 import { stepNames } from '../../shared/workflow-tree.js';
@@ -353,6 +353,7 @@ function validateRecord(step, c, { err, warn, scope }) {
       err(`Field "${f.name}": kiểu "${f.type}" không được hỗ trợ.`, step.id, key);
       continue;
     }
+    for (const i of optionRangeIssues(f)) err(i.message, step.id, key, { option: i.key });
     if (REF_TYPES.has(f.type) && (f.options?.mode ?? 'current') !== 'fixed') {
       if (!f.options?.ref) err(`Field "${f.name}": chưa chọn bản ghi cha. Chọn một bước Record phía trên trong ô "Bản ghi cha".`, step.id, key);
       else {
