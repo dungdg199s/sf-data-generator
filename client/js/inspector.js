@@ -24,10 +24,12 @@ import { START_ID } from './layout.js';
 import { placesText, formatSample } from './variables.js';
 import { applySuggestion, closePicker } from './var-picker.js';
 import { isMac, pickerKeys } from './keys.js';
+import { snapSheet, SHEET } from './sizing.js';
 
 let root;
 const expanded = new Set(); // `${stepId}:${fieldIndex}` with options panel open
-let sheetClosed = false; // narrow screens: "‹ Xong" hides the sheet but keeps the selection
+let sheetClosed = false; // narrow screens: "Xong" hides the sheet but keeps the selection
+let sheetFull = false; // design 0014 §3: the sheet is at its full notch (always opens at mid)
 let lastSelectionKey = null;
 // Last good alias per step: references wait there while the alias field is empty or clashing.
 const aliasMemo = new Map();
@@ -59,7 +61,13 @@ function render() {
   if (key !== lastSelectionKey && !key.startsWith('multi:')) sheetClosed = false;
   lastSelectionKey = key;
   // The "‹ Xong" row sticks to the top of the sheet, so it closes without scrolling back up.
-  const head = h('div', { class: 'sheet-head' }, h('button', { class: 'sheet-close', title: 'Đóng bảng cấu hình (vẫn giữ bước đang chọn)', onclick: closeSheet }, ico('chevron-left'), 'Xong'));
+  const head = h('div', { class: 'sheet-head', onpointerdown: onSheetHeadDown },
+    h('button', { class: 'sheet-close', title: 'Đóng bảng cấu hình (vẫn giữ bước đang chọn)', onclick: closeSheet }, ico('chevron-left'), 'Xong'),
+    h('button', {
+      class: 'sheet-grip', 'aria-label': 'Mở rộng bảng cấu hình', 'aria-expanded': String(sheetFull), 'aria-controls': 'inspector',
+      title: 'Kéo hoặc chạm để đổi chiều cao',
+      onclick: () => { if (!sheetDragged) setSheetFull(!sheetFull); },
+    }));
   root.replaceChildren(head, many.length > 1 ? renderMulti(many) : step ? renderStep(step) : renderWorkflow());
   setSheetOpen(Boolean(s) && !sheetClosed);
   markIssues();
@@ -85,6 +93,7 @@ function setSheetOpen(open) {
   if (!open && was && root.contains(document.activeElement)) {
     (document.querySelector('.view-wrap .step-card.selected') ?? document.getElementById('btn-preview'))?.focus({ preventScroll: true });
   }
+  if (open !== was) setSheetFull(false, { quiet: true }); // opens (and closes) at the mid notch
   root.classList.toggle('open', open);
   root.inert = narrow() && !open;
   document.body.classList.toggle('sheet-open', open);
@@ -100,7 +109,8 @@ function setSheetOpen(open) {
 
 /** --sheet-overlap: how much of the canvas the open sheet covers (scroll padding, end spacer). */
 function updateSheetOverlap() {
-  if (!document.body.classList.contains('sheet-open')) return;
+  // Measured at the mid notch only: at the full notch the card is covered on purpose (0014 §3).
+  if (!document.body.classList.contains('sheet-open') || sheetFull || root.classList.contains('dragging')) return;
   const canvas = document.querySelector('.view-wrap > .view:not([hidden])').getBoundingClientRect();
   // offsetHeight ignores the slide-in transform, so this is the sheet's final position.
   const sheetTop = window.innerHeight - root.offsetHeight;
@@ -126,10 +136,102 @@ export function closeSheet() {
   setSheetOpen(false);
 }
 
-/** Show the sheet again for the current selection (a run failed on validation: goToIssue). */
-export function openSheet() {
+/**
+ * Show the sheet again for the current selection. `mid`: back to the mid notch, so the card of an
+ * issue (F8, a row of the issues bar, a run that failed validation: goToIssue) shows above it.
+ */
+export function openSheet({ mid = false } = {}) {
   sheetClosed = false;
+  if (mid) setSheetFull(false);
   setSheetOpen(Boolean(state.selection));
+}
+
+// ---------- two notches (design 0014 §3) ----------
+
+let sheetDragged = false; // the press that ends now was a drag: its click does not toggle
+
+/** Mid ↔ full. Back at mid, the selected card goes back to just above the sheet's edge. */
+function setSheetFull(full, { quiet = false } = {}) {
+  const was = sheetFull;
+  sheetFull = full;
+  root.classList.toggle('full', full);
+  root.querySelector('.sheet-grip')?.setAttribute('aria-expanded', String(full));
+  document.body.style.setProperty('--sheet-now', full ? 'var(--sheet-h-full)' : 'var(--sheet-h)');
+  if (quiet || was === full || full || !root.classList.contains('open')) return;
+  // After the height transition (none with reduced motion): measure the overlap, show the card.
+  const settle = () => {
+    updateSheetOverlap();
+    const sel = state.selection;
+    if (sel) reveal(sel.kind === 'step' ? sel.id : START_ID, { focus: false, block: 'nearest' });
+  };
+  if (root.getAnimations().some((a) => a.transitionProperty === 'height')) root.addEventListener('transitionend', settle, { once: true });
+  else requestAnimationFrame(settle);
+}
+
+/** px height of a notch token (`--sheet-h`, `--sheet-h-full`), measured with a hidden probe. */
+function notchPx(token) {
+  const probe = h('div', { 'aria-hidden': 'true', style: { position: 'fixed', visibility: 'hidden', height: `var(${token})` } });
+  document.body.append(probe);
+  const px = probe.getBoundingClientRect().height;
+  probe.remove();
+  return px;
+}
+
+/**
+ * Dragging anywhere on the sheet head but "Xong" (never in the form, so scrolling the form is not a
+ * drag): the sheet follows the finger; released, a flick goes to the next notch and a slow release
+ * to the nearest one; below half of mid it closes like "Xong".
+ */
+function onSheetHeadDown(e) {
+  if (!narrow() || e.button !== 0 || e.target.closest('.sheet-close')) return;
+  // No native drag or text selection from this press (a palette item under the full sheet started one).
+  e.preventDefault();
+  const head = e.currentTarget;
+  const startY = e.clientY;
+  const startH = root.getBoundingClientRect().height;
+  const full = notchPx('--sheet-h-full');
+  let moving = false;
+  let samples = [];
+  sheetDragged = false;
+  const heightAt = (y) => Math.min(full, Math.max(0, startH + (startY - y)));
+  const move = (ev) => {
+    if (ev.pointerId !== e.pointerId) return;
+    if (!moving && Math.abs(ev.clientY - startY) <= SHEET.dragStart) return;
+    if (!moving) {
+      moving = true;
+      sheetDragged = true;
+      head.setPointerCapture(ev.pointerId);
+      root.classList.add('dragging');
+    }
+    const hgt = heightAt(ev.clientY);
+    root.style.setProperty('--sheet-drag-h', `${hgt}px`);
+    const t = ev.timeStamp;
+    samples.push({ t, h: hgt });
+    samples = samples.filter((p) => t - p.t <= 100);
+  };
+  const up = (ev) => {
+    if (ev.pointerId !== e.pointerId) return;
+    document.removeEventListener('pointermove', move);
+    document.removeEventListener('pointerup', up);
+    document.removeEventListener('pointercancel', up);
+    if (!moving) return;
+    const hgt = heightAt(ev.clientY);
+    const first = samples[0];
+    const dt = first ? ev.timeStamp - first.t : 0;
+    const velocity = dt > 0 ? (hgt - first.h) / dt : 0;
+    const to = snapSheet({ height: hgt, velocity, mid: notchPx('--sheet-h'), full });
+    root.classList.remove('dragging');
+    root.style.removeProperty('--sheet-drag-h');
+    if (to === 'closed') closeSheet();
+    else setSheetFull(to === 'full');
+    // The click that follows this press (on the grip) must not toggle again.
+    setTimeout(() => { sheetDragged = false; }, 0);
+  };
+  // On the document: the first moves may already leave the head (no capture before it is a drag,
+  // so a tap still clicks the grip).
+  document.addEventListener('pointermove', move);
+  document.addEventListener('pointerup', up);
+  document.addEventListener('pointercancel', up);
 }
 
 /** Several steps selected (design 0012 B): what they are and what can be done with them; no shared form. */

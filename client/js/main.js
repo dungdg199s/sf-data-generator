@@ -549,7 +549,7 @@ function goToIssue(i) {
   const index = i.field?.startsWith('fields.') ? (step.config?.fields ?? []).findIndex((f) => `fields.${f?.name}` === i.field) : -1;
   if (index >= 0) openField(i.nodeId, index);
   else select({ kind: 'step', id: i.nodeId });
-  openSheet(); // narrow screens: a run closed the sheet; show the step's configuration again
+  openSheet({ mid: true }); // narrow screens: a run closed the sheet; show the step's configuration again, the card above it
   emit('app', 'view');
   ops.reveal(i.nodeId);
   return undefined;

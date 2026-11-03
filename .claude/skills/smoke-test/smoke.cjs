@@ -909,6 +909,12 @@ async function flowLayoutWide() {
   await page.keyboard.press('Home');
   const hMin = await panelH();
   await page.keyboard.press('End');
+  // The selected card was in view: it is revealed again in the next frame.
+  await page.waitForFunction(() => {
+    const c = document.querySelector('.step-card[data-id="con"]').getBoundingClientRect();
+    const v = document.getElementById('process').getBoundingClientRect();
+    return c.top >= v.top - 0.5 && c.bottom <= v.bottom + 0.5;
+  }, null, { timeout: 2000 }).catch(() => {});
   const top = await page.evaluate(() => {
     const r = (s) => document.querySelector(s).getBoundingClientRect();
     const card = r('.step-card[data-id="con"]');
@@ -1070,6 +1076,42 @@ async function flowLayoutNarrow() {
     return insp.scrollTop > 0 && b.top >= a.top - 0.5 && b.bottom <= a.bottom;
   });
   check(stuck, '"‹ Xong" scrolls away with the sheet');
+  // Design 0014 §3: two notches. Enter on the grip: full (top at the top bar's bottom), the toast above it; again: mid.
+  const notch = () => m.evaluate(() => {
+    const i = document.getElementById('inspector');
+    return { top: i.getBoundingClientRect().top, h: i.getBoundingClientRect().height, bar: document.querySelector('.topbar').getBoundingClientRect().bottom, expanded: i.querySelector('.sheet-grip').getAttribute('aria-expanded'), open: i.classList.contains('open'), inert: i.inert, focus: document.activeElement?.dataset.id ?? document.activeElement?.className };
+  });
+  await m.focus('#inspector .sheet-grip');
+  await m.keyboard.press('Enter');
+  await settle(m);
+  let n = await notch();
+  check(Math.abs(n.top - n.bar) <= 1 && n.expanded === 'true', `390px: full sheet notch ${JSON.stringify(n)} (top = top bar bottom, aria-expanded)`);
+  await m.keyboard.press('F8'); // nothing to go to: a toast, above the full sheet
+  await m.waitForSelector('#toast.show');
+  await settle(m);
+  const toastFull = await m.evaluate(() => document.getElementById('toast').getBoundingClientRect().bottom);
+  check(toastFull <= n.top + 0.5, `toast under the full sheet (${toastFull} > ${n.top})`);
+  await m.keyboard.press('Enter');
+  await settle(m);
+  s = await sheet();
+  check(s.open && s.card <= s.sheet + 0.5 && (await notch()).expanded === 'false', `back to the mid notch, con not above the sheet (${JSON.stringify(s)})`);
+  // Dragging the sheet head with a pointer: up 200 px → full; down 400 px → closed like Xong (inert, focus on the card).
+  const headAt = () => m.$eval('#inspector .sheet-head', (e) => { const r = e.getBoundingClientRect(); return { x: r.x + r.width * 0.8, y: r.y + r.height / 2 }; });
+  for (const dy of [-200, 400]) {
+    const at = await headAt();
+    await m.mouse.move(at.x, at.y);
+    await m.mouse.down();
+    await m.mouse.move(at.x, at.y + dy, { steps: 4 });
+    await m.mouse.up();
+    await settle(m);
+    n = await notch();
+    if (dy < 0) check(n.open && Math.abs(n.top - n.bar) <= 1, `dragging the sheet head up 200 px (${JSON.stringify(n)}: full notch expected)`);
+    else check(!n.open && n.inert && n.focus === 'con', `dragging the sheet head down 400 px (${JSON.stringify(n)}: closed, inert, focus on con)`);
+  }
+  await m.tap('.step-card[data-id="con"] .type');
+  await m.waitForSelector('#inspector.open');
+  await settle(m);
+  check((await notch()).expanded === 'false', 'the sheet did not reopen at the mid notch');
   await m.keyboard.press('F8'); // nothing to go to: a toast
   await m.waitForSelector('#toast.show');
   await settle(m);
@@ -1081,6 +1123,13 @@ async function flowLayoutNarrow() {
   s = await sheet();
   check(s.sheet >= s.palette + 60 - 0.5 && s.sheet - s.canvas >= 60 - 0.5, `844×390: less than 60 px of canvas above the sheet (${JSON.stringify(s)})`);
   check(await m.evaluate(() => document.getElementById('results-resize').hidden), '844×390: the results height handle shows although there is no room to resize');
+  await m.focus('#inspector .sheet-grip');
+  await m.keyboard.press('Enter');
+  await settle(m);
+  n = await notch();
+  check(Math.abs(n.top - n.bar) <= 1 && Math.abs(n.h - (390 - n.bar)) <= 1, `844×390: full notch ${JSON.stringify(n)} (390 − top bar)`);
+  await m.keyboard.press('Enter');
+  await settle(m);
   await m.tap('#btn-more');
   check(await m.$('.popup .popup-item:has-text("Thu gọn tất cả")'), '844×390: "Thu gọn tất cả" is neither on screen nor in the ⋯ menu');
   await m.keyboard.press('Escape');
@@ -1107,6 +1156,15 @@ async function flowLayoutNarrow() {
     check(b.ok, `${width}×${height}: after tapping its issue, "${id}" is not fully visible above the sheet (${JSON.stringify(b)})`);
   }
   await m.setViewportSize({ width: 390, height: 844 });
+  // F8 with the sheet at its full notch: back to mid, the card of the issue above it (design 0014 §3).
+  await m.focus('#inspector .sheet-grip');
+  await m.keyboard.press('Enter');
+  await settle(m);
+  await m.keyboard.press('F8');
+  await settle(m);
+  const f8 = await m.evaluate(() => document.querySelector('.step-card.selected')?.dataset.id);
+  const f8Box = f8 ? await cardBetween(f8) : null;
+  check((await notch()).expanded === 'false' && f8Box?.ok, `F8 from the full sheet (${f8}, ${JSON.stringify(f8Box)}: mid notch, card above the sheet)`);
   if (outDir) {
     await m.tap('#inspector .sheet-close');
     await m.emulateMedia({ colorScheme: 'dark' });
