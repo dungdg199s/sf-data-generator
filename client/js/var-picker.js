@@ -2,8 +2,9 @@
 // edited, grouped by source step, with type and sample values, and inserts the chosen one.
 // Attached by forms.js to every option that declares `vars` ('template': insert {{path}} at the
 // caret; 'path': replace the whole value; 'number', design 0013: replace the whole value by
-// {{path}}, listing variables of type Số or unknown only). Opens with the {x} button, Ctrl+Space,
-// typing "{{" (template, number) or focusing an empty / pressing ↓ in a path field.
+// {{path}}, listing variables of type Số or unknown only). Opens with the {x} button, Alt+↓ (⌥↓,
+// design 0014: macOS keeps Ctrl+Space for input sources), Ctrl+Space, typing "{{" (template,
+// number) or clicking / pressing ↓ in a path field.
 //
 // The input keeps the raw text; a read-only chip strip under it shows each {{…}} token, red
 // when validation reports it, grey while it matches no source. Insertions go through
@@ -12,10 +13,12 @@
 
 import { linkRefTarget, refSourceStep, sourceTitle } from './ref-target.js';
 import { h, icoTile } from './dom.js';
+import { isMac, isPickerKey, pickerKeys, PICKER_SHORTCUTS } from './keys.js';
 import { state, subscribe, stepById, currentScope } from './store.js';
 import { groupsFor, matchScore, tokenize, refAt, previewOf, formatSample, typeLabel, MAX_ROWS, NUMBER_HINT } from './variables.js';
 
 let uid = 0;
+const KEYS = pickerKeys(isMac(globalThis.navigator));
 let open = null; // { el, input, opts, mode, query, items, active, replace, render }
 const strips = new Set(); // live chip strips, refreshed on validation and run results
 
@@ -53,6 +56,7 @@ export function attachVarPicker(input, opts) {
   input.setAttribute('role', 'combobox');
   input.setAttribute('aria-autocomplete', 'list');
   input.setAttribute('aria-expanded', 'false'); // aria-controls is set only while the list exists
+  input.setAttribute('aria-keyshortcuts', PICKER_SHORTCUTS);
   input.spellcheck = false;
   let unsaved = Boolean(opts.unsaved);
   const state0 = { listId, opts, get unsaved() { return unsaved; }, set unsaved(v) { unsaved = v; } };
@@ -61,7 +65,7 @@ export function attachVarPicker(input, opts) {
   const btn = h('button', {
     type: 'button',
     class: 'var-btn',
-    title: opts.mode === 'template' ? 'Chèn biến (gõ {{ hoặc Ctrl+Space)' : opts.mode === 'number' ? 'Chọn biến kiểu Số (gõ {{ hoặc Ctrl+Space)' : 'Chọn biến (Ctrl+Space)',
+    title: KEYS[opts.mode] ?? KEYS.path,
     'aria-label': 'Chèn biến',
     onmousedown: (e) => e.preventDefault(), // keep the caret/selection of the input
     onclick: () => (open?.input === input && !open.auto ? closePicker() : openPicker(input, { focusSearch: true })),
@@ -88,7 +92,7 @@ export function attachVarPicker(input, opts) {
     }
   });
   input.addEventListener('keydown', (e) => onFieldKey(e, input));
-  // Path fields open like a combobox on a click (or ↓ / Ctrl+Space), never on focus alone, so
+  // Path fields open like a combobox on a click (or ↓ / Alt+↓ / Ctrl+Space), never on focus alone, so
   // tabbing through the form cannot pick a variable.
   input.addEventListener('click', () => {
     if (tokenMode(opts.mode)) autocomplete(input, { onlyUpdate: true });
@@ -184,8 +188,9 @@ function chip(part, input, opts, issues) {
 
 function onFieldKey(e, input) {
   const vp = input._varPicker;
-  if (e.ctrlKey && (e.code === 'Space' || e.key === ' ')) {
+  if (isPickerKey(e)) {
     e.preventDefault();
+    if (open?.input === input && !open.auto) return; // already open on its search box
     const auto = tokenMode(vp.opts.mode) ? autocompleteRange(input) : null; // path: search box, like {x}
     openPicker(input, { focusSearch: !auto, auto });
     return;
@@ -257,7 +262,7 @@ function openPicker(input, { focusSearch = false, auto = null, replace = null, t
   const extra = h('div');
   const scroll = h('div', { class: 'vp-list' }, list, extra);
   const foot = h('div', { class: 'vp-foot' }, '↑↓ chọn · Enter chèn · Esc đóng');
-  const hint = h('div', { class: 'vp-foot vp-hint', hidden: Boolean(state.result) }, 'Bấm ▶ Xem trước (Ctrl+Enter) để thấy giá trị mẫu.');
+  const hint = h('div', { class: 'vp-foot vp-hint', hidden: Boolean(state.result) }, 'Bấm Xem trước (Ctrl+Enter) để thấy giá trị mẫu.');
   const el = h('div', { class: 'var-picker' }, search, scroll, foot, hint);
   el.addEventListener('mousedown', (e) => { if (e.target !== search) e.preventDefault(); });
   document.body.append(el);

@@ -372,6 +372,15 @@ async function flowPicker() {
   const tplInput = `${title} input[data-key="template"]`;
   await page.waitForSelector(tplInput);
   await page.fill(tplInput, '');
+  // Design 0014 §6: Alt+↓ (⌥↓ on a Mac, where Ctrl+Space switches input sources) opens the picker on its search box.
+  check((await page.getAttribute(tplInput, 'aria-keyshortcuts')) === 'Alt+ArrowDown Control+Space', 'template field: no aria-keyshortcuts');
+  check(/Alt\+↓/.test(await page.getAttribute(`${title} .var-btn`, 'title')), '{x} title does not name Alt+↓');
+  await page.focus(tplInput);
+  await page.keyboard.press('Alt+ArrowDown');
+  await page.waitForSelector('.var-picker .vp-item');
+  check(await page.evaluate(() => document.activeElement?.classList.contains('var-search')), 'Alt+↓ did not focus the picker search');
+  await page.keyboard.press('Escape');
+  await page.waitForSelector('.var-picker', { state: 'detached' });
   await page.click(`${title} .var-btn`);
   await page.waitForSelector('.var-picker .vp-item');
   check(await page.evaluate(() => document.activeElement?.classList.contains('var-search')), '{x} did not focus the picker search');
@@ -470,6 +479,10 @@ async function flowPicker() {
   await page.keyboard.press('ArrowDown');
   await page.keyboard.press('Tab');
   check((await page.inputValue(leftSel)) !== '', 'Tab after moving the selection did not insert');
+  await page.focus(leftSel);
+  await page.keyboard.press('Alt+ArrowDown');
+  await page.waitForSelector('.var-picker .vp-item');
+  check(await page.evaluate(() => document.activeElement?.classList.contains('var-search')), 'Alt+↓ in a path field did not open the picker');
   await page.context().close();
 }
 

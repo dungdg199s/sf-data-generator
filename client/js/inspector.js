@@ -23,6 +23,7 @@ import { stepLabel } from './summary.js';
 import { START_ID } from './layout.js';
 import { placesText, formatSample } from './variables.js';
 import { applySuggestion, closePicker } from './var-picker.js';
+import { isMac, pickerKeys } from './keys.js';
 
 let root;
 const expanded = new Set(); // `${stepId}:${fieldIndex}` with options panel open
@@ -163,7 +164,7 @@ function renderWorkflow() {
       { class: 'hint' },
       h('li', {}, 'Bấm "+ Thêm bước đầu tiên" hoặc Record ở cột trái.'),
       h('li', {}, 'Chọn org ở thanh trên rồi "Import từ org…" để lấy field có sẵn.'),
-      h('li', {}, 'Bấm ▶ Xem trước (Ctrl+Enter) để kiểm tra dữ liệu trước khi insert.'),
+      h('li', {}, 'Bấm Xem trước (Ctrl+Enter) để kiểm tra dữ liệu trước khi insert.'),
     ),
     h('h3', {}, 'Phím tắt'),
     h(
@@ -182,6 +183,7 @@ function renderWorkflow() {
       h('li', {}, 'Ctrl+S: tải workflow JSON; Ctrl+Enter: xem trước'),
       h('li', {}, 'Ctrl+Shift+Enter: đọc lại org cho các bước Query rồi xem trước'),
       h('li', {}, 'F8 / Shift+F8: tới lỗi hoặc cảnh báo tiếp theo / trước đó'),
+      h('li', {}, pickerKeys(isMac(navigator)).shortcut),
       h('li', {}, 'M: đổi chế độ xem Quy trình / Sơ đồ. Trong Sơ đồ: kéo nền hoặc cuộn để di chuyển, Ctrl + cuộn hoặc + / − để thu phóng, 0: vừa khung'),
     ),
     h('h3', {}, 'Workflow'),
