@@ -16,6 +16,8 @@ import { stepAlias } from './summary.js';
 import { api } from './api.js';
 import { openPopup, closePopup, popupAnchor } from './popup.js';
 import { groupTarget } from './history-text.js';
+import { reveal } from './ops.js';
+import { resultsRange, clampResults, resultsFromRatio, resultsRatio, resultsKey, shouldCollapse, resultsAria, RESULTS } from './sizing.js';
 
 const QUERY_TAB = 'q:'; // activeTab of a Query tab: `q:<stepId>`
 const ERRORS_TAB = '__errors';
@@ -65,6 +67,140 @@ export function initResults({ onRefresh: refresh, onGoTo: goTo, onHistory: histo
     else if (activeTab && activeTab !== ERRORS_TAB) exportFile('csv', activeTab);
   };
   subscribe(({ kind }) => kind === 'result' && render());
+  initResize();
+}
+
+// ---------- panel height (design 0014 §2) ----------
+
+const HEIGHT_KEY = 'sfdg.resultsH';
+let handle = null;
+let storedRatio = null; // share of the space under the top bar, as stored (string) or null: 38 %
+let dragging = null; // { startY, startH, want, frame, selVisible }
+
+const readRatio = () => { try { return localStorage.getItem(HEIGHT_KEY); } catch { return null; } };
+function writeRatio(v) {
+  storedRatio = v;
+  try {
+    if (v === null) localStorage.removeItem(HEIGHT_KEY);
+    else localStorage.setItem(HEIGHT_KEY, v);
+  } catch { /* private mode: remembered until reload */ }
+}
+/** Height under the top bar: the space the panel and the main area share. */
+const space = () => window.innerHeight - (document.querySelector('.topbar')?.offsetHeight ?? 0);
+
+function initResize() {
+  handle = document.getElementById('results-resize');
+  storedRatio = readRatio();
+  handle.addEventListener('pointerdown', onResizeDown);
+  handle.addEventListener('keydown', onResizeKey);
+  handle.addEventListener('dblclick', () => {
+    writeRatio(null);
+    layoutResults();
+    keepSelected(selectedFullyVisible());
+  });
+  window.addEventListener('resize', () => layoutResults());
+  layoutResults();
+}
+
+/**
+ * Applies the remembered height to the open panel (clamped for this window) and shows the handle
+ * only when it is open and there are at least 24 px to change (main.js calls this when the top bar
+ * changes height). While dragging, `override` is the height under the pointer.
+ */
+export function layoutResults(override = null) {
+  if (!handle) return;
+  const total = space();
+  const range = resultsRange(total);
+  const open = !panel.classList.contains('collapsed');
+  handle.hidden = !open || !range.usable;
+  if (!range.usable) {
+    panel.style.removeProperty('--results-h'); // landscape phone: the 38vh of before
+    return;
+  }
+  const height = override ?? resultsFromRatio(storedRatio, total, window.innerHeight);
+  panel.style.setProperty('--results-h', `${height}px`);
+  const aria = resultsAria(height, total);
+  handle.setAttribute('aria-valuemin', String(aria.min));
+  handle.setAttribute('aria-valuemax', String(aria.max));
+  handle.setAttribute('aria-valuenow', String(aria.now));
+  handle.setAttribute('aria-valuetext', aria.text);
+}
+
+/** The selected card of Quy trình is fully in view (Sơ đồ keeps it with its own ResizeObserver). */
+function selectedFullyVisible() {
+  const view = document.getElementById('process');
+  const card = view && !view.hidden ? view.querySelector('.step-card.selected') : null;
+  if (!card) return false;
+  const v = view.getBoundingClientRect();
+  const c = card.getBoundingClientRect();
+  return c.top >= v.top - 0.5 && c.bottom <= v.bottom + 0.5;
+}
+function keepSelected(was) {
+  const sel = state.selection;
+  if (was && sel?.kind === 'step') requestAnimationFrame(() => reveal(sel.id, { block: 'nearest', focus: false }));
+}
+
+function onResizeDown(e) {
+  if (e.button !== 0 || handle.hidden) return;
+  e.preventDefault();
+  handle.setPointerCapture(e.pointerId);
+  dragging = { startY: e.clientY, startH: panel.getBoundingClientRect().height, want: null, frame: 0, selVisible: selectedFullyVisible() };
+  document.body.classList.add('resizing');
+  handle.classList.add('dragging');
+  handle.addEventListener('pointermove', onResizeMove);
+  handle.addEventListener('pointerup', onResizeUp);
+  handle.addEventListener('pointercancel', onResizeUp);
+}
+
+function onResizeMove(e) {
+  if (!dragging) return;
+  dragging.want = dragging.startH + (dragging.startY - e.clientY);
+  if (!dragging.frame) {
+    dragging.frame = requestAnimationFrame(() => {
+      dragging.frame = 0;
+      if (dragging.want !== null) layoutResults(clampResults(dragging.want, space()));
+    });
+  }
+}
+
+function onResizeUp(e) {
+  const d = dragging;
+  dragging = null;
+  if (!d) return;
+  cancelAnimationFrame(d.frame);
+  handle.removeEventListener('pointermove', onResizeMove);
+  handle.removeEventListener('pointerup', onResizeUp);
+  handle.removeEventListener('pointercancel', onResizeUp);
+  if (handle.hasPointerCapture(e.pointerId)) handle.releasePointerCapture(e.pointerId);
+  document.body.classList.remove('resizing');
+  handle.classList.remove('dragging');
+  if (d.want === null) return; // a click, no move
+  const total = space();
+  if (shouldCollapse(d.want, RESULTS.min)) {
+    // Dragged well under the minimum: collapse, keep the remembered height for the next opening.
+    setOpen(false);
+    toggle.focus({ preventScroll: true });
+  } else {
+    writeRatio(resultsRatio(clampResults(d.want, total), total));
+    layoutResults();
+  }
+  keepSelected(d.selVisible);
+}
+
+function onResizeKey(e) {
+  const total = space();
+  const res = resultsKey(e.key, e.shiftKey, panel.getBoundingClientRect().height, total);
+  if (!res) return;
+  e.preventDefault();
+  if (res.toggle) {
+    setOpen(false); // the handle hides with the panel: focus goes to "Kết quả"
+    toggle.focus();
+    return;
+  }
+  const was = selectedFullyVisible();
+  writeRatio(resultsRatio(res.height, total));
+  layoutResults();
+  keepSelected(was);
 }
 
 const fileBase = () => (state.workflow.name || 'workflow').replace(/[^\w.-]+/g, '_');
@@ -74,6 +210,7 @@ function setOpen(open) {
   panel.classList.toggle('collapsed', !open);
   toggle.setAttribute('aria-expanded', String(open));
   toggle.querySelector('.caret').dataset.ico = open ? 'chevron-down' : 'chevron-up';
+  layoutResults();
 }
 
 /** "Tải" (phones): the two download buttons as a menu; each row calls its button. */

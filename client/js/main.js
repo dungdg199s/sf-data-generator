@@ -13,7 +13,7 @@ import { initViews, focusSelected, openAddMenuAtDefault, paletteDragStart, palet
 import { openStepMenu } from './menus.js';
 import * as ops from './ops.js';
 import { initInspector, openField, openSheet, closeSheet, clearDescribeCache } from './inspector.js';
-import { initResults, showRunning, showProgress, endProgress, sobjectChips, renderResults, showDeleteErrors } from './results.js';
+import { initResults, showRunning, showProgress, endProgress, sobjectChips, renderResults, showDeleteErrors, layoutResults } from './results.js';
 import { initHistory, openHistory, openDeleteConfirm, downloadIds, refreshHistory, historyOffText } from './history.js';
 import { planInsert } from '/shared/insert-plan.js';
 import { poolUsage } from '/shared/scope.js';
@@ -46,6 +46,7 @@ async function boot() {
   initInspector();
   initResults({ onRefresh: () => run(false, { refresh: true }), onGoTo: goToIssue, onHistory: (hid) => openHistory({ focus: hid ?? null }), onIds: downloadIds });
   initHistory({ onDelete: deleteRun, isRunning: () => Boolean(running) });
+  watchTopbar();
   initIssues({ onGoTo: goToIssue });
   firstRender();
   wireToolbar();
@@ -55,6 +56,20 @@ async function boot() {
   wireValidation();
   loadOrgs();
   afterBoot?.();
+}
+
+/**
+ * --topbar-h on :root (design 0014): the full sheet notch stops under the top bar, and the results
+ * panel's height range is the space under it, so both follow when the bar wraps to two rows.
+ */
+function watchTopbar() {
+  const bar = document.querySelector('.topbar');
+  const update = () => {
+    document.documentElement.style.setProperty('--topbar-h', `${bar.offsetHeight}px`);
+    layoutResults();
+  };
+  new ResizeObserver(update).observe(bar);
+  update();
 }
 
 /** Options for migrateV1 from /api/meta (depth limit, defaults of the "unique" option). */

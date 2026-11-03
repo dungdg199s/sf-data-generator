@@ -67,10 +67,14 @@ export function clampResults(want, total) {
   return Math.round(Math.min(Math.max(want, min), Math.max(min, max)));
 }
 
-/** Height for a stored ratio (0–1) of `total`; a missing or broken ratio gives the 38 % default. */
-export function resultsFromRatio(ratio, total) {
-  const r = Number(ratio);
-  return clampResults((Number.isFinite(r) && r > 0 && r <= 1 ? r : RESULTS.defaultRatio) * total, total);
+/**
+ * Height for a stored ratio (0–1) of `total`. A missing or broken ratio gives the default of
+ * before design 0014: 38 % of the window height `viewport` (38vh), clamped too.
+ */
+export function resultsFromRatio(ratio, total, viewport = total) {
+  const r = ratio === null || ratio === undefined || ratio === '' ? NaN : Number(ratio);
+  if (Number.isFinite(r) && r > 0 && r <= 1) return clampResults(r * total, total);
+  return clampResults(RESULTS.defaultRatio * viewport, total);
 }
 
 /** The ratio stored in localStorage['sfdg.resultsH']: 3 decimals, as a string. */

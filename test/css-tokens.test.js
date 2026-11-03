@@ -403,3 +403,21 @@ test('the icon rules cover the 0011 / 0012 / 0013 controls (library ▾, select 
   // The "Lỗi insert" / "Lỗi xóa" tabs draw the warning icon with a CSS mask, not a glyph.
   assert.match(blocks(COMPONENTS, '.tabs button.tab-issues::before')[0]?.['mask'] ?? '', /var\(--ico-warning\)/);
 });
+
+test('design 0014 layout tokens are defined, documented, and match the numbers of client/js/sizing.js', async () => {
+  const { RESULTS } = await import('../client/js/sizing.js');
+  const all = Object.fromEntries(declarations(TOKENS).map((d) => [d.prop, d.value]));
+  assert.equal(all['--results-h'], '38vh');
+  assert.equal(all['--results-min-h'], `${RESULTS.min}px`);
+  assert.equal(all['--layout-min-h'], `${RESULTS.layoutMin}px`);
+  assert.equal(all['--resize-hit'], '8px');
+  assert.equal(all['--resize-hit-touch'], '24px');
+  assert.equal(all['--grip-w'], '32px');
+  assert.equal(all['--grip-h'], '4px');
+  assert.equal(all['--fade-w'], 'var(--space-6)');
+  for (const side of ['start', 'end', 'both']) assert.match(all[`--mask-fade-${side}`] ?? '', /^linear-gradient\(/);
+  const doc = read('docs/ui-design-system.md');
+  for (const t of ['--results-h', '--results-min-h', '--layout-min-h', '--resize-hit', '--grip-w', '--fade-w', '--icon-xs']) {
+    assert.ok(doc.includes(`\`${t}\``), `${t} missing from docs/ui-design-system.md`);
+  }
+});

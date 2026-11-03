@@ -288,6 +288,10 @@
   --icon-xs: 12px; --icon-sm: 14px; --icon-md: 16px; /* icon next to 12 px text / next to 13 px text / in a button (design 0014) */
   /* Rows that scroll sideways (design 0014 §4): the edge that still hides items fades out (a mask, not a colour). */
   --fade-w: var(--space-6);
+  /* Results panel height (design 0014 §2): JS sets --results-h in px on #results (kept as a share in sfdg.resultsH). */
+  --results-h: 38vh; --results-min-h: 160px; --layout-min-h: 240px;
+  --resize-hit: 8px; --resize-hit-touch: 24px; /* handle hit area: mouse (over the edge) / touch (a row) */
+  --grip-w: 32px; --grip-h: 4px; /* the pill of the results and sheet handles */
   --mask-fade-start: linear-gradient(to right, transparent, black var(--fade-w));
   --mask-fade-end: linear-gradient(to left, transparent, black var(--fade-w));
   --mask-fade-both: linear-gradient(to right, transparent, black var(--fade-w), black calc(100% - var(--fade-w)), transparent);
@@ -1045,7 +1049,25 @@ dialog .list .import-group {
 .btn-row { display: flex; gap: var(--space-2); margin: var(--space-2) 0; flex-wrap: wrap; }
 
 /* ---------- results (§6.10) ---------- */
-.results { background: var(--color-surface); border-top: 1px solid var(--color-border); height: 38vh; display: flex; flex-direction: column; }
+.results { position: relative; background: var(--color-surface); border-top: 1px solid var(--color-border); height: var(--results-h); display: flex; flex-direction: column; }
+/* Height handle (design 0014 §2): an 8 px band over the top edge (mouse), a 24 px row on touch screens. */
+.results-resize {
+  position: absolute; left: 0; right: 0; top: calc(-0.5 * var(--resize-hit)); height: var(--resize-hit); z-index: 1;
+  display: flex; align-items: center; justify-content: center; cursor: row-resize; touch-action: none; outline: none;
+}
+.results-resize::before { content: ''; position: absolute; left: 0; right: 0; top: 50%; height: 2px; transform: translateY(-50%); }
+.results-grip { position: relative; width: 48px; height: 16px; display: grid; place-items: center; border-radius: var(--radius-md); }
+.results-grip::before { content: ''; width: var(--grip-w); height: var(--grip-h); border-radius: var(--radius-pill); background: var(--color-border-control); }
+.results-resize:hover::before, .results-resize:focus-visible::before { background: var(--color-border-strong); }
+.results-resize:hover .results-grip::before, .results-resize:focus-visible .results-grip::before { background: var(--color-text-muted); }
+.results-resize:focus-visible .results-grip { outline: var(--ring-w) solid var(--color-focus-ring); outline-offset: var(--focus-offset); }
+.results-resize.dragging::before, .results-resize.dragging .results-grip::before { background: var(--color-accent); }
+body.resizing, body.resizing * { cursor: row-resize; user-select: none; }
+@media (pointer: coarse) {
+  .results-resize { position: relative; top: 0; flex: none; height: var(--resize-hit-touch); }
+  .results-resize::before { top: 0; transform: none; }
+  .results-resize:not([hidden]) + .results-head { padding-top: 0; }
+}
 .results.collapsed { height: auto; }
 .results.collapsed .results-body { display: none; }
 .results-head { position: relative; display: flex; align-items: center; gap: var(--space-3); padding: var(--space-2) var(--space-3); }

@@ -61,6 +61,8 @@ test('results panel: the stored ratio follows the window, broken values give 38 
   assert.equal(resultsFromRatio('0.95', 500), 260); // then clamped (main keeps 240 px)
   assert.equal(resultsFromRatio('0.95', 400), 200); // and 50 % on a short window
   assert.equal(resultsFromRatio(null, 851), Math.round(0.38 * 851));
+  assert.equal(resultsFromRatio(null, 851, 900), 342); // nothing stored: 38vh, as before design 0014
+  assert.equal(resultsFromRatio('', 301, 390), 160); // landscape phone: clamped (no handle there anyway)
   assert.equal(resultsFromRatio('abc', 851), Math.round(RESULTS.defaultRatio * 851));
   assert.equal(resultsFromRatio('-1', 851), Math.round(0.38 * 851));
 });

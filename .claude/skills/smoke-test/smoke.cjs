@@ -896,6 +896,43 @@ async function flowLayoutWide() {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.waitForFunction(() => !document.getElementById('inspector').inert, null, { timeout: 2000 }).catch(() => errors.push('the inspector stays inert on a wide screen'));
   check(!(await page.$('.palette[data-overflow], #results-summary[data-overflow]')), '1440px: the palette or the summary is marked as overflowing sideways');
+  // Design 0014 §2: the results panel height handle (keyboard, mouse, remembered), never breaking 0009's guarantees.
+  await page.click('.step-card[data-id="con"] .type');
+  if ((await page.getAttribute('#btn-results-toggle', 'aria-expanded')) !== 'true') await page.click('#btn-results-toggle');
+  await page.focus('#btn-results-toggle');
+  await page.keyboard.press('Shift+Tab');
+  check(await page.evaluate(() => document.activeElement?.id === 'results-resize'), 'the height handle is not the tab stop before "Kết quả"');
+  const panelH = () => page.evaluate(() => Math.round(document.getElementById('results').getBoundingClientRect().height));
+  const h0 = await panelH();
+  for (let i = 0; i < 3; i++) await page.keyboard.press('ArrowUp');
+  const h3 = await panelH();
+  await page.keyboard.press('Home');
+  const hMin = await panelH();
+  await page.keyboard.press('End');
+  const top = await page.evaluate(() => {
+    const r = (s) => document.querySelector(s).getBoundingClientRect();
+    const card = r('.step-card[data-id="con"]');
+    const view = r('#process');
+    return { main: r('.layout').height, bar: r('#issues').height, col: r('.view-wrap').height, card: card.top >= view.top - 0.5 && card.bottom <= view.bottom + 0.5, now: document.getElementById('results-resize').getAttribute('aria-valuenow') };
+  });
+  check(h3 === h0 + 48 && hMin === 160, `handle keys: ${h0} → ↑×3 ${h3} (+48 expected), Home ${hMin} (160 expected)`);
+  check(Math.abs(top.main - 240) <= 1 && top.bar <= 0.25 * top.col + 0.5 && top.card && top.now === '72', `End: main area ${JSON.stringify(top)} (240 px, issues bar ≤ 25 %, con in view)`);
+  await page.keyboard.press('Home');
+  const grip = await page.$eval('#results-resize', (e) => { const r = e.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; });
+  await page.mouse.move(grip.x, grip.y);
+  await page.mouse.down();
+  await page.mouse.move(grip.x, grip.y - 100, { steps: 4 });
+  await page.mouse.up();
+  const dragged = await panelH();
+  check(Math.abs(dragged - 260) <= 1, `dragging the handle up 100 px gave ${dragged} px (260 expected)`);
+  await page.reload();
+  await page.waitForSelector('.step-card[data-id="con"]');
+  await page.click('#btn-results-toggle');
+  check(Math.abs((await panelH()) - dragged) <= 1, `the panel height was not kept after a reload (${await panelH()} vs ${dragged})`);
+  await page.focus('#results-resize');
+  await page.keyboard.press('Enter');
+  const shut = await page.evaluate(() => ({ expanded: document.getElementById('btn-results-toggle').getAttribute('aria-expanded'), focus: document.activeElement?.id, hidden: document.getElementById('results-resize').hidden }));
+  check(shut.expanded === 'false' && shut.focus === 'btn-results-toggle' && shut.hidden, `Enter on the handle (${JSON.stringify(shut)}: collapsed, focus on Kết quả)`);
   const theme = await page.evaluate(() => ({ title: document.getElementById('theme-select').title, color: getComputedStyle(document.querySelector('#theme-select option')).color }));
   check(theme.title === 'Giao diện: Theo hệ thống' && !/rgba\(0, 0, 0, 0\)|transparent/.test(theme.color), `theme select title/option colour (${JSON.stringify(theme)})`);
   await page.context().close();
@@ -1003,6 +1040,8 @@ async function flowLayoutNarrow() {
   // 13e: one-row results header, "⤓ Tải" menu with the two downloads.
   const head = await m.evaluate(() => ({ h: document.querySelector('.results-head').getBoundingClientRect().height, expanded: document.getElementById('btn-results-toggle').getAttribute('aria-expanded') }));
   check(head.h <= 50 && head.expanded === 'true', `390px results header after Xem trước (${JSON.stringify(head)})`);
+  const grip390 = await m.evaluate(() => { const g = document.getElementById('results-resize'); return { hidden: g.hidden, h: g.getBoundingClientRect().height, coarse: matchMedia('(pointer: coarse)').matches }; });
+  check(!grip390.hidden && (!grip390.coarse || Math.abs(grip390.h - 24) < 0.5), `390px: results height handle ${JSON.stringify(grip390)} (shown; a 24 px row on touch)`);
   // Design 0014 §4: the summary and the palette fade their hidden edge; a vertical wheel scrolls the summary sideways.
   const fade = (sel, want) => m.waitForFunction(([q, w]) => document.querySelector(q)?.dataset.overflow === w, [sel, want], { timeout: 2000 }).then(() => true, () => false);
   check(await fade('#results-summary', 'end') && await fade('.palette', 'end'), `390px: summary / palette overflow ${await m.evaluate(() => [document.getElementById('results-summary').dataset.overflow, document.querySelector('.palette').dataset.overflow])} (end expected)`);
@@ -1041,6 +1080,7 @@ async function flowLayoutNarrow() {
   await settle(m);
   s = await sheet();
   check(s.sheet >= s.palette + 60 - 0.5 && s.sheet - s.canvas >= 60 - 0.5, `844×390: less than 60 px of canvas above the sheet (${JSON.stringify(s)})`);
+  check(await m.evaluate(() => document.getElementById('results-resize').hidden), '844×390: the results height handle shows although there is no room to resize');
   await m.tap('#btn-more');
   check(await m.$('.popup .popup-item:has-text("Thu gọn tất cả")'), '844×390: "Thu gọn tất cả" is neither on screen nor in the ⋯ menu');
   await m.keyboard.press('Escape');
