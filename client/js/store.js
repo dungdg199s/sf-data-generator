@@ -4,6 +4,7 @@
 
 import { findStep, collectAliases, allSteps } from '/shared/workflow-tree.js';
 import { analyzeScope } from '/shared/scope.js';
+import { estimateSteps } from '/shared/estimate.js';
 
 const STORAGE_KEY = 'sfdg.workflow.v2';
 // Autosave of the old graph editor. Read once for migration, never written or removed.
@@ -256,6 +257,21 @@ export function currentScope() {
     scopeCache = { revision, workflow: state.workflow, scope: analyzeScope(state.workflow, state.meta) };
   }
   return scopeCache.scope;
+}
+
+let estimateCache = { revision: -1, workflow: null, result: undefined, estimate: null };
+/**
+ * Record-count estimate of the current workflow (shared/estimate.js, design 0012 H): per Record
+ * step and in total. Query steps count the rows of the last preview. Once per workflow revision
+ * (and result).
+ */
+export function currentEstimate() {
+  const c = estimateCache;
+  if (c.revision !== revision || c.workflow !== state.workflow || c.result !== state.result) {
+    const queryCounts = Object.fromEntries((state.result?.queries ?? []).map((q) => [q.nodeId, q.count]));
+    estimateCache = { revision, workflow: state.workflow, result: state.result, estimate: estimateSteps(state.workflow, state.meta, { queryCounts, limits: state.meta?.limits }) };
+  }
+  return estimateCache.estimate;
 }
 
 /** Suggest a short unique alias from an sObject name: Account → acc, My_Thing__c → mything. */

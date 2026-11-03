@@ -16,6 +16,7 @@ import { state, subscribe, select, nodeType, stepById, setCollapsed } from './st
 import { layout, START_ID } from './layout.js';
 import {
   stepSummary, stepAlias, statChip, stepLabel, addPointLabel, issuesByStep, innerIssues, innerCount, emptySlotLabel,
+  estimateChip, startEstimate,
 } from './summary.js';
 import * as ops from './ops.js';
 import { openSheet } from './inspector.js';
@@ -292,7 +293,7 @@ const typeLabel = (step) => nodeType(step.type)?.label ?? step.type;
 
 function startCard() {
   const wf = state.workflow;
-  const max = wf.settings?.maxRecords ?? state.meta?.limits.maxRecordsDefault;
+  const est = startEstimate();
   return h(
     'div',
     {
@@ -308,7 +309,7 @@ function startCard() {
     },
     h('div', { class: 'dg-row' }, h('span', { class: 'type' }, icoTile(), h('span', { class: 'type-label' }, 'Bắt đầu')), h('span', { class: 'badges' })),
     h('div', { class: 'sum dg-sum', title: wf.name || 'Workflow' }, wf.name || 'Workflow'),
-    h('div', { class: 'dg-tags' }, h('span', { class: 'dg-note' }, `≤ ${Number(max).toLocaleString('vi-VN')} bản ghi`)),
+    h('div', { class: 'dg-tags' }, h('span', { class: 'dg-note', title: est.title }, est.text), est.over ? h('span', { class: 'tag-over', title: est.over.title }, est.over.text) : null),
   );
 }
 
@@ -324,13 +325,15 @@ function cardEl(n) {
   const type = nodeType(step.type);
   const alias = stepAlias(step);
   const summary = stepSummary(step);
-  const chip = state.result ? statChip(step, state.result.stats?.byStep) : null;
+  const est = !state.result || staleStats ? estimateChip(step) : null;
+  const chip = state.result && !est ? statChip(step, state.result.stats?.byStep) : null;
   const head = n.kind === 'frame';
   const parts = {
     type: h('span', { class: 'type' }, icoTile(), h('span', { class: 'type-label' }, typeLabel(step))),
     alias: alias ? h('span', { class: 'alias', title: alias }, alias) : null,
     sum: h('span', { class: `sum${head ? '' : ' dg-sum'}`, title: summary }, summary),
-    chip: chip ? h('span', { class: `stat${staleStats ? ' stale' : ''}`, title: staleStats ? 'Số liệu của lần xem trước gần nhất; workflow đã đổi sau đó.' : 'Số liệu của lần xem trước gần nhất.' }, chip) : null,
+    chip: chip ? h('span', { class: `stat${staleStats ? ' stale' : ''}`, 'data-stat': step.id, title: staleStats ? 'Số liệu của lần xem trước gần nhất; workflow đã đổi sau đó.' : 'Số liệu của lần xem trước gần nhất.' }, chip)
+      : est ? h('span', { class: 'stat est', title: est.title }, est.text) : null,
     badges: h('span', { class: 'badges' }),
     off: step.disabled ? h('span', { class: 'tag-off', title: 'Bước này đang tắt: không chạy và không được kiểm tra. Ctrl+/ để bật lại.' }, 'Đã tắt') : null,
     sample: type?.needsOrg && !state.org && !step.disabled ? h('span', { class: 'tag-sample', title: 'Chưa chọn org: Xem trước dùng bản ghi mẫu (Id giả). Chọn org ở thanh trên để đọc dữ liệu thật.' }, 'chưa chọn org') : null,

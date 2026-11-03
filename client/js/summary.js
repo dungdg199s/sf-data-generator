@@ -2,7 +2,7 @@
 // Record, Query, Chọn bản ghi, Lặp and Rẽ nhánh have their own sentence; other step types fall
 // back to the options marked `summary: true` in /api/meta.
 
-import { state, nodeType, queryResultOf, stepById, slotKeys } from './store.js';
+import { state, nodeType, queryResultOf, stepById, slotKeys, currentEstimate } from './store.js';
 import { walkSteps } from '/shared/workflow-tree.js';
 import { START_ID } from './layout.js';
 import { selectFields, soqlSobject } from '/shared/soql.js';
@@ -95,6 +95,49 @@ export function statChip(step, byStep) {
   }
   if (step.type === 'pick') return `chọn ${s.picked ?? 0} lần${s.skipped ? ` · bỏ qua ${s.skipped}` : ''}`;
   return s.records ? `${s.records} bản ghi` : `${s.runs} lần chạy`;
+}
+
+const vi = (n) => Number(n).toLocaleString('vi-VN', { maximumFractionDigits: n < 10 ? 1 : 0 });
+
+/** "12", "≈ 12,5", "≤ 40", "?", "> 200 000" for an estimate Amount (shared/estimate.js). */
+export function estimateText(a, hard = state.meta?.limits?.maxRecordsHard ?? 200000) {
+  const over = (n) => n !== null && n > hard;
+  if (a.exp === null) return a.max === null ? '?' : over(a.max) ? `≤ > ${vi(hard)}` : `≤ ${vi(a.max)}`;
+  if (over(a.exp)) return `> ${vi(hard)}`;
+  return a.exact ? vi(a.exp) : `≈ ${vi(a.exp)}`;
+}
+
+/** "(khoảng 3–48)" of an estimate, or ''. */
+const rangeText = (a) => (a.exact ? '' : a.max === null ? ` (ít nhất ${vi(a.min)}, tối đa chưa biết)` : ` (khoảng ${vi(a.min)}–${vi(a.max)})`);
+
+/**
+ * Chip of a Record card before a run, or when the run is stale (design 0012 H):
+ * { text: '≈ 12 bản ghi', title } from the estimate; null for other steps or turned-off ones.
+ */
+export function estimateChip(step) {
+  const a = currentEstimate()?.byStep?.[step.id];
+  if (!a) return null;
+  const why = a.exp === null ? ' Số lần lặp lấy từ biến hoặc có lọc nên chưa biết trước số bản ghi.' : '';
+  return { text: `${estimateText(a)} bản ghi`, title: `Ước tính từ cấu hình, chưa chạy${rangeText(a)}.${why}` };
+}
+
+/**
+ * Start card (design 0012 H): "≈ 1 250 bản ghi · ≤ 50 000", and the over-limit tag when the
+ * expected total is above the run's limit. → { text, over: { text, title } | null }
+ */
+export function startEstimate() {
+  const max = state.workflow.settings?.maxRecords ?? state.meta?.limits.maxRecordsDefault;
+  const t = currentEstimate()?.total;
+  const limit = `≤ ${vi(Number(max))}`;
+  if (!t) return { text: `${limit} bản ghi`, over: null };
+  const exp = t.exp ?? 0;
+  return {
+    text: `${estimateText(t)} bản ghi · ${limit}`,
+    title: `Ước tính từ cấu hình${rangeText(t)}. Giới hạn mỗi lần chạy: ${vi(Number(max))} bản ghi.`,
+    over: exp > Number(max)
+      ? { text: 'Ước tính vượt giới hạn', title: `Ước tính khoảng ${vi(Math.round(exp))} bản ghi, quá giới hạn ${vi(Number(max))} mỗi lần chạy. Giảm số lần lặp hoặc tăng giới hạn ở bước Bắt đầu.` }
+      : null,
+  };
 }
 
 /** Name of a step in labels: its alias, else its type label. */

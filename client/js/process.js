@@ -14,6 +14,7 @@ import { linkRefTarget, refSourceStep, sourceTitle } from './ref-target.js';
 import { allSteps, slotList } from '/shared/workflow-tree.js';
 import {
   stepSummary, stepAlias, statChip, stepLabel, addPointLabel, issuesByStep, innerIssues, innerCount, emptySlotLabel,
+  estimateChip, startEstimate,
 } from './summary.js';
 import * as ops from './ops.js';
 import { openField, openSheet } from './inspector.js';
@@ -102,7 +103,7 @@ function targetOf(el) {
 
 function startCard(rootSize) {
   const wf = state.workflow;
-  const max = wf.settings?.maxRecords ?? state.meta?.limits.maxRecordsDefault;
+  const est = startEstimate();
   return h(
     'div',
     {
@@ -120,7 +121,8 @@ function startCard(rootSize) {
       },
     },
     h('span', { class: 'type' }, icoTile(), 'Bắt đầu'),
-    h('span', { class: 'sum' }, `${wf.name || 'Workflow'} · ≤ ${Number(max).toLocaleString('vi-VN')} bản ghi`),
+    h('span', { class: 'sum', title: est.title }, `${wf.name || 'Workflow'} · ${est.text}`),
+    est.over ? h('span', { class: 'tag-over', title: est.over.title }, est.over.text) : null,
     h('span', { class: 'badges' }),
   );
 }
@@ -164,7 +166,8 @@ function renderStep(step, level, at) {
   const collapsed = container && state.collapsed.has(step.id);
   const alias = stepAlias(step);
   const summary = stepSummary(step);
-  const chip = state.result ? statChip(step, state.result.stats?.byStep) : null;
+  const est = !state.result || staleStats ? estimateChip(step) : null;
+  const chip = state.result && !est ? statChip(step, state.result.stats?.byStep) : null;
   const stale = staleStats;
   const showDetails = !container && detailsOpen.has(step.id);
 
@@ -190,7 +193,8 @@ function renderStep(step, level, at) {
     h('span', { class: 'type' }, icoTile(), type?.label ?? step.type),
     alias ? h('span', { class: 'alias' }, alias) : null,
     h('span', { class: 'sum', title: summary }, summary),
-    chip ? h('span', { class: `stat${stale ? ' stale' : ''}`, title: stale ? 'Số liệu của lần xem trước gần nhất; workflow đã đổi sau đó.' : 'Số liệu của lần xem trước gần nhất.' }, chip) : null,
+    chip ? h('span', { class: `stat${stale ? ' stale' : ''}`, 'data-stat': step.id, title: stale ? 'Số liệu của lần xem trước gần nhất; workflow đã đổi sau đó.' : 'Số liệu của lần xem trước gần nhất.' }, chip) : null,
+    est ? h('span', { class: 'stat est', title: est.title }, est.text) : null,
     h('span', { class: 'badges' }),
     step.disabled ? h('span', { class: 'tag-off', title: 'Bước này đang tắt: không chạy và không được kiểm tra. Ctrl+/ để bật lại.' }, 'Đã tắt') : null,
     type?.needsOrg && !state.org && !step.disabled ? h('span', { class: 'tag-sample', title: 'Chưa chọn org: Xem trước dùng bản ghi mẫu (Id giả). Chọn org ở thanh trên để đọc dữ liệu thật.' }, 'chưa chọn org') : null,

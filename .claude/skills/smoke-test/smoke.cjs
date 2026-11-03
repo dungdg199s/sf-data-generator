@@ -190,8 +190,9 @@ async function flowEditing() {
 
   await page.keyboard.press('Control+Enter');
   await page.waitForSelector('table.data tbody tr');
-  await page.waitForSelector('.step-card .stat');
-  const chips = await page.$$eval('.step-card .stat', (n) => n.map((x) => x.textContent));
+  // Design 0012 H: Record cards show an estimate (.stat.est) until a run; wait for the real chips.
+  await page.waitForSelector('.step-card .stat:not(.est)');
+  const chips = await page.$$eval('.step-card .stat:not(.est)', (n) => n.map((x) => x.textContent));
   check(chips.some((c) => /\d+ bản ghi/.test(c)), `no "bản ghi" stat chip (${chips.join(', ')})`);
   check(chips.some((c) => /\d+ lần lặp/.test(c)), 'no "lần lặp" stat chip');
   const summary = await page.textContent('#results-summary');
@@ -997,7 +998,8 @@ async function flowEach() {
 
   // ⋯ on the Query card → "Lặp qua từng bản ghi": a filled Lặp right after it, selected.
   await page.click('.step-card[data-id="accs"] .menu-btn');
-  await page.click('.popup [role="menuitem"]:has-text("Lặp qua từng bản ghi")');
+  // Exact label: design 0012 C adds "Bọc trong Lặp qua từng bản ghi" to the same menu.
+  await page.click('.popup [role="menuitem"]:has(.pi-label:text-is("Lặp qua từng bản ghi"))');
   await page.waitForSelector('#inspector select[data-key="from"]');
   const filled = await page.evaluate(() => ({
     mode: document.querySelector('#inspector select[data-key="mode"]').value,
@@ -1163,7 +1165,7 @@ async function flowCanvas() {
   await page.mouse.move(low.x, low.y);
   await page.mouse.wheel(0, low.dy);
   await page.keyboard.press('Control+Enter');
-  await page.waitForSelector('#canvas .step-card[data-id="con"] .stat');
+  await page.waitForSelector('#canvas .step-card[data-id="con"] .stat:not(.est)');
   await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
   check((await inView('con'))?.inside, 'the results panel hid the selected card of the diagram');
   if (outDir) await page.screenshot({ path: path.join(outDir, 'smoke-1440-canvas.png') });
