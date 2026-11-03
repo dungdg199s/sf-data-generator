@@ -2,6 +2,7 @@
 // insertion point and the ⋯ menu of a step. Rendering is popup.js; the actions are ops.js.
 
 import { state, select, nodeType, slotKeys, stepById } from './store.js';
+import { selectedIds, selectionInfo, inSelectMode, setSelectMode } from './selection.js';
 import { exposesOf } from '/shared/scope.js';
 import { stepLabel } from './summary.js';
 import * as ops from './ops.js';
@@ -34,30 +35,73 @@ export function eachItem(ids, { disabled = false, title } = {}) {
   return { label: 'Bọc trong Lặp qua từng bản ghi', title: `Thêm bước Lặp quanh ${ids.length > 1 ? 'các bước này' : 'bước này'}, chạy một lần cho mỗi bản ghi của "${plan.from}".`, onSelect: () => ops.wrapInEach(ids) };
 }
 
-/** ⋯ menu of a step (also ContextMenu / Shift+F10 on the selected step). */
+const COARSE = window.matchMedia('(max-width: 900px), (pointer: coarse)');
+
+/**
+ * ⋯ menu of a step (also ContextMenu / Shift+F10 on the selected step), in groups (design 0012 B):
+ * Chỉnh sửa, Di chuyển, Bọc, Chọn (narrow / touch), then Tắt and Xóa. On a card of a selection of
+ * several steps the items act on all of them (title "3 bước đã chọn"; move and wrap only for a
+ * run); on another card the selection shrinks to that card first.
+ */
 export function openStepMenu(anchor, id) {
   const step = stepById(id);
   if (!step) return;
+  const ids = selectedIds();
+  const many = ids.length > 1 && ids.includes(id);
+  if (!many) select({ kind: 'step', id, anchor: id });
+  else if (state.selection.id !== id) select({ ...state.selection, id });
+  openPopup(anchor, { title: many ? `${ids.length} bước đã chọn` : stepLabel(step), items: stepMenuItems(id, many) });
+}
+
+/** Items of the ⋯ menu for step `id` (or the selection of several steps when `many`). */
+export function stepMenuItems(id, many = false) {
+  const step = stepById(id);
+  const info = many ? selectionInfo() : { ids: [id], contiguous: true };
+  const run = info.contiguous;
+  const runOnly = (item, title) => (run ? item : { ...item, disabled: true, title, onSelect: undefined });
   const container = slotKeys(step.type).length > 0;
+  const allOff = info.ids.every((x) => stepById(x)?.disabled);
   const items = [
-    { label: 'Nhân bản', kbd: 'Ctrl+D', onSelect: () => ops.duplicateStep(id) },
-    { label: 'Lên', kbd: 'Alt+↑', onSelect: () => ops.moveBy(id, -1) },
-    { label: 'Xuống', kbd: 'Alt+↓', onSelect: () => ops.moveBy(id, 1) },
-    { label: 'Bọc trong Lặp', onSelect: () => ops.wrapIn(id, 'loop') },
-    eachItem([id]),
-    { label: 'Bọc trong Rẽ nhánh', onSelect: () => ops.wrapIn(id, 'branch') },
+    { group: 'Chỉnh sửa' },
+    { label: 'Sao chép', kbd: 'Ctrl+C', onSelect: () => ops.copyFromMenu(false) },
+    { label: 'Cắt', kbd: 'Ctrl+X', onSelect: () => ops.copyFromMenu(true) },
+    { label: many ? 'Dán sau các bước này' : 'Dán sau bước này', kbd: 'Ctrl+V', onSelect: () => ops.pasteFromMenu() },
+    { label: 'Nhân bản', kbd: 'Ctrl+D', onSelect: () => ops.duplicateSelection() },
+    { group: 'Di chuyển' },
+    runOnly({ label: 'Lên', kbd: 'Alt+↑', onSelect: () => ops.moveSelectionBy(-1) }, ops.SELECTION_TITLES.move),
+    runOnly({ label: 'Xuống', kbd: 'Alt+↓', onSelect: () => ops.moveSelectionBy(1) }, ops.SELECTION_TITLES.move),
+    { group: 'Bọc' },
+    ...wrapItems(info),
     // Design 0010: a Lặp over each record of this step's pool, right after it.
-    isPoolStep(step)
+    !many && isPoolStep(step)
       ? step.config?.alias
         ? { label: 'Lặp qua từng bản ghi', title: `Thêm bước Lặp ngay sau bước này, chạy một lần cho mỗi bản ghi của "${step.config.alias}".`, onSelect: () => ops.addEachLoopAfter(id) }
         : { label: 'Lặp qua từng bản ghi', disabled: true, title: 'Đặt alias cho bước này trước.' }
       : null,
-    container
+    !many && container
       ? { label: 'Bỏ vỏ (giữ các bước bên trong)', disabled: !ops.canUnwrap(step), title: ops.canUnwrap(step) ? undefined : 'Chỉ bỏ vỏ được khi một nhánh trống.', onSelect: () => ops.unwrap(id) }
       : null,
-    { label: step.disabled ? 'Bật bước' : 'Tắt bước', kbd: 'Ctrl+/', onSelect: () => ops.toggleDisabled(id) },
-    { label: 'Xóa', kbd: 'Delete', danger: true, onSelect: () => ops.deleteStep(id) },
-  ].filter(Boolean);
-  select({ kind: 'step', id });
-  openPopup(anchor, { title: stepLabel(step), items });
+    COARSE.matches && !inSelectMode() ? { group: 'Chọn' } : null,
+    COARSE.matches && !inSelectMode() ? { label: 'Chọn nhiều bước', title: 'Chạm các thẻ khác để chọn thêm; thao tác ở thanh dưới.', onSelect: () => startSelectMode(id) } : null,
+    { group: 'Tắt / xóa' },
+    { label: many ? (allOff ? `Bật ${info.ids.length} bước` : `Tắt ${info.ids.length} bước`) : step.disabled ? 'Bật bước' : 'Tắt bước', kbd: 'Ctrl+/', onSelect: () => ops.toggleSelection() },
+    { label: many ? `Xóa ${info.ids.length} bước` : 'Xóa', kbd: 'Delete', danger: true, onSelect: () => ops.deleteSelection() },
+  ];
+  return items.filter(Boolean);
+}
+
+/** The three kinds of wrapping for the selection `info` (only a run of neighbours can be wrapped). */
+export function wrapItems(info) {
+  const title = info.contiguous ? undefined : ops.SELECTION_TITLES.wrap;
+  return [
+    { label: 'Bọc trong Lặp', disabled: !info.contiguous, title, onSelect: () => ops.wrapSelection('loop') },
+    info.contiguous ? eachItem(info.ids) : eachItem(info.ids, { disabled: true, title }),
+    { label: 'Bọc trong Rẽ nhánh', disabled: !info.contiguous, title, onSelect: () => ops.wrapSelection('branch') },
+  ];
+}
+
+/** ⋯ → "Chọn nhiều bước" (narrow screens, touch): the card is the first one selected. */
+function startSelectMode(id) {
+  select({ kind: 'step', id, anchor: id });
+  setSelectMode(true);
 }

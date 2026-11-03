@@ -19,7 +19,8 @@ import {
 } from './summary.js';
 import { chipFor, insertErrorTag, paintRunInfo } from './run-info.js';
 import { showInsertErrorsFor } from './results.js';
-import { collapsedNote } from './process.js';
+import { collapsedNote, clickSelect } from './process.js';
+import { selectedIds, extendBy } from './selection.js';
 import * as ops from './ops.js';
 import { openSheet } from './inspector.js';
 import { openAddMenu, openStepMenu } from './menus.js';
@@ -160,6 +161,7 @@ function render() {
   for (const el of els.values()) el.remove();
   els.clear();
   issues = issuesByStep();
+  chosen = new Set(selectedIds());
   if (!placed) placeInitial();
   applyNow(); // the elements exist before focus is put back on one of them
   if (focusKey) {
@@ -318,8 +320,10 @@ function startCard() {
 
 function cardClick(e, id) {
   if (e.target.closest('button')) return;
-  select(id === START_ID ? { kind: 'workflow' } : { kind: 'step', id });
-  openSheet(); // narrow screens: a tap on the selected card shows the sheet a run (or ‹ Xong) closed
+  if (id === START_ID || !clickSelect(e, id)) {
+    select(id === START_ID ? { kind: 'workflow' } : { kind: 'step', id, anchor: id });
+    openSheet(); // narrow screens: a tap on the selected card shows the sheet a run (or ‹ Xong) closed
+  }
   e.currentTarget.focus({ preventScroll: true });
 }
 
@@ -424,9 +428,11 @@ function labelEl(l) {
 
 // ---------- decoration (selection, issues) without rebuilding ----------
 
+let chosen = new Set(); // every selected step (design 0012 B), for decorateCard
 function decorate() {
   if (!lay) return;
   issues = issuesByStep();
+  chosen = new Set(selectedIds());
   cull(); // the selection is pinned: a newly selected card off screen exists from now on
   for (const el of els.values()) decorateEl(el);
 }
@@ -448,11 +454,13 @@ function decorateCard(card) {
     errors += inner.errors;
     warnings += inner.warnings;
   }
-  const selected = id === (selectedId() ?? null);
+  const main = id === (selectedId() ?? null);
+  const selected = main || chosen.has(id);
   card.classList.toggle('selected', selected);
+  card.classList.toggle('main', main && chosen.size > 1);
   card.setAttribute('aria-selected', String(selected));
-  // Roving tab stop: the selected card, or the Start card when nothing is selected.
-  card.tabIndex = selected || (id === START_ID && !selectedId()) ? 0 : -1;
+  // Roving tab stop: the main selected card, or the Start card when nothing is selected.
+  card.tabIndex = main || (id === START_ID && !selectedId()) ? 0 : -1;
   card.classList.toggle('has-error', errors > 0);
   card.classList.toggle('has-warning', !errors && warnings > 0);
   const jump = (e) => {
@@ -745,6 +753,11 @@ function onKey(e) {
     ensureVisible(entry.id);
     cardElement(entry.id)?.focus({ preventScroll: true });
   };
+  if (e.shiftKey && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+    e.preventDefault();
+    if (extendBy(e.key === 'ArrowDown' ? 1 : -1)) focusSelected();
+    return undefined;
+  }
   switch (e.key) {
     case 'ArrowDown':
       return go(order[idx + 1] ?? (idx < 0 ? order[0] : null));

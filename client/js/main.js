@@ -22,6 +22,8 @@ import { openPopup, closePopup, popupAnchor } from './popup.js';
 import { SAMPLES } from './samples.js';
 import { stepAlias } from './summary.js';
 import { startLiveRun, liveProgress, endLiveRun } from './run-info.js';
+import { selectedIds, collapseToMain, selectSiblings, inSelectMode, setSelectMode } from './selection.js';
+import { initSelectBar } from './select-bar.js';
 
 const $ = (id) => document.getElementById(id);
 const ORG_KEY = 'sfdg.org';
@@ -45,6 +47,8 @@ async function boot() {
   firstRender();
   wireToolbar();
   wireShortcuts();
+  wireSelectionLive();
+  initSelectBar();
   wireValidation();
   loadOrgs();
   afterBoot?.();
@@ -369,15 +373,19 @@ function wireShortcuts() {
     } else if (mod && key === 'y') {
       e.preventDefault();
       redo();
+    } else if (mod && key === 'a' && e.target.closest('[role="tree"]')) {
+      // Design 0012 B: every step of the main step's sequence.
+      e.preventDefault();
+      selectSiblings();
     } else if (mod && key === 'd') {
       e.preventDefault();
-      if (sel) ops.duplicateStep(sel);
+      if (sel) ops.duplicateSelection();
     } else if (mod && (e.key === '/' || e.code === 'Slash')) {
       e.preventDefault();
-      if (sel) ops.toggleDisabled(sel);
+      if (sel) ops.toggleSelection();
     } else if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
       e.preventDefault();
-      if (sel) ops.moveBy(sel, e.key === 'ArrowUp' ? -1 : 1);
+      if (sel) ops.moveSelectionBy(e.key === 'ArrowUp' ? -1 : 1);
     } else if (!mod && !e.altKey && e.key === '/') {
       e.preventDefault();
       openAddMenuAtDefault();
@@ -388,7 +396,7 @@ function wireShortcuts() {
     } else if (e.key === 'Delete' || e.key === 'Backspace') {
       if (!sel) return;
       e.preventDefault();
-      ops.deleteStep(sel);
+      ops.deleteSelection();
     } else if (e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10')) {
       const card = sel && document.querySelector(`.step-card[data-id="${CSS.escape(sel)}"] .menu-btn`);
       if (card) {
@@ -396,8 +404,58 @@ function wireShortcuts() {
         openStepMenu(card, sel);
       }
     } else if (e.key === 'Escape') {
-      select(null);
+      // Two steps (design 0012 B): several selected → the main one; then nothing.
+      if (inSelectMode()) {
+        setSelectMode(false);
+        collapseToMain();
+      } else if (!collapseToMain()) select(null);
     }
+  });
+  wireClipboard();
+}
+
+/** Focus in a field (or a text selection on the page): the browser's own copy / paste. */
+const nativeClipboard = () => {
+  const el = document.activeElement;
+  if (document.querySelector('dialog[open]') || el?.closest?.('input, textarea, select, [contenteditable], .popup')) return true;
+  const sel = window.getSelection?.();
+  return Boolean(sel && !sel.isCollapsed && String(sel).trim());
+};
+
+/**
+ * Ctrl+C / Ctrl+X / Ctrl+V on steps (design 0012 B): the document's copy / cut / paste events
+ * with JSON text (no permission prompt, works without a secure context). Only when focus is not
+ * in a field; "not our steps" is said only when the paste was aimed at the steps.
+ */
+function wireClipboard() {
+  const onCopy = (cut) => (e) => {
+    if (nativeClipboard() || !selectedIds().length) return;
+    const c = ops.selectionClipboard();
+    if (!c) return;
+    e.preventDefault();
+    e.clipboardData.setData('text/plain', c.text);
+    if (cut) ops.cutSelection();
+    else ops.copied(c.count);
+  };
+  document.addEventListener('copy', onCopy(false));
+  document.addEventListener('cut', onCopy(true));
+  document.addEventListener('paste', (e) => {
+    if (nativeClipboard()) return;
+    const text = e.clipboardData?.getData('text/plain') ?? '';
+    const fromTree = Boolean(document.activeElement?.closest?.('[role="tree"], .step-card'));
+    if (ops.pasteText(text, { fromTree })) e.preventDefault();
+  });
+}
+
+/** "Đã chọn 3 bước." for screen readers when the number of selected steps changes (not back to 1). */
+function wireSelectionLive() {
+  let last = 0;
+  subscribe(({ kind }) => {
+    if (kind !== 'selection' && kind !== 'workflow') return;
+    const n = selectedIds().length;
+    if (n === last) return;
+    last = n;
+    $('sel-live').textContent = n > 1 ? `Đã chọn ${n} bước.` : '';
   });
 }
 

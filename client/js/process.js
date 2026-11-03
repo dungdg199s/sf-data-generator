@@ -13,6 +13,7 @@ import { state, subscribe, select, nodeType, fieldType, slotKeys, stepById, setC
 import { linkRefTarget, refSourceStep, sourceTitle } from './ref-target.js';
 import { chipFor, insertErrorTag, innerInsertErrors, paintRunInfo } from './run-info.js';
 import { showInsertErrorsFor } from './results.js';
+import { selectedIds, extendTo, toggleOne, extendBy, inSelectMode } from './selection.js';
 import { allSteps, slotList } from '/shared/workflow-tree.js';
 import {
   stepSummary, stepAlias, stepLabel, addPointLabel, issuesByStep, innerIssues, innerCount, emptySlotLabel, startEstimate,
@@ -184,8 +185,10 @@ function renderStep(step, level, at) {
       tabindex: '-1',
       onclick: (e) => {
         if (e.target.closest('button, .handle')) return;
-        select({ kind: 'step', id: step.id });
-        openSheet(); // narrow screens: a tap on the selected card shows the sheet a run (or ‹ Xong) closed
+        if (!clickSelect(e, step.id)) {
+          select({ kind: 'step', id: step.id, anchor: step.id });
+          openSheet(); // narrow screens: a tap on the selected card shows the sheet a run (or ‹ Xong) closed
+        }
         card.focus({ preventScroll: true });
       },
     },
@@ -268,6 +271,17 @@ function fieldChips(step) {
   return h('div', { class: 'details' }, chips);
 }
 
+/**
+ * Shift / Ctrl / ⌘ + click, or a tap in "Chọn nhiều bước" mode (design 0012 B, both views).
+ * → true when the click changed a selection of several steps (no sheet then).
+ */
+export function clickSelect(e, id) {
+  if (e.shiftKey) extendTo(id);
+  else if (e.ctrlKey || e.metaKey || inSelectMode()) toggleOne(id);
+  else return false;
+  return true;
+}
+
 // ---------- decoration (selection, issues) without rebuilding ----------
 
 function decorate() {
@@ -275,6 +289,7 @@ function decorate() {
   const issues = issuesByStep();
   const sel = state.selection;
   const selectedId = sel?.kind === 'step' && stepById(sel.id) ? sel.id : sel?.kind === 'workflow' ? START_ID : null;
+  const chosen = new Set(selectedIds());
   let focusable = null;
 
   for (const card of root.querySelectorAll('.step-card')) {
@@ -290,11 +305,12 @@ function decorate() {
       errors += inner.errors;
       warnings += inner.warnings;
     }
-    const selected = id === selectedId;
+    const selected = id === selectedId || chosen.has(id);
     card.classList.toggle('selected', selected);
+    card.classList.toggle('main', id === selectedId && chosen.size > 1);
     card.setAttribute('aria-selected', String(selected));
     card.tabIndex = -1;
-    if (selected) focusable = card;
+    if (id === selectedId) focusable = card;
     card.classList.toggle('has-error', errors > 0);
     card.classList.toggle('has-warning', !errors && warnings > 0);
     const badges = card.querySelector(':scope > .badges');
@@ -404,6 +420,12 @@ function onTreeKey(e) {
   };
   const stepEl = current?.parentElement;
   const isFrame = stepEl?.classList.contains('frame');
+  if (e.shiftKey && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+    // Design 0012 B: grow / shrink the run within the anchor's sequence.
+    e.preventDefault();
+    if (extendBy(e.key === 'ArrowDown' ? 1 : -1)) focusSelected();
+    return undefined;
+  }
   switch (e.key) {
     case 'ArrowDown':
       return go(cards[idx + 1] ?? (idx < 0 ? cards[0] : null));
@@ -520,7 +542,8 @@ function onHandleDown(e, step) {
   let scrollRaf = 0;
 
   const begin = () => {
-    select({ kind: 'step', id: step.id });
+    // Dragging ⠿ of one card moves that card only: the selection shrinks to it (design 0012 B).
+    select({ kind: 'step', id: step.id, anchor: step.id });
     const card = stepEl.querySelector(':scope > .step-card');
     const r = card.getBoundingClientRect();
     const ghost = card.cloneNode(true);

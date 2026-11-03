@@ -24,7 +24,7 @@ export function emptyWorkflow() {
 export const state = {
   meta: null, // { fieldTypes, nodeTypes, stepCategories, limits }
   workflow: emptyWorkflow(),
-  selection: null, // { kind: 'step', id } | { kind: 'workflow' }
+  selection: null, // { kind: 'step', id, ids?, anchor? } | { kind: 'workflow' } (ids: several steps, selection.js)
   issues: { errors: [], warnings: [] },
   orgs: [],
   org: '',
@@ -108,6 +108,8 @@ function restore(json) {
   lastCoalesce = { key: null, at: 0 };
   revision++;
   if (state.selection?.kind === 'step' && !stepById(state.selection.id)) state.selection = null;
+  // Undo / redo keep the main step only (design 0012 B: several steps are not restored).
+  else if (state.selection?.ids) state.selection = { kind: 'step', id: state.selection.id, anchor: state.selection.id };
   persist();
   emit('history', 'workflow');
 }

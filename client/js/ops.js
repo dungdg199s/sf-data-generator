@@ -11,7 +11,10 @@ import { analyzeScope, refChoices, sourceStep } from '/shared/scope.js';
 import {
   insertStep, removeStep, moveStep, wrapStep, cloneSteps, collectIds, collectAliases,
   defaultInsertTarget, neighbourTarget, findStep, walkSteps, slotList, subtreeIds,
+  wrapSteps, removeSteps, moveBlock, neighbourTargetBlock, pasteSteps,
 } from '/shared/workflow-tree.js';
+import { selectedIds, selectionInfo, selectMany } from './selection.js';
+import { toClipboard, parseClipboard } from './clipboard.js';
 import { stepLabel } from './summary.js';
 import { placesText } from './variables.js';
 
@@ -319,7 +322,7 @@ export function eachWrapPlan(ids) {
   if (steps.length !== ids.length) return null;
   const loop = newStep('loop', { parentId: at.parentId, slot: at.slot, index: at.index }, steps);
   loop.config.mode = 'each';
-  if (!wrapStepsIn(wf, ids, loop)) return null;
+  if (!wrapSteps(wf, ids, loop, { slotKeys })) return null;
   const scope = analyzeScope(wf, state.meta);
   const pools = refChoices(scope, loop.id, { pool: true }).filter((c) => c.usable);
   if (!pools.length) return null;
@@ -339,19 +342,6 @@ export function eachWrapPlan(ids) {
   return { from: best > 0 && top.length === 1 ? top[0].name : pools[0].name, pools };
 }
 
-/** Replace the run of siblings `ids` by `container` holding them in its first slot. → true when done. */
-function wrapStepsIn(wf, ids, container) {
-  if (ids.length === 1) return Boolean(wrapStep(wf, ids[0], container, { slotKeys }));
-  const at = findStep(wf, ids[0], slotKeys);
-  if (!at || ids.some((id, i) => at.list[at.index + i]?.id !== id)) return false;
-  const moved = at.list.splice(at.index, ids.length, container);
-  const key = slotKeys(container.type)[0];
-  container.slots ??= {};
-  for (const k of slotKeys(container.type)) container.slots[k] ??= [];
-  container.slots[key] = moved;
-  return true;
-}
-
 /**
  * ⋯ → "Bọc trong Lặp qua từng bản ghi" (design 0012 C): a Lặp `each` around the steps `ids` (one
  * step or a run of siblings), over the pool of eachWrapPlan, the record named after it
@@ -366,7 +356,7 @@ export function wrapInEach(ids) {
   const around = ids.map((id) => stepById(id));
   const loop = newStep('loop', { parentId: at.parentId, slot: at.slot, index: at.index }, around);
   Object.assign(loop.config, { mode: 'each', from: plan.from, itemAlias: suggestPickAlias(plan.from, undefined, 'itemAlias') });
-  if (!updateWorkflow((wf) => wrapStepsIn(wf, ids, loop))) return null;
+  if (!updateWorkflow((wf) => Boolean(wrapSteps(wf, ids, loop, { slotKeys })))) return null;
   select({ kind: 'step', id: loop.id });
   reveal(loop.id, { flash: true });
   offerRelink(loop.id);
@@ -435,4 +425,223 @@ export function expandAncestors(id) {
   let changed = false;
   for (const a of at.ancestors) if (state.collapsed.delete(a.id)) changed = true;
   return changed;
+}
+
+// ---------- several steps (design 0012 B) ----------
+
+const RUN_ONLY_MOVE = 'Chỉ di chuyển được các bước liền nhau trong cùng một dãy.';
+const RUN_ONLY_WRAP = 'Chỉ bọc được các bước liền nhau trong cùng một dãy.';
+export const SELECTION_TITLES = { move: RUN_ONLY_MOVE, wrap: RUN_ONLY_WRAP };
+
+/** "3 bước" / "Record "acc"" for toasts about the selection. */
+const countText = (ids) => (ids.length === 1 ? stepLabel(stepById(ids[0])) : `${ids.length} bước`);
+
+/** Delete: one step as before; several at once (one undo step), asking when frames hold steps. */
+export function deleteSelection() {
+  const ids = selectedIds();
+  if (ids.length <= 1) return ids[0] ? deleteStep(ids[0]) : undefined;
+  const inner = ids.reduce((n, id) => n + childCount(stepById(id)), 0);
+  if (inner > 0) return confirmDeleteMany(ids, inner);
+  return doRemoveMany(ids);
+}
+
+function doRemoveMany(ids) {
+  const scope = currentScope();
+  const inside = new Set(ids.flatMap((id) => [...subtreeIds(stepById(id), slotKeys)]));
+  const refs = scope.refs.filter((r) => inside.has(sourceStep(scope, r.source)) && !inside.has(r.nodeId));
+  const first = locate(ids[0]);
+  const lastAt = locate(ids.at(-1));
+  const next = lastAt.list[lastAt.index + 1]?.id ?? first.list[first.index - 1]?.id ?? first.parentId ?? null;
+  updateWorkflow((wf) => removeSteps(wf, ids, { slotKeys }));
+  select(next && stepById(next) ? { kind: 'step', id: next } : null);
+  if (next && stepById(next)) reveal(next);
+  const places = placesText(refs);
+  const used = places.length ? ` Các bước vừa xóa đang được dùng ở ${places.length} chỗ: ${places.join(', ')}. ${places.length > 1 ? 'Các chỗ đó' : 'Chỗ đó'} sẽ báo lỗi cho tới khi sửa.` : '';
+  toastWithUndo(`Đã xóa ${ids.length} bước.${used}`);
+}
+
+function confirmDeleteMany(ids, inner) {
+  const modal = document.getElementById('modal');
+  const close = () => modal.close();
+  modal.replaceChildren(
+    h('h2', {}, `Xóa ${ids.length} bước và ${inner} bước bên trong?`),
+    h('p', { class: 'hint' }, 'Có thể hoàn tác bằng Ctrl+Z.'),
+    h('div', { class: 'actions' },
+      h('button', { onclick: close }, 'Hủy'),
+      h('button', { class: 'danger solid', onclick: () => { close(); doRemoveMany(ids.filter((id) => stepById(id))); } }, 'Xóa tất cả')),
+  );
+  modal.onclose = null;
+  modal.showModal();
+  modal.querySelector('.actions .danger')?.focus();
+}
+
+/** Ctrl+/ on the selection: off when one of them is on, else all back on (one undo step). */
+export function toggleSelection() {
+  const ids = selectedIds();
+  if (ids.length <= 1) return ids[0] ? toggleDisabled(ids[0]) : undefined;
+  const steps = ids.map(stepById);
+  const off = steps.some((st) => !st.disabled);
+  updateWorkflow(() => {
+    for (const st of steps) {
+      if (off) st.disabled = true;
+      else delete st.disabled;
+    }
+  });
+  toast(off ? `Đã tắt ${ids.length} bước. Bấm Ctrl+/ để bật lại.` : `Đã bật lại ${ids.length} bước.`);
+  return undefined;
+}
+
+/** Ctrl+D: a run is copied right after the run; loose steps each right after itself. */
+export function duplicateSelection() {
+  const info = selectionInfo();
+  if (info.ids.length <= 1) return info.ids[0] ? duplicateStep(info.ids[0]) : undefined;
+  const copies = [];
+  updateWorkflow((wf) => {
+    const ids = collectIds(wf);
+    const aliases = collectAliases(wf, state.meta);
+    if (info.contiguous) {
+      const at = findStep(wf, info.ids[0], slotKeys);
+      const run = at.list.slice(at.index, at.index + info.ids.length);
+      const { steps } = cloneSteps(run, { ids, aliases, catalog: state.meta });
+      at.list.splice(at.index + run.length, 0, ...steps);
+      copies.push(...steps.map((x) => x.id));
+    } else {
+      // From the last one up, so earlier positions do not move.
+      for (const id of [...info.ids].reverse()) {
+        const at = findStep(wf, id, slotKeys);
+        const { steps: [copy] } = cloneSteps([at.step], { ids, aliases, catalog: state.meta });
+        at.list.splice(at.index + 1, 0, copy);
+        copies.unshift(copy.id);
+      }
+    }
+  });
+  selectMany(copies, copies[0], copies[0]);
+  reveal(copies[0], { flash: true });
+  return undefined;
+}
+
+/** Bọc trong Lặp / Rẽ nhánh for a run (one undo step); a loose selection cannot be wrapped. */
+export function wrapSelection(type) {
+  const info = selectionInfo();
+  if (info.ids.length <= 1) return info.ids[0] ? wrapIn(info.ids[0], type) : undefined;
+  if (!info.contiguous) return toast(RUN_ONLY_WRAP);
+  const container = newStep(type, { parentId: info.parentId, slot: info.slot, index: info.index }, info.ids.map(stepById));
+  if (!updateWorkflow((wf) => Boolean(wrapSteps(wf, info.ids, container, { slotKeys })))) return undefined;
+  select({ kind: 'step', id: container.id });
+  reveal(container.id, { flash: true });
+  return undefined;
+}
+
+/** Alt+↑ / Alt+↓ on a run: it moves as a block; consecutive presses are one undo step. */
+export function moveSelectionBy(dir) {
+  const info = selectionInfo();
+  if (info.ids.length <= 1) return info.ids[0] ? moveBy(info.ids[0], dir) : false;
+  if (!info.contiguous) {
+    toast(RUN_ONLY_MOVE);
+    return false;
+  }
+  const target = neighbourTargetBlock(state.workflow, info.ids, dir, state.collapsed, slotKeys);
+  if (!target) return false;
+  const keep = state.selection;
+  updateWorkflow((wf) => moveBlock(wf, info.ids, target, slotKeys), { coalesceKey: `move:${info.ids.join(',')}` });
+  select(keep);
+  reveal(state.selection.id);
+  return true;
+}
+
+// ---------- copy / cut / paste (system clipboard, design 0012 B) ----------
+
+let clipMemory = null; // the last copy of this tab (for "Dán sau bước này" without clipboard access)
+
+/** The JSON of the selection for the clipboard, or null. Remembered for the menu's Dán. */
+export function selectionClipboard() {
+  const ids = selectedIds();
+  if (!ids.length) return null;
+  const text = toClipboard(ids.map((id) => structuredClone(stepById(id))), state.workflow.name);
+  clipMemory = text;
+  return { text, count: ids.length };
+}
+
+/** After a copy event wrote the clipboard (or the menu fell back to memory). */
+export function copied(count) {
+  toast(`Đã sao chép ${count} bước.`);
+}
+
+/** Cut: the selection is removed (one undo step); paste is another. */
+export function cutSelection() {
+  const ids = selectedIds();
+  if (!ids.length) return;
+  const first = locate(ids[0]);
+  const lastAt = locate(ids.at(-1));
+  const next = lastAt.list[lastAt.index + 1]?.id ?? first.list[first.index - 1]?.id ?? first.parentId ?? null;
+  updateWorkflow((wf) => removeSteps(wf, ids, { slotKeys }));
+  select(next && stepById(next) ? { kind: 'step', id: next } : null);
+  toast(`Đã cắt ${ids.length} bước. Bấm Ctrl+V để dán.`);
+}
+
+/** Where a paste goes: the "+" rule for one step; after the last one (reading order) for several. */
+function pasteTarget() {
+  const info = selectionInfo();
+  if (info.ids.length > 1) {
+    const at = locate(info.ids.at(-1));
+    return { parentId: at.parentId, slot: at.slot, index: at.index + 1 };
+  }
+  return defaultTarget();
+}
+
+/**
+ * Paste clipboard text. `fromTree`: the user pasted with focus on the steps (only then is
+ * "not our steps" said). → true when steps were pasted.
+ */
+export function pasteText(text, { fromTree = true } = {}) {
+  const parsed = parseClipboard(text, state.meta);
+  if (parsed.error) {
+    if (parsed.error !== 'notSteps' || fromTree) toast(parsed.message, 6000);
+    return false;
+  }
+  const target = pasteTarget();
+  let res = null;
+  updateWorkflow((wf) => { res = pasteSteps(wf, target, structuredClone(parsed.steps), { catalog: state.meta, slotKeys }); return res; });
+  if (!res?.ids.length) return false;
+  selectMany(res.ids, res.ids[0], res.ids[0]);
+  reveal(res.ids[0], { flash: true });
+  const parts = [`Đã dán ${res.ids.length} bước.`];
+  if (res.renamed.length) parts.push(`Đổi tên alias: ${res.renamed.map((x) => `${x.from} → ${x.to}`).join(', ')}.`);
+  // References to steps that are not here (another workflow): the ordinary errors say where.
+  const scope = currentScope();
+  const inside = new Set(res.ids.flatMap((id) => [...subtreeIds(stepById(id), slotKeys)]));
+  const missing = [...new Set(scope.refs.filter((r) => inside.has(r.nodeId) && r.code === 'unknownName' && !r.hidden).map((r) => String(r.path ?? r.name ?? '').split('.')[0]).filter(Boolean))];
+  if (missing.length) parts.push(`${missing.length} tham chiếu tới bước không có ở đây (${missing.join(', ')}): xem thanh lỗi (F8).`);
+  toast(parts.join(' '), res.renamed.length || missing.length ? 7000 : 3000);
+  return true;
+}
+
+/** Menu "Sao chép" / "Cắt": the browser's copy command (fires the copy event), else this tab's memory. */
+export function copyFromMenu(cut = false) {
+  let ok = false;
+  try {
+    ok = document.execCommand(cut ? 'cut' : 'copy');
+  } catch {
+    ok = false;
+  }
+  if (ok) return;
+  const c = selectionClipboard();
+  if (!c) return;
+  if (cut) cutSelection();
+  else toast(`Đã sao chép ${c.count} bước (trong tab này). Dán bằng mục "Dán sau bước này".`);
+}
+
+/** Menu "Dán sau bước này": the clipboard when the browser lets us read it, else the last copy of this tab. */
+export async function pasteFromMenu() {
+  let text = null;
+  try {
+    text = await navigator.clipboard?.readText();
+  } catch {
+    text = null;
+  }
+  if (text && !parseClipboard(text, state.meta).error) return pasteText(text);
+  if (clipMemory) return pasteText(clipMemory);
+  if (text) return pasteText(text);
+  toast('Không đọc được bộ nhớ tạm. Chọn bước rồi bấm Ctrl+V để dán.', 5000);
+  return false;
 }

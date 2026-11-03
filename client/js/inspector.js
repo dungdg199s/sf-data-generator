@@ -16,6 +16,10 @@ import { setStepAlias, renameField, insertStep } from '/shared/workflow-tree.js'
 import { refChoices, refsToRecords, referenceOptions, exposesList } from '/shared/scope.js';
 import { buildSoql, QUERY_DEFAULTS, SAMPLE_ROWS, addSelectField } from '/shared/soql.js';
 import { deleteStep, duplicateStep, toggleDisabled, newStep, fillEach, fillParentFilter, reveal } from './ops.js';
+import * as ops from './ops.js';
+import { selectedIds, selectionInfo, inSelectMode } from './selection.js';
+import { wrapItems } from './menus.js';
+import { stepLabel } from './summary.js';
 import { START_ID } from './layout.js';
 import { placesText, formatSample } from './variables.js';
 import { applySuggestion, closePicker } from './var-picker.js';
@@ -49,12 +53,13 @@ export function openField(stepId, index) {
 function render() {
   const s = state.selection;
   const step = s?.kind === 'step' ? stepById(s.id) : null;
-  const key = step ? `step:${step.id}` : s?.kind ?? 'none';
-  if (key !== lastSelectionKey) sheetClosed = false;
+  const many = step ? selectedIds() : [];
+  const key = many.length > 1 ? `multi:${many.join(',')}` : step ? `step:${step.id}` : s?.kind ?? 'none';
+  if (key !== lastSelectionKey && !key.startsWith('multi:')) sheetClosed = false;
   lastSelectionKey = key;
   // The "‹ Xong" row sticks to the top of the sheet, so it closes without scrolling back up.
   const head = h('div', { class: 'sheet-head' }, h('button', { class: 'sheet-close', title: 'Đóng bảng cấu hình (vẫn giữ bước đang chọn)', onclick: closeSheet }, '‹ Xong'));
-  root.replaceChildren(head, step ? renderStep(step) : renderWorkflow());
+  root.replaceChildren(head, many.length > 1 ? renderMulti(many) : step ? renderStep(step) : renderWorkflow());
   setSheetOpen(Boolean(s) && !sheetClosed);
   markIssues();
 }
@@ -71,7 +76,8 @@ const narrow = () => NARROW.matches;
  * issues bar), so the selected card is scrolled to just above the sheet's edge.
  */
 function setSheetOpen(open) {
-  open = open && narrow();
+  // "Chọn nhiều bước" mode (design 0012 B): the toolbar takes the sheet's place.
+  open = open && narrow() && !inSelectMode();
   const was = root.classList.contains('open');
   // Closing while focus is in the sheet (Ctrl+Enter in a field, "‹ Xong"): focus goes to the
   // selected card, never left in a hidden form.
@@ -125,6 +131,27 @@ export function openSheet() {
   setSheetOpen(Boolean(state.selection));
 }
 
+/** Several steps selected (design 0012 B): what they are and what can be done with them; no shared form. */
+function renderMulti(ids) {
+  const info = selectionInfo();
+  const n = ids.length;
+  const allOff = ids.every((id) => stepById(id)?.disabled);
+  const btn = (label, onclick, attrs = {}) => h('button', { onclick, ...attrs }, label);
+  const fromItem = (it) => h('button', { disabled: it.disabled, title: it.title, onclick: it.onSelect }, it.label);
+  return h('div', { class: 'multi-panel' },
+    h('div', { class: 'node-head', 'data-type': 'start' }, h('h2', {}, `${n} bước đã chọn`)),
+    h('p', { class: 'multi-list' }, ids.map((id) => stepLabel(stepById(id))).join(' · ')),
+    h('div', { class: 'btn-row' }, wrapItems(info).map(fromItem)),
+    h('div', { class: 'btn-row' },
+      btn('Sao chép', () => ops.copyFromMenu(false), { title: 'Sao chép (Ctrl+C)' }),
+      btn('Cắt', () => ops.copyFromMenu(true), { title: 'Cắt (Ctrl+X)' }),
+      btn('Nhân bản', () => ops.duplicateSelection(), { title: 'Nhân bản (Ctrl+D)' }),
+      btn(allOff ? `Bật ${n} bước` : `Tắt ${n} bước`, () => ops.toggleSelection(), { title: 'Tắt / bật (Ctrl+/)' }),
+      btn(`Xóa ${n} bước`, () => ops.deleteSelection(), { class: 'danger', title: 'Xóa (Delete)' })),
+    h('p', { class: 'hint' }, 'Mẹo: Shift+bấm để chọn dải, Ctrl+bấm để chọn rời, Esc để bỏ.'),
+  );
+}
+
 function renderWorkflow() {
   return h(
     'div',
@@ -146,6 +173,9 @@ function renderWorkflow() {
       h('li', {}, '/: thêm bước ở vị trí mặc định'),
       h('li', {}, 'Alt+↑ / Alt+↓: di chuyển bước'),
       h('li', {}, 'Ctrl+D: nhân bản; Ctrl+/: tắt / bật bước'),
+      h('li', {}, 'Shift+bấm / Shift+↑ ↓: chọn một dải bước; Ctrl+bấm: chọn rời; Ctrl+A: chọn cả dãy'),
+      h('li', {}, 'Ctrl+C / Ctrl+X / Ctrl+V: sao chép / cắt / dán bước (cả sang workflow khác)'),
+      h('li', {}, 'Ctrl+O: thư viện workflow'),
       h('li', {}, 'Delete: xóa bước (khung có bước con thì hỏi)'),
       h('li', {}, 'Enter: sửa bước đang chọn; Esc: quay lại danh sách'),
       h('li', {}, 'Ctrl+Z / Ctrl+Shift+Z: hoàn tác / làm lại'),
