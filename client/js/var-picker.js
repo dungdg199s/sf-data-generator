@@ -10,6 +10,7 @@
 // execCommand('insertText') so the field's native undo still works, and each one is its own
 // undo step in the store (unique coalesceKey).
 
+import { linkRefTarget, refSourceStep, sourceTitle } from './ref-target.js';
 import { h, icoTile } from './dom.js';
 import { state, subscribe, stepById, currentScope } from './store.js';
 import { groupsFor, matchScore, tokenize, refAt, previewOf, formatSample, typeLabel, MAX_ROWS, NUMBER_HINT } from './variables.js';
@@ -145,13 +146,15 @@ function chip(part, input, opts, issues) {
   const known = Boolean(src) && ref.code !== 'unknownName';
   // Built-ins ($n) are neutral (start colour, docs/ui-design-system.md §3); this.* takes the step's colour.
   const type = rest[0]?.startsWith('$') || src?.global ? 'start' : ref?.viaThis ? stepById(opts.stepId)?.type : src?.nodeType;
+  // Design 0012 I: hover / focus highlights the card of the step the chip points at.
+  const target = known && !(issue && state.issues.errors.includes(issue)) ? refSourceStep(ref) : null;
   let title;
   if (issue) title = issue.message;
   else if (!known) title = `Chưa khớp biến nào: ${part.path}`;
   else {
     const member = src.members.find((m) => m.key === rest[0]);
     const owner = src.kind === 'vars' ? `${src.name}` : src.sobject || src.name;
-    title = `${owner}.${rest.join('.')}${member ? ` · ${typeLabel(member)}` : ''}`;
+    title = `${owner}.${rest.join('.')}${member ? ` · ${typeLabel(member)}` : ''}${sourceTitle(target)}`;
   }
   const el = h(
     'button',
@@ -173,7 +176,7 @@ function chip(part, input, opts, issues) {
     h('span', { class: 'var-src' }, name),
     rest.length ? ` · ${rest.join('.')}` : '',
   );
-  return el;
+  return linkRefTarget(el, target);
 }
 
 // ---------- opening ----------

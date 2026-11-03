@@ -9,7 +9,8 @@
 // does not render.
 
 import { h, icoTile } from './dom.js';
-import { state, subscribe, select, nodeType, fieldType, slotKeys, stepById, setCollapsed } from './store.js';
+import { state, subscribe, select, nodeType, fieldType, slotKeys, stepById, setCollapsed, currentScope } from './store.js';
+import { linkRefTarget, refSourceStep, sourceTitle } from './ref-target.js';
 import { allSteps, slotList } from '/shared/workflow-tree.js';
 import {
   stepSummary, stepAlias, statChip, stepLabel, addPointLabel, issuesByStep, innerIssues, innerCount, emptySlotLabel,
@@ -249,12 +250,14 @@ function fieldChips(step) {
   const chips = fields.slice(0, MAX_FIELD_CHIPS).map((f, i) => {
     const t = fieldType(f.type)?.label ?? f.type;
     const ref = (f.type === 'lookup' || f.type === 'masterdetail') && f.options?.ref ? ` → ${f.options.ref}` : '';
-    return h('button', {
+    // Design 0012 I: a Lookup chip highlights its parent's card on hover / focus.
+    const target = ref ? refSourceStep(currentScope().refs.find((r) => r.nodeId === step.id && r.field === `fields.${f.name}` && r.option === 'ref')) : null;
+    return linkRefTarget(h('button', {
       class: 'field-chip',
       'data-field': `fields.${f.name}`,
-      title: 'Mở tùy chọn của field này trong panel bên phải',
+      title: `Mở tùy chọn của field này trong panel bên phải${sourceTitle(target)}`,
       onclick: () => openField(step.id, i),
-    }, `${f.name || '(chưa đặt tên)'} · ${t}${ref}`);
+    }, `${f.name || '(chưa đặt tên)'} · ${t}${ref}`), target);
   });
   if (fields.length > MAX_FIELD_CHIPS) chips.push(h('span', { class: 'field-more' }, `+${fields.length - MAX_FIELD_CHIPS} field`));
   if (!fields.length) chips.push(h('span', { class: 'field-more' }, 'Chưa có field nào.'));
