@@ -895,6 +895,7 @@ async function flowLayoutWide() {
   check(!narrowed.open && !narrowed.sheet && narrowed.inert && narrowed.top >= 899, `narrowing the window popped the sheet open (${JSON.stringify(narrowed)})`);
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.waitForFunction(() => !document.getElementById('inspector').inert, null, { timeout: 2000 }).catch(() => errors.push('the inspector stays inert on a wide screen'));
+  check(!(await page.$('.palette[data-overflow], #results-summary[data-overflow]')), '1440px: the palette or the summary is marked as overflowing sideways');
   const theme = await page.evaluate(() => ({ title: document.getElementById('theme-select').title, color: getComputedStyle(document.querySelector('#theme-select option')).color }));
   check(theme.title === 'Giao diện: Theo hệ thống' && !/rgba\(0, 0, 0, 0\)|transparent/.test(theme.color), `theme select title/option colour (${JSON.stringify(theme)})`);
   await page.context().close();
@@ -1002,6 +1003,18 @@ async function flowLayoutNarrow() {
   // 13e: one-row results header, "⤓ Tải" menu with the two downloads.
   const head = await m.evaluate(() => ({ h: document.querySelector('.results-head').getBoundingClientRect().height, expanded: document.getElementById('btn-results-toggle').getAttribute('aria-expanded') }));
   check(head.h <= 50 && head.expanded === 'true', `390px results header after Xem trước (${JSON.stringify(head)})`);
+  // Design 0014 §4: the summary and the palette fade their hidden edge; a vertical wheel scrolls the summary sideways.
+  const fade = (sel, want) => m.waitForFunction(([q, w]) => document.querySelector(q)?.dataset.overflow === w, [sel, want], { timeout: 2000 }).then(() => true, () => false);
+  check(await fade('#results-summary', 'end') && await fade('.palette', 'end'), `390px: summary / palette overflow ${await m.evaluate(() => [document.getElementById('results-summary').dataset.overflow, document.querySelector('.palette').dataset.overflow])} (end expected)`);
+  const wheeled = await m.evaluate(() => {
+    const el = document.getElementById('results-summary');
+    const ev = new WheelEvent('wheel', { deltaY: 60, bubbles: true, cancelable: true });
+    el.dispatchEvent(ev);
+    return { left: el.scrollLeft, prevented: ev.defaultPrevented };
+  });
+  check(wheeled.left > 0 && wheeled.prevented, `a vertical wheel on the summary did not scroll it sideways (${JSON.stringify(wheeled)})`);
+  await m.evaluate(() => { const el = document.getElementById('results-summary'); el.scrollLeft = el.scrollWidth; });
+  check(await fade('#results-summary', 'start'), 'scrolled to its end, the summary does not fade only its start');
   await m.tap('#btn-dl-menu');
   const dl = await m.$$eval('.popup .popup-item', (n) => n.map((x) => x.textContent));
   check(dl.join('|') === 'Tải JSON|Tải CSV (tab hiện tại)', `⤓ Tải menu: ${dl.join('|')}`);

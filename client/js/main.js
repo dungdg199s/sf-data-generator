@@ -2,7 +2,7 @@
 // narrow screens, design 0009), shortcuts, live validation (issues bar: issues.js) and runs.
 
 import { api } from './api.js';
-import { h, toast, download, icoTile } from './dom.js';
+import { h, toast, download, icoTile, watchOverflow } from './dom.js';
 import {
   state, emit, subscribe, updateWorkflow, emptyWorkflow, loadPersisted, loadLegacy, persist,
   undo, redo, select, stepById, runKey, saveCollapsed, backupBrokenAutosave, slotKeys, rememberInsert,
@@ -41,6 +41,7 @@ async function boot() {
   saveCollapsed();
 
   renderPalette();
+  watchOverflow(document.querySelector('.palette')); // a sideways row on narrow screens (design 0014 §4)
   initViews();
   initInspector();
   initResults({ onRefresh: () => run(false, { refresh: true }), onGoTo: goToIssue, onHistory: (hid) => openHistory({ focus: hid ?? null }), onIds: downloadIds });

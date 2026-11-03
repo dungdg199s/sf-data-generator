@@ -1,5 +1,7 @@
 // Tiny DOM helper: h('div', { class: 'x', onclick }, child, 'text').
 
+import { overflowSide, wheelScroll, revealInline } from './sizing.js';
+
 export function h(tag, attrs = {}, ...children) {
   const el = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs ?? {})) {
@@ -39,6 +41,58 @@ export function icoTile() {
  */
 export function ico(name) {
   return h('span', { class: 'ico', 'data-ico': name, 'aria-hidden': 'true' });
+}
+
+/**
+ * A row that scrolls sideways (design 0014 §4): marks it `data-scroll-x` and keeps
+ * `data-overflow="start" | "end" | "both"` on it (removed when nothing is hidden), so CSS fades the
+ * edge that still hides items. Updated on scroll (once a frame), resize and content changes. A
+ * mostly vertical wheel turn scrolls the row sideways while it can move that way.
+ * → a function that stops watching (rows that are rebuilt, like the results tabs).
+ */
+export function watchOverflow(el) {
+  el.setAttribute('data-scroll-x', '');
+  let frame = 0;
+  // Only while the row is a sideways scroller (the results summary wraps on wide screens).
+  const scrolls = () => /^(?:auto|scroll)$/.test(getComputedStyle(el).overflowX);
+  const update = () => {
+    frame = 0;
+    const side = scrolls() ? overflowSide({ left: el.scrollLeft, scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }) : null;
+    if (side) {
+      if (el.dataset.overflow !== side) el.dataset.overflow = side;
+    } else if (el.hasAttribute('data-overflow')) el.removeAttribute('data-overflow');
+  };
+  const schedule = () => { if (!frame) frame = requestAnimationFrame(update); };
+  const onWheel = (e) => {
+    if (e.ctrlKey || !scrolls()) return; // Ctrl: page zoom
+    const next = wheelScroll({ deltaX: e.deltaX, deltaY: e.deltaY, deltaMode: e.deltaMode, left: el.scrollLeft, scrollWidth: el.scrollWidth, clientWidth: el.clientWidth });
+    if (next === null) return;
+    e.preventDefault();
+    el.scrollLeft = next;
+  };
+  el.addEventListener('scroll', schedule, { passive: true });
+  el.addEventListener('wheel', onWheel, { passive: false });
+  const resize = new ResizeObserver(schedule);
+  resize.observe(el);
+  const content = new MutationObserver(schedule);
+  content.observe(el, { childList: true, characterData: true, subtree: true });
+  update();
+  return () => {
+    resize.disconnect();
+    content.disconnect();
+    cancelAnimationFrame(frame);
+    el.removeEventListener('scroll', schedule);
+    el.removeEventListener('wheel', onWheel);
+  };
+}
+
+/** Scrolls a sideways row (only that row) so `item` is outside the faded edges. */
+export function revealInRow(row, item) {
+  const pad = parseFloat(getComputedStyle(row).scrollPaddingInlineStart) || 0;
+  const r = row.getBoundingClientRect();
+  const i = item.getBoundingClientRect();
+  const left = revealInline({ itemLeft: i.left - r.left + row.scrollLeft, itemWidth: i.width, left: row.scrollLeft, clientWidth: row.clientWidth, pad });
+  if (left !== row.scrollLeft) row.scrollLeft = left;
 }
 
 let toastTimer;

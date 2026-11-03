@@ -10,7 +10,7 @@
 // The header is one row at every width (0009 §4): on phones the summary scrolls sideways and the
 // two download buttons become one "⤓ Tải" menu that calls them.
 
-import { h, ico, download, toast } from './dom.js';
+import { h, ico, download, toast, watchOverflow, revealInRow } from './dom.js';
 import { state, subscribe, stepById } from './store.js';
 import { stepAlias } from './summary.js';
 import { api } from './api.js';
@@ -28,6 +28,7 @@ let onGoTo = null;
 let onHistory = null; // (hid?) → opens the history dialog (design 0011)
 let onIds = null; // (hid) → downloads the Ids of a run
 let busyDownload = false;
+let unwatchTabs = null; // the tab row is rebuilt on each render (design 0014 §4)
 
 /** Thousands with a space, as in the design docs: 200 000. */
 export const fmt = (n) => String(n ?? 0).replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
@@ -47,6 +48,7 @@ export function initResults({ onRefresh: refresh, onGoTo: goTo, onHistory: histo
   panel = document.getElementById('results');
   body = document.getElementById('results-body');
   summary = document.getElementById('results-summary');
+  watchOverflow(summary); // one line that scrolls sideways on phones
   progressBar = document.getElementById('run-progress');
   stopBtn = document.getElementById('btn-stop');
   dlJson = document.getElementById('btn-dl-json');
@@ -274,7 +276,13 @@ function render() {
     const viaBulk = (r.insert?.bulk ?? []).some((b) => b.sobject === activeTab);
     content = dataTable(r.records.filter((x) => x.sobject === activeTab), r.insert?.ids, r.stats.bySobject[activeTab] ?? 0, { viaBulk, failedRefs: new Set((r.insert?.errors ?? []).map((e) => e.ref)) });
   }
+  const prevLeft = body.querySelector('.tabs')?.scrollLeft ?? 0;
   body.replaceChildren(tabs, content);
+  unwatchTabs?.();
+  unwatchTabs = watchOverflow(tabs);
+  tabs.scrollLeft = prevLeft;
+  const active = tabs.querySelector('.active');
+  if (active) revealInRow(tabs, active);
 }
 
 /** "📌 giữ seed": fills the Seed field; the input event updates the phone's "Seed n" chip. */
