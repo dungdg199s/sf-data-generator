@@ -1,6 +1,6 @@
 # 0014 — Hoàn thiện giao diện: icon SVG, đổi cao panel kết quả, sheet hai nấc, dấu hiệu cuộn ngang, minimap, phím chọn biến trên macOS
 
-- **Trạng thái:** Đã duyệt (2026-10-28; người dùng giao chốt theo phương án đề xuất, xem [Đã chốt](#đã-chốt))
+- **Trạng thái:** Đã làm (2026-11-03; duyệt 2026-10-28, người dùng giao chốt theo phương án đề xuất, xem [Đã chốt](#đã-chốt))
 - **Ngày:** 2026-10-28
 - **Liên quan:** [0008](0008-ui-design-system.md) (token, icon mask, trạng thái; để lại việc đổi ký tự thành SVG),
   [0009](0009-bo-cuc-man-hinh.md) (thanh lỗi, bottom sheet, đầu panel kết quả; "Câu hỏi mở" chuyển sang doc này),
@@ -570,4 +570,70 @@ Người dùng giao chọn theo phương án đề xuất; planner chốt như s
 
 ## Đã làm
 
-(Chưa làm.)
+Làm 2026-11-03 theo đúng 8 bước của kế hoạch, mỗi bước một commit (cộng một commit tinh chỉnh smoke). Không đổi workflow JSON,
+server, `/api/meta`; hash vàng của `test/stream.test.js` không đổi.
+
+**Kiểm tra lại giả định (doc viết trước khi làm 0011, 0012, 0013).**
+
+| Giả định / chỗ mới | Kết quả |
+| --- | --- |
+| 0011: link `⤓ Id`, tab `⚠ Lỗi xóa`, nút Lịch sử icon 32 px | Khi làm, 0011 đã dùng **chữ**: link `Tải Id` / `Lịch sử`, nút ghost `Lịch sử` có chữ, tab "Lỗi xóa (n)" vẽ ▲ bằng mask CSS như "Lỗi insert". Không cần icon mới; test (`css-tokens`) kiểm tab dùng `--ico-warning` |
+| 0011: hộp Lịch sử | Ký tự `▸ / ▾` của hàng → `chevron-right` / `chevron-down` 12 px; nút `⋯` của hàng → `ico('more')` (đã có `aria-label="Thao tác khác"`) |
+| 0011: Dừng ngay, hộp xác nhận xóa | Chỉ có chữ, không có ký tự-icon; câu "bấm ⟳ Đọc lại rồi Insert" của hộp xác nhận Insert đổi thành "bấm Đọc lại rồi Insert" (smoke đổi theo) |
+| 0012: nút `▾` thư viện, `Chưa lưu` / `Tạm dừng lưu` (`#btn-unsaved`) | `#btn-library` → `chevron-down` (đã có `aria-label`); `#btn-unsaved` là chữ, không đổi. Toast "nút ▾ cạnh tên" → "nút Thư viện cạnh tên workflow" |
+| 0012: thanh chọn nhiều, nút `⋯` của Thư viện (≤ 720 px) | `Bọc ▾` → `Bọc` + `chevron-down`; `⋯` → `ico('more')` (cả hai đã có `aria-label`) |
+| 0012: chip ước tính, tag `lỗi n`, hàng "Ví dụ:", chọn nhiều bước | `≈ ≤` là chữ (giữ). Tag `lỗi n` **giữ chỉ chữ** (quyết định: để khác hẳn badge validate ⊗ nền đỏ; 0012 để ngỏ chuyện thêm icon). "Ví dụ:" không có ký tự-icon. Minimap vẽ mọi bước của lựa chọn nhiều bước là "đang chọn"; thẻ nguồn `.is-ref-target` không pan nên có thể nằm dưới minimap (chấp nhận, ghi ở `ui-design-system.md` §6.13) |
+| 0013: ô số, danh sách giá trị | Không có ký tự-icon. `title` của `{x}` ở ô số (`mode: 'number'`) cũng lấy từ `keys.js` |
+| 0009 + 0011/0012 ở đầu panel kết quả (Lịch sử, Dừng / Dừng ngay, `<progress>` 3 px) | Tay nắm đổi cao là phần tử đầu của `#results`, không nằm trong `.results-head`: với chuột phủ mép trên (không đẩy nội dung), với chạm là hàng riêng phía trên. Đầu panel vẫn ≤ 50 px ở 390 px (smoke 13e); `<progress>` vẫn ở mép dưới `.results-head` |
+| Ngân sách smoke 12 s, hiện ~8 s (doc) | Đã cũ: từ 0012 ngân sách là 20 s, chạy ~13,6–14,5 s trên máy 4 CPU trước doc này (đo lại 2 lần) |
+
+**Đã làm theo từng bước.**
+
+1. **Phím chọn biến:** `client/js/keys.js` (`isMac`, `isPickerKey`, `pickerKeys`, `PICKER_SHORTCUTS`); Alt+↓ / ⌥↓ mở bảng
+   chọn ở ô Mẫu, ô số và ô đường dẫn như Ctrl+Space (đang mở trên ô tìm thì không làm gì); `title` của `{x}`,
+   `aria-keyshortcuts`, dòng trong "Phím tắt". `test/keys.test.js`; smoke 5b.
+2. **Icon:** 24 token `--ico-*` mới, luật `.ico[data-ico]` cho cả 37 icon, `--icon-xs/sm/md`, `ico()` trong `dom.js`; badge
+   12 px, dòng lỗi và hộp cảnh báo 16 px, link 14 px, ô bảng 12 px. Thay ký tự ở `index.html`, `process.js`, `canvas.js`,
+   `inspector.js`, `results.js`, `popup.js`, `main.js`, và các file của 0011/0012 (`history.js`, `library-ui.js`,
+   `select-bar.js`). `aria-label` cho 7 nút chỉ có icon (thêm `aria-pressed` cho tắt/bật bước, `aria-expanded` cho "Tùy
+   chọn"); ô Id insert lỗi: icon `error` + chữ ẩn "lỗi" + `title`. Nhãn Đúng/Sai và `.info-box` dùng `::before` mask. Test
+   (`css-tokens`): icon dùng ở client có token + luật, mọi token có dòng ở §5, không còn ký tự-icon trong chuỗi JS / HTML /
+   `content:` (kèm test của chính bộ quét), các nút của 0011/0012 dùng `ico()`. Smoke luồng 1.
+3. **Thẻ không tràn ở điện thoại:** ở ≤ 720 px tag `chưa chọn org` ẩn, chip số liệu co (`min-width: 3em`, `…`), alias co rất ít,
+   còn lại `flex: none`. Đo trước: thẻ Query tràn 67 px (doc ghi 62 px). Smoke 5c (Query) và 13e (thẻ lồng có chip).
+4. **Dấu hiệu cuộn ngang:** `watchOverflow()` / `revealInRow()` trong `dom.js` (luật thuần ở `sizing.js`); palette,
+   `#results-summary`, hàng tab. Chỉ đánh dấu khi hàng đang là ô cuộn ngang (tóm tắt ở màn hình rộng xuống dòng); hàng tab
+   dựng lại mỗi lần vẽ giữ `scrollLeft` cũ rồi đưa tab đang mở ra ngoài vùng mờ. Smoke 13e và 1440 px.
+5. **Panel kết quả:** tay nắm `#results-resize` (`role="separator"`), kéo / phím / nhấp đúp / Enter, `sfdg.resultsH`,
+   `layoutResults()` (cửa sổ đổi cỡ, thanh trên đổi cao: `main.js` đo `--topbar-h`). **Khác doc:** khi chưa có chiều cao đã
+   lưu, mặc định là **38vh** đúng như trước (38 % chiều cao cửa sổ, kẹp vào khoảng cho phép), không phải 38 % của khoảng dưới
+   thanh trên; tỉ lệ lưu vẫn là của khoảng dưới thanh trên. `test/sizing.test.js`; smoke 13f (`flowLayoutWide`).
+6. **Sheet hai nấc:** `.sheet-grip`, kéo ở `.sheet-head`, `snapSheet`, `--sheet-now`, `openSheet({ mid: true })` cho F8 / dòng
+   lỗi / chạy lỗi validate. Hai lỗi bắt được khi thử: (a) nghe `pointermove` trên hàng đầu sheet thì lần di chuyển đầu đã ra
+   khỏi hàng nên kéo không bắt đầu: nghe trên `document`, chỉ bắt con trỏ khi đã là kéo (chạm vẫn là bấm tay nắm); (b) ở nấc
+   cao, Chromium khởi động kéo-thả gốc của mục palette nằm dưới sheet: `preventDefault` ở `pointerdown` và `user-select:
+   none`. Smoke 13d.
+7. **Minimap:** `client/js/minimap.js` (thuần), `canvas.js` (dựng path trong rAF sau `render()`, khi gõ ≤ 1 lần / 250 ms,
+   chỉ khối trong cửa sổ ± một cửa sổ; mỗi khung hình chỉ đổi `viewBox`, khung nhìn, con trượt), `#btn-minimap`
+   (`sfdg.minimap`), `overlayRects()` cho `showRect`, token `--color-minimap-off`, `--minimap-*`. **Khác doc:** tối đa 15
+   `<path>` (6 khung + 6 thẻ theo loại + tắt + chọn + lỗi), khung nhìn và quầng là hai `<rect>`; quầng thẻ đang chọn là nét
+   4 px `paint-order: stroke` của chính path. Đo trong Chromium (1 250 bước): dựng lại sau một lần thu phóng ≈ 10 ms gồm cả
+   `render()` của Sơ đồ. `test/minimap.test.js`; smoke `flowMinimap` (15b) và 15 (390 px không có minimap).
+8. **Tài liệu:** `ui-design-system.md` (bỏ mọi nhãn "dự kiến"; bảng icon §5 ghi tên đủ từng icon vì test đọc nó; bảng tương
+   phản thêm 4 cặp minimap: 79 cặp mỗi theme, 0 không đạt), `architecture.md` (`sizing.js`, `minimap.js`, `keys.js`, `ico()`,
+   `watchOverflow`), SKILL.md của smoke, `README.md` (trạng thái, "Việc còn lại", hai mục "Câu hỏi mở" thành **Hoãn**).
+
+**Test.** 417 → 441 (`npm test`), 24 test mới: `keys` 3, `sizing` 8, `minimap` 6, `css-tokens` 7 (icon 5, token 0014 2). Test có
+sẵn đổi có chủ ý: danh sách cặp tương phản của `css-tokens.test.js` thêm 4 cặp (minimap); không test nào khác đổi.
+
+**Smoke.** Thêm vào các luồng có sẵn (1, 5b, 5c, 13d, 13e, 13f, 15) và luồng mới `flowMinimap`. Để giữ nhẹ: hàng đợi chạy luồng
+dài nhất trước, nửa sau `flowLayoutNarrow` chạy với `prefers-reduced-motion: reduce` (không phải chờ chuyển nấc 200 ms; cũng
+kiểm đường 0 ms), kiểm "giữ chiều cao sau tải lại" dùng lần tải lại sẵn có của `flowLayoutWide`. Một kiểm tra kéo sheet phụ
+thuộc tốc độ (xuống 400 px từ nấc cao chỉ đóng khi vuốt nhanh) được đổi thành 600 px. Thời gian (máy 4 CPU): trước doc này
+13,6 / 14,5 s; sau, 3 lần liên tiếp: 16,0 / 17,1 / 17,4 s, `SMOKE OK` cả 3 (ngân sách 20 s). Chạy song song bị giới hạn bởi CPU (mọi
+làn kết thúc trong 2 s cuối), nên phần tăng là việc thêm vào, chủ yếu `flowMinimap` (~3 s khi chạy riêng, tải workflow
+1 000 bước) và các kiểm tra sheet / panel (`flowLayoutNarrow` 4,2 → 5,0 s khi chạy riêng, `flowLayoutWide` +1 s). `npm test`:
+441/441, hai lần liên tiếp và ba lần chạy song song.
+
+**Còn lại.** Hai mục "Câu hỏi mở" (minimap / rãnh tổng quan trên điện thoại; nhớ nấc sheet) chuyển sang **Hoãn** trong
+[README](README.md#việc-còn-lại). Kéo thẻ / nhớ pan-zoom trên Sơ đồ vẫn ngoài phạm vi (0003).

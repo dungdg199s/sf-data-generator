@@ -24,7 +24,7 @@ viết và cập nhật các file này theo skill `design-doc`; người viết 
 | [0011](0011-thao-tac-du-lieu-org.md) | Thao tác dữ liệu org: Bulk API 2.0, lịch sử chạy, xóa dữ liệu đã insert | Đã làm |
 | [0012](0012-nang-suat-soan-thao.md) | Năng suất soạn thảo: thư viện workflow, chọn nhiều bước, copy/paste, sửa nhanh | Đã làm |
 | [0013](0013-mo-rong-bien-va-lap.md) | Mở rộng biến và lặp | Đã làm |
-| [0014](0014-hoan-thien-giao-dien.md) | Hoàn thiện giao diện: icon SVG, đổi cao panel kết quả, sheet hai nấc, dấu hiệu cuộn ngang, minimap, phím chọn biến | Đã duyệt |
+| [0014](0014-hoan-thien-giao-dien.md) | Hoàn thiện giao diện: icon SVG, đổi cao panel kết quả, sheet hai nấc, dấu hiệu cuộn ngang, minimap, phím chọn biến | Đã làm |
 
 ## Nguyên tắc tiện dụng
 
@@ -75,11 +75,13 @@ Các mục "Câu hỏi mở" / "Việc tiếp theo" / "Chưa làm" của 0001–
 | Mẫu (`samples`) theo mọi bước | [0013](0013-mo-rong-bien-va-lap.md) — **Đã làm** | 0005: hiện chỉ có cho Chọn bản ghi |
 | Biến trong `pick.filterValue` | [0013](0013-mo-rong-bien-va-lap.md) — **Đã có** | Đã có từ 0006 (`vars: 'template'`); 0013 không đổi gì; chỉ mục `eq` dùng chung cho Chọn bản ghi để sau |
 | Option phạm vi pool (chỉ bản ghi của lượt hiện tại) | [0013](0013-mo-rong-bien-va-lap.md) → **Hoãn** (dòng dưới) | 0010 |
-| Icon SVG cho các ký tự còn lại (`⋯ ▸ ▾ ⠿ ↶ ↷ ⟳ ⤓`) | [0014](0014-hoan-thien-giao-dien.md) | 0008, 0009 |
-| Kéo đổi chiều cao panel kết quả; bottom sheet hai nấc | [0014](0014-hoan-thien-giao-dien.md) | 0009 |
-| Dấu hiệu "còn mục" ở palette ngang | [0014](0014-hoan-thien-giao-dien.md) | 0009 |
-| Minimap trên Sơ đồ | [0014](0014-hoan-thien-giao-dien.md) | 0001, 0003 |
-| Phím thay thế Ctrl+Space trên macOS | [0014](0014-hoan-thien-giao-dien.md) | 0005 câu 7, 0007: vẫn giữ Ctrl+Space, nút `{x}`, gõ `{{` |
+| Icon SVG cho các ký tự còn lại (`⋯ ▸ ▾ ⠿ ↶ ↷ ⟳ ⤓`) | [0014](0014-hoan-thien-giao-dien.md) — **Đã làm** | 0008, 0009; cả các nút của 0011 / 0012 (có test chặn ký tự quay lại) |
+| Kéo đổi chiều cao panel kết quả; bottom sheet hai nấc | [0014](0014-hoan-thien-giao-dien.md) — **Đã làm** | 0009 |
+| Dấu hiệu "còn mục" ở palette ngang | [0014](0014-hoan-thien-giao-dien.md) — **Đã làm** | 0009; cả tóm tắt kết quả (điện thoại) và hàng tab |
+| Minimap trên Sơ đồ | [0014](0014-hoan-thien-giao-dien.md) — **Đã làm** | 0001, 0003 |
+| Minimap (hoặc chỉ rãnh tổng quan) trên điện thoại | **Hoãn** | 0014 "Câu hỏi mở": chờ phản hồi dùng thật |
+| Nhớ nấc bottom sheet giữa các lần mở | **Hoãn** | 0014 "Câu hỏi mở": hiện luôn mở ở nấc vừa để thẻ đang sửa thấy được |
+| Phím thay thế Ctrl+Space trên macOS | [0014](0014-hoan-thien-giao-dien.md) — **Đã làm** (Alt+↓ / ⌥↓) | 0005 câu 7, 0007: vẫn giữ Ctrl+Space, nút `{x}`, gõ `{{` |
 | Kéo thẻ / vị trí tự do trên Sơ đồ | **Không làm** | Trái mô hình cây (bố cục tự tính). Đổi thứ tự bằng Alt+↑/↓, menu ⋯, hoặc kéo trong Quy trình (M) |
 | Sửa cấu hình ngay trong thẻ | **Không làm** | 0003 câu 3: chỉ sửa ở inspector, một nơi sửa cho cả hai chế độ |
 | Nhánh song song | **Không làm** | 0003, 0004: phá tính tất định theo seed |

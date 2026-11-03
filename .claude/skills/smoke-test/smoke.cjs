@@ -1,7 +1,8 @@
 // UI smoke test: starts the server, loads the editor ("Quy trình" view) in headless Chromium and
 // exercises the main flows; fails on any page error. Flows (described in SKILL.md):
 //   1. load the "Account + Contact" sample; steps, Start card and palette items have data-type and an
-//      icon tile, no inline --c; NODE_COLORS is gone from the client (0008)
+//      icon tile, no inline --c; NODE_COLORS is gone from the client (0008); icons are data-ico SVG masks,
+//      icon-only buttons have an aria-label, 16 px in buttons (0014)
 //   2. "+" inside the inner loop body (menu rows typed + icons) → Record; Alt+↑ moves it; Delete then
 //      Ctrl+Z restores it
 //   3. Ctrl+Enter previews: results table (sticky header right under the tabs) and "bản ghi" / "lần lặp"
@@ -13,10 +14,10 @@
 //   5. "Hoàn tác" on the delete toast disappears after another edit
 //  5b. variable picker (0005): {x} + search + Enter inserts {{acc.Industry}}, "{{in" puts loop.index first,
 //      chips are coloured by source type, a misspelt field turns its chip red with an error badge on the card,
-//      "Sửa thành" fixes it, renaming the field updates the template
+//      "Sửa thành" fixes it, renaming the field updates the template; Alt+↓ opens the picker (0014)
 //  5c. Query → Chọn bản ghi → Record without an org (0006): the "Contact cho Account có sẵn" sample previews with
 //      5 sample rows (tab "↓ accs", warning on the Query card), "Chọn bản ghi" from the palette fills from/alias,
-//      "{{" in WHERE outlines the field
+//      "{{" in WHERE outlines the field; at 390 px no card row is wider than its card (0014)
 //   6. a v1 autosave is migrated on load (toast) and the sfdg.workflow.v1 key is left untouched
 //   7. a malformed v2 autosave falls back to the sample without being overwritten
 //   8. a malformed v2 file is refused with a toast
@@ -31,13 +32,16 @@
 //      warns about repeating the data, error groups are role=button rows (Space) with a remainder row
 //  13. screen layout (0009): issues bar docked under the canvas (F8, collapse kept after reload, expands on a
 //      failed run), top bar rows / no overflow with a long (mocked) org label, the "⋯" menu (Mẫu, Seed chip),
-//      bottom sheet keeps the selected card above it and closes on run, one-row results header with "⤓ Tải"
+//      bottom sheet keeps the selected card above it and closes on run, one-row results header with "Tải";
+//      0014: sheet notches (grip, drag, F8 back to mid), fading row edges, results height handle (keys, drag, kept)
 //  14. Lặp "Mỗi bản ghi trong pool" (0010): the sample previews 15 Contacts ("5 lần lặp"), "⋯ → Lặp qua từng
 //      bản ghi" on the Query inserts a filled each-loop (one undo), switching a Lặp to each fills pool and name,
 //      a Contact moved out of the loop gets the outsideLoop error
 //  15. Sơ đồ view (0003 đợt B): M switches with the selection kept, focused and inside the viewport; "+" on a
 //      connector adds a Record there; Delete removes it; ↑ walks the tree; M back; dark screenshot; at 390 px
 //      the saved Sơ đồ is not applied, the ⋯ menu switches (not saved) and a tap opens the sheet above the card
+// 15b. minimap (0014, 1 000 steps): shown, ≤ 16 paths, track / map clicks move the viewport, the wheel does not,
+//      ensureVisible keeps a card clear of it, the button hides it (kept after reload), hidden under the sheet / small
 //  16. insert history and delete (0011, every org call mocked in the page): Bulk checkbox and limit warning in the
 //      Insert confirmation, Tải Id / Lịch sử links, "Xóa dữ liệu này…" opens the delete confirmation (Hủy focused),
 //      production needs the org name typed, the history dialog (org filter, interrupted title, forget, 390 px)
@@ -1458,6 +1462,7 @@ async function flowMinimap() {
   if (outDir) {
     await page.screenshot({ path: path.join(outDir, 'smoke-1440-minimap.png') });
     await page.emulateMedia({ colorScheme: 'dark' });
+    await settle(page);
     await page.screenshot({ path: path.join(outDir, 'smoke-1440-minimap-dark.png') });
     await page.emulateMedia({ colorScheme: 'light' });
   }
