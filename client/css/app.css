@@ -844,6 +844,10 @@ input:focus, select:focus, textarea:focus { border-color: var(--color-accent); }
 .opt-error { color: var(--color-danger-text); font-size: var(--text-sm); }
 .error-line .fix-btn { margin-left: var(--space-1); font-size: var(--text-sm); }
 .error-line.warn-line { color: var(--color-warning-text); }
+/* Design 0012 E: example values at the end of an open field's options. */
+.samples-row { margin-top: var(--space-1); font-size: var(--text-sm); color: var(--color-text-muted); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.samples-row.stale { font-style: italic; }
+.samples-row.err { color: var(--color-danger-text); }
 /* Design 0012 F2: "Thiếu n field bắt buộc …" above a Record's field list. */
 .hint-box {
   display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); border: 1px solid var(--color-accent);

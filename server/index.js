@@ -9,6 +9,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { describeGenerators, VALUE_TYPES } from './generators/index.js';
+import { fieldSamples } from './workflow/samples.js';
 import { serializableNodeTypes, STEP_CATEGORIES, LIMITS, QUERY_PRESETS, RECORD_PRESETS, WORKFLOW_GLOBALS } from './workflow/nodes.js';
 import { TEMPLATE_TOKEN } from './workflow/paths.js';
 import { validateWorkflow, prepareWorkflow, insertBlockedReason, WorkflowError } from './workflow/schema.js';
@@ -235,6 +236,8 @@ export function createApp({
       }),
     ],
     ['POST', /^\/api\/validate$/, (_m, body) => validateWorkflow(body?.workflow, { derived: true })],
+    // Design 0012 E: example values of one field (no I/O, never the org).
+    ['POST', /^\/api\/field-samples$/, (_m, body) => fieldSamples(body)],
     [
       'POST',
       /^\/api\/run$/,

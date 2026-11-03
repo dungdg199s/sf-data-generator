@@ -17,7 +17,7 @@ import { refChoices, refsToRecords, referenceOptions, exposesList } from '/share
 import { buildSoql, QUERY_DEFAULTS, SAMPLE_ROWS, addSelectField } from '/shared/soql.js';
 import { deleteStep, duplicateStep, toggleDisabled, newStep, fillEach, fillParentFilter, reveal } from './ops.js';
 import { START_ID } from './layout.js';
-import { placesText } from './variables.js';
+import { placesText, formatSample } from './variables.js';
 import { applySuggestion, closePicker } from './var-picker.js';
 
 let root;
@@ -686,16 +686,22 @@ function renderFields(node) {
             'div',
             { class: 'opts' },
             renderOptions(ft.options, f.options ?? {}, (k, v, meta) =>
-              updateWorkflow(() => {
-                f.options = { ...(f.options ?? {}), [k]: v };
-              }, { source: 'inspector', coalesceKey: meta?.coalesceKey ?? `${key}:${k}` }),
+              {
+                updateWorkflow(() => {
+                  f.options = { ...(f.options ?? {}), [k]: v };
+                }, { source: 'inspector', coalesceKey: meta?.coalesceKey ?? `${key}:${k}` });
+                samples.schedule();
+              },
               {
                 refChoices: (def, values) => parentChoices(node, def.accepts, values?.referenceTo, values?.mode ?? 'current'),
-                vars: { stepId: node.id, fieldIndex: i, get fieldName() { return f.name; }, get field() { return `fields.${f.name}`; } },
+                vars: { stepId: node.id, fieldIndex: i, samplesRow: true, get fieldName() { return f.name; }, get field() { return `fields.${f.name}`; } },
               },
             ),
           ),
         );
+        const samples = sampleRow(node, f);
+        card.querySelector('.opts').append(samples.el);
+        samples.schedule(0);
       }
       card.append(h('div', { class: 'error-text', hidden: true }));
       return card;
@@ -725,6 +731,100 @@ function renderFields(node) {
       }, 'Import từ org…'),
     ),
   );
+}
+
+// ---------- example values of the open field (design 0012 E) ----------
+
+let samplesSeq = 0;
+let samplesAbort = null;
+
+/** Local midnight today: the examples stand still while typing and change only with the options. */
+const todayMidnight = () => { const d = new Date(); d.setHours(0, 0, 0, 0); return d.getTime(); };
+
+/**
+ * Fields of `step` whose value depends on another step or a loop variable (Lookup, Master-Detail,
+ * a template / "Lấy từ biến" naming another step), or on such a field through {{this.X}}
+ * (transitively), from currentScope().refs. → Set of field names.
+ */
+function dependentFields(step) {
+  const refs = currentScope().refs.filter((r) => r.nodeId === step.id && r.field?.startsWith('fields.') && !r.hidden);
+  const out = new Set();
+  const fields = step.config?.fields ?? [];
+  for (const f of fields) if (['lookup', 'masterdetail'].includes(f?.type)) out.add(f.name);
+  const scope = currentScope();
+  for (const r of refs) {
+    const src = r.source !== undefined ? scope.sources[r.source] : null;
+    if (!r.viaThis && !src?.global) out.add(r.field.slice('fields.'.length));
+  }
+  for (let changed = true; changed;) {
+    changed = false;
+    for (const r of refs) {
+      const name = r.field.slice('fields.'.length);
+      const x = String(r.member ?? '').split('.')[0];
+      if (r.viaThis && out.has(x) && !out.has(name)) {
+        out.add(name);
+        changed = true;
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * The "Ví dụ: …" row at the end of an open field's options: 3 values from POST /api/field-samples
+ * for an independent field (debounced 300 ms, older answers dropped), else the first 3 records of
+ * the step in the last preview. → { el, schedule(ms?) }
+ */
+function sampleRow(step, f) {
+  const el = h('div', { class: 'samples-row', 'aria-live': 'polite' });
+  let timer = 0;
+  const fill = () => {
+    if (!el.isConnected) return;
+    const live = stepById(step.id);
+    const field = (live?.config?.fields ?? []).find((x) => x === f);
+    if (!live || !field) return;
+    const dependent = dependentFields(live);
+    if (dependent.has(field.name)) {
+      el.title = '';
+      const recs = (state.result?.records ?? []).filter((r) => r.nodeId === live.id).slice(0, 3);
+      if (!recs.length || !recs.some((r) => field.name in (r.fields ?? {}))) {
+        el.className = 'samples-row hint';
+        el.textContent = 'Bấm Xem trước (Ctrl+Enter) để thấy giá trị: field này lấy dữ liệu từ bước khác.';
+        return;
+      }
+      const stale = state.lastRunSteps !== JSON.stringify(state.workflow.steps);
+      el.className = `samples-row${stale ? ' stale' : ''}`;
+      el.title = stale ? 'Từ lần xem trước; workflow đã thay đổi sau đó.' : 'Ba bản ghi đầu của bước này trong lần xem trước.';
+      el.textContent = `Lần xem trước: ${recs.map((r) => formatSample(r.fields?.[field.name])).join(' · ')}`;
+      return;
+    }
+    const fields = (live.config.fields ?? []).filter((x) => x && !dependent.has(x.name));
+    const index = fields.indexOf(field);
+    const raw = document.getElementById('seed')?.value.trim() ?? '';
+    const seed = /^\d+$/.test(raw) ? Number(raw) : 1;
+    const seq = ++samplesSeq;
+    samplesAbort?.abort();
+    samplesAbort = new AbortController();
+    api.fieldSamples({ sobject: live.config.sobject, fields: fields.slice(0, index + 1), index, seed, now: todayMidnight(), count: 3 }, { signal: samplesAbort.signal })
+      .then(({ values }) => {
+        if (seq !== samplesSeq || !el.isConnected) return;
+        el.className = 'samples-row';
+        el.title = `Ba giá trị sinh riêng cho field này (seed ${seed}) để thấy ngay tác dụng của tùy chọn. Xem trước có thể ra giá trị khác.`;
+        el.textContent = `Ví dụ: ${values.map(formatSample).join(' · ')}`;
+      }, (e) => {
+        if (e.name === 'AbortError' || seq !== samplesSeq || !el.isConnected) return;
+        el.className = 'samples-row err';
+        el.title = '';
+        el.textContent = `Không tạo được ví dụ: ${e.message}`;
+      });
+  };
+  return {
+    el,
+    schedule(ms = 300) {
+      clearTimeout(timer);
+      timer = setTimeout(fill, ms);
+    },
+  };
 }
 
 // ---------- required fields still missing (design 0012 F2) ----------

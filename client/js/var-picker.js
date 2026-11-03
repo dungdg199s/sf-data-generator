@@ -118,7 +118,8 @@ function renderStrip(input, opts, chips, preview) {
   const keep = list.find((c) => c.dataset.path === focused) ?? list[0];
   if (keep) keep.tabIndex = 0;
   if (focused && keep) keep.focus();
-  const value = opts.fieldName !== undefined ? previewOf(opts.stepId, opts.fieldName) : null;
+  // A field of a Record has the inspector's row of 3 examples instead (design 0012 E).
+  const value = opts.fieldName !== undefined && !opts.samplesRow ? previewOf(opts.stepId, opts.fieldName) : null;
   preview.hidden = value === null;
   preview.textContent = value === null ? '' : `Lần xem trước: ${formatSample(value)}`;
 }

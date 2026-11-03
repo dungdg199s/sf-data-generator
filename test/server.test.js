@@ -497,7 +497,7 @@ test('cross-site requests are refused: foreign Origin / Sec-Fetch-Site / Host (4
     assert.equal(site.status, 403);
     const read = await fetch(`${url}/api/orgs`, { headers: { Origin: 'http://evil.example' } });
     assert.equal(read.status, 403, 'org data is not readable cross-site');
-    for (const path of ['/api/validate', '/api/runs/rabc/cancel']) {
+    for (const path of ['/api/validate', '/api/runs/rabc/cancel', '/api/field-samples']) {
       assert.equal((await fetch(url + path, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: 'null' }, body: '{}' })).status, 403, path);
     }
     assert.equal(created, 0, 'nothing was inserted');
@@ -637,4 +637,31 @@ test('0013 review N1: a now outside what a Date holds is a 400 with the range, o
   assert.equal((await post('/api/run', { workflow: big(), now: 8.64e15 })).status, 200);
   const exp = await post('/api/export', { workflow: big(), seed: 1, now: 1e20, format: 'json' });
   assert.equal(exp.status, 400);
+});
+
+test('POST /api/field-samples returns 3 deterministic values; {{this.X}} sees the fields above; errors are 422 (design 0012 E)', async () => {
+  const pick = { name: 'Industry', type: 'picklist', options: { values: ['Banking', 'Retail'], weights: [3, 1] } };
+  const call = async (body) => { const res = await post('/api/field-samples', body); return { status: res.status, body: await res.json() }; };
+  const now = Date.UTC(2026, 9, 28);
+  const a = await call({ sobject: 'Account', fields: [pick], index: 0, seed: 1, now });
+  assert.equal(a.status, 200);
+  assert.equal(a.body.values.length, 3);
+  assert.ok(a.body.values.every((v) => ['Banking', 'Retail'].includes(v)));
+  assert.deepEqual((await call({ sobject: 'Account', fields: [pick], index: 0, seed: 1, now })).body, a.body, 'same seed, same values');
+  const tpl = await call({ fields: [{ name: 'FirstName', type: 'text', options: { mode: 'list', values: ['An'] } }, { name: 'Title', type: 'template', options: { template: 'Hi {{this.FirstName}} #{{this.$n}}' } }], index: 1, seed: 2, now });
+  assert.deepEqual(tpl.body.values, ['Hi An #1', 'Hi An #2', 'Hi An #3']);
+  // count is clamped to 5; the fields after `index` are not generated.
+  const five = await call({ fields: [pick, { name: 'X', type: 'nope' }], index: 0, seed: 1, now, count: 50 });
+  assert.equal(five.body.values.length, 5);
+  const bad = await call({ fields: [{ name: 'A', type: 'nope', options: {} }], index: 0, now });
+  assert.equal(bad.status, 422);
+  assert.deepEqual(bad.body.issues.map((i) => i.field), ['fields.A']);
+  const unique = await call({ fields: [{ name: 'N', type: 'number', options: { min: 1, max: 2, unique: true } }], index: 0, seed: 1, now });
+  assert.equal(unique.status, 422);
+  assert.match(unique.body.error, /không tạo được giá trị duy nhất/);
+  assert.equal((await call({ fields: [pick], index: 3, now })).status, 422);
+  assert.equal((await call({ fields: Array.from({ length: 501 }, () => pick), index: 0, now })).status, 422);
+  // Dates follow the `now` sent (no clock on the server).
+  const d = await call({ fields: [{ name: 'D', type: 'date', options: { from: 'today', to: 'today' } }], index: 0, now });
+  assert.deepEqual(d.body.values, ['2026-10-28', '2026-10-28', '2026-10-28']);
 });

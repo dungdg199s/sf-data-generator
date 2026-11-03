@@ -73,6 +73,12 @@ async function ndjsonStream(path, body, { onEvent, onResponse, signal } = {}) {
 export const api = {
   meta: () => call('GET', '/api/meta'),
   validate: (workflow) => call('POST', '/api/validate', { workflow }),
+  /** Example values of one field (design 0012 E): body { sobject, fields, index, seed, now, count } → { values }. */
+  fieldSamples: async (body, { signal } = {}) => {
+    const res = await fetch('/api/field-samples', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal });
+    if (!res.ok) throw await errorOf(res);
+    return res.json();
+  },
   /**
    * org: the org Query steps read for a preview (none → sample rows); refreshQueries: bypass the
    * server's query cache; expectQueries: fingerprints of the preview an insert must match (409).
