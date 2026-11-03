@@ -58,6 +58,14 @@ export function estimateSteps(wf, catalog, { queryCounts = {}, limits = {} } = {
   const byStep = {};
   let total = ZERO;
   const pools = new Map(); // name → Amount: records in the pool so far (generated, read, picked)
+  const growsIn = new Map(); // name → Set of the Lặp ids open when records were added to it
+  const openLoops = []; // ids of the Lặp steps around the step being walked
+  const addTo = (name, amount) => {
+    pools.set(name, add(pools.get(name) ?? ZERO, amount));
+    const set = growsIn.get(name) ?? new Set();
+    for (const id of openLoops) set.add(id);
+    growsIn.set(name, set);
+  };
 
   const optionValue = (type, c, key) => c?.[key] ?? type?.options?.find((o) => o.key === key)?.default;
 
@@ -74,8 +82,8 @@ export function estimateSteps(wf, catalog, { queryCounts = {}, limits = {} } = {
     return Number.isFinite(n) ? fixed(Math.max(0, Math.trunc(n))) : fixed(fallback);
   };
 
-  /** Iterations of one run of a Lặp. */
-  const loopTimes = (type, c) => {
+  /** Iterations of one run of a Lặp (`visits`: how many times the Lặp is reached). */
+  const loopTimes = (type, c, visits) => {
     const mode = optionValue(type, c, 'mode') ?? 'fixed';
     if (mode === 'values') return fixed(valueList(c?.values).length);
     if (mode === 'range') {
@@ -87,7 +95,13 @@ export function estimateSteps(wf, catalog, { queryCounts = {}, limits = {} } = {
       return a === b && lo.exact && hi.exact ? fixed(a) : { exp: (a + b) / 2, min: Math.min(lo.min, a), max: b, exact: false };
     }
     if (mode === 'each') {
-      const pool = pools.get(c?.from) ?? UNKNOWN;
+      let pool = pools.get(c?.from) ?? UNKNOWN;
+      // A pool that grows inside a Lặp around this one (pools are global to the run): each visit
+      // sees the records made so far, on average (total + one visit's) / 2. Not exact.
+      if (pool.exp !== null && [...(growsIn.get(c?.from) ?? [])].some((id) => openLoops.includes(id)) && visits?.exp) {
+        const avg = (pool.exp + pool.exp / visits.exp) / 2;
+        pool = { exp: avg, min: Math.min(pool.min, avg), max: pool.max, exact: false };
+      }
       let n = { ...pool };
       if ((optionValue(type, c, 'filter') ?? 'none') !== 'none') n = { exp: null, min: 0, max: pool.max, exact: false };
       const limit = Number(c?.limit ?? 0);
@@ -135,15 +149,18 @@ export function estimateSteps(wf, catalog, { queryCounts = {}, limits = {} } = {
         byStep[step.id] = made;
         total = add(total, made);
         const names = stepNames(step, catalog);
-        for (const { value } of names.length ? names : [{ value: String(step.id) }]) pools.set(value, add(pools.get(value) ?? ZERO, made));
+        for (const { value } of names.length ? names : [{ value: String(step.id) }]) addTo(value, made);
       } else if (record?.ex.origin === 'org' && c.alias) {
         pools.set(c.alias, queryRows(step));
       } else if (record?.ex.current === 'picked' && c.alias) {
-        pools.set(c.alias, add(pools.get(c.alias) ?? ZERO, maybe(t)));
+        addTo(c.alias, maybe(t));
       }
       if (flow === 'loop') {
         // A skip ends one run of the body; what follows the loop is not affected.
-        walk(step.slots?.[type.flow.body], mul(t, loopTimes(type, c)));
+        const n = loopTimes(type, c, t);
+        openLoops.push(step.id);
+        walk(step.slots?.[type.flow.body], mul(t, n));
+        openLoops.pop();
       } else if (flow === 'branch') {
         const [yes, no] = type.flow.alternatives ?? [];
         const kind = optionValue(type, c, 'kind') ?? 'chance';

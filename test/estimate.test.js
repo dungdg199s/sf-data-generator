@@ -36,6 +36,15 @@ test('Lặp each over a Record pool: the records estimated above', () => {
   assert.deepEqual(byStep.c, { exp: 5, min: 5, max: 5, exact: true });
 });
 
+test('Lặp each over a pool that grows in the same outer loop: the average size seen, not exact', () => {
+  // 5 × [acc, each acc → con]: the pool holds 1, 2, … 5 Accounts ⇒ 15 Contacts.
+  const w = wf([loop('o', { count: 5, alias: 'o' }, [r('acc'), loop('e', { mode: 'each', from: 'acc', itemAlias: 'a1' }, [record('c', 'Contact', 'con', [])])])]);
+  const e = est(w).byStep.c;
+  assert.equal(e.exp, 15);
+  assert.equal(e.exact, false);
+  assert.equal(runWorkflow(w, { seed: 1, now: NOW }).stats.byStep.c.records, 15);
+});
+
 test('Lặp each over a Query: rows of the last read, else its LIMIT (inexact); filter and limit', () => {
   const w = (extra = {}) => wf([query('q', 'accs', { limit: 50 }), loop('l', { mode: 'each', from: 'accs', itemAlias: 'acc', ...extra }, [record('c', 'Contact', 'con', [], { count: 2 })])]);
   assert.deepEqual(est(w()).byStep.c, { exp: 100, min: 0, max: 100, exact: false });
