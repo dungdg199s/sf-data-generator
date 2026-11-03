@@ -797,3 +797,85 @@ test('0010 review: a field path is never suggested onto a pool without a current
   const [c] = errorsOf(wf([query('q', 'accs'), pick('p', 'pk', 'accs'), record('c', 'Contact', 'con', [tplField('T', '{{acc.$count}}')])]));
   assert.equal(c.suggestion?.to, 'accs.$count');
 });
+
+// ---------- design 0013: validation ----------
+
+const numField = (name) => ({ name, type: 'number', options: {} });
+const issue = (list, nodeId, field) => list.find((i) => i.nodeId === nodeId && i.field === field);
+
+test('number option format errors carry nodeId and field', () => {
+  const base = (cfg) => wf([record('a', 'Account', 'acc', [numField('N')]), loop('l', cfg, [record('c', 'Contact', 'con', [])])]);
+  const e1 = issue(errorsOf(base({ count: '{{acc.N}} lần' })), 'l', 'count');
+  assert.equal(e1.message, '"Số lần lặp" phải là một số nguyên, hoặc đúng một biến như {{acc.NumberOfEmployees}}. Bỏ phần chữ quanh biến.');
+  assert.equal(e1.code, 'numberFormat');
+  assert.equal(issue(errorsOf(base({ mode: 'range', min: 1, max: '{{acc.N}}{{acc.N}}' })), 'l', 'max').code, 'numberFormat');
+  // The message of before for a bad number; a variable is fine, and min > max only between numbers.
+  assert.equal(issue(errorsOf(base({ count: 'abc' })), 'l', 'count').message, 'Số lần lặp phải là số nguyên từ 0 đến 100000.');
+  assert.equal(issue(errorsOf(base({ count: 100001 })), 'l', 'count').message, 'Số lần lặp phải là số nguyên từ 0 đến 100000.');
+  assert.deepEqual(errorsOf(base({ count: ' {{ acc.N }} ' })), []);
+  assert.deepEqual(errorsOf(base({ mode: 'range', min: 5, max: '{{acc.N}}' })), []);
+  // Hidden in each mode: not checked.
+  assert.deepEqual(errorsOf(wf([record('a', 'Account', 'acc', []), loop('l', { mode: 'each', from: 'acc', itemAlias: 'x', count: '{{bad' }, [record('c', 'Contact', 'con', [])])])), []);
+});
+
+test('number variable of a non-number type: error for Ngày, warning for Chuỗi', () => {
+  const w = wf([
+    record('a', 'Account', 'acc', [{ name: 'D', type: 'date', options: {} }, tplField('S', 'x')]),
+    loop('l1', { count: '{{acc.D}}' }, [record('c1', 'Contact', 'c1', [])]),
+    loop('l2', { count: '{{acc.S}}' }, [record('c2', 'Contact', 'c2', [])]),
+  ]);
+  const { errors, warnings } = validateWorkflow(w);
+  assert.equal(issue(errors, 'l1', 'count').message, '"Số lần lặp": {{acc.D}} là Ngày, không phải số. Bấm {x} để chọn biến kiểu Số, ví dụ {{accs.$count}} hoặc {{loop.index}}.');
+  assert.equal(issue(warnings, 'l2', 'count').message, '"Số lần lặp": {{acc.S}} là Chuỗi; lần chạy nào giá trị không phải số thì vòng lặp chạy 0 lần. Nên chọn biến kiểu Số bằng {x}.');
+  assert.equal(issue(warnings, 'l2', 'count').code, 'notNumber');
+  // Scope messages of 0005 apply too, named by the option.
+  const u = issue(errorsOf(wf([loop('l', { count: '{{nope.N}}' }, [record('c', 'Contact', 'con', [])])])), 'l', 'count');
+  assert.equal(u.code, 'unknownName');
+  assert.match(u.message, /^"Số lần lặp": không có biến "nope"/);
+});
+
+test('branch right with a broken reference is an error on right; {{ left open is unclosed', () => {
+  const br = (right) => wf([acc(), branch('b', { kind: 'compare', left: 'acc.Name', op: 'eq', right }, [record('c', 'Contact', 'con', [])], [])]);
+  const e = issue(errorsOf(br('{{nope.Amount}}')), 'b', 'right');
+  assert.equal(e.code, 'unknownName');
+  const w = issue(warningsOf(br('{{acc.Name')), 'b', 'right');
+  assert.equal(w.code, 'unclosed');
+  assert.deepEqual(errorsOf(br('{{acc.Name}}')), []);
+  assert.deepEqual(errorsOf(br('100000')), []);
+});
+
+test('values loop with no values is an error on values', () => {
+  const v = (values) => wf([loop('l', { mode: 'values', values }, [record('c', 'Contact', 'con', [])])]);
+  for (const values of [undefined, [], ['  ', ''], '']) {
+    const e = issue(errorsOf(v(values)), 'l', 'values');
+    assert.equal(e.message, 'Nhập ít nhất một giá trị, mỗi dòng một giá trị (ví dụ Hot, Warm, Cold).');
+    assert.equal(e.code, 'valuesEmpty');
+  }
+  assert.deepEqual(errorsOf(v(['Hot', 'Warm'])), []);
+  assert.deepEqual(errorsOf(v('Hot\nWarm')), []);
+  const big = issue(errorsOf(v(Array.from({ length: 100001 }, (_, i) => `v${i}`))), 'l', 'values');
+  assert.equal(big.message, 'Danh sách có 100.001 giá trị, quá giới hạn 100.000 lần lặp của một bước Lặp. Bớt giá trị.');
+  assert.equal(issue(errorsOf(wf([loop('l', { mode: 'nope' }, [])])), 'l', 'mode').message, 'Chế độ lặp "nope" không hợp lệ.');
+});
+
+test('each filter, order and limit are validated only in each mode', () => {
+  const ev = (extra, mode = 'each') => errorsOf(wf([query('q', 'cons', { sobject: 'Contact', fields: ['Id', 'AccountId'] }), loop('l', { mode, from: 'cons', itemAlias: 'con', count: 1, ...extra }, [record('c', 'Task', 'task', [])])]));
+  assert.deepEqual(ev({ filter: 'compare', filterField: 'AccountId', filterValue: 'x', order: 'shuffle', limit: 3 }), []);
+  assert.equal(issue(ev({ filter: 'compare' }), 'l', 'filterField').message, 'Chưa nhập field để lọc, ví dụ AccountId hoặc Account.Type.');
+  assert.match(issue(ev({ filter: 'compare', filterField: 'a b' }), 'l', 'filterField').message, /^Field "a b" không hợp lệ/);
+  assert.equal(issue(ev({ filter: 'compare', filterField: 'AccountId', filterOp: 'x' }), 'l', 'filterOp').message, 'Phép so sánh không hợp lệ.');
+  assert.equal(issue(ev({ filter: 'x' }), 'l', 'filter').message, 'Cách lọc "x" không hợp lệ.');
+  assert.equal(issue(ev({ order: 'x' }), 'l', 'order').message, 'Thứ tự "x" không hợp lệ.');
+  for (const limit of [-1, 1.5, 'a', 100001]) {
+    assert.equal(issue(ev({ limit }), 'l', 'limit').message, '"Tối đa số bản ghi" phải là số nguyên từ 0 đến 100000 (0 = tất cả).');
+  }
+  // In fixed mode the leftovers are ignored (hidden), and so are references in them.
+  assert.deepEqual(ev({ filter: 'x', order: 'x', limit: -1, filterValue: '{{nope.Id}}' }, 'fixed'), []);
+});
+
+test('weighted pick needs weightField', () => {
+  const pw = (extra) => errorsOf(wf([query('q', 'accs'), pick('p', 'acc', 'accs', { mode: 'weighted', ...extra }), record('c', 'Contact', 'con', [lookup('acc')])]));
+  assert.equal(issue(pw({}), 'p', 'weightField').message, 'Chưa nhập field trọng số, ví dụ NumberOfEmployees hoặc Amount.');
+  assert.equal(issue(pw({ weightField: '1x' }), 'p', 'weightField').message, 'Field "1x" không hợp lệ. Dùng API name; field quan hệ viết Account.NumberOfEmployees.');
+  assert.deepEqual(pw({ weightField: 'Account.NumberOfEmployees' }), []);
+});

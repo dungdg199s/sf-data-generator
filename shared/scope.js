@@ -39,13 +39,38 @@ export const templateTokenRe = () => new RegExp(TEMPLATE_TOKEN_SOURCE, 'g');
 const RANK = { always: 0, last: 1, maybe: 2 };
 const worse = (a, b) => (RANK[a] >= RANK[b] ? a : b);
 
-/** Lowest number of times a loop body runs (0 when it may be skipped). */
-export function loopMinIterations(config = {}) {
+/**
+ * The one variable of a number option (`vars: 'number'`, design 0013): `' {{ acc.X }} '` → `acc.X`;
+ * anything else (a number, a numeric string, text around the token, two tokens) → null.
+ */
+export function numberVarPath(value) {
+  if (typeof value !== 'string') return null;
+  const m = /^\s*\{\{\s*([\w.$]+)\s*\}\}\s*$/.exec(value);
+  return m ? m[1] : null;
+}
+
+/** A number option holding a variable instead of a number. */
+export const isVar = (value) => numberVarPath(value) !== null;
+
+/** Values of a Lặp "Mỗi giá trị trong danh sách" (design 0013): trimmed, empty lines dropped. */
+export function valueList(values) {
+  const list = Array.isArray(values) ? values : typeof values === 'string' ? values.split('\n') : [];
+  return list.map((v) => String(v ?? '').trim()).filter((v) => v !== '');
+}
+
+/**
+ * Lowest number of times a loop body runs (0 when it may be skipped). `ctx.poolNonEmpty(name)`
+ * (from analyzeScope, design 0013): the pool `name` surely holds a record when the loop starts.
+ */
+export function loopMinIterations(config = {}, ctx = {}) {
   const c = config ?? {};
-  // Each record of a pool (0010): the pool may be empty.
-  if (c.mode === 'each') return 0;
-  if ((c.mode ?? 'fixed') === 'range') return Math.max(0, Number(c.min ?? 1)) || 0;
-  return Math.max(0, Number(c.count ?? 0)) || 0;
+  if (c.mode === 'each') {
+    // A Record pool that always has a record, not filtered: ≥ 1 time (limit 0 = all, ≥ 1 ⇒ ≥ 1).
+    return (c.filter ?? 'none') === 'none' && c.from && ctx.poolNonEmpty?.(c.from) ? 1 : 0;
+  }
+  if (c.mode === 'values') return valueList(c.values).length;
+  if ((c.mode ?? 'fixed') === 'range') return isVar(c.min) ? 0 : Math.max(0, Number(c.min ?? 1)) || 0;
+  return isVar(c.count) ? 0 : Math.max(0, Number(c.count ?? 0)) || 0;
 }
 
 /** Per-type helpers that cannot travel through /api/meta (functions). */
@@ -56,7 +81,25 @@ const VAR_EXAMPLES = {
       const pool = c.from || '?';
       return { label: `Vòng lặp mỗi bản ghi trong ${pool}`, examples: { index: '1, 2, 3…', index0: '0, 1, 2…', count: `số bản ghi của ${pool}` } };
     }
+    if (c.mode === 'values') {
+      const list = valueList(c.values);
+      const n = list.length;
+      const shownValues = list.slice(0, 3).map((v) => JSON.stringify(v)).join(', ') + (n > 3 ? ', …' : '');
+      return {
+        label: `Vòng lặp theo ${n} giá trị`,
+        examples: { index: n ? `1…${n}` : '—', index0: n ? `0…${n - 1}` : '—', count: `${n}`, value: n ? shownValues : '—' },
+      };
+    }
     const range = (c.mode ?? 'fixed') === 'range';
+    const raw = (v, d) => (isVar(v) ? `{{${numberVarPath(v)}}}` : String(Number(v ?? d) || 0));
+    if (range ? isVar(c.min) || isVar(c.max) : isVar(c.count)) {
+      const times = range ? `${raw(c.min, 1)}–${raw(c.max, 1)}` : raw(c.count, 0);
+      const of = (v) => (isVar(v) ? `giá trị của ${numberVarPath(v)}` : raw(v, 0));
+      return {
+        label: `Vòng lặp ${times} lần`,
+        examples: { index: '1, 2, 3…', index0: '0, 1, 2…', count: range ? `${of(c.min)}–${of(c.max)}` : of(c.count) },
+      };
+    }
     const lo = Number(range ? c.min ?? 1 : c.count ?? 0) || 0;
     const hi = Number(range ? c.max ?? 1 : c.count ?? 0) || 0;
     const times = range ? `${lo}–${hi}` : `${hi}`;
@@ -102,7 +145,21 @@ function catalogMaps(catalog) {
   };
 }
 
-const shown = (def, values) => !def.showIf || def.showIf.in.includes(values[def.showIf.key]);
+/**
+ * Is option `def` shown for `values` (missing keys: defaults)? `showIf` is transitive (design
+ * 0013): an option is shown when its condition holds and the option it depends on is shown too.
+ * `defs`: the sibling options (without them only the option's own condition counts).
+ */
+export function optionShown(def, values, defs = []) {
+  let d = def;
+  for (let hops = 0; d && hops < 16; hops++) {
+    if (!d.showIf) return true;
+    if (!d.showIf.in.includes(values[d.showIf.key])) return false;
+    d = defs.find((x) => x.key === d.showIf.key);
+  }
+  return true;
+}
+const shown = optionShown;
 
 /**
  * The `exposes` entries of a step type in effect for `config` (design 0010): a single object is
@@ -144,7 +201,7 @@ export function referenceOptions(step, catalog, { includeHidden = false } = {}) 
   for (const def of type?.options ?? []) {
     if (!isRefOption(def)) continue;
     const values = { ...Object.fromEntries((type.options ?? []).map((d) => [d.key, d.default])), ...c };
-    const isShown = shown(def, values);
+    const isShown = shown(def, values, type.options);
     if (!includeHidden && !isShown) continue;
     out.push({
       field: def.key, option: def.key, mode: def.vars ?? 'ref', def, value: c[def.key], hidden: !isShown,
@@ -163,7 +220,7 @@ export function referenceOptions(step, catalog, { includeHidden = false } = {}) 
     }
     for (const def of ft?.options ?? []) {
       if (!isRefOption(def)) continue;
-      const isShown = shown(def, values);
+      const isShown = shown(def, values, ft.options);
       if (!includeHidden && !isShown) continue;
       out.push({
         field: `fields.${f.name}`, option: def.key, mode: def.vars ?? 'ref', def, value: values[def.key], hidden: !isShown,
@@ -178,7 +235,9 @@ export function referenceOptions(step, catalog, { includeHidden = false } = {}) 
 /** Paths referenced by one option value: [{ path, start?, end? }]. */
 export function pathsIn(mode, value) {
   if (value === undefined || value === null || value === '') return [];
-  if (mode === 'template') return tokenize(value).filter((p) => p.kind === 'token').map((p) => ({ path: p.path, start: p.start, end: p.end }));
+  // A number option (design 0013) holds a number (no reference) or `{{path}}` tokens.
+  if (mode === 'number' && typeof value !== 'string') return [];
+  if (mode === 'template' || mode === 'number') return tokenize(value).filter((p) => p.kind === 'token').map((p) => ({ path: p.path, start: p.start, end: p.end }));
   const path = mode === 'path' ? stripPath(value) : String(value).trim();
   return path ? [{ path }] : [];
 }
@@ -259,15 +318,23 @@ function buildSource(step, type, ex, id, cat, off) {
     origin: ex.origin ?? null,
     lookupParent: ex.lookupParent === true,
     open: ex.open === true,
+    // Design 0013: every run of the step adds at least one record to its pool (Record).
+    nonEmpty: ex.nonEmpty === true,
     visibleIn: ex.visibleIn ?? 'downstream',
     disabled: off,
     members: [],
   };
+  // Members with `when` (same shape as showIf, design 0013) exist only while the config matches.
+  const value = (key) => c[key] ?? type.options?.find((o) => o.key === key)?.default;
+  const active = (m) => !m.when || m.when.in.includes(value(m.when.key));
   if (ex.label?.key === 'sobject' || type.options?.some((o) => o.key === 'sobject')) src.sobject = c.sobject ?? '';
   if (ex.kind === 'vars') {
     const ex2 = VAR_EXAMPLES[step.type]?.(c);
     if (ex2 && typeof ex.label === 'string') src.label = ex2.label;
-    src.members = (Array.isArray(ex.members) ? ex.members : []).map((m) => ({ ...m, ...(ex2?.examples?.[m.key] ? { example: ex2.examples[m.key] } : {}) }));
+    const all = Array.isArray(ex.members) ? ex.members : [];
+    src.members = all.filter(active).map((m) => ({ ...m, ...(ex2?.examples?.[m.key] ? { example: ex2.examples[m.key] } : {}) }));
+    const inactive = all.filter((m) => !active(m));
+    if (inactive.length) src.inactive = inactive.map((m) => ({ key: m.key, when: m.when }));
   } else if (ex.members === 'fields') {
     src.members = (Array.isArray(c.fields) ? c.fields : []).filter((f) => f?.name).map((f) => {
       const ft = cat.fieldTypes.get(f.type);
@@ -285,7 +352,7 @@ function buildSource(step, type, ex, id, cat, off) {
     src.sobject = soqlSobject(c);
     if (ex.label?.key === 'sobject') src.label = src.sobject;
   } else if (Array.isArray(ex.members)) {
-    src.members = ex.members.map((m) => ({ ...m }));
+    src.members = ex.members.filter(active).map((m) => ({ ...m }));
   }
   for (const b of ex.builtins ?? []) src.members.push({ ...b, builtin: true, ...(BUILTIN_EXAMPLES[b.key] ? { example: BUILTIN_EXAMPLES[b.key] } : {}) });
   // { fromSource: <optionKey> } members / label / origin are filled in once every source is known.
@@ -335,6 +402,18 @@ export function analyzeScope(wf, catalog) {
     }
   };
   collect(wf?.steps, false);
+  // Workflow-wide variables (design 0013: `run.seed`, `run.now`, `run.today`), declared by the
+  // catalogue (`globals`, meta.globals). Not tied to a step (nodeId null), visible everywhere,
+  // after every name the user gave: a loop variable or an alias with the same name wins.
+  for (const g of Array.isArray(catalog?.globals) ? catalog.globals : []) {
+    if (!g?.name) continue;
+    const id = `$${g.name}`;
+    sources[id] = {
+      id, nodeId: null, nodeType: null, global: true, kind: 'vars', name: g.name, label: g.label ?? g.name,
+      pool: false, origin: null, lookupParent: false, open: false, nonEmpty: false, visibleIn: 'downstream', disabled: false,
+      members: (g.members ?? []).map((m) => ({ ...m })), _from: [],
+    };
+  }
 
   const byName = new Map(); // name → [source] in reading order
   for (const s of Object.values(sources)) {
@@ -399,6 +478,16 @@ export function analyzeScope(wf, catalog) {
     return out;
   };
   const raw = new Map(); // stepId → { head, vars, others, off }
+  /**
+   * Design 0013: does pool `name` surely hold a record at chain `head`? A source that adds at least
+   * one record each time it runs (`exposes.nonEmpty`, Record), always or last there.
+   */
+  function poolNonEmpty(name, head) {
+    const ids = new Set((byName.get(String(name)) ?? []).filter((x) => x.pool && x.nonEmpty).map((x) => x.id));
+    if (!ids.size) return false;
+    for (let n = head; n && n !== ROOT; n = n.prev) if (ids.has(n.id)) return n.entry.certainty !== 'maybe';
+    return false;
+  }
   function walk(list, head, vars, others, off) {
     for (const step of Array.isArray(list) ? list : []) {
       if (!isStep(step)) continue;
@@ -421,7 +510,7 @@ export function analyzeScope(wf, catalog) {
         }
         const inner = addedSince(walk(step.slots?.[body], bodyHead, innerVars, others, stepOff), bodyHead);
         const minFn = typeof type.minIterations === 'function' ? type.minIterations : MIN_ITERATIONS[step.type];
-        const once = (minFn ? minFn(step.config ?? {}) : 0) >= 1;
+        const once = (minFn ? minFn(step.config ?? {}, { poolNonEmpty: (name) => poolNonEmpty(name, head) }) : 0) >= 1;
         const loopName = src?.name ?? step.id;
         const mode = step.config?.mode ?? 'fixed';
         added = new Map();
@@ -485,6 +574,7 @@ export function analyzeScope(wf, catalog) {
     return best?.entry ?? null;
   };
   const allSources = Object.values(sources);
+  const globals = allSources.filter((x) => x.global);
 
   const at = {};
   for (const [id, r] of raw) at[id] = makeAt(id, r);
@@ -500,6 +590,7 @@ export function analyzeScope(wf, catalog) {
     const state = (sid) => {
       const s = sources[sid];
       if (!s) return { reason: 'after' };
+      if (s.global) return globalShadow(s) ? { reason: 'shadowed' } : { certainty: 'always' };
       if (s.kind === 'vars' && s.visibleIn !== 'downstream') {
         // Outside the loop body first: a turned-off loop's variable used elsewhere is "outside".
         if (!r.vars.some((v) => v.id === sid)) return { reason: 'outsideLoop' };
@@ -514,8 +605,14 @@ export function analyzeScope(wf, catalog) {
       if (r.others.has(sid)) return { reason: 'otherBranch' };
       return { reason: 'after' };
     };
+    /** The name of a workflow-wide variable taken by a visible loop variable or an alias: 'var' | 'alias' | null. */
+    const globalShadow = (s) => {
+      if (varByName(s.name)) return 'var';
+      return (byName.get(s.name) ?? []).some((x) => !x.global && x.kind !== 'vars') ? 'alias' : null;
+    };
     const noteOf = (sid, st) => {
       const s = sources[sid];
+      if (s.global && st.reason === 'shadowed') return globalShadow(s) === 'var' ? `bị biến lặp "${s.name}" che` : `bị alias "${s.name}" che`;
       if (st.reason === 'outsideLoop') return `chỉ có bên trong vòng lặp "${s.kind === 'vars' ? s.name : sources[s.nodeId]?.name ?? s.name}"`;
       if (st.reason === 'shadowed') return `bị vòng lặp "${s.name}" bên trong che`;
       if (st.reason === 'after' && sid === id) return NOTES.self;
@@ -548,6 +645,8 @@ export function analyzeScope(wf, catalog) {
           list.push({ source: n.id, certainty: n.entry.certainty, seq: n.entry.seq, ...(n.entry.why ? { why: n.entry.why } : {}) });
         }
         list.sort((a, b) => b.seq - a.seq);
+        // Workflow-wide variables always come last (design 0013).
+        for (const g of globals) if (!state(g.id).reason) list.push({ source: g.id, certainty: 'always' });
         for (const v of list) {
           delete v.seq;
           if (v.certainty === 'maybe') v.note = v.why?.loop ? `vòng lặp "${v.why.loop}" có thể chạy 0 lần` : 'chỉ được tạo ở một số nhánh phía trên';
@@ -570,7 +669,7 @@ export function analyzeScope(wf, catalog) {
     };
   }
 
-  const loopKeys = new Set(allSources.filter((x) => x.kind === 'vars').flatMap((x) => x.members.map((m) => m.key)));
+  const loopKeys = new Set(allSources.filter((x) => x.kind === 'vars' && !x.global).flatMap((x) => x.members.map((m) => m.key)));
   const refs = [];
   for (const { step, off } of steps) {
     const here = at[step.id];
@@ -579,12 +678,40 @@ export function analyzeScope(wf, catalog) {
       for (const { path } of pathsIn(o.mode, o.value)) {
         const ref = { ...resolveRef({ step, here, o, path, sources, byName, loopKeys }), disabled: off };
         if (o.hidden) ref.hidden = true;
+        if (!ref.code || ref.level === 'warning') {
+          const vt = refValueType(ref, sources, step);
+          if (vt) ref.valueType = vt;
+          // A number option (design 0013): Số or a field read from the org; Chuỗi is only a warning.
+          if (o.mode === 'number' && vt && vt !== 'number' && vt !== 'any') {
+            Object.assign(ref, { code: 'notNumber', level: vt === 'string' ? 'warning' : 'error' });
+            delete ref.why;
+          }
+        }
         refs.push(ref);
       }
     }
   }
 
   return { partial: false, sources, at, refs };
+}
+
+/**
+ * Value type of what a resolved reference points at (design 0013): a member's `valueType`
+ * ('any' for org fields and unknown members of an open source), 'object' for a member with
+ * members of its own; undefined when it cannot be told.
+ */
+function refValueType(ref, sources, step) {
+  const src = ref.source !== undefined ? sources[ref.source] : null;
+  if (!src || ref.mode === 'ref') return undefined;
+  if (src.unresolved) return 'any';
+  const parts = String(ref.member ?? '').split('.').filter(Boolean);
+  if (!parts.length) return undefined;
+  const members = ref.viaThis ? sources[step.id]?.members ?? [] : src.members;
+  const builtin = members.find((m) => m.builtin && m.key === parts[0]);
+  if (builtin) return builtin.valueType;
+  const r = resolveMember(members, parts, src.origin === 'org');
+  if (r.ok && r.member) return r.member.members?.length && r.member.valueType !== 'reference' ? 'object' : r.member.valueType;
+  return src.open ? 'any' : undefined;
 }
 
 /** State of source `id` at `here`: { certainty, why? } or { reason }. */
@@ -660,10 +787,12 @@ function resolveRef({ step, here, o, path, sources, byName, loopKeys }) {
     return { ...base, source: step.id, viaThis: true, certainty: 'always' };
   }
 
-  // A loop variable in scope wins (like the executor), then a record alias, then any loop variable.
+  // A loop variable in scope wins (like the executor), then a record alias, then a workflow-wide
+  // variable (`run`, design 0013), then any loop variable.
   const visibleVar = here.varSource(name);
   const candidates = byName.get(name) ?? [];
-  const src = visibleVar ?? candidates.find((s) => s.kind !== 'vars') ?? candidates.find((s) => !s.disabled) ?? candidates[0];
+  const src = visibleVar ?? candidates.find((s) => s.kind !== 'vars') ?? candidates.find((s) => s.global)
+    ?? candidates.find((s) => !s.disabled) ?? candidates[0];
   if (!src) {
     // `loop.index` with no loop of that name: a loop variable shape. Point at the enclosing loop,
     // or say the step is not inside any loop.
@@ -688,6 +817,9 @@ function resolveRef({ step, here, o, path, sources, byName, loopKeys }) {
     return fail('selfAlias', { ...withSrc, suggestion: { option: o.option, from: path, to: ['this', ...rest].join('.') } });
   }
   const st = src.id === step.id ? { reason: 'after' } : stateAt(here, src.id);
+  // The loop's own variable or record in one of its own options (design 0013): computed before
+  // the first iteration, so it does not exist yet.
+  if ((st.reason === 'outsideLoop' || (src.id === step.id && src.kind === 'vars')) && src.nodeId === step.id && o.fieldIndex === undefined) return fail('ownLoop', { ...withSrc, reason: st.reason });
   if (st.reason) return fail(st.reason, { ...withSrc, reason: st.reason });
 
   if (!rest.length) return fail('wholeRecord', withSrc);
@@ -695,6 +827,9 @@ function resolveRef({ step, here, o, path, sources, byName, loopKeys }) {
   if (src.kind === 'vars') {
     const r = resolveMember(src.members, rest);
     if (!r.ok) {
+      // A member that exists in another mode only (`loop.value`, design 0013): no "did you mean".
+      const inactive = src.inactive?.find((m) => m.key === member);
+      if (inactive) return fail('unknownMember', { ...withSrc, missing: member, when: inactive.when });
       const hint = closest(member, src.members.map((m) => m.key));
       return fail('unknownMember', { ...withSrc, missing: member, ...(hint ? { suggestion: { option: o.option, from: path, to: `${name}.${hint}` } } : {}) });
     }
@@ -818,4 +953,46 @@ export function poolUsage(wf, catalog) {
     }
   }
   return { readers, referenced };
+}
+
+/**
+ * Fields of Query steps used as numbers (design 0013): referenced by a number option
+ * (`vars: 'number'`, through the Query's pool, a Chọn bản ghi from it or the record a Lặp `each`
+ * loops over), or named by an option that reads a number field of the records of a pool option
+ * (`numberField: '<poolKey>'`, the `weightField` of Chọn bản ghi). The sample rows of a preview
+ * without an org give these fields numbers (shared/soql.js sampleRows).
+ * → { [queryStepId]: [field] }
+ */
+export function numericSampleFields(wf, catalog) {
+  const scope = analyzeScope(wf, catalog);
+  const out = {};
+  const add = (src, field) => {
+    const root = src?.nodeType === 'query' ? src : src?.root !== undefined ? scope.sources[src.root] : null;
+    if (root?.nodeType !== 'query' || !field) return;
+    const list = (out[root.nodeId] ??= []);
+    if (!list.some((f) => f.toLowerCase() === field.toLowerCase())) list.push(field);
+  };
+  for (const ref of scope.refs) {
+    if (ref.mode !== 'number' || ref.disabled || ref.hidden || !ref.member || ref.member.startsWith('$')) continue;
+    add(scope.sources[ref.source], ref.member);
+  }
+  const cat = catalogMaps(catalog);
+  const visit = (list) => {
+    for (const step of Array.isArray(list) ? list : []) {
+      if (!step || typeof step !== 'object' || step.disabled === true) continue;
+      const type = cat.nodeTypes.get(step.type);
+      const c = step.config ?? {};
+      const values = { ...Object.fromEntries((type?.options ?? []).map((d) => [d.key, d.default])), ...c };
+      for (const def of type?.options ?? []) {
+        if (!def.numberField || !optionShown(def, values, type.options)) continue;
+        const field = String(c[def.key] ?? '').trim();
+        const poolName = c[def.numberField];
+        const pool = (scope.at[step.id]?.visible ?? []).map((v) => scope.sources[v.source]).find((x) => x?.kind === 'record' && x.name === poolName);
+        add(pool, field);
+      }
+      for (const children of Object.values(step.slots ?? {})) visit(children);
+    }
+  };
+  visit(wf?.steps);
+  return out;
 }

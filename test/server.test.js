@@ -77,14 +77,40 @@ test('GET /api/meta: loop has mode each with from and itemAlias shown only for e
   const meta = await (await fetch(base + '/api/meta')).json();
   const loopType = meta.nodeTypes.find((n) => n.type === 'loop');
   const opt = (k) => loopType.options.find((o) => o.key === k);
-  assert.deepEqual(loopType.options.map((o) => o.key), ['mode', 'count', 'min', 'max', 'from', 'itemAlias', 'alias']);
+  // 0013 added values, the each filter, order and limit (checked in their own test below).
+  assert.deepEqual(loopType.options.map((o) => o.key).filter((k) => ['mode', 'count', 'min', 'max', 'from', 'itemAlias', 'alias'].includes(k)), ['mode', 'count', 'min', 'max', 'from', 'itemAlias', 'alias']);
   assert.equal(opt('mode').label, 'Lặp theo');
-  assert.deepEqual(opt('mode').choices.map((c) => `${c.value}:${c.label}`), ['fixed:Số lần cố định', 'range:Số lần ngẫu nhiên trong khoảng', 'each:Mỗi bản ghi trong pool']);
+  assert.deepEqual(opt('mode').choices.slice(0, 3).map((c) => `${c.value}:${c.label}`), ['fixed:Số lần cố định', 'range:Số lần ngẫu nhiên trong khoảng', 'each:Mỗi bản ghi trong pool']);
   assert.deepEqual([opt('from').kind, opt('from').accepts, opt('from').showIf, opt('itemAlias').showIf], ['ref', { pool: true }, { key: 'mode', in: ['each'] }, { key: 'mode', in: ['each'] }]);
   assert.deepEqual([opt('count').showIf.in, opt('min').showIf.in], [['fixed'], ['range']]);
   const [vars, item] = loopType.exposes;
   assert.deepEqual([vars.kind, item.kind, item.key, item.when, item.name.key, item.current, item.pool, item.members], ['vars', 'record', 'item', { key: 'mode', in: ['each'] }, 'itemAlias', 'item', false, { fromSource: 'from' }]);
   assert.match(loopType.description, /mỗi bản ghi của một pool/);
+});
+
+test('GET /api/meta: loop has values, filter, order and limit with chained showIf; count/min/max declare vars number; branch right declares vars template; pick has weighted and weightField; globals lists run', async () => {
+  const meta = await (await fetch(base + '/api/meta')).json();
+  const type = (t) => meta.nodeTypes.find((n) => n.type === t);
+  const opt = (t, k) => type(t).options.find((o) => o.key === k);
+  assert.deepEqual(type('loop').options.map((o) => o.key), ['mode', 'count', 'min', 'max', 'values', 'from', 'itemAlias', 'filter', 'filterField', 'filterOp', 'filterValue', 'order', 'limit', 'alias']);
+  assert.deepEqual(opt('loop', 'mode').choices.map((c) => c.value), ['fixed', 'range', 'each', 'values']);
+  assert.equal(opt('loop', 'mode').choices[3].label, 'Mỗi giá trị trong danh sách');
+  assert.deepEqual([opt('loop', 'values').kind, opt('loop', 'values').showIf, opt('loop', 'values').placeholder], ['list', { key: 'mode', in: ['values'] }, 'Hot\nWarm\nCold']);
+  // Chained showIf: the filter fields depend on `filter`, which depends on `mode`.
+  assert.deepEqual(opt('loop', 'filter').showIf, { key: 'mode', in: ['each'] });
+  assert.deepEqual(opt('loop', 'filterField').showIf, { key: 'filter', in: ['compare'] });
+  assert.equal(opt('loop', 'filterValue').vars, 'template');
+  assert.deepEqual([opt('loop', 'order').default, opt('loop', 'order').choices.map((c) => c.value)], ['pool', ['pool', 'shuffle']]);
+  assert.deepEqual([opt('loop', 'limit').default, opt('loop', 'limit').showIf], [0, { key: 'mode', in: ['each'] }]);
+  assert.deepEqual(['count', 'min', 'max'].map((k) => opt('loop', k).vars), ['number', 'number', 'number']);
+  assert.equal(opt('loop', 'limit').vars, undefined, 'limit takes no variable');
+  assert.deepEqual(type('loop').exposes[0].members.find((m) => m.key === 'value').when, { key: 'mode', in: ['values'] });
+  assert.equal(type('record').exposes.nonEmpty, true);
+  assert.equal(opt('branch', 'right').vars, 'template');
+  assert.ok(opt('pick', 'mode').choices.some((c) => c.value === 'weighted'));
+  assert.deepEqual([opt('pick', 'weightField').showIf, opt('pick', 'weightField').suggest], [{ key: 'mode', in: ['weighted'] }, { kind: 'poolFields', poolKey: 'from' }]);
+  assert.equal(opt('pick', 'filter').showIf, undefined, 'the pick filter is always shown, as before');
+  assert.deepEqual(meta.globals.map((g) => `${g.name}:${g.members.map((m) => `${m.key}/${m.valueType}`).join(',')}`), ['run:seed/number,now/datetime,today/date']);
 });
 
 test('GET /api/meta (0006): Query / Chọn bản ghi options, suggest hints, presets and query limits', async () => {
@@ -100,7 +126,7 @@ test('GET /api/meta (0006): Query / Chọn bản ghi options, suggest hints, pre
   assert.equal(query.options.find((o) => o.key === 'limit').max, 2000);
   assert.deepEqual([query.exposes.current, query.exposes.origin, query.exposes.members, query.exposes.builtins[0].key], ['none', 'org', 'select', '$count']);
   assert.equal(pick.label, 'Chọn bản ghi');
-  assert.deepEqual(pick.options.map((o) => o.key), ['from', 'alias', 'mode', 'filter', 'filterField', 'filterOp', 'filterValue', 'onEmpty']);
+  assert.deepEqual(pick.options.map((o) => o.key), ['from', 'alias', 'mode', 'weightField', 'filter', 'filterField', 'filterOp', 'filterValue', 'onEmpty']);
   assert.deepEqual(pick.options.find((o) => o.key === 'from').accepts, { pool: true });
   assert.equal(pick.options.find((o) => o.key === 'filterValue').vars, 'template');
   assert.deepEqual(pick.options.find((o) => o.key === 'filterField').suggest, { kind: 'poolFields', poolKey: 'from' });

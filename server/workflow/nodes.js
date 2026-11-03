@@ -65,6 +65,48 @@ const BUILDER = { key: 'mode', in: ['builder'] };
 const SOQL = { key: 'mode', in: ['soql'] };
 const FILTER = { key: 'filter', in: ['compare'] };
 const EACH = { key: 'mode', in: ['each'] };
+const VALUES = { key: 'mode', in: ['values'] };
+const NUM_HELP = 'Số nguyên 0–100000, hoặc bấm {x} để lấy từ biến kiểu Số, ví dụ {{acc.NumberOfEmployees}} hay {{accs.$count}}.';
+
+/**
+ * The four filter options shared by Chọn bản ghi and Lặp `each` (design 0013); they differ in the
+ * showIf of `filter` (Lặp: only in `each` mode; the others follow it, showIf being transitive)
+ * and the help of `filterValue`.
+ */
+function filterOptions({ showIf, valueHelp }) {
+  return [
+    {
+      key: 'filter',
+      label: 'Lọc',
+      kind: 'select',
+      default: 'none',
+      ...(showIf ? { showIf } : {}),
+      choices: [
+        { value: 'none', label: 'Không lọc' },
+        { value: 'compare', label: 'Chỉ bản ghi thỏa điều kiện' },
+      ],
+    },
+    { key: 'filterField', label: 'Field', kind: 'string', default: '', showIf: FILTER, suggest: { kind: 'poolFields', poolKey: 'from' }, help: 'Field của bản ghi trong pool, ví dụ AccountId, Industry hoặc Account.Type.' },
+    { key: 'filterOp', label: 'Phép so sánh', kind: 'select', default: 'eq', choices: CONDITION_OPS, showIf: FILTER },
+    { key: 'filterValue', label: 'So với', kind: 'string', default: '', vars: 'template', showIf: FILTER, help: valueHelp },
+  ];
+}
+
+/**
+ * Workflow-wide variables (design 0013), served as meta.globals; shared/scope.js analyzeScope makes
+ * them visible everywhere, after every name the user gave (an alias or loop variable `run` wins).
+ */
+export const WORKFLOW_GLOBALS = [
+  {
+    name: 'run',
+    label: 'Lần chạy',
+    members: [
+      { key: 'seed', valueType: 'number', label: 'Seed của lần chạy' },
+      { key: 'now', valueType: 'datetime', label: 'Thời điểm chạy (UTC, ISO 8601)' },
+      { key: 'today', valueType: 'date', label: 'Ngày chạy (UTC, YYYY-MM-DD)' },
+    ],
+  },
+];
 
 export const STEP_CATEGORIES = [
   { key: 'data', label: 'Dữ liệu' },
@@ -101,6 +143,8 @@ export const NODE_TYPES = [
       builtins: [{ key: '$n', valueType: 'number', label: 'Số thứ tự bản ghi (n trong acc#n)' }],
       current: 'last',
       pool: true,
+      // Design 0013: every run of the step adds ≥ 1 record (count ≥ 1 is required).
+      nonEmpty: true,
       origin: 'generated',
       lookupParent: true,
     },
@@ -180,22 +224,22 @@ export const NODE_TYPES = [
           { value: 'random', label: 'Ngẫu nhiên (có thể lặp lại)' },
           { value: 'unique', label: 'Ngẫu nhiên, không lặp lại' },
           { value: 'sequential', label: 'Lần lượt theo thứ tự (quay vòng)' },
+          { value: 'weighted', label: 'Ngẫu nhiên theo trọng số (field số)' },
         ],
-        help: 'Muốn chạy đúng một lần cho mỗi bản ghi của pool, dùng bước Lặp → "Mỗi bản ghi trong pool".',
+        help: 'Muốn chạy đúng một lần cho mỗi bản ghi của pool, dùng bước Lặp → "Mỗi bản ghi trong pool". Muốn chọn N bản ghi khác nhau một lần, dùng Lặp → "Mỗi bản ghi trong pool", Xáo trộn, Tối đa N.',
       },
       {
-        key: 'filter',
-        label: 'Lọc',
-        kind: 'select',
-        default: 'none',
-        choices: [
-          { value: 'none', label: 'Không lọc' },
-          { value: 'compare', label: 'Chỉ bản ghi thỏa điều kiện' },
-        ],
+        key: 'weightField',
+        label: 'Field trọng số',
+        kind: 'string',
+        default: '',
+        showIf: { key: 'mode', in: ['weighted'] },
+        suggest: { kind: 'poolFields', poolKey: 'from' },
+        // A number field of the records of the pool named by option `from` (sample Query rows give it numbers).
+        numberField: 'from',
+        help: 'Field số của bản ghi trong pool, ví dụ NumberOfEmployees hoặc Amount. Bản ghi có giá trị gấp đôi được chọn nhiều gấp đôi; trống hoặc âm tính là 0.',
       },
-      { key: 'filterField', label: 'Field', kind: 'string', default: '', showIf: FILTER, suggest: { kind: 'poolFields', poolKey: 'from' }, help: 'Field của bản ghi trong pool, ví dụ AccountId, Industry hoặc Account.Type.' },
-      { key: 'filterOp', label: 'Phép so sánh', kind: 'select', default: 'eq', choices: CONDITION_OPS, showIf: FILTER },
-      { key: 'filterValue', label: 'So với', kind: 'string', default: '', vars: 'template', showIf: FILTER, help: 'Giá trị cố định, hoặc {{acc.Id}} để lấy theo bản ghi ở bước trước.' },
+      ...filterOptions({ valueHelp: 'Giá trị cố định, hoặc {{acc.Id}} để lấy theo bản ghi ở bước trước.' }),
       {
         key: 'onEmpty',
         label: 'Khi không còn bản ghi để chọn',
@@ -213,7 +257,7 @@ export const NODE_TYPES = [
     type: 'loop',
     label: 'Lặp',
     category: 'control',
-    description: 'Chạy các bước bên trong nhiều lần: số lần cố định, ngẫu nhiên, hoặc mỗi bản ghi của một pool; rồi đi tiếp xuống bước sau.',
+    description: 'Chạy các bước bên trong nhiều lần: số lần cố định, ngẫu nhiên, mỗi bản ghi của một pool hoặc mỗi giá trị của một danh sách; rồi đi tiếp xuống bước sau.',
     slots: [{ key: 'body', label: '', empty: 'Thêm bước vào vòng lặp' }],
     flow: { kind: 'loop', body: 'body' },
     minIterations: loopMinIterations,
@@ -230,6 +274,7 @@ export const NODE_TYPES = [
           { key: 'index', valueType: 'number', label: 'Lần lặp hiện tại (từ 1)' },
           { key: 'index0', valueType: 'number', label: 'Lần lặp hiện tại (từ 0)' },
           { key: 'count', valueType: 'number', label: 'Tổng số lần lặp' },
+          { key: 'value', valueType: 'string', label: 'Giá trị đang lặp', when: VALUES },
         ],
       },
       {
@@ -257,14 +302,33 @@ export const NODE_TYPES = [
           { value: 'fixed', label: 'Số lần cố định' },
           { value: 'range', label: 'Số lần ngẫu nhiên trong khoảng' },
           { value: 'each', label: 'Mỗi bản ghi trong pool' },
+          { value: 'values', label: 'Mỗi giá trị trong danh sách' },
         ],
       },
-      { key: 'count', label: 'Số lần lặp', kind: 'integer', default: 0, initial: 3, min: 0, max: LIMITS.maxCountPerNode, showIf: { key: 'mode', in: ['fixed'] } },
-      { key: 'min', label: 'Ít nhất', kind: 'integer', default: 1, min: 0, max: LIMITS.maxCountPerNode, showIf: { key: 'mode', in: ['range'] } },
-      { key: 'max', label: 'Nhiều nhất', kind: 'integer', default: 1, initial: 5, min: 0, max: LIMITS.maxCountPerNode, showIf: { key: 'mode', in: ['range'] } },
-      { key: 'from', label: 'Lặp qua pool', kind: 'ref', default: '', showIf: EACH, accepts: { pool: true }, placeholder: '— chọn pool —', empty: '— chưa có pool nào phía trên —', help: 'Alias của bước Query, Record hoặc Chọn bản ghi ở phía trên. Thân vòng lặp chạy một lần cho mỗi bản ghi, theo thứ tự của pool.' },
+      // Design 0013: a number, or exactly one variable `{{path}}` of type Số (vars: 'number').
+      { key: 'count', label: 'Số lần lặp', kind: 'integer', vars: 'number', default: 0, initial: 3, min: 0, max: LIMITS.maxCountPerNode, showIf: { key: 'mode', in: ['fixed'] }, help: NUM_HELP },
+      { key: 'min', label: 'Ít nhất', kind: 'integer', vars: 'number', default: 1, min: 0, max: LIMITS.maxCountPerNode, showIf: { key: 'mode', in: ['range'] } },
+      {
+        key: 'max', label: 'Nhiều nhất', kind: 'integer', vars: 'number', default: 1, initial: 5, min: 0, max: LIMITS.maxCountPerNode, showIf: { key: 'mode', in: ['range'] },
+        help: 'Ít nhất / Nhiều nhất nhận số hoặc một biến kiểu Số (bấm {x}). Khi chạy, Nhiều nhất nhỏ hơn Ít nhất thì dùng Ít nhất.',
+      },
+      {
+        key: 'values', label: 'Danh sách giá trị', kind: 'list', default: [], showIf: VALUES, placeholder: 'Hot\nWarm\nCold',
+        help: 'Mỗi dòng một giá trị. Bên trong dùng {{loop.value}}; với field Picklist chọn kiểu "Lấy từ biến (giữ kiểu)" rồi loop.value.',
+      },
+      { key: 'from', label: 'Lặp qua pool', kind: 'ref', default: '', showIf: EACH, accepts: { pool: true }, placeholder: '— chọn pool —', empty: '— chưa có pool nào phía trên —', help: 'Alias của bước Query, Record hoặc Chọn bản ghi ở phía trên. Thân vòng lặp chạy một lần cho mỗi bản ghi, theo thứ tự của pool. Pool Record gồm mọi bản ghi của alias đã sinh từ đầu lần chạy.' },
       { key: 'itemAlias', label: 'Tên bản ghi đang lặp', kind: 'string', default: '', showIf: EACH, help: 'Bên trong vòng lặp dùng {{acc.Name}}, hoặc Lookup "Bản ghi hiện tại" acc.' },
-      { key: 'alias', label: 'Tên biến lặp', kind: 'string', default: 'loop', help: 'Dùng {{loop.index}} (từ 1), {{loop.index0}} (từ 0), {{loop.count}}. Khi lặp theo pool, count = số bản ghi của pool.' },
+      ...filterOptions({ showIf: EACH, valueHelp: 'Giá trị cố định, hoặc {{acc.Id}} để chỉ lấy bản ghi con của bản ghi đang lặp ở vòng ngoài. Tính một lần khi vòng lặp bắt đầu.' }),
+      {
+        key: 'order', label: 'Thứ tự', kind: 'select', default: 'pool', showIf: EACH,
+        choices: [
+          { value: 'pool', label: 'Theo thứ tự của pool' },
+          { value: 'shuffle', label: 'Xáo trộn (theo seed)' },
+        ],
+        help: 'Xáo trộn: mỗi lần chạy qua một thứ tự khác, cùng seed thì như nhau. Kết hợp với "Tối đa số bản ghi" để lấy N bản ghi ngẫu nhiên không trùng.',
+      },
+      { key: 'limit', label: 'Tối đa số bản ghi', kind: 'integer', default: 0, min: 0, max: LIMITS.maxCountPerNode, showIf: EACH, help: '0 = tất cả. Áp dụng sau khi lọc và xáo trộn.' },
+      { key: 'alias', label: 'Tên biến lặp', kind: 'string', default: 'loop', help: 'Dùng {{loop.index}} (từ 1), {{loop.index0}} (từ 0), {{loop.count}}. Khi lặp theo pool, count = số bản ghi của pool; {{loop.value}} khi lặp theo danh sách.' },
     ],
   },
   {
@@ -291,7 +355,7 @@ export const NODE_TYPES = [
       { key: 'probability', label: 'Xác suất đi nhánh đúng (0–1)', kind: 'number', default: 0.5, min: 0, max: 1, step: 0.05, showIf: { key: 'kind', in: ['chance'] } },
       { key: 'left', label: 'Giá trị', kind: 'string', vars: 'path', default: 'loop.index', help: 'Bấm {x} để chọn biến, ví dụ acc.Industry hoặc loop.index.', showIf: { key: 'kind', in: ['compare'] } },
       { key: 'op', label: 'Phép so sánh', kind: 'select', default: 'eq', choices: CONDITION_OPS, showIf: { key: 'kind', in: ['compare'] } },
-      { key: 'right', label: 'So với', kind: 'string', default: '', showIf: { key: 'kind', in: ['compare'] } },
+      { key: 'right', label: 'So với', kind: 'string', vars: 'template', default: '', showIf: { key: 'kind', in: ['compare'] }, help: 'Giá trị cố định (100000, Banking), hoặc bấm {x} để so với biến, ví dụ {{opp.Amount}}.' },
     ],
   },
 ];
