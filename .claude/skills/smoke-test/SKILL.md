@@ -215,8 +215,8 @@ the others; never add a fixed `waitForTimeout`.
     từng bản ghi → a Lặp `each` over `accs` around `con`, and the toast's [Đổi] points the Lookup at the record looped over (C).
     At 390 px: ⋯ → Chọn nhiều bước shows `.select-bar`, a tap gives `2 đã chọn` without opening the sheet, Xong leaves.
 
-It also fails on any page error or a run over the time budget, `SMOKE_BUDGET_MS` (default 12 000 ms, review 0013: raise it
-on a slow or loaded machine, e.g. `SMOKE_BUDGET_MS=20000`; keep 12 000 for normal runs). When a flow throws (a timed-out
+It also fails on any page error or a run over the time budget, `SMOKE_BUDGET_MS` (default 20 000 ms; raised from 12 000 after 0012 added two flows, since the run is CPU-bound,
+about 11–15 s on 4 CPUs; raise it further on a loaded machine, e.g. `SMOKE_BUDGET_MS=30000`). When a flow throws (a timed-out
 wait), its open pages are saved as full-page screenshots plus a `<flow>.txt` with the selector it was waiting for and the
 stack, under `failures/` in the smoke temp dir (kept when that happens); the paths are printed after `failure artefacts:`.
 Waits never race a previous state: after Ctrl+Enter wait for the new result before clicking its tab, wait for a mocked

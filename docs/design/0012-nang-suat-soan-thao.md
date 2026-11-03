@@ -904,3 +904,8 @@ workflow thành `smokeOpen` (mở như một mục thư viện); `flowHistory` v
 (`flowHistoryWide`); `flowCanvas` tách phần điện thoại (`flowCanvasPhone`); G và A rời `flowProductivity` sang `flowLibrary`; các
 luồng chạy theo thứ tự dài trước, tối đa 2 × số CPU cùng lúc. Kết quả: xem báo cáo của lần sửa (máy đo lúc đó bị tranh CPU từ host,
 nên trước / sau đo xen kẽ nhau).
+
+Ngân sách smoke: đo xen kẽ trên cùng máy, bản trước 0012 (`fc216c4`) chạy 11,2 s, bản 0012 (`8bcf2a1`) 14,5 s, bản sau sửa 14,2 s.
+Phần tăng đến từ hai luồng mới (`flowProductivity*`, `flowLibrary`), không phải app chậm đi (mỗi lần tải trang chỉ chậm ~25 ms).
+Smoke bị giới hạn bởi CPU, nên **trần mặc định nâng từ 12 s lên 20 s** (`SMOKE_BUDGET_MS`). Trần vẫn bắt được luồng chờ cố định
+hoặc treo. Giảm thời gian khởi động app (bớt số module tải) để lại cho việc sau.

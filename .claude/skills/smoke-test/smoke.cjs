@@ -109,8 +109,8 @@ const V1_ORPHAN = {
 
 const errors = [];
 const check = (cond, msg) => { if (!cond) errors.push(msg); };
-// Time budget of the whole run (SMOKE_BUDGET_MS, default 12 s; review 0013 S3).
-const BUDGET_MS = Number(process.env.SMOKE_BUDGET_MS) > 0 ? Number(process.env.SMOKE_BUDGET_MS) : 12000;
+// Time budget of the whole run (SMOKE_BUDGET_MS, default 20 s; review 0013 S3, raised after 0012).
+const BUDGET_MS = Number(process.env.SMOKE_BUDGET_MS) > 0 ? Number(process.env.SMOKE_BUDGET_MS) : 20000;
 const { AsyncLocalStorage } = require('node:async_hooks');
 const flowOf = new AsyncLocalStorage(); // name of the flow a page is opened by
 const pages = new Map(); // flow name → its pages, for the failure screenshot
@@ -1844,8 +1844,8 @@ async function flowProductivityRun() {
   }
   const ms = Date.now() - t0;
   console.log(`duration=${ms}ms`);
-  // 12 s budget. Since 0009 the flows run in parallel (≈ 5–6 s); the budget stays to catch a flow
-  // that starts waiting on fixed timeouts again.
+  // 20 s budget. The flows run in parallel and are CPU-bound (≈ 11–15 s on a 4-CPU machine since 0012
+  // added its flows); the budget stays to catch a flow that starts waiting on fixed timeouts again.
   if (ms > BUDGET_MS) errors.push(`smoke test took ${ms} ms (limit ${BUDGET_MS / 1000} s, SMOKE_BUDGET_MS)`);
   if (artefacts.length) console.error(`failure artefacts:\n${artefacts.join('\n')}`);
   if (errors.length) {
