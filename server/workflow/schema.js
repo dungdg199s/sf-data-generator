@@ -10,7 +10,7 @@ import { NODE_TYPES, nodeTypeMap, CONDITION_OPS, LIMITS, WORKFLOW_GLOBALS } from
 import { checkSoql, checkBuilder, isFieldPath, buildSoql, soqlSobject, selectFields, builderLimit } from '../../shared/soql.js';
 import { getGenerator, describeGenerators, VALUE_TYPES } from '../generators/index.js';
 import { migrateV1, describeReport, reportNeedsReview } from '../../shared/migrate-v1.js';
-import { analyzeScope, referenceOptions, hasUnclosed, optionShown, numberVarPath, valueList } from '../../shared/scope.js';
+import { analyzeScope, referenceOptions, hasUnclosed, optionShown, numberVarPath, valueList, poolFieldOptions } from '../../shared/scope.js';
 import { stepNames } from '../../shared/workflow-tree.js';
 
 const API_NAME = /^[A-Za-z][A-Za-z0-9_]*$/;
@@ -290,6 +290,21 @@ export function prepareWorkflow(wf) {
         }
       }
     }
+    // A filter / weight field of a Record pool that the Record does not make (review 0013 N3):
+    // the filter never matches (weights are 0). Query pools are checked by the org.
+    for (const { step, off } of steps) {
+      if (off) continue;
+      for (const o of poolFieldOptions(step, scope, catalog)) {
+        const pool = o.pool;
+        if (o.hidden || !pool || pool.origin !== 'generated' || pool.open || !isFieldPath(o.value)) continue;
+        const keys = pool.members.filter((m) => !m.builtin).map((m) => m.key);
+        const head = o.value.trim().split('.')[0];
+        if (keys.includes(head)) continue;
+        const owner = pool.root !== undefined ? scope.sources[pool.root]?.name ?? pool.name : pool.name;
+        const known = keys.length ? ` Field có sẵn: ${keys.slice(0, 6).join(', ')}${keys.length > 6 ? ', …' : ''}.` : '';
+        warn(`"${o.def.label}": bước "${owner}" không sinh field "${head}" nên ${o.key === 'weightField' ? 'mọi trọng số là 0' : 'điều kiện lọc không khớp bản ghi nào'}. Thêm field "${head}" vào bước "${owner}" hoặc chọn field khác trong gợi ý.${known}`, step.id, o.key, { code: 'unknownPoolField' });
+      }
+    }
     // A Query pool nobody reads (no Lookup, Chọn bản ghi or template refers to it).
     for (const { step, off } of steps) {
       if (off || step.type !== 'query' || !step.config?.alias) continue;
@@ -365,7 +380,7 @@ function validateQuery(step, c, { err, warn, inLoop }) {
     const raw = c.fields;
     if (raw !== undefined && !Array.isArray(raw) && typeof raw !== 'string') err('"fields" phải là một danh sách tên field.', step.id, 'fields');
     else {
-      const list = Array.isArray(raw) ? raw : raw === undefined ? [] : String(raw).split(/[\n,;]/);
+      const list = (Array.isArray(raw) ? raw : raw === undefined ? [] : [raw]).flatMap((x) => String(x ?? '').split(/[\n,;]/));
       const bad = list.map((x) => String(x ?? '').trim()).filter(Boolean).find((x) => !isFieldPath(x));
       if (bad !== undefined) err(`Field "${bad}" không hợp lệ. Dùng API name; field quan hệ viết Owner.Name.`, step.id, 'fields');
     }
@@ -627,6 +642,10 @@ export function referenceIssue(ref, scope, step) {
 }
 
 function maybeMessage(ref, s, isLookup, isMD) {
+  if (ref.why?.skip) {
+    // Review 0013 S1: a Chọn bản ghi "Bỏ qua…" before it in the loop body.
+    return `bước "${ref.why.skip}" có thể bỏ qua phần còn lại của vòng lặp "${ref.why.loop}" (khi không còn bản ghi để chọn), nên "${s}" có thể chưa có bản ghi.${isMD ? ' Master-Detail sẽ báo lỗi khi chạy nếu chưa có bản ghi cha.' : ''} Đặt "${s}" trước bước "${ref.why.skip}" hoặc chọn "Báo lỗi và dừng".`;
+  }
   if (ref.why?.loop) {
     if (ref.why.each !== undefined) {
       return `vòng lặp "${ref.why.loop}" chạy 0 lần khi pool "${ref.why.each || '?'}" rỗng nên "${s}" có thể chưa có bản ghi.${isMD ? ' Master-Detail sẽ báo lỗi khi chạy nếu pool đó rỗng.' : ''}`;

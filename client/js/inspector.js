@@ -690,7 +690,8 @@ function followFieldRename(step, from, to) {
   // history: false — the references move in the same undo step as the name (one Ctrl+Z undoes both).
   const res = updateWorkflow((wf) => renameField(wf, step.id, from, to, { catalog: state.meta }), { source: 'inspector-structure', history: false });
   if (!res?.count) return;
-  const pairs = res.names.map((n) => `${n}.${from} → ${n}.${to}`).join(', ');
+  // Only filter / weight fields of a pool changed (review 0013 N3): name the field itself.
+  const pairs = res.names.length ? res.names.map((n) => `${n}.${from} → ${n}.${to}`).join(', ') : `${from} → ${to}`;
   toast(`Đã cập nhật ${res.count} tham chiếu: ${pairs}. Ctrl+Z để hoàn tác.`, 5000);
 }
 

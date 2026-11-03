@@ -418,3 +418,52 @@ test('numericSampleFields lists Query fields used as numbers or weights', () => 
   ]);
   assert.deepEqual(numericSampleFields(w, catalog), { qa: ['numberofemployees'], qo: ['Amount'] });
 });
+
+// ---------- design 0013, review fixes ----------
+
+test('0013 review S1: a Chọn bản ghi that may skip makes what follows it in the loop body maybe after the loop', () => {
+  const qq = q('q', 'accs', ['Id']);
+  const pk = (extra = {}) => ({ id: 'p', type: 'pick', config: { from: 'accs', alias: 'pp', filter: 'compare', filterField: 'Id', filterValue: 'zzz', ...extra } });
+  const w = wf([qq, loop('o', { count: 2 }, [r('b', 'before'), pk(), r('a', 'acc')]), each('e', 'acc', 'x', [r('c', 'con')]), r('t', 'tk', [lookupField('con')])]);
+  const scope = scopeOf(w);
+  assert.equal(stateOf(scope, 't', 'a'), 'maybe', 'acc is after the pick: some iterations skipped it');
+  assert.equal(stateOf(scope, 't', 'b'), 'last', 'what came before the pick is still last');
+  assert.equal(stateOf(scope, 't', 'c'), 'maybe', 'the each loop over acc may run 0 times (poolNonEmpty is false)');
+  assert.deepEqual(scope.at.t.visible.find((v) => v.source === 'a').why, { loop: 'loop', loopId: 'o', skip: 'pp' });
+  assert.equal(scope.at.t.visible.find((v) => v.source === 'a').note, 'bước "pp" có thể bỏ qua phần sau của vòng lặp "loop"');
+  // Inside the body, after the pick, acc is always there (the iteration went on).
+  assert.equal(stateOf(scope, 'a', 'p'), 'always');
+  // onEmpty "error" never skips; a skip at the top level ends the run (nothing after is maybe).
+  assert.equal(stateOf(scopeOf(wf([qq, loop('o', { count: 2 }, [pk({ onEmpty: 'error' }), r('a', 'acc')]), r('t')])), 't', 'a'), 'last');
+  assert.equal(stateOf(scopeOf(wf([qq, pk(), r('a', 'acc', [], { count: 3 }), each('e', 'acc', 'x', [r('c', 'con')]), r('t')])), 't', 'c'), 'last');
+  // A pick in one branch column also makes what follows the branch maybe; a pick in a nested loop does not leak out.
+  const br = scopeOf(wf([qq, loop('o', { count: 2 }, [branch('bb', {}, [pk()], [r('n', 'n')]), r('a', 'acc')]), r('t')]));
+  assert.equal(stateOf(br, 't', 'a'), 'maybe');
+  const nested = scopeOf(wf([qq, loop('o', { count: 2 }, [loop('i', { count: 1 }, [pk()]), r('a', 'acc')]), r('t')]));
+  assert.equal(stateOf(nested, 't', 'a'), 'last');
+  // The message names the pick.
+  const { warnings } = validateWorkflow(wf([qq, loop('o', { count: 2 }, [pk(), r('a', 'acc')]), r('t', 'tk', [lookupField('acc')])]));
+  assert.equal(warnings.find((x) => x.nodeId === 't').message, 'Field "L": bước "pp" có thể bỏ qua phần còn lại của vòng lặp "loop" (khi không còn bản ghi để chọn), nên "acc" có thể chưa có bản ghi. Đặt "acc" trước bước "pp" hoặc chọn "Báo lỗi và dừng".');
+  // Declared in the catalogue, not per type in shared/.
+  assert.deepEqual(catalog.nodeTypes.find((t) => t.type === 'pick').flow.canSkip, { key: 'onEmpty', in: ['skip'] });
+});
+
+test('0013 review N5: numberVarPath uses the template token syntax', async () => {
+  const { readFileSync } = await import('node:fs');
+  const src = readFileSync(new URL('../shared/scope.js', import.meta.url), 'utf8');
+  assert.match(src, /new RegExp\(`\^\\\\s\*\$\{TEMPLATE_TOKEN_SOURCE\}\\\\s\*\$`\)/, 'built from TEMPLATE_TOKEN_SOURCE');
+  for (const s of ['{{a.b}}', ' {{ a.$n }} ', '{{a.b}} x', '{{a b}}', '{{}}', '{{a.b}}{{c.d}}', 'x']) {
+    const one = tokenize(s.trim());
+    assert.equal(numberVarPath(s), one.length === 1 && one[0].kind === 'token' ? one[0].path : null, s);
+  }
+});
+
+test('0013 review N6: a turned-off step named run does not hide {{run.*}}', () => {
+  const w = wf([{ ...r('x', 'run', [tpl('Name', 'n')]), disabled: true }, r('a', 'acc', [tpl('T', '{{run.seed}}')])]);
+  const scope = scopeOf(w);
+  assert.deepEqual(codesAt(scope, 'a'), ['fields.T:run.seed:ok']);
+  assert.equal(scope.refs.find((x) => x.nodeId === 'a').source, '$run');
+  assert.equal(scope.at.a.visible.at(-1).source, '$run');
+  // Turned on again, the alias wins (and run.seed is its unknown field).
+  assert.deepEqual(codesAt(scopeOf(wf([r('x', 'run', [tpl('Name', 'n')]), r('a', 'acc', [tpl('T', '{{run.seed}}')])])), 'a'), ['fields.T:run.seed:unknownMember/error']);
+});

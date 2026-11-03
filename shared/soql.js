@@ -125,8 +125,10 @@ const mode = (config) => (config?.mode ?? QUERY_DEFAULTS.mode) === 'soql' ? 'soq
 /** Builder field list as entered (strings; a newline/comma separated string is accepted too). */
 function builderFields(config) {
   const raw = config?.fields ?? QUERY_DEFAULTS.fields;
-  const list = Array.isArray(raw) ? raw : String(raw).split(/[\n,;]/);
-  return list.map((f) => String(f ?? '').trim()).filter(Boolean);
+  // Field names hold no comma: "Id, Name" on one line is two fields (SELECT-list habit), also in an
+  // array item (the form keeps commas in list values, review 0013 N4).
+  const list = (Array.isArray(raw) ? raw : [raw]).flatMap((f) => String(f ?? '').split(/[\n,;]/));
+  return list.map((f) => f.trim()).filter(Boolean);
 }
 
 /** Fields the Query step reads: { fields: ['Id', …], open }. The builder always reads Id (first). */

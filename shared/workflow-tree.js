@@ -10,7 +10,7 @@
 // An insertion point ("target") is { parentId: null | stepId, slot: null | key, index }:
 // parentId null means the root sequence `wf.steps`.
 
-import { analyzeScope, referenceOptions, refsToRecords, tokenize, stripPath, exposesOf, exposesList } from './scope.js';
+import { analyzeScope, referenceOptions, refsToRecords, tokenize, stripPath, exposesOf, exposesList, poolFieldOptions } from './scope.js';
 
 const ownSlots = (step) => Object.keys(step?.slots ?? {});
 
@@ -320,12 +320,24 @@ export function renameField(wf, stepId, from, to, { catalog } = {}) {
   const scope = analyzeScope(wf, catalog);
   // Also through a Chọn bản ghi from its pool and the record a Lặp `each` loops over (0010 review).
   const refs = refsToRecords(scope, stepId, from, { includeHidden: true }).filter((r) => r.mode !== 'ref');
-  if (!refs.length) return none;
   let count = 0;
   const places = [];
   const changedNames = new Set();
   const steps = new Map();
   walkSteps(wf.steps, (s) => { steps.set(s.id, s); });
+  // A field of the pool's records named by an option (filterField, weightField; review 0013 N3),
+  // when that pool's records are this step's (the Record itself, or a Chọn bản ghi of it).
+  for (const s of steps.values()) {
+    for (const o of poolFieldOptions(s, scope, catalog)) {
+      if (!o.pool || (o.pool.id !== stepId && o.pool.root !== stepId)) continue;
+      const v = o.value.trim();
+      if (v !== from && !v.startsWith(`${from}.`)) continue;
+      o.set(to + v.slice(from.length));
+      count++;
+      places.push({ nodeId: s.id, field: o.key });
+    }
+  }
+  if (!refs.length) return { count, places, names: [] };
   const byOption = new Map();
   for (const r of refs) {
     const key = `${r.nodeId}|${r.field}|${r.option}`;

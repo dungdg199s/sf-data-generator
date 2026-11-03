@@ -6,6 +6,7 @@
 // showIf: { key: otherOptionKey, in: [values] } — UI hides the option unless the condition holds.
 
 import { firstNames, lastNames, companyPrefixes, companySuffixes, words, cities } from '../data/pools.js';
+import { splitList } from '../../shared/list.js';
 
 export const nullRatioOption = {
   key: 'nullRatio',
@@ -58,18 +59,21 @@ function coerce(def, raw) {
     case 'list':
       return toList(raw);
     case 'numberList':
-      return toList(raw).map(Number);
+      return toNumberList(raw).map(Number);
     default:
       return raw;
   }
 }
 
+/** A list option: one value per line (shared/list.js, review 0013 N4). */
 export function toList(raw) {
-  if (Array.isArray(raw)) return raw.map((v) => String(v).trim()).filter(Boolean);
-  return String(raw)
-    .split(/[\n,;]/)
-    .map((v) => v.trim())
-    .filter(Boolean);
+  return splitList(raw);
+}
+
+/** A number list option: commas, semicolons and newlines all separate (a number has none). */
+export function toNumberList(raw) {
+  const list = Array.isArray(raw) ? raw : String(raw ?? '').split(/[\n,;]/);
+  return list.map((v) => String(v ?? '').trim()).filter(Boolean);
 }
 
 export function truncate(value, maxLength) {

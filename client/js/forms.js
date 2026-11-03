@@ -4,6 +4,7 @@
 import { h } from './dom.js';
 import { attachVarPicker } from './var-picker.js';
 import { optionShown } from '/shared/scope.js';
+import { splitList } from '/shared/list.js';
 
 let uid = 0;
 
@@ -138,8 +139,10 @@ function renderControl(def, value, set, id, ctx, current) {
         placeholder: def.placeholder,
         value: Array.isArray(v) ? v.join('\n') : v ?? '',
         oninput: (e) => {
-          const items = e.target.value.split(/\n|,/).map((s) => s.trim()).filter(Boolean);
-          set(def.kind === 'numberList' ? items.map(Number) : items);
+          // One value per line, commas kept (shared/list.js, the rule of the server too; review
+          // 0013 N4). Numbers may still be separated by commas.
+          const text = e.target.value;
+          set(def.kind === 'numberList' ? text.split(/\n|,/).map((s) => s.trim()).filter(Boolean).map(Number) : splitList(text));
         },
       });
     case 'text':

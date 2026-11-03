@@ -3,7 +3,7 @@
 // byte-identical for the same seed and `now`: the palette samples plus nested cases covering
 // random Lookups (count-only pools), Chọn bản ghi from generated and Query pools, branch/loop
 // nesting, unique values and pick "skip". Cases added later (the each-loop sample and nested
-// case of design 0010, the two cases of design 0013) were recorded when added; adding them changed
+// case of design 0010, the cases of design 0013 and of its review) were recorded when added; adding them changed
 // none of the earlier hashes.
 //
 // To re-record after a deliberate data change: node test/fixtures/golden-record.js > test/fixtures/golden-hashes.json
@@ -151,6 +151,19 @@ export const GOLDEN_CASES = [
       loop('lw', { count: 6 }, [pick('p', 'big', 'accs', { mode: 'weighted', weightField: 'Employees' }), record('opp', 'Opportunity', 'opp', [lookup('AccountId', 'big'), { name: 'When__c', type: 'copy', options: { path: 'run.now' } }])]),
     ]),
     queryResults: { q: rows(Array.from({ length: 5 }, (_, i) => ({ Id: `001${String(i).padStart(15, '0')}`, Name: `Org ${i}`, Employees: [3, 0, '', 2, 7][i] }))) },
+  },
+  {
+    // Review 0013 B1: two weighted picks on one pool, each with its own weight field.
+    name: 'two weighted picks on one pool with different weight fields (0013 review)',
+    workflow: wf([
+      query('q', 'accs', { fields: ['Id', 'Name', 'W1', 'W2'] }),
+      loop('l', { count: 12 }, [
+        pick('p1', 'big1', 'accs', { mode: 'weighted', weightField: 'W1' }),
+        pick('p2', 'big2', 'accs', { mode: 'weighted', weightField: 'W2' }),
+        record('opp', 'Opportunity', 'opp', [lookup('AccountId', 'big1'), lookup('Partner__c', 'big2')]),
+      ]),
+    ]),
+    queryResults: { q: rows(Array.from({ length: 6 }, (_, i) => ({ Id: `001${String(i).padStart(15, '0')}`, Name: `Org ${i}`, W1: i < 3 ? i + 1 : 0, W2: i < 3 ? 0 : i }))) },
   },
 ];
 

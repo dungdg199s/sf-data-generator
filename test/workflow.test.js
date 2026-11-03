@@ -1128,3 +1128,78 @@ test('nested each loops with an eq filter over 2 000 × 2 000 rows finish under 
   assert.ok(r.records.every((x) => cons.records.find((c) => c.Id === x.fields.WhoId).AccountId === x.fields.WhatId));
   assert.ok(ms < 2000, `took ${ms.toFixed(0)} ms`);
 });
+
+// ---------- design 0013, review fixes ----------
+
+import { NOW_MESSAGE } from '../server/workflow/executor.js';
+import { createRun } from '../server/workflow/executor.js';
+
+test('0013 review B1: two weighted picks on one pool with different weight fields keep their own weights', () => {
+  const q = { q: rows([{ Id: 'A', W1: 1, W2: 0 }, { Id: 'B', W1: 0, W2: 1 }]) };
+  const mk = (first) => wf([query('q', 'accs', { fields: ['Id', 'W1', 'W2'] }), loop('l', { count: 50 }, [
+    ...(first ? [pick('p1', 'x1', 'accs', { mode: 'weighted', weightField: 'W1' })] : []),
+    pick('p2', 'x2', 'accs', { mode: 'weighted', weightField: 'W2' }),
+    record('r', 'Lead', 'l', [tplField('Title', `${first ? '{{x1.Id}}' : '-'}|{{x2.Id}}`)]),
+  ])]);
+  for (const first of [false, true]) {
+    const got = runWorkflow(mk(first), { seed: 1, now: NOW, queryResults: q }).records.map((x) => x.fields.Title.split('|'));
+    assert.ok(got.every(([, b]) => b === 'B'), `W2 picks only B (first pick ${first}): ${got.map((x) => x[1]).join('')}`);
+    if (first) assert.ok(got.every(([a]) => a === 'A'), 'W1 picks only A');
+  }
+});
+
+test('0013 review N2: a total weight too big for a number falls back to uniform with a warning', () => {
+  const q = { q: rows([{ Id: '1', W: 1e308 }, { Id: '2', W: 1e308 }, { Id: '3', W: -5 }, { Id: '4', W: 0 }]) };
+  const w = wf([query('q', 'accs', { fields: ['Id', 'W'] }), loop('l', { count: 400 }, [pick('p', 'a', 'accs', { mode: 'weighted', weightField: 'W' }), record('r', 'Lead', 'ld', [tplField('Title', '{{a.Id}}')])])]);
+  const r = runWorkflow(w, { seed: 1, now: NOW, queryResults: q });
+  const counts = {};
+  for (const x of r.records) counts[x.fields.Title] = (counts[x.fields.Title] ?? 0) + 1;
+  assert.deepEqual(Object.keys(counts).sort(), ['1', '2', '3', '4'], 'uniform: every row is picked');
+  const warn = r.warnings.find((x) => x.code === 'pickWeightZero');
+  assert.equal(warn.message, 'Bước Chọn bản ghi "a": 400/400 lần tổng trọng số của field "W" quá lớn để tính nên đã chọn đều. Dùng field có giá trị nhỏ hơn (ví dụ NumberOfEmployees thay cho một số rất lớn).');
+});
+
+test('0013 review S2: an empty min or max variable says what the range does', () => {
+  const q = { q: rows([{ Id: 'a', N: '' }]) };
+  const mk = (min, max) => wf([query('q', 'accs', { fields: ['Id', 'N'] }), each('la', 'accs', 'acc', [loop('l', { mode: 'range', min, max, alias: 'k' }, [])])]);
+  const msg = (min, max) => runWorkflow(mk(min, max), { seed: 1, now: NOW, queryResults: q }).warnings.filter((x) => x.code === 'numberVarEmpty').map((x) => `${x.field}: ${x.message}`);
+  assert.deepEqual(msg('{{acc.N}}', 3), ['min: Bước Lặp "k": "Ít nhất" = {{acc.N}} trống, âm hoặc không phải số ở 1/1 lần chạy qua, nên các lần đó lấy "Ít nhất" = 0. Kiểm tra field trong org hoặc chọn biến khác.']);
+  assert.deepEqual(msg(2, '{{acc.N}}'), ['max: Bước Lặp "k": "Nhiều nhất" = {{acc.N}} trống, âm hoặc không phải số ở 1/1 lần chạy qua, nên các lần đó lặp đúng "Ít nhất" lần. Kiểm tra field trong org hoặc chọn biến khác.']);
+  // And that is what happens: max empty → min times.
+  assert.equal(runWorkflow(mk(2, '{{acc.N}}'), { seed: 1, now: NOW, queryResults: q }).stats.byStep.l.iterations, 2);
+});
+
+test('0013 review N1: createRun refuses a now that a Date cannot hold', () => {
+  const w = wf([record('r', 'Lead', 'ld', [])]);
+  for (const now of [1e20, -1e16, Infinity]) assert.throws(() => createRun(w, { seed: 1, now }), (e) => e instanceof WorkflowError && e.message === NOW_MESSAGE);
+  assert.equal(runWorkflow(w, { seed: 1, now: -8.64e15 }).records.length, 1);
+});
+
+test('0013 review N3: a filter or weight field the Record pool does not make is a warning on that field', () => {
+  const base = [record('a', 'Account', 'acc', [{ name: 'Industry', type: 'text', options: {} }], { count: 3 })];
+  const warnAt = (w, id, field) => validateWorkflow(w).warnings.find((x) => x.nodeId === id && x.field === field && x.code === 'unknownPoolField');
+  const p = warnAt(wf([...base, pick('p', 'pk', 'acc', { filter: 'compare', filterField: 'Industy', filterValue: 'x' })]), 'p', 'filterField');
+  assert.equal(p.message, '"Field": bước "acc" không sinh field "Industy" nên điều kiện lọc không khớp bản ghi nào. Thêm field "Industy" vào bước "acc" hoặc chọn field khác trong gợi ý. Field có sẵn: Industry.');
+  assert.ok(warnAt(wf([...base, each('l', 'acc', 'x', [record('c', 'Contact', 'con', [])], { filter: 'compare', filterField: 'Nope', filterValue: 'x' })]), 'l', 'filterField'));
+  assert.match(warnAt(wf([...base, pick('p', 'pk', 'acc', { mode: 'weighted', weightField: 'Size' })]), 'p', 'weightField').message, /nên mọi trọng số là 0/);
+  // Known fields, a Query pool and a hidden filter: no warning.
+  assert.ok(!warnAt(wf([...base, pick('p', 'pk', 'acc', { filter: 'compare', filterField: 'Industry' })]), 'p', 'filterField'));
+  assert.ok(!warnAt(wf([query('q', 'accs'), pick('p', 'pk', 'accs', { filter: 'compare', filterField: 'Whatever' })]), 'p', 'filterField'));
+  assert.ok(!warnAt(wf([...base, each('l', 'acc', 'x', [record('c', 'Contact', 'con', [])], { mode: 'fixed', count: 1, filter: 'compare', filterField: 'Nope' })]), 'l', 'filterField'));
+});
+
+test('0013 review N4: list values are one per line, commas kept, the same on the server and in a values loop', async () => {
+  const { toList } = await import('../server/generators/common.js');
+  const { splitList } = await import('../shared/list.js');
+  assert.deepEqual(splitList('Hà Nội, Việt Nam\n  Huế \n\n'), ['Hà Nội, Việt Nam', 'Huế']);
+  assert.deepEqual(toList('a, b\nc;d'), ['a, b', 'c;d']);
+  assert.deepEqual(toList([' x ', '', null, 'y, z']), ['x', 'y, z']);
+  const r = runWorkflow(wf([loop('l', { mode: 'values', values: 'Hà Nội, Việt Nam\nHuế' }, [record('x', 'Lead', 'ld', [tplField('City', '{{loop.value}}')])])]), { seed: 1, now: NOW });
+  assert.deepEqual(r.records.map((x) => x.fields.City), ['Hà Nội, Việt Nam', 'Huế']);
+  const picks = runWorkflow(wf([record('x', 'Lead', 'ld', [{ name: 'City', type: 'text', options: { mode: 'list', values: 'Hà Nội, Việt Nam' } }], { count: 3 })]), { seed: 1, now: NOW });
+  assert.deepEqual([...new Set(picks.records.map((x) => x.fields.City))], ['Hà Nội, Việt Nam']);
+  // Field names still split on commas (a Query field list typed as a SELECT list).
+  assert.deepEqual(validateWorkflow(wf([query('q', 'accs', { fields: ['Id, Name'] }), pick('p', 'a', 'accs')])).errors, []);
+  const { selectFields } = await import('../shared/soql.js');
+  assert.deepEqual(selectFields({ fields: ['Name, Industry', 'Owner.Name'] }).fields, ['Id', 'Name', 'Industry', 'Owner.Name']);
+});

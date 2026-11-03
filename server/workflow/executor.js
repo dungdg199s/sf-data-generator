@@ -81,6 +81,11 @@ function mergeSorted(a, b) {
   return out;
 }
 
+/** Message for a `now` a Date cannot hold (server/index.js answers it with a 400 too). */
+export const NOW_MESSAGE = 'Tham số now không hợp lệ: phải là số mili giây từ -8640000000000000 đến 8640000000000000. Bỏ now để dùng giờ hiện tại, hoặc bấm Xem trước rồi chạy lại.';
+/** `now` (ms) that a Date can represent. */
+export const isValidNow = (now) => typeof now === 'number' && Number.isFinite(now) && Math.abs(now) <= 8.64e15;
+
 /** Count-only pool of a Record alias: `refAt(i)` is the ref of record i (0-based). */
 function countPool(alias) {
   return { kind: 'generated', length: 0, refAt: (i) => `${alias}#${i + 1}` };
@@ -104,6 +109,8 @@ export function createRun(input, opts = {}) {
 
   const seed = opts.seed ?? workflow.seed ?? Math.floor(Math.random() * 2 ** 31);
   const now = opts.now ?? Date.now();
+  // A Date can hold |now| ≤ 8.64e15 ms (review 0013 N1): {{run.now}} and date fields need one.
+  if (!isValidNow(now)) throw new WorkflowError([{ message: NOW_MESSAGE }]);
   const maxRecords = Math.min(opts.maxRecords ?? workflow.settings?.maxRecords ?? LIMITS.maxRecordsDefault, LIMITS.maxRecordsHard);
   const queryResults = opts.queryResults ?? {};
   const { readers, referenced } = poolUsage(workflow, scopeCatalog());
@@ -174,7 +181,11 @@ function generate(workflow, { seed, now, maxRecords, queryResults, keptPools, ti
     const eachFilterStats = new Map(); // Lặp `each` step id → { visits, matched }
     const eachFilters = new Map(); // Lặp `each` step id → { pool, scanned, index, cache }
     const weightZero = new Map(); // Chọn bản ghi step id → picks where every weight was 0
-    const weightSums = new WeakMap(); // candidate array → { sums } (prefix sums of the weights)
+    const weightHuge = new Map(); // Chọn bản ghi step id → picks whose total weight was not finite
+    // Chọn bản ghi step id → WeakMap(candidate array → prefix sums of that step's weightField).
+    // Per step (review 0013 B1): two weighted picks on one pool with different fields must not
+    // share a table.
+    const weightSums = new Map();
 
     function fail(step, message, field) {
       throw new WorkflowError([{ message, nodeId: step.id, ...(field ? { field } : {}) }]);
@@ -300,8 +311,10 @@ function generate(workflow, { seed, now, maxRecords, queryResults, keptPools, ti
      * per candidate array and extended when it grows (an unfiltered pool is the pool array).
      */
     function pickWeighted(step, c, cands) {
-      let pre = weightSums.get(cands);
-      if (!pre) weightSums.set(cands, (pre = { sums: [] }));
+      let byCands = weightSums.get(step.id);
+      if (!byCands) weightSums.set(step.id, (byCands = new WeakMap()));
+      let pre = byCands.get(cands);
+      if (!pre) byCands.set(cands, (pre = { sums: [] }));
       const { sums } = pre;
       for (let i = sums.length; i < cands.length; i++) {
         const r = cands[i];
@@ -310,8 +323,10 @@ function generate(workflow, { seed, now, maxRecords, queryResults, keptPools, ti
       }
       const x = rng.next();
       const total = sums[cands.length - 1];
-      if (!(total > 0)) {
-        weightZero.set(step.id, (weightZero.get(step.id) ?? 0) + 1);
+      // All 0, or a total too big for a number (review 0013 N2): uniformly, with a warning.
+      if (!(total > 0) || !Number.isFinite(total)) {
+        const counter = total > 0 ? weightHuge : weightZero;
+        counter.set(step.id, (counter.get(step.id) ?? 0) + 1);
         return cands[Math.floor(x * cands.length)];
       }
       const target = x * total;
@@ -560,8 +575,14 @@ function generate(workflow, { seed, now, maxRecords, queryResults, keptPools, ti
           const name = step.config?.alias || 'loop';
           const label = nodeTypeMap.get(step.type)?.options.find((o) => o.key === key)?.label ?? key;
           if (w.empty) {
+            // What 0 means for each option (review 0013 S2): no iteration for "Số lần lặp"; for a
+            // range, 0 as "Ít nhất", and "Nhiều nhất" 0 → the run uses "Ít nhất" (max < min).
+            const minLabel = nodeTypeMap.get(step.type)?.options.find((o) => o.key === 'min')?.label ?? 'min';
+            const effect = key === 'count'
+              ? 'nên các lần đó lặp 0 lần'
+              : key === 'min' ? `nên các lần đó lấy "${label}" = 0` : `nên các lần đó lặp đúng "${minLabel}" lần`;
             runWarnings.push({
-              message: `Bước Lặp "${name}": "${label}" = {{${w.path}}} trống, âm hoặc không phải số ở ${nf(w.empty)}/${nf(w.runs)} lần chạy qua, nên các lần đó lặp 0 lần. Kiểm tra field trong org hoặc chọn biến khác.`,
+              message: `Bước Lặp "${name}": "${label}" = {{${w.path}}} trống, âm hoặc không phải số ở ${nf(w.empty)}/${nf(w.runs)} lần chạy qua, ${effect}. Kiểm tra field trong org hoặc chọn biến khác.`,
               nodeId: step.id,
               field: key,
               code: 'numberVarEmpty',
@@ -588,6 +609,14 @@ function generate(workflow, { seed, now, maxRecords, queryResults, keptPools, ti
         if (step.type === 'pick' && weightZero.get(step.id)) {
           runWarnings.push({
             message: `Bước Chọn bản ghi "${step.config?.alias}": ${nf(weightZero.get(step.id))}/${nf(s?.runs ?? 0)} lần mọi bản ghi có trọng số 0 (field "${step.config?.weightField}" trống hoặc không phải số) nên đã chọn đều. Kiểm tra field trọng số hoặc thêm nó vào "Field cần lấy" của Query.`,
+            nodeId: step.id,
+            field: 'weightField',
+            code: 'pickWeightZero',
+          });
+        }
+        if (step.type === 'pick' && weightHuge.get(step.id)) {
+          runWarnings.push({
+            message: `Bước Chọn bản ghi "${step.config?.alias}": ${nf(weightHuge.get(step.id))}/${nf(s?.runs ?? 0)} lần tổng trọng số của field "${step.config?.weightField}" quá lớn để tính nên đã chọn đều. Dùng field có giá trị nhỏ hơn (ví dụ NumberOfEmployees thay cho một số rất lớn).`,
             nodeId: step.id,
             field: 'weightField',
             code: 'pickWeightZero',

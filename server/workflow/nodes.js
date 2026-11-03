@@ -187,7 +187,7 @@ export const NODE_TYPES = [
       },
       { key: 'sobject', label: 'sObject', kind: 'string', default: QUERY_DEFAULTS.sobject, showIf: BUILDER, suggest: { kind: 'sobject', purpose: 'query' }, help: 'API name. Chọn org ở thanh trên để có gợi ý.' },
       { key: 'alias', label: 'Tên pool (alias)', kind: 'string', default: '', help: 'Lookup "Ngẫu nhiên trong pool" và bước Chọn bản ghi dùng tên này. {{accs.$count}} = số bản ghi đọc được.' },
-      { key: 'fields', label: 'Field cần lấy', kind: 'list', default: QUERY_DEFAULTS.fields, showIf: BUILDER, suggest: { kind: 'fields', sobjectKey: 'sobject' }, help: 'Mỗi dòng một field. Dùng được field quan hệ như Owner.Name. Id luôn được lấy.' },
+      { key: 'fields', label: 'Field cần lấy', kind: 'list', default: QUERY_DEFAULTS.fields, showIf: BUILDER, suggest: { kind: 'fields', sobjectKey: 'sobject' }, help: 'Mỗi dòng một field (hoặc cách nhau bằng dấu phẩy). Dùng được field quan hệ như Owner.Name. Id luôn được lấy.' },
       { key: 'where', label: 'Điều kiện (WHERE)', kind: 'string', default: QUERY_DEFAULTS.where, showIf: BUILDER, help: "Cú pháp SOQL, ví dụ Industry = 'Banking' AND CreatedDate = LAST_N_DAYS:30. Để trống = lấy tất cả." },
       { key: 'orderBy', label: 'Sắp xếp (ORDER BY)', kind: 'string', default: QUERY_DEFAULTS.orderBy, showIf: BUILDER, help: 'Giữ thứ tự cố định để cùng seed chọn ra cùng bản ghi.' },
       { key: 'limit', label: 'Số bản ghi tối đa (LIMIT)', kind: 'integer', default: QUERY_DEFAULTS.limit, min: 1, max: LIMITS.maxQueryRows, showIf: BUILDER, help: `Từ 1 đến ${LIMITS.maxQueryRows}.` },
@@ -200,7 +200,8 @@ export const NODE_TYPES = [
     category: 'data',
     description: 'Chọn một bản ghi từ pool (kết quả Query hoặc bản ghi đã sinh) làm bản ghi hiện tại của alias mới. Mỗi lần chạy qua chọn lại.',
     slots: [],
-    flow: { kind: 'sequence' },
+    // With onEmpty "skip" the rest of the innermost loop body may not run (review 0013 S1).
+    flow: { kind: 'sequence', canSkip: { key: 'onEmpty', in: ['skip'] } },
     exposes: {
       kind: 'record',
       name: { key: 'alias' },
@@ -314,7 +315,7 @@ export const NODE_TYPES = [
       },
       {
         key: 'values', label: 'Danh sách giá trị', kind: 'list', default: [], showIf: VALUES, placeholder: 'Hot\nWarm\nCold',
-        help: 'Mỗi dòng một giá trị. Bên trong dùng {{loop.value}}; với field Picklist chọn kiểu "Lấy từ biến (giữ kiểu)" rồi loop.value.',
+        help: 'Mỗi dòng một giá trị; dấu phẩy là một phần của giá trị ("Hà Nội, Việt Nam"). Bên trong dùng {{loop.value}}; với field Picklist chọn kiểu "Lấy từ biến (giữ kiểu)" rồi loop.value.',
       },
       { key: 'from', label: 'Lặp qua pool', kind: 'ref', default: '', showIf: EACH, accepts: { pool: true }, placeholder: '— chọn pool —', empty: '— chưa có pool nào phía trên —', help: 'Alias của bước Query, Record hoặc Chọn bản ghi ở phía trên. Thân vòng lặp chạy một lần cho mỗi bản ghi, theo thứ tự của pool. Pool Record gồm mọi bản ghi của alias đã sinh từ đầu lần chạy.' },
       { key: 'itemAlias', label: 'Tên bản ghi đang lặp', kind: 'string', default: '', showIf: EACH, help: 'Bên trong vòng lặp dùng {{acc.Name}}, hoặc Lookup "Bản ghi hiện tại" acc.' },

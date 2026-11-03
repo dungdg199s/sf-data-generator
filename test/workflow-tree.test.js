@@ -446,3 +446,24 @@ test('setStepAlias on a loop does not rename its own count variable from an oute
   setStepAlias(wf, 'outer', 'o', { memo: new Map(), slotKeys, catalog });
   assert.equal(findStep(wf, 'inner').step.config.count, '{{o.index}}');
 });
+
+test('0013 review N3: renameField follows filterField and weightField on a Record pool', () => {
+  const catalog = scopeCatalog();
+  const wf = tree([
+    r('a', 'acc', [{ name: 'Industry', type: 'text' }, { name: 'Size', type: 'number' }]),
+    { id: 'p', type: 'pick', config: { from: 'acc', alias: 'pk', filter: 'compare', filterField: 'Industry', mode: 'weighted', weightField: 'Size' } },
+    { id: 'p2', type: 'pick', config: { from: 'pk', alias: 'pk2', filter: 'compare', filterField: 'Industry' } },
+    each('e', 'acc', 'x', [r('z')], { filter: 'compare', filterField: 'Industry.Sub' }),
+    r('o', 'other', [{ name: 'Industry', type: 'text' }]),
+    { id: 'p3', type: 'pick', config: { from: 'other', alias: 'pk3', filter: 'compare', filterField: 'Industry' } },
+  ]);
+  fieldsOf(wf, 'a')[0].name = 'Sector';
+  const res = renameField(wf, 'a', 'Industry', 'Sector', { catalog });
+  assert.equal(res.count, 3);
+  assert.deepEqual(res.places.map((x) => `${x.nodeId}:${x.field}`).sort(), ['e:filterField', 'p2:filterField', 'p:filterField']);
+  assert.equal(findStep(wf, 'e').step.config.filterField, 'Sector.Sub');
+  assert.equal(findStep(wf, 'p3').step.config.filterField, 'Industry', 'another Record is not touched');
+  fieldsOf(wf, 'a')[1].name = 'Headcount';
+  assert.equal(renameField(wf, 'a', 'Size', 'Headcount', { catalog }).count, 1);
+  assert.equal(findStep(wf, 'p').step.config.weightField, 'Headcount');
+});

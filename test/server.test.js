@@ -603,3 +603,14 @@ test('JSON-mode insert is recorded too: historyId, status done, the Ids in the h
   assert.deepEqual([run.status, run.inserted, run.remaining.total, run.org.alias, run.org.username, run.workflowName], ['done', 3, 3, 'dev', 'a@x.com', 'test']);
   assert.ok(!('workflow' in run));
 });
+
+test('0013 review N1: a now outside what a Date holds is a 400 with the range, on /api/run and /api/export', async () => {
+  for (const now of [1e20, -8.64e15 - 1]) {
+    const res = await post('/api/run', { workflow: big(), now });
+    assert.equal(res.status, 400);
+    assert.match((await res.json()).error, /^Tham số now không hợp lệ: phải là số mili giây từ -8640000000000000 đến 8640000000000000/);
+  }
+  assert.equal((await post('/api/run', { workflow: big(), now: 8.64e15 })).status, 200);
+  const exp = await post('/api/export', { workflow: big(), seed: 1, now: 1e20, format: 'json' });
+  assert.equal(exp.status, 400);
+});
