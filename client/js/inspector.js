@@ -15,7 +15,7 @@ import {
 import { setStepAlias, renameField, insertStep } from '/shared/workflow-tree.js';
 import { refChoices, refsToRecords, referenceOptions, exposesList } from '/shared/scope.js';
 import { buildSoql, QUERY_DEFAULTS, SAMPLE_ROWS } from '/shared/soql.js';
-import { deleteStep, duplicateStep, toggleDisabled, newStep, fillEach, reveal } from './ops.js';
+import { deleteStep, duplicateStep, toggleDisabled, newStep, fillEach, fillParentFilter, reveal } from './ops.js';
 import { START_ID } from './layout.js';
 import { placesText } from './variables.js';
 import { applySuggestion, closePicker } from './var-picker.js';
@@ -387,6 +387,7 @@ function onStepOption(step, key, v, form, meta) {
     if (input) input.value = next;
   };
   let filled = null;
+  let parent = null;
   updateWorkflow((wf) => {
     const c = (step.config ??= {});
     const follow = (next, nameKey = 'alias') => {
@@ -413,6 +414,10 @@ function onStepOption(step, key, v, form, meta) {
       // the other modes stay (hidden), so switching back loses nothing.
       c.mode = v;
       if (v === 'each') filled = fillEach(wf, step);
+    } else if (key === 'filter' && v === 'compare' && ['filterField', 'filterValue'].every((k) => nodeType(step.type)?.options.some((o) => o.key === k))) {
+      // Design 0013: "parent–child" condition filled in, in the same undo step.
+      c.filter = v;
+      parent = fillParentFilter(wf, step);
     } else if (key === 'from' && step.type === 'loop') {
       // The record name follows the pool while it is still the suggested one (accs → acc).
       const auto = !c.itemAlias || c.itemAlias === suggestPickAlias(c.from, step.id, 'itemAlias');
@@ -429,6 +434,10 @@ function onStepOption(step, key, v, form, meta) {
   fillPathDefaults(step, key, form);
   // Pool / record names filled in: show them (the mode select loses nothing by a re-render).
   if (filled && Object.keys(filled).length) updateWorkflow(() => {}, { source: 'inspector-structure', history: false });
+  if (parent) {
+    updateWorkflow(() => {}, { source: 'inspector-structure', history: false });
+    toast(`Đã điền điều kiện ${parent.field} = {{${parent.name}.Id}} (bản ghi con của "${parent.name}"). Sửa nếu cần.`, 6000);
+  }
   if (step.type === 'query') {
     refreshSoqlBox(step);
     // Switching between builder and SOQL shows / hides the "SOQL sẽ chạy" line.
@@ -653,7 +662,7 @@ function issueOption(issue) {
   return step ? referenceOptions(step, state.meta, { includeHidden: true }).find((x) => x.field === issue.field && x.option === issue.suggestion?.option) : null;
 }
 
-const suggestionText = (issue) => (issueOption(issue)?.mode === 'template' ? `{{${issue.suggestion.to}}}` : issue.suggestion.to);
+const suggestionText = (issue) => (['template', 'number'].includes(issueOption(issue)?.mode) ? `{{${issue.suggestion.to}}}` : issue.suggestion.to);
 
 /** Apply an issue's suggestion to the first matching reference (one undo step). */
 function applyFix(issue) {

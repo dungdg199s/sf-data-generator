@@ -88,8 +88,23 @@ function flatten(members, prefix = []) {
 
 function item(group, m, keys, nodeId) {
   const sample = m.example ? { text: m.example, title: m.label ?? '' } : m.builtin ? null : sampleFor(nodeId, keys);
-  return { path: [group.name, ...keys].join('.'), key: keys.join('.'), typeLabel: typeLabel(m), help: m.label ?? '', sample };
+  return { path: [group.name, ...keys].join('.'), key: keys.join('.'), typeLabel: typeLabel(m), help: m.label ?? '', sample, valueType: m.valueType ?? 'string' };
 }
+
+/** Sample of a workflow-wide variable (design 0013, `run.*`): from the last preview's seed and now. */
+function globalSample(key) {
+  const r = state.result;
+  if (!r) return null;
+  const iso = Number.isFinite(r.now) ? new Date(r.now).toISOString() : null;
+  const value = { seed: r.seed, now: iso, today: iso?.slice(0, 10) }[key];
+  if (value === undefined || value === null) return null;
+  const stale = samplesStale();
+  return { text: formatSample(key === 'seed' ? value : String(value)), title: stale ? 'Từ lần xem trước; mỗi lần chạy có seed và thời điểm riêng.' : 'Từ lần xem trước.', stale };
+}
+
+/** Number options (design 0013) list numbers, and org fields whose type is not known. */
+export const NUMBER_HINT = 'Chỉ hiện biến kiểu Số và field đọc từ org (chưa biết kiểu).';
+const fitsMode = (it, mode) => mode !== 'number' || it.valueType === 'number' || it.valueType === 'any';
 
 const BADGES = {
   last: ['bản ghi cuối', 'Tạo trong vòng lặp đã kết thúc: giá trị là bản ghi của lần lặp cuối. Lookup "Ngẫu nhiên" sẽ chọn trong tất cả.'],
@@ -98,8 +113,15 @@ const BADGES = {
 /**
  * Groups for the picker at `stepId` (field `fieldIndex` of a record step, or a step option):
  * → { groups: [{ id, nodeType, name, label, badge?, badgeTitle?, note?, items: [...] }], hidden: [{ text }] }
+ * `mode: 'number'` keeps the items of type Số or unknown (org fields) only.
  */
-export function groupsFor(stepId, fieldIndex) {
+export function groupsFor(stepId, fieldIndex, { mode } = {}) {
+  const out = groupsAll(stepId, fieldIndex);
+  if (mode !== 'number') return out;
+  return { ...out, groups: out.groups.map((g) => ({ ...g, items: g.items.filter((it) => fitsMode(it, mode)) })).filter((g) => g.items.length) };
+}
+
+function groupsAll(stepId, fieldIndex) {
   const scope = currentScope();
   const step = stepById(stepId);
   const here = scope.at[stepId];
@@ -122,7 +144,8 @@ export function groupsFor(stepId, fieldIndex) {
     const src = scope.sources[v.source];
     if (!src) continue;
     const g = {
-      id: src.id ?? src.nodeId, nodeType: src.nodeType, name: src.name, label: src.label || src.sobject || '', items: [],
+      // Workflow-wide variables (`run`, design 0013) are neutral like built-ins.
+      id: src.id ?? src.nodeId, nodeType: src.global ? 'start' : src.nodeType, name: src.name, label: src.label || src.sobject || '', items: [],
       ...(v.certainty === 'last' ? { badge: BADGES.last[0], badgeTitle: BADGES.last[1] } : {}),
       ...(v.certainty === 'maybe' ? { badge: 'có thể trống', badgeTitle: v.note ?? '' } : {}),
     };
@@ -138,7 +161,11 @@ export function groupsFor(stepId, fieldIndex) {
     // The record a Lặp `each` loops over (0010) shows the first record of its pool as sample.
     const sampleId = src.current === 'item' ? src.root ?? src.nodeId : src.nodeId;
     for (const b of builtins) g.items.push(item(g, b, [b.key], sampleId));
-    for (const { m, keys } of flatten(fields)) g.items.push(item(g, m, keys, sampleId));
+    for (const { m, keys } of flatten(fields)) {
+      const it = item(g, m, keys, sampleId);
+      if (src.global) it.sample = globalSample(m.key);
+      g.items.push(it);
+    }
     groups.push(g);
   }
   for (const hdn of here?.hidden ?? []) {

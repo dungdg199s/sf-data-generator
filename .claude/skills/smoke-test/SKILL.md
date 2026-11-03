@@ -21,7 +21,7 @@ flows
 
 **Speed (since design 0009).** The flows are grouped into seven independent functions that run **in parallel**, each in
 its own browser context (so storage, routes and dialogs never leak between them): `flowEditing` (1–5), `flowPicker`
-(5b), `flowFiles` (5c–10), `flowDark` (12), `flowLayoutWide` and `flowLayoutNarrow` (11, 13), `flowEach` (14), `flowCanvas` (15), `flowHistory` (16). The browser launches
+(5b), `flowFiles` (5c–10), `flowDark` (12), `flowLayoutWide` and `flowLayoutNarrow` (11, 13), `flowEach` (14), `flowCanvas` (15), `flowHistory` (16), `flowVarsLoops` (17). The browser launches
 while the server starts; a fresh context starts with empty storage, so no `localStorage.clear()` + reload; storage a flow
 needs before its first load is written by `addInitScript` (once, guarded by a marker key, so reloads keep it); layout
 checks resize one page (`setViewportSize`) instead of opening a context per width; waits for the sheet or toast
@@ -179,7 +179,19 @@ the others; never add a fixed `waitForTimeout`.
       "Lỗi xóa (1)" tab opens and that row is not a button (review nit).
     - **16d (390)** The dialog is full screen with no horizontal overflow (`smoke-390-history.png`).
 
-It also fails on any page error or a run over 12 s (typically ~5.5–6.5 s since the flows run in parallel, flow 14 included, ~7–8.5 s with flow 15 on a 4-CPU machine, ~8–9.5 s with flow 16; ~10 s before;
+17. **Biến và vòng lặp (design 0013), `flowVarsLoops`, own context.** A seeded workflow (Query `accs`, Query `cons`, Record
+    `opp`, Lặp `each` `acc` → Lặp `each` `con` → Task, a fixed Lặp `lf` with a Lead, a compare Rẽ nhánh), no org (sample rows).
+    "Số lần lặp" of `lf` is a numeric text field; {x} lists only Số / org-field variables and the line "Chỉ hiện biến kiểu Số…";
+    `accs.$c` + Enter stores `{{accs.$count}}` with a chip, and the card reads `{{accs.$count}} lần · {{loop.index}}`. On the
+    inner each-loop, "Lọc" → "Chỉ bản ghi thỏa điều kiện" fills `AccountId` / `{{acc.Id}}` with the "Đã điền điều kiện…" toast;
+    one ↶ undoes the filter and the fill together. Xáo trộn + Tối đa 2 → summary `… · xáo trộn · tối đa 2 · {{loop2.index}}`;
+    Ctrl+Enter → chip `10 lần lặp` and `Lead: 5`. With the filter on, "Lặp theo" = fixed hides every filter, order and limit
+    row (chained showIf). In a Task template, the picker's `run.seed` sample is the preview's seed. {x} at the branch's
+    "So với" inserts `{{opp.Amount}}`. A new Lặp switched to "Mỗi giá trị trong danh sách" has the `Hot/Warm/Cold`
+    placeholder, an outlined list and the valuesEmpty message; typing `Hot⏎Warm⏎Cold` gives `3 giá trị: Hot, Warm, Cold ·
+    {{loop.value}}`.
+
+It also fails on any page error or a run over 12 s (typically ~5.5–6.5 s since the flows run in parallel, flow 14 included, ~7–8.5 s with flow 15 on a 4-CPU machine, ~8–9.5 s with flow 16, ~9–10 s with flow 17; ~10 s before;
 ~7–8 s with two CPU-bound processes running alongside).
 Screenshots (only when a directory is given): `smoke-1440.png`, `smoke-390.png`, `smoke-390-sheet.png`,
 `smoke-390-dark.png`, `smoke-390-topbar.png`, `smoke-1280-issues.png`, `smoke-1440-dark.png`, `smoke-1440-dark-insert.png`,

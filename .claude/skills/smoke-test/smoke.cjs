@@ -41,6 +41,10 @@
 //  16. insert history and delete (0011, every org call mocked in the page): Bulk checkbox and limit warning in the
 //      Insert confirmation, Tải Id / Lịch sử links, "Xóa dữ liệu này…" opens the delete confirmation (Hủy focused),
 //      production needs the org name typed, the history dialog (org filter, interrupted title, forget, 390 px)
+//  17. variables and loops (0013): "Số lần lặp" {x} lists number variables only and inserts {{accs.$count}};
+//      turning the each filter on fills AccountId = {{acc.Id}} (toast, one undo); shuffle + limit 2 → "10 lần
+//      lặp"; filter options hidden in fixed mode; run.seed sample; branch right {x}; values loop empty → error,
+//      Hot/Warm/Cold → summary
 // The flows run in parallel, one browser context each (independent storage): see SKILL.md.
 // Usage: node .claude/skills/smoke-test/smoke.cjs [screenshotDir]
 // Needs Playwright with a Chromium build available (require('playwright')).
@@ -1361,6 +1365,125 @@ async function flowHistory() {
   await page.context().close();
 }
 
+/**
+ * Flow 17: variables and loops (design 0013), own context. A seeded workflow (no org: sample rows);
+ * no fixed waits.
+ */
+async function flowVarsLoops() {
+  const page = await newPage('0013');
+  const tpl = (name, template) => ({ name, type: 'template', options: { template } });
+  const wf = { version: 2, name: 'smoke 0013', steps: [
+    { id: 'q1', type: 'query', config: { sobject: 'Account', alias: 'accs', fields: ['Id', 'Name'] } },
+    { id: 'q2', type: 'query', config: { sobject: 'Contact', alias: 'cons', fields: ['Id', 'LastName', 'AccountId'] } },
+    { id: 'opp', type: 'record', config: { sobject: 'Opportunity', alias: 'opp', count: 1, fields: [{ name: 'Amount', type: 'currency', options: {} }] } },
+    { id: 'la', type: 'loop', config: { mode: 'each', from: 'accs', itemAlias: 'acc' }, slots: { body: [
+      { id: 'lc', type: 'loop', config: { mode: 'each', from: 'cons', itemAlias: 'con', alias: 'loop2' }, slots: { body: [
+        { id: 'task', type: 'record', config: { sobject: 'Task', alias: 'task', count: 1, fields: [tpl('Subject', '{{con.LastName}}')] } },
+      ] } },
+    ] } },
+    { id: 'lf', type: 'loop', config: { count: 1 }, slots: { body: [{ id: 'ld', type: 'record', config: { sobject: 'Lead', alias: 'ld', count: 1, fields: [tpl('LastName', 'x')] } }] } },
+    { id: 'br', type: 'branch', config: { kind: 'compare', left: 'opp.Amount', op: 'gt', right: '' }, slots: { true: [{ id: 'ev', type: 'record', config: { sobject: 'Event', alias: 'ev', count: 1, fields: [] } }], false: [] } },
+  ] };
+  await seedStorage(page, { workflow: wf });
+  await page.goto(base);
+  await page.waitForSelector('.step-card[data-id="lf"]');
+  const stored = () => page.evaluate(() => JSON.parse(localStorage.getItem('sfdg.workflow.v2')));
+  const findIn = (steps, id) => {
+    for (const s of steps) {
+      if (s.id === id) return s;
+      for (const list of Object.values(s.slots ?? {})) { const f = findIn(list, id); if (f) return f; }
+    }
+    return null;
+  };
+  const cfg = async (id) => findIn((await stored()).steps, id)?.config ?? {};
+
+  // "Số lần lặp" = {x} → accs.$count: only number variables are listed, the card prints the variable.
+  await page.click('.step-card[data-id="lf"] .type');
+  const count = '#inspector input[data-key="count"]';
+  await page.waitForSelector(count);
+  check((await page.getAttribute(count, 'inputmode')) === 'numeric', '"Số lần lặp" is not a numeric text field');
+  await page.click('#inspector .form-row:has(input[data-key="count"]) .var-btn');
+  await page.waitForSelector('.var-picker .vp-item');
+  const listed = await page.$$eval('.var-picker .vp-item', (rows) => rows.map((r) => `${r.dataset.path}:${r.querySelector('.vp-type').textContent}`));
+  check(listed.length && listed.every((x) => /:(Số|Từ org|Currency)$/.test(x)), `number picker lists non-numbers: ${listed.join(', ')}`);
+  check(/Chỉ hiện biến kiểu Số/.test(await page.textContent('.var-picker')), 'number picker has no "Chỉ hiện biến kiểu Số" line');
+  await page.keyboard.type('accs.$c');
+  await page.keyboard.press('Enter');
+  await page.waitForFunction((s) => document.querySelector(s)?.value === '{{accs.$count}}', count, { timeout: 3000 }).catch(() => {});
+  check((await page.inputValue(count)) === '{{accs.$count}}', `count after the picker: ${await page.inputValue(count)}`);
+  check(await page.$('#inspector .form-row:has(input[data-key="count"]) .var-chip[data-path="accs.$count"]'), 'no chip under "Số lần lặp"');
+  await page.waitForFunction(() => /accs/.test(document.querySelector('.step-card[data-id="lf"] .sum')?.textContent), null, { timeout: 3000 }).catch(() => {});
+  check((await page.textContent('.step-card[data-id="lf"] .sum')) === '{{accs.$count}} lần · {{loop.index}}', `lf summary: ${await page.textContent('.step-card[data-id="lf"] .sum')}`);
+
+  // Lặp each over cons inside Lặp acc: turning the filter on fills AccountId = {{acc.Id}}; one ↶ undoes both.
+  await page.click('.step-card[data-id="lc"] .type');
+  await page.waitForSelector('#inspector select[data-key="filter"]');
+  await page.selectOption('#inspector select[data-key="filter"]', 'compare');
+  await page.waitForFunction(() => document.querySelector('#inspector input[data-key="filterValue"]')?.value === '{{acc.Id}}', null, { timeout: 3000 }).catch(() => {});
+  const fill = await page.evaluate(() => [document.querySelector('#inspector input[data-key="filterField"]').value, document.querySelector('#inspector input[data-key="filterValue"]').value]);
+  check(fill.join() === 'AccountId,{{acc.Id}}', `parent–child filter not filled: ${fill}`);
+  check(/Đã điền điều kiện AccountId = \{\{acc\.Id\}\} \(bản ghi con của "acc"\)/.test(await page.textContent('#toast')), 'no "Đã điền điều kiện" toast');
+  await page.click('#btn-undo');
+  const undone = await cfg('lc');
+  check((undone.filter ?? 'none') === 'none' && !undone.filterField && !undone.filterValue, `one ↶ did not undo the filter and its fill: ${JSON.stringify(undone)}`);
+
+  // Xáo trộn + Tối đa 2: 5 sample accounts × 2.
+  await page.click('.step-card[data-id="lc"] .type');
+  await page.waitForSelector('#inspector select[data-key="order"]');
+  await page.selectOption('#inspector select[data-key="order"]', 'shuffle');
+  await page.fill('#inspector input[data-key="limit"]', '2');
+  await page.waitForFunction(() => /tối đa 2/.test(document.querySelector('.step-card[data-id="lc"] .sum')?.textContent), null, { timeout: 3000 }).catch(() => {});
+  check((await page.textContent('.step-card[data-id="lc"] .sum')) === 'Mỗi bản ghi trong cons → con · xáo trộn · tối đa 2 · {{loop2.index}}', `lc summary: ${await page.textContent('.step-card[data-id="lc"] .sum')}`);
+  await page.keyboard.press('Control+Enter');
+  const chip = await page.waitForSelector('.step-card[data-id="lc"] .stat', { timeout: 5000 }).catch(() => null);
+  check(chip && (await chip.textContent()) === '10 lần lặp', `lc chip: ${chip && await chip.textContent()}`);
+  check(/Lead: 5/.test(await page.textContent('#results-summary')), `{{accs.$count}} loops did not make 5 Leads: ${await page.textContent('#results-summary')}`);
+  const seed = /seed (\d+)/.exec(await page.textContent('#results-summary'))?.[1];
+
+  // In fixed mode every filter option is hidden (chained showIf), even with filter = compare.
+  await page.click('.step-card[data-id="lc"] .type');
+  await page.selectOption('#inspector select[data-key="filter"]', 'compare');
+  await page.waitForFunction(() => document.querySelector('#inspector input[data-key="filterField"]')?.value === 'AccountId', null, { timeout: 3000 }).catch(() => {});
+  await page.selectOption('#inspector select[data-key="mode"]', 'fixed');
+  const hidden = await page.evaluate(() => ['filter', 'filterField', 'filterOp', 'filterValue', 'order', 'limit'].map((k) => document.querySelector(`#inspector [data-key="${k}"]`).closest('.form-row').hidden));
+  check(hidden.every(Boolean), `filter options shown in fixed mode: ${hidden}`);
+  await page.click('#btn-undo');
+
+  // {{run.seed}} in a template has the preview's seed as sample.
+  await page.click('.step-card[data-id="task"] .type');
+  const subj = '#inspector .field-card[data-field="fields.Subject"]';
+  await page.click(`${subj} .actions button[title="Tùy chọn"]`);
+  await page.click(`${subj} .var-btn`);
+  await page.waitForSelector('.var-picker .vp-item[data-path="run.seed"]');
+  const runSample = await page.textContent('.var-picker .vp-item[data-path="run.seed"] .vp-sample');
+  check(seed && runSample === seed, `run.seed sample "${runSample}" is not the preview seed ${seed}`);
+  await page.keyboard.press('Escape');
+
+  // Rẽ nhánh: {x} at "So với" inserts {{opp.Amount}}.
+  await page.click('.step-card[data-id="br"] .type');
+  await page.click('#inspector .form-row:has(input[data-key="right"]) .var-btn');
+  await page.waitForSelector('.var-picker .vp-item');
+  await page.keyboard.type('opp.Am');
+  await page.keyboard.press('Enter');
+  await page.waitForFunction(() => document.querySelector('#inspector input[data-key="right"]')?.value === '{{opp.Amount}}', null, { timeout: 3000 }).catch(() => {});
+  check((await page.inputValue('#inspector input[data-key="right"]')) === '{{opp.Amount}}', `branch right: ${await page.inputValue('#inspector input[data-key="right"]')}`);
+
+  // Lặp "Mỗi giá trị trong danh sách": empty → valuesEmpty on the field; Hot/Warm/Cold → the summary.
+  await page.click('#palette-items .palette-item[data-type="loop"]');
+  await page.waitForSelector('#inspector select[data-key="mode"]');
+  const newId = await page.$eval('.step-card.selected', (c) => c.dataset.id);
+  await page.selectOption('#inspector select[data-key="mode"]', 'values');
+  const values = '#inspector textarea[data-key="values"]';
+  check((await page.getAttribute(values, 'placeholder')) === 'Hot\nWarm\nCold', 'no Hot/Warm/Cold placeholder');
+  await page.waitForSelector(`${values}.invalid`, { timeout: 3000 }).catch(() => {});
+  check(await page.$(`${values}.invalid`), 'empty values list is not outlined');
+  check(/Nhập ít nhất một giá trị, mỗi dòng một giá trị/.test(await page.textContent('#inspector .form-row:has(textarea[data-key="values"]) .opt-error')), 'no valuesEmpty message under the list');
+  await page.fill(values, 'Hot\nWarm\nCold');
+  await page.waitForFunction((id) => /^3 giá trị/.test(document.querySelector(`.step-card[data-id="${id}"] .sum`)?.textContent), newId, { timeout: 3000 }).catch(() => {});
+  check((await page.textContent(`.step-card[data-id="${newId}"] .sum`)) === '3 giá trị: Hot, Warm, Cold · {{loop.value}}', `values summary: ${await page.textContent(`.step-card[data-id="${newId}"] .sum`)}`);
+  await page.context().close();
+}
+
 (async () => {
   // A Playwright error outside a flow's promise (e.g. in an event handler) fails the run.
   process.on('uncaughtException', (e) => { console.error('SMOKE FAILED\n' + e); process.exit(1); });
@@ -1375,7 +1498,7 @@ async function flowHistory() {
     check(orgs.status === 503 && /smoke:/.test((await orgs.json()).error), 'the smoke server is not using the sf CLI stub');
     // Independent flows, one context each, in parallel. A flow that throws (timed-out wait) is
     // reported and the others still finish.
-    let flows = { flowEditing, flowPicker, flowFiles, flowDark, flowLayoutWide, flowLayoutNarrow, flowEach, flowCanvas, flowHistory };
+    let flows = { flowEditing, flowPicker, flowFiles, flowDark, flowLayoutWide, flowLayoutNarrow, flowEach, flowCanvas, flowHistory, flowVarsLoops };
     // SMOKE_ONLY=flowCanvas,flowEach runs only those flows (while working on one area).
     const only = process.env.SMOKE_ONLY?.split(',').filter(Boolean);
     if (only?.length) flows = Object.fromEntries(Object.entries(flows).filter(([n]) => only.includes(n)));

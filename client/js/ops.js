@@ -131,6 +131,36 @@ export function fillEach(wf, step) {
   return filled;
 }
 
+/**
+ * "Lọc" just turned to "Chỉ bản ghi thỏa điều kiện" (design 0013, Lặp `each` and Chọn bản ghi):
+ * with filterField and filterValue still empty, a pool read from the org (`from`) whose fields
+ * include `<S>Id` is filtered by the nearest usable record read from the org of sObject S that is
+ * a current record (the record looped over, or a pick): AccountId = {{acc.Id}}. The `<S>Id` naming
+ * is Salesforce's convention; it is only a suggestion (validation and runs do not depend on it).
+ * → { field, name } when filled, else null.
+ */
+export function fillParentFilter(wf, step) {
+  const c = (step.config ??= {});
+  if (String(c.filterField ?? '').trim() || String(c.filterValue ?? '').trim()) return null;
+  const scope = analyzeScope(wf, state.meta);
+  const here = scope.at[step.id];
+  const visible = (here?.visible ?? []).map((v) => scope.sources[v.source]).filter(Boolean);
+  const pool = visible.find((s) => s.kind === 'record' && s.pool && s.name === c.from);
+  if (!pool || pool.origin !== 'org') return null;
+  const fields = pool.members.filter((m) => !m.builtin).map((m) => m.key);
+  for (const s of visible) {
+    if (s.kind !== 'record' || s.origin !== 'org' || !['item', 'picked'].includes(s.current) || !s.sobject) continue;
+    const want = `${s.sobject}Id`.toLowerCase();
+    const field = fields.find((k) => k.toLowerCase() === want);
+    if (!field) continue;
+    c.filterField = field;
+    c.filterOp = 'eq';
+    c.filterValue = `{{${s.name}.Id}}`;
+    return { field, name: s.name };
+  }
+  return null;
+}
+
 /** Insert a new step (default target: the "first free slot" rule) and select it. */
 export function addStep(type, target = defaultTarget()) {
   const step = newStep(type, target);

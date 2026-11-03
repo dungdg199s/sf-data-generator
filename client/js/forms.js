@@ -3,6 +3,7 @@
 
 import { h } from './dom.js';
 import { attachVarPicker } from './var-picker.js';
+import { optionShown } from '/shared/scope.js';
 
 let uid = 0;
 
@@ -15,7 +16,10 @@ let uid = 0;
  *                   vars?: { stepId, fieldIndex?, fieldName?, field }, suggest? }
  *                 aliases (or refChoices) feed `ref` dropdowns; `usable: false` ones are listed
  *                 disabled, with `note` saying why (below this step, other branch, turned off).
- *                 Options declaring `vars` get the variable picker (var-picker.js) for `ctx.vars`.
+ *                 Options declaring `vars` get the variable picker (var-picker.js) for `ctx.vars`;
+ *                 an `integer`/`number` option with `vars: 'number'` (design 0013) is a text field
+ *                 holding a number or one `{{path}}`. `showIf` is transitive (shared/scope.js
+ *                 optionShown): an option hides when the option it depends on is hidden.
  *                 Options declaring `suggest` (design 0006: help from the org) get it from
  *                 `ctx.suggest` = { org, sobjects(purpose) → Promise<[{ name, label }]>,
  *                 pickFields(def, values, apply(list)), poolFields(poolAlias) → [path] }:
@@ -42,7 +46,7 @@ export function renderOptions(defs, values, onChange, ctx = {}) {
     }
   };
   const refreshVisibility = () => {
-    for (const { def, row } of rows) row.hidden = def.showIf ? !def.showIf.in.includes(current[def.showIf.key]) : false;
+    for (const { def, row } of rows) row.hidden = !optionShown(def, current, defs);
   };
 
   for (const def of defs) {
@@ -59,7 +63,8 @@ export function renderOptions(defs, values, onChange, ctx = {}) {
     const helper = def.suggest && ctx.suggest ? suggestHelper(def, control, id, ctx.suggest, current) : null;
     let field = helper ? h('div', { class: 'suggest-wrap' }, control, helper) : control;
     let strip = null;
-    if (def.vars && ctx.vars && (def.kind === 'string' || def.kind === undefined)) {
+    const numberVars = def.vars === 'number' && (def.kind === 'integer' || def.kind === 'number');
+    if (def.vars && ctx.vars && (def.kind === 'string' || def.kind === undefined || numberVars)) {
       // Getters, not a spread: the field can be renamed while this form stays on screen.
       const vctx = ctx.vars;
       ({ wrap: field, strip } = attachVarPicker(control, {
@@ -93,6 +98,23 @@ function renderControl(def, value, set, id, ctx, current) {
       return h('input', { id, type: 'checkbox', checked: Boolean(v), onchange: (e) => set(e.target.checked) });
     case 'integer':
     case 'number':
+      // A number or exactly one variable (design 0013): a text field, since it must hold {{…}}.
+      // A number typed is stored as a number, empty as undefined (the default), {{…}} as text.
+      if (def.vars === 'number' && ctx.vars) {
+        return h('input', {
+          id,
+          type: 'text',
+          inputmode: 'numeric',
+          autocomplete: 'off',
+          value: v ?? '',
+          oninput: (e) => {
+            const t = e.target.value;
+            const trimmed = t.trim();
+            const next = trimmed === '' ? undefined : !trimmed.includes('{{') && Number.isFinite(Number(trimmed)) ? Number(trimmed) : t;
+            set(next, e.target._varInsert ? { coalesceKey: `insert:${++insertSeq}` } : undefined);
+          },
+        });
+      }
       return h('input', {
         id,
         type: 'number',
@@ -113,6 +135,7 @@ function renderControl(def, value, set, id, ctx, current) {
       return h('textarea', {
         id,
         rows: 3,
+        placeholder: def.placeholder,
         value: Array.isArray(v) ? v.join('\n') : v ?? '',
         oninput: (e) => {
           const items = e.target.value.split(/\n|,/).map((s) => s.trim()).filter(Boolean);
@@ -120,7 +143,7 @@ function renderControl(def, value, set, id, ctx, current) {
         },
       });
     case 'text':
-      return h('textarea', { id, rows: def.rows ?? 3, class: def.monospace ? 'mono' : undefined, spellcheck: def.monospace ? 'false' : undefined, value: v ?? '', oninput: (e) => set(e.target.value) });
+      return h('textarea', { id, rows: def.rows ?? 3, placeholder: def.placeholder, class: def.monospace ? 'mono' : undefined, spellcheck: def.monospace ? 'false' : undefined, value: v ?? '', oninput: (e) => set(e.target.value) });
     case 'ref': {
       const aliases = (ctx.refChoices ? ctx.refChoices(def, current) : ctx.aliases) ?? [];
       const usable = aliases.filter((a) => a.usable !== false);
