@@ -21,7 +21,10 @@ flows
 
 **Speed (since design 0009).** The flows are grouped into seven independent functions that run **in parallel**, each in
 its own browser context (so storage, routes and dialogs never leak between them): `flowEditing` (1–5), `flowPicker`
-(5b), `flowFiles` (5c–10), `flowDark` (12), `flowLayoutWide` and `flowLayoutNarrow` (11, 13), `flowEach` (14), `flowCanvas` (15), `flowHistory` (16), `flowVarsLoops` (17), `flowProductivity` and `flowProductivityRun` (18, 18b). The browser launches
+(5b), `flowFiles` (5c–10), `flowDark` (12), `flowLayoutWide` and `flowLayoutNarrow` (11, 13), `flowEach` (14), `flowCanvas` and `flowCanvasPhone` (15), `flowHistoryWide` (16 then the wide part of 11/13, one context), `flowVarsLoops` (17),
+`flowProductivity`, `flowProductivityRun` and `flowLibrary` (18, 18b, 18c). Since the review of 0012 they run longest first, at
+most 2 × CPUs at once; a page of a flow can share its context (`newPage(label, { shared: true })`); a reload that only reset the
+workflow is `smokeOpen(wf)` (opens it as a library item) instead. The browser launches
 while the server starts; a fresh context starts with empty storage, so no `localStorage.clear()` + reload; storage a flow
 needs before its first load is written by `addInitScript` (once, guarded by a marker key, so reloads keep it); layout
 checks resize one page (`setViewportSize`) instead of opening a context per width; waits for the sheet or toast
@@ -201,8 +204,12 @@ the others; never add a fixed `waitForTimeout`.
     selected as `acc2` / `loop` with the rename toast; Ctrl+/ turns both off (B). `▾` → `+ Workflow mới` adds an item (A); a
     Record switched to Task gets `Subject`, renamed `Name` it gets the `Đổi thành Subject` fix, which clears the warning (G);
     Ctrl+O back to the first item, where ↶ has nothing to undo; a sample opens as a third item, the others kept (A).
+18c. **`flowLibrary`, own context (review 0012 B1, S2, S5).** The library and G steps moved out of 18 (they wait for the
+    `/api/validate` response of the edited workflow, then the default timeout). A second tab edits the open workflow: the first
+    shows `Tạm dừng lưu` (`#btn-unsaved`); with a held preview, "Dùng bản ở tab kia" says "Đang chạy" and leaves the workflow
+    alone; `+ Workflow mới` ends the pause and its edits are saved.
 18b. **`flowProductivityRun`, own context, alongside 18.** With a mocked org and a page-side fake NDJSON stream for the insert
-    (nothing reaches an org): `insert 5/n` (`.stat.live`) and `lỗi 2` (`.tag-insert-err`) on `con` while inserting; after
+    (nothing reaches an org): `insert 3/n` (`.stat.live`, inserted only) and `lỗi 2` (`.tag-insert-err`) on `con` while inserting; after
     `done` the tag opens "Lỗi insert" with the step's group `.current` (D). "Contact cho Account có sẵn": `{{acc.Industry}}` in
     con's Title → `Thêm Industry vào SELECT của "accs"` adds it to the Query and the error goes (F1); ⋯ → Bọc trong Lặp qua
     từng bản ghi → a Lặp `each` over `accs` around `con`, and the toast's [Đổi] points the Lookup at the record looped over (C).

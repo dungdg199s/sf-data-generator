@@ -44,6 +44,11 @@ Mốc thời gian (`from`/`to` của date/datetime) nhận `YYYY-MM-DD`, ISO đ�
 
 ## Hợp đồng generator
 
+`min` / `max` của option `integer` / `number` là **giới hạn thật** (sửa sau review [0012](design/0012-nang-suat-soan-thao.md)):
+validate (và `POST /api/field-samples`) báo lỗi gắn `fields.<Name>` khi giá trị nằm ngoài, ví dụ `Field "Title": "Số từ tối
+thiểu" phải từ 1 đến 1000 (đang là 100000). …`. Số từ / số câu / số đoạn của Text, Text Area, Text Area (Long) tối đa **1000**
+(`MAX_COUNT` trong `server/generators/text.js`), để một lần chạy hay ví dụ ở inspector không treo server.
+
 ```js
 export const myType = {
   type: 'mytype',            // khóa dùng trong workflow JSON

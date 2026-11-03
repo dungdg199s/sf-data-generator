@@ -120,9 +120,23 @@ const pendingSelector = (e) => /(?:waiting for|locator\()\s*['"(]?([^'")\n]+)/.e
 let browser;
 let base;
 
-/** A fresh context (empty storage) and page; page errors are reported with `label`. */
-async function newPage(label, ctxOpts = {}) {
-  const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, ...ctxOpts });
+const sharedCtx = new Map(); // flow name → context reused by its pages with { shared: true }
+/**
+ * A fresh context (empty storage) and page; page errors are reported with `label`. With
+ * `shared: true` the pages of one flow share a context (and its HTTP cache: modules come back as
+ * 304, review 0012); the flow clears storage between its parts.
+ */
+async function newPage(label, { shared = false, ...ctxOpts } = {}) {
+  const key = flowOf.getStore() ?? '?';
+  const reuse = shared && sharedCtx.get(key);
+  const ctx = reuse || await browser.newContext({ viewport: { width: 1440, height: 900 }, ...ctxOpts });
+  if (shared) sharedCtx.set(key, ctx);
+  if (!reuse) await addSmokeHelpers(ctx);
+  const page = await ctx.newPage();
+  return trackPage(label, page);
+}
+
+async function addSmokeHelpers(ctx) {
   // Design 0012 A: edits are saved in the library's item, not sfdg.workflow.v2. smokeStored() is
   // the open item of the tab; smokeSetAutosave(wf) makes the next load start from a v2 autosave
   // again (library keys and the tab's item removed), as the flows did before the library.
@@ -131,13 +145,20 @@ async function newPage(label, ctxOpts = {}) {
       const id = sessionStorage.getItem('sfdg.activeId') ?? JSON.parse(localStorage.getItem('sfdg.library') ?? '{}').activeId;
       return JSON.parse(localStorage.getItem(`sfdg.wf.${id}`) ?? 'null');
     };
+    // Opens `wf` in the app like Mới / Mở file (a new library item): no reload when the load
+    // itself is not what a check is about (review 0012: page loads were most of the smoke's CPU).
+    window.smokeOpen = async (wf) => {
+      (await import('/js/library-ui.js')).newWorkflow(wf);
+    };
     window.smokeSetAutosave = (wf) => {
       for (const k of Object.keys(localStorage)) if (k === 'sfdg.library' || k.startsWith('sfdg.wf.')) localStorage.removeItem(k);
       sessionStorage.removeItem('sfdg.activeId');
       localStorage.setItem('sfdg.workflow.v2', JSON.stringify(wf));
     };
   });
-  const page = await ctx.newPage();
+}
+
+function trackPage(label, page) {
   const flowName = flowOf.getStore() ?? '?';
   if (!pages.has(flowName)) pages.set(flowName, []);
   pages.get(flowName).push({ label, page });
@@ -428,9 +449,8 @@ async function flowPicker() {
     const rec = { id: 'a', type: 'record', config: { sobject: 'Account', alias: 'acc', fields: [{ name: 'Name', type: 'text', options: {} }] } };
     const top = { id: 'top', type: 'branch', config: { kind: 'chance', probability: 0.5 }, slots: { true: [], false: [] } };
     const inner = { id: 'B', type: 'branch', config: { kind: 'compare', left: '', op: 'eq', right: '1' }, slots: { true: [], false: [] } };
-    smokeSetAutosave({ version: 2, name: 'p', steps: [rec, top, { id: 'L', type: 'loop', config: { count: 2, alias: 'loop' }, slots: { body: [inner] } }] });
+    return smokeOpen({ version: 2, name: 'p', steps: [rec, top, { id: 'L', type: 'loop', config: { count: 2, alias: 'loop' }, slots: { body: [inner] } }] });
   });
-  await page.reload();
   await page.waitForSelector('.step-card[data-id="top"]');
   await page.click('.step-card[data-id="top"] .type');
   await page.selectOption('#inspector select[data-key="kind"]', 'compare');
@@ -741,7 +761,7 @@ const topbarBox = (page) => page.evaluate(() => {
 
 /** 13a (issues bar), 13b (top bar, wide widths), 13e (download buttons at 1440). */
 async function flowLayoutWide() {
-  const page = await newPage('0009 wide');
+  const page = await newPage('0009 wide', { shared: true });
   await mockOrgs(page, LONG_ORGS);
   await seedStorage(page, { workflow: await issuesWorkflow(), org: LONG_ORGS[0].alias });
   await page.goto(base);
@@ -972,6 +992,7 @@ async function flowLayoutNarrow() {
   await m.tap('#inspector .sheet-close');
 
   // Going to an issue on a phone: the card ends up fully between the palette and the sheet.
+  // A reload (not smokeOpen): the layout under test is the one a fresh load gives (panel collapsed).
   await m.evaluate((wf) => smokeSetAutosave(wf), await issuesWorkflow());
   await m.reload();
   await m.waitForSelector('#issues:not([hidden]) .issue.error');
@@ -1076,8 +1097,7 @@ async function flowEach() {
     { id: 'e', type: 'loop', config: { mode: 'each', from: 'acc', itemAlias: 'a' }, slots: { body: [{ id: 'c', type: 'record', config: { sobject: 'Contact', alias: 'c', fields: [tpl('LastName')] } }] } },
     { id: 'e2', type: 'loop', config: { mode: 'each', from: 'accs', itemAlias: 'row', alias: 'k' }, slots: { body: [{ id: 'c2', type: 'record', config: { sobject: 'Contact', alias: 'c2', fields: [tpl('Title')] } }] } },
   ] };
-  await page.evaluate((w) => smokeSetAutosave(w), wfN);
-  await page.reload();
+  await page.evaluate((w) => smokeOpen(w), wfN);
   await page.click('.step-card[data-id="e"] .type');
   const accOpt = await page.$eval('#inspector select[data-key="from"] option:checked', (o) => o.textContent);
   check(accOpt === 'acc (Account · đã sinh)', `pool option of a record made in a finished loop: ${accOpt}`);
@@ -1224,7 +1244,10 @@ async function flowCanvas() {
   });
   check(left, 'panning far away left no card on screen');
   await page.context().close();
+}
 
+/** Flow 15, phone part (own context, so it runs alongside the wide part). */
+async function flowCanvasPhone() {
   // Phone: the saved Sơ đồ is not applied; the ⋯ menu offers it and does not save it.
   const m = await newPage('canvas 390', { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
   await m.addInitScript(() => { if (!localStorage.getItem('smoke.view')) { localStorage.setItem('sfdg.view', 'canvas'); localStorage.setItem('smoke.view', '1'); } });
@@ -1286,7 +1309,7 @@ const HIST_RUNS = [
 
 /** Flow 16 (0011): Bulk in the Insert confirmation, Tải Id / Lịch sử links, "Xóa dữ liệu này…", production name, history dialog. */
 async function flowHistory() {
-  const page = await newPage('history');
+  const page = await newPage('history', { shared: true });
   const sent = { inserts: [], deletes: [], forgets: [] };
   await page.addInitScript(() => { if (!localStorage.getItem('smoke.h')) { localStorage.setItem('sfdg.org', 'dev-sb'); localStorage.setItem('smoke.h', '1'); } });
   // Everything that would touch an org is answered here; nothing reaches the server's (absent) sf CLI.
@@ -1412,7 +1435,7 @@ async function flowHistory() {
   });
   check(Math.abs(box.w - box.iw) <= 1 && Math.abs(box.h - box.ih) <= 1 && box.sw === box.iw && box.inner <= 0, `16d 390px: history dialog not full screen or overflowing ${JSON.stringify(box)}`);
   if (outDir) await page.screenshot({ path: path.join(outDir, 'smoke-390-history.png') });
-  await page.context().close();
+  // The context goes on with flowLayoutWide (flowHistoryWide), which closes it.
 }
 
 /**
@@ -1545,7 +1568,6 @@ async function flowProductivity() {
   const page = await newPage('productivity');
   const sel = () => page.$$eval('#process .step-card[aria-selected="true"]', (n) => n.map((x) => x.dataset.id));
   const toastHas = (re) => page.waitForFunction((src) => new RegExp(src).test(document.getElementById('toast').textContent), re.source);
-  const libItems = () => page.evaluate(() => JSON.parse(localStorage.getItem('sfdg.library')).items.map((i) => i.name));
   await page.goto(base);
   await page.waitForSelector('.step-card[data-id="con"]');
 
@@ -1590,6 +1612,20 @@ async function flowProductivity() {
   await page.keyboard.press('Control+/');
   await page.waitForFunction(() => smokeStored()?.steps[0].slots.body.filter((s) => s.disabled).length === 2);
 
+}
+
+/**
+ * Flow 18c (design 0012 A, G and review B1 / S2): the library (new item, switch back with an
+ * empty undo, a sample as a new item), Record default fields and the noNameField fix, and two tabs
+ * on one workflow: the paused tab shows "Tạm dừng lưu", the choice waits while a run goes on, and
+ * a new workflow made while paused is saved.
+ */
+async function flowLibrary() {
+  const page = await newPage('library');
+  const toastHas = (re) => page.waitForFunction((src) => new RegExp(src).test(document.getElementById('toast').textContent), re.source);
+  const libItems = () => page.evaluate(() => JSON.parse(localStorage.getItem('sfdg.library')).items.map((i) => i.name));
+  await page.goto(base);
+  await page.waitForSelector('.step-card[data-id="con"]');
   // A: a new workflow of the library; back to the first one (undo starts empty there).
   const firstName = await page.inputValue('#wf-name');
   await page.click('#btn-library');
@@ -1602,14 +1638,15 @@ async function flowProductivity() {
   await page.fill('#inspector input[data-key="sobject"]', 'Task');
   await page.waitForFunction(() => [...document.querySelectorAll('#inspector .field-card input[aria-label="Tên field"]')].map((i) => i.value).join() === 'Subject');
   const nameInput = page.locator('#inspector .field-card input[aria-label="Tên field"]');
+  // Review 0012 S5: wait for the validation of exactly this workflow, then the fix (default timeout).
+  const validated = page.waitForResponse((r) => r.url().endsWith('/api/validate') && (r.request().postData() ?? '').includes('"name":"Name","type":"text","options":{"mode":"list"'));
   await nameInput.fill('Name');
   await nameInput.press('Tab');
-  const fix = await page.waitForSelector('#inspector .fix-btn[data-fix="renameField"]', { timeout: 3000 }).catch(() => null);
-  check(fix && (await fix.textContent()) === 'Đổi thành Subject', 'no "Đổi thành Subject" fix on a Task with Name');
-  if (fix) {
-    await fix.click();
-    await page.waitForFunction(() => !document.querySelector('#inspector .fix-btn[data-fix="renameField"]') && !document.querySelector('.step-card .badge.warn'));
-  }
+  await validated;
+  const fix = await page.waitForSelector('#inspector .fix-btn[data-fix="renameField"]');
+  check((await fix.textContent()) === 'Đổi thành Subject', 'no "Đổi thành Subject" fix on a Task with Name');
+  await fix.click();
+  await page.waitForFunction(() => !document.querySelector('#inspector .fix-btn[data-fix="renameField"]') && !document.querySelector('.step-card .badge.warn'));
   await page.keyboard.press('Control+o');
   await page.click(`.popup-item[role="menuitemradio"]:has-text("${firstName}")`);
   await page.waitForSelector('.step-card[data-id="con"]');
@@ -1620,6 +1657,46 @@ async function flowProductivity() {
   await page.waitForSelector('.step-card[data-id="accs"]');
   const names = await libItems();
   check(names.length === 3 && names.includes(firstName), `Mẫu replaced a workflow of the library (${names})`);
+
+  // B1 / S2: another tab edits the open workflow → this tab pauses with a lasting indicator.
+  const other = await page.context().newPage();
+  trackPage('library tab 2', other);
+  await other.goto(base);
+  await other.waitForSelector('.step-card[data-id="accs"]');
+  await other.fill('#wf-name', 'Sửa ở tab 2');
+  await page.waitForSelector('#btn-unsaved:not([hidden])');
+  check((await page.textContent('#btn-unsaved')) === 'Tạm dừng lưu', `paused indicator: ${await page.textContent('#btn-unsaved')}`);
+  let release;
+  const held = new Promise((r) => { release = r; });
+  await page.route('**/api/run', async (r) => { await held; await r.abort().catch(() => {}); });
+  const runReq = page.waitForRequest('**/api/run');
+  await page.keyboard.press('Control+Enter');
+  await runReq;
+  await page.click('#btn-unsaved');
+  await page.click('#toast .toast-action:text-is("Dùng bản ở tab kia")');
+  await toastHas(/Đang chạy/);
+  check((await page.inputValue('#wf-name')) !== 'Sửa ở tab 2', '"Dùng bản ở tab kia" replaced the workflow during a run');
+  release();
+  await page.waitForFunction(() => !document.getElementById('btn-preview').disabled);
+  await page.unroute('**/api/run');
+  // A new workflow while paused: the pause ends and its edits are saved.
+  await page.click('#btn-library');
+  await page.click('.popup-item:has-text("+ Workflow mới")');
+  await page.waitForSelector('#btn-unsaved[hidden]', { state: 'attached' });
+  await page.fill('#wf-name', 'Sau khi tạm dừng');
+  await page.waitForFunction(() => smokeStored()?.name === 'Sau khi tạm dừng');
+  await page.context().close();
+}
+
+/** Flows 16 and 11/13-wide in one context (review 0012: its HTTP cache serves the second load). */
+async function flowHistoryWide() {
+  await flowHistory();
+  for (const { page } of pages.get('flowHistoryWide') ?? []) {
+    if (page.isClosed()) continue;
+    await page.evaluate(() => { localStorage.clear(); sessionStorage.clear(); });
+    await page.close();
+  }
+  await flowLayoutWide();
 }
 
 /** Flow 18b (design 0012, in parallel with 18): D, F1, C and the phone's "Chọn nhiều bước". */
@@ -1675,13 +1752,13 @@ async function flowProductivityRun() {
   await page.click('.step-card[data-id="con"] .type');
   const title = page.locator('#inspector .field-card[data-field="fields.Title"]');
   await title.locator('button[title="Tùy chọn"]').click();
+  const validated = page.waitForResponse((r) => r.url().endsWith('/api/validate') && (r.request().postData() ?? '').includes('{{acc.Industry}}'));
   await title.locator('[data-key="template"]').fill('{{acc.Industry}}');
-  const add = await page.waitForSelector('#inspector .fix-btn[data-fix="addSelectField"]', { timeout: 3000 }).catch(() => null);
-  check(add && (await add.textContent()) === 'Thêm Industry vào SELECT của "accs"', 'no "Thêm Industry vào SELECT" fix');
-  if (add) {
-    await add.click();
-    await page.waitForFunction(() => smokeStored()?.steps[0].config.fields.includes('Industry') && !document.querySelector('.step-card[data-id="con"] .badge:not(.warn)'));
-  }
+  await validated;
+  const add = await page.waitForSelector('#inspector .fix-btn[data-fix="addSelectField"]');
+  check((await add.textContent()) === 'Thêm Industry vào SELECT của "accs"', 'no "Thêm Industry vào SELECT" fix');
+  await add.click();
+  await page.waitForFunction(() => smokeStored()?.steps[0].config.fields.includes('Industry') && !document.querySelector('.step-card[data-id="con"] .badge:not(.warn)'));
 
   // C: ⋯ → Bọc trong Lặp qua từng bản ghi: a Lặp each over accs around con; [Đổi] relinks the Lookup.
   await page.click('.step-card[data-id="con"] .menu-btn');
@@ -1720,7 +1797,8 @@ async function flowProductivityRun() {
     check(orgs.status === 503 && /smoke:/.test((await orgs.json()).error), 'the smoke server is not using the sf CLI stub');
     // Independent flows, one context each, in parallel. A flow that throws (timed-out wait) is
     // reported and the others still finish.
-    let flows = { flowEditing, flowPicker, flowFiles, flowDark, flowLayoutWide, flowLayoutNarrow, flowEach, flowCanvas, flowHistory, flowVarsLoops, flowProductivity, flowProductivityRun };
+    // Longest first; at most 2 × CPUs run at once (review 0012: the flows are CPU-bound).
+    let flows = { flowPicker, flowFiles, flowLayoutNarrow, flowCanvas, flowProductivity, flowEach, flowVarsLoops, flowProductivityRun, flowLibrary, flowHistoryWide, flowEditing, flowDark, flowCanvasPhone };
     // SMOKE_ONLY=flowCanvas,flowEach runs only those flows (while working on one area).
     const only = process.env.SMOKE_ONLY?.split(',').filter(Boolean);
     if (only?.length) flows = Object.fromEntries(Object.entries(flows).filter(([n]) => only.includes(n)));
@@ -1743,7 +1821,16 @@ async function flowProductivityRun() {
         throw e;
       }
     };
-    const results = await Promise.allSettled(Object.entries(flows).map(([n, f]) => runFlow(n, f)));
+    const queue = Object.entries(flows);
+    const results = new Array(queue.length);
+    let next = 0;
+    const lanes = Math.max(2, Math.min(queue.length, 2 * os.cpus().length));
+    await Promise.all(Array.from({ length: lanes }, async () => {
+      while (next < queue.length) {
+        const i = next++;
+        results[i] = await runFlow(...queue[i]).then(() => ({ status: 'fulfilled' }), (reason) => ({ status: 'rejected', reason }));
+      }
+    }));
     results.forEach((r, i) => { if (r.status === 'rejected') errors.push(`${Object.keys(flows)[i]}: ${r.reason}`); });
   } catch (e) {
     errors.push(String(e));

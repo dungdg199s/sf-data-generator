@@ -881,3 +881,26 @@ Làm đủ chín phần theo thứ tự của kế hoạch (G, F1 cùng F2, C, I
 - Smoke gần trần 12 s trên máy 4 CPU (khoảng 1 s dư): luồng mới nhỏ (≈ 3,8 s riêng) nhưng thêm tải CPU cho các luồng song song.
 - Câu hỏi mở / việc tiếp theo ở trên giữ nguyên (thư viện ra đĩa, sửa hàng loạt option, kéo thẻ trên Sơ đồ, khai báo ý nghĩa ước
   tính trong danh mục, gợi ý field bắt buộc từ `REQUIRED_FIELD_MISSING`, mũi tên cho thẻ nguồn ngoài khung nhìn).
+
+## Sửa sau review
+
+| Mục | Sửa | Test |
+| --- | --- | --- |
+| B1 (mất dữ liệu): tạm dừng tự lưu còn sau khi đổi / tạo / xóa workflow | `createLibrary` (`client/js/library.js`) giữ mục đang mở của tab; tạm dừng **theo mục**, hết khi mở / tạo mục khác hay xóa mục đang mở. Nút `#btn-unsaved` thành `Tạm dừng lưu` (bấm mở lại lựa chọn) khi đang tạm dừng; hai nút của toast không làm gì nếu đã mở mục khác | `test/library.test.js` "paused + switch"; smoke `flowLibrary` |
+| B2 (mất dữ liệu): Xóa khi thùng rác không ghi được thì Hoàn tác mất | Bản xóa (`item` + JSON) giữ trong bộ nhớ của nút Hoàn tác; thùng rác chỉ là ghi thêm. Không khôi phục được (đầy) ⇒ toast nói rõ và nút "Tải bản đã xóa" | `test/library.test.js` (Storage giả có hạn mức) |
+| S1: xóa workflow đang mở khi đang chạy; `sfdg.wf.null` | Nút Xóa của mục đang mở khóa khi đang chạy (`title` BUSY); mục thay thế được mở / tạo **trước** khi xóa, không bao giờ đặt `activeId = null` | `test/library.test.js` (không có khóa `sfdg.wf.null`) |
+| S2: "Dùng bản ở tab kia" khi đang chạy | Chờ: toast `Đang chạy…`, giữ tạm dừng, chọn lại bằng `Tạm dừng lưu` | smoke `flowLibrary` (xem trước bị giữ) |
+| S3: `minWords`/`maxWords` không có trần | `MAX_COUNT = 1000` cho số từ / câu / đoạn; `min`/`max` của option số được validate (`optionRangeIssues`) ở lần chạy và ở `/api/field-samples`; `/api/field-samples` dừng sau 1 s. Không mẫu, workflow test hay ca vàng nào vượt (hash vàng không đổi) | `test/server.test.js` S3/S4 |
+| S4: `/api/field-samples` với `\|now\| > 8,64·10^15` ⇒ 500 | 422 với câu `NOW_MESSAGE` của lần chạy | `test/server.test.js` S3/S4 |
+| S5: hai chỗ chờ 3 s trong smoke | Chờ response `/api/validate` của đúng workflow vừa sửa, rồi timeout mặc định | smoke |
+| N1: `addSelectField` với dấu phẩy cuối / không cách trước FROM; truy vấn gộp | Chèn đúng; `COUNT`/`SUM`/… hoặc `GROUP BY` ⇒ `null`; kết quả phải qua `checkSoql` và có field | `test/soql.test.js` N1 |
+| N2: đổi tên khi dán chiếm tên mà bản dán tham chiếu nhưng không định nghĩa | Các tên đó tính là đã dùng | `test/workflow-tree.test.js` N2 |
+| N3: Hoàn tác ghi đè `sfdg.wf.<id>` đã có | Khôi phục dưới id mới | `test/library.test.js` N3 |
+| N4: chip insert cộng cả lỗi | Chip `insert n/tổng` chỉ đếm đã insert; lỗi ở tag `lỗi n` | smoke `flowProductivityRun` (`insert 3/n`) |
+| N5: đếm bước của bộ nhớ tạm đệ quy (RangeError) | Đếm bằng vòng lặp, dừng ở 2 001; lỗi phân tích bất kỳ ⇒ từ chối bằng toast | `test/clipboard.test.js` N5 (20 000 cấp) |
+
+Tốc độ smoke: file tĩnh có ETag yếu (mtime + size) và 304 (vẫn `no-cache`; `test/server.test.js`); ba lần tải lại chỉ để đổi
+workflow thành `smokeOpen` (mở như một mục thư viện); `flowHistory` và phần wide của `flowLayoutWide` chung một context
+(`flowHistoryWide`); `flowCanvas` tách phần điện thoại (`flowCanvasPhone`); G và A rời `flowProductivity` sang `flowLibrary`; các
+luồng chạy theo thứ tự dài trước, tối đa 2 × số CPU cùng lúc. Kết quả: xem báo cáo của lần sửa (máy đo lúc đó bị tranh CPU từ host,
+nên trước / sau đo xen kẽ nhau).
