@@ -74,6 +74,11 @@
           <button id="btn-zoom-reset" class="dg-zoom-level">100%</button>
           <button id="btn-zoom-in" class="icon" title="Phóng to (+)" aria-label="Phóng to"><span class="ico" data-ico="plus" aria-hidden="true"></span></button>
           <button id="btn-zoom-fit" class="icon" title="Vừa khung: thấy cả sơ đồ (0)" aria-label="Vừa khung"><span class="ico" data-ico="fit" aria-hidden="true"></span></button>
+          <button id="btn-minimap" class="icon" aria-pressed="true" aria-controls="dg-minimap" aria-label="Bản đồ thu nhỏ" title="Bản đồ thu nhỏ (hiện khi sơ đồ lớn hơn khung nhìn)"><span class="ico" data-ico="minimap" aria-hidden="true"></span></button>
+        </div>
+        <div id="dg-minimap" class="dg-minimap" aria-hidden="true">
+          <svg class="mm-map" xmlns="http://www.w3.org/2000/svg"><g class="mm-paths"></g><rect class="mm-view-halo"></rect><rect class="mm-view"></rect></svg>
+          <div class="mm-track" hidden><div class="mm-thumb"></div></div>
         </div>
         <p id="canvas-help" class="sr-only">↑ ↓: bước trước, bước sau. ← →: khung cha, bước con (thu gọn, mở khung). Enter: sửa trong bảng cấu hình. Kéo nền hoặc cuộn để di chuyển, Ctrl + cuộn để thu phóng. M: về chế độ Quy trình.</p>
       </div>

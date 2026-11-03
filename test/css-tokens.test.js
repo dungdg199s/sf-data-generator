@@ -271,6 +271,8 @@ const PAIRS = [
   ['success-text', 'surface', 4.5], ['success-contrast', 'success', 4.5],
   ['border-control', 'surface', 3], ['border-control', 'surface-raised', 3], ['border-control', 'surface-sunken', 3],
   ['text-muted', 'bg-disabled', 4.5], ['inverse-text', 'inverse-bg', 4.5],
+  // Design 0014: minimap viewport and thumb, its error ring and turned-off blocks (the other 0014 pairs are above).
+  ['accent', 'surface-raised', 3], ['accent', 'surface-hover', 3], ['danger', 'surface-raised', 3], ['minimap-off', 'surface-raised', 3],
 ].map(([f, b, min]) => [`--color-${f}`, `--color-${b}`, min]);
 for (const t of TYPES) {
   PAIRS.push(
@@ -420,4 +422,17 @@ test('design 0014 layout tokens are defined, documented, and match the numbers o
   for (const t of ['--results-h', '--results-min-h', '--layout-min-h', '--resize-hit', '--grip-w', '--fade-w', '--icon-xs']) {
     assert.ok(doc.includes(`\`${t}\``), `${t} missing from docs/ui-design-system.md`);
   }
+});
+
+test('design 0014 minimap tokens match client/js/minimap.js and are documented', async () => {
+  const { MINIMAP } = await import('../client/js/minimap.js');
+  const all = Object.fromEntries(declarations(TOKENS).map((d) => [d.prop, d.value]));
+  assert.equal(all['--minimap-w'], '240px');
+  assert.equal(all['--minimap-min-h'], `${MINIMAP.minH}px`);
+  assert.equal(all['--minimap-max-h'], `${MINIMAP.maxH}px`);
+  assert.equal(LIGHT['--color-minimap-off'], 'var(--gray-400)');
+  assert.equal(DARK_MEDIA['--color-minimap-off'], 'var(--gray-500)');
+  assert.match(all['--sheet-h-full'] ?? '', /^min\(90dvh, calc\(100dvh - var\(--topbar-h, 89px\)\)\)$/);
+  const doc = read('docs/ui-design-system.md');
+  for (const t of ['--minimap-w', '--minimap-min-h', '--color-minimap-off', '--sheet-h-full']) assert.ok(doc.includes(`\`${t}\``), `${t} missing from docs/ui-design-system.md`);
 });

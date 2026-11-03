@@ -1401,6 +1401,101 @@ async function flowCanvas() {
 }
 
 /** Flow 15, phone part (own context, so it runs alongside the wide part). */
+/** 1 000 steps: 250 × (Lặp → Record, Rẽ nhánh → Record), one Record turned off now and then, a few without sObject (errors). */
+function bigWorkflow(groups = 250) {
+  const rec = (id, sobject, extra = {}) => ({ id, type: 'record', config: { sobject, alias: id, count: 1, fields: [] }, ...extra });
+  const steps = [];
+  for (let i = 0; i < groups; i++) {
+    steps.push({ id: `l${i}`, type: 'loop', config: { count: 2, alias: `loop${i}` }, slots: { body: [
+      rec(`a${i}`, 'Account', i % 37 === 5 ? { disabled: true } : {}),
+      { id: `b${i}`, type: 'branch', config: { kind: 'chance', probability: 0.5 }, slots: { true: [rec(`t${i}`, i % 50 === 7 ? '' : 'Contact')], false: [] } },
+    ] } });
+  }
+  return { version: 2, name: 'Sơ đồ lớn', steps };
+}
+
+/** 15b. Minimap of the Sơ đồ view (design 0014 §5), own context. */
+async function flowMinimap() {
+  const page = await newPage('minimap');
+  await page.addInitScript((wf) => {
+    if (localStorage.getItem('smoke.mm')) return;
+    localStorage.setItem('sfdg.workflow.v2', JSON.stringify(wf));
+    localStorage.setItem('sfdg.view', 'canvas');
+    localStorage.setItem('smoke.mm', '1');
+  }, bigWorkflow());
+  await page.goto(base);
+  await page.waitForSelector('#canvas .step-card[data-id="a0"]');
+  await page.waitForSelector('#dg-minimap.shown path');
+  const mm = await page.evaluate(() => ({
+    paths: document.querySelectorAll('#dg-minimap path').length, track: !document.querySelector('#dg-minimap .mm-track').hidden,
+    hidden: document.getElementById('dg-minimap').getAttribute('aria-hidden'), pressed: document.getElementById('btn-minimap').getAttribute('aria-pressed'),
+  }));
+  check(mm.paths > 0 && mm.paths <= 16 && mm.track && mm.hidden === 'true' && mm.pressed === 'true', `1 000 steps: minimap ${JSON.stringify(mm)} (shown, ≤ 16 paths, track, aria-hidden)`);
+  // A card pushed under the minimap comes out from under it when ensureVisible shows it (↑ then ↓ back to it).
+  await page.click('#canvas .step-card[data-id="a0"] .type');
+  const box = (sel) => page.$eval(sel, (e) => { const r = e.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; });
+  const [card, map] = [await box('#canvas .step-card[data-id="a0"]'), await box('#dg-minimap')];
+  await page.mouse.move(card.x, card.y);
+  await page.mouse.wheel(card.x - map.x, card.y - map.y);
+  const pushed = await page.waitForFunction(() => {
+    const c = document.querySelector('#canvas .step-card[data-id="a0"]').getBoundingClientRect();
+    const m = document.getElementById('dg-minimap').getBoundingClientRect();
+    return c.left < m.right && c.right > m.left && c.top < m.bottom && c.bottom > m.top;
+  }, null, { timeout: 2000 }).then(() => true, () => false);
+  check(pushed, 'the wheel did not bring a0 under the minimap (the next check would prove nothing)');
+  await page.keyboard.press('ArrowUp');
+  await page.keyboard.press('ArrowDown');
+  const clear = await page.evaluate(() => {
+    const c = document.querySelector('#canvas .step-card.selected').getBoundingClientRect();
+    const m = document.getElementById('dg-minimap').getBoundingClientRect();
+    return { id: document.querySelector('#canvas .step-card.selected').dataset.id, overlap: c.left < m.right && c.right > m.left && c.top < m.bottom && c.bottom > m.top };
+  });
+  check(clear.id === 'a0' && !clear.overlap, `ensureVisible left the card under the minimap (${JSON.stringify(clear)})`);
+  if (outDir) {
+    await page.screenshot({ path: path.join(outDir, 'smoke-1440-minimap.png') });
+    await page.emulateMedia({ colorScheme: 'dark' });
+    await page.screenshot({ path: path.join(outDir, 'smoke-1440-minimap-dark.png') });
+    await page.emulateMedia({ colorScheme: 'light' });
+  }
+  // A press at 75 % of the overview track: the cards around three quarters of the diagram are drawn.
+  const track = await page.$eval('#dg-minimap .mm-track', (e) => { const r = e.getBoundingClientRect(); return { x: r.x + r.width * 0.75, y: r.y + r.height / 2 }; });
+  await page.mouse.click(track.x, track.y);
+  const near = await page.$$eval('#canvas .step-card[data-id^="l"]', (n) => n.map((c) => Number(c.dataset.id.slice(1))).filter((i) => i > 0));
+  check(near.some((i) => Math.abs(i - 0.75 * 250) <= 15), `75 % of the track: loops drawn ${near.join(',')} (around 187 expected)`);
+  // A press on the map centres the viewport there (the cards under that point are drawn).
+  const mapAt = await page.$eval('#dg-minimap .mm-map', (e) => { const r = e.getBoundingClientRect(); return { x: r.x + 4, y: r.y + r.height / 2 }; });
+  const before = near.join();
+  await page.mouse.click(mapAt.x, mapAt.y);
+  const moved = await page.$$eval('#canvas .step-card[data-id^="l"]', (n) => n.map((c) => c.dataset.id.slice(1)).join(','));
+  check(moved !== before, 'a press on the minimap did not move the viewport');
+  // The wheel over the minimap does nothing.
+  const pan0 = await page.$eval('.dg-world', (w) => w.style.transform);
+  await page.mouse.move(mapAt.x + 20, mapAt.y);
+  await page.mouse.wheel(0, 400);
+  check((await page.$eval('.dg-world', (w) => w.style.transform)) === pan0, 'the wheel over the minimap moved the diagram');
+  // The toggle: off hides it, a reload keeps it off; on again.
+  await page.click('#btn-minimap');
+  check(!(await page.$('#dg-minimap.shown')) && (await page.getAttribute('#btn-minimap', 'aria-pressed')) === 'false', 'the minimap button did not hide it');
+  await page.reload();
+  await page.waitForSelector('#canvas .step-card[data-id="__start"]');
+  check(!(await page.$('#dg-minimap.shown')) && (await page.evaluate(() => localStorage.getItem('sfdg.minimap'))) === '0', 'the minimap came back after a reload while turned off');
+  await page.click('#btn-minimap');
+  await page.waitForSelector('#dg-minimap.shown');
+  // At 800 px the open sheet hides it.
+  await page.setViewportSize({ width: 800, height: 900 });
+  await page.click('#canvas .step-card[data-id="__start"] .type');
+  await page.waitForSelector('#inspector.open');
+  check(!(await page.$('#dg-minimap.shown')), '800px: the minimap stays over the open sheet');
+  await page.click('#inspector .sheet-close');
+  await page.waitForSelector('#dg-minimap.shown');
+  await page.setViewportSize({ width: 1440, height: 900 });
+  // A one-step diagram fits the viewport: no minimap.
+  await page.evaluate(() => smokeOpen({ version: 2, name: 'một bước', steps: [{ id: 'x', type: 'record', config: { sobject: 'Account', alias: 'x', fields: [] } }] }));
+  await page.waitForSelector('#canvas .step-card[data-id="x"]');
+  await page.waitForFunction(() => !document.querySelector('#dg-minimap.shown'), null, { timeout: 2000 }).catch(() => errors.push('a one-step diagram shows the minimap'));
+  await page.context().close();
+}
+
 async function flowCanvasPhone() {
   // Phone: the saved Sơ đồ is not applied; the ⋯ menu offers it and does not save it.
   const m = await newPage('canvas 390', { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
@@ -1411,7 +1506,8 @@ async function flowCanvasPhone() {
   await m.click('.popup [role="menuitemradio"]:has-text("Sơ đồ")');
   await m.waitForSelector('#canvas .step-card[data-id="__start"]');
   const phone = await m.evaluate(() => ({ overflow: document.documentElement.scrollWidth - innerWidth, zoomButtons: [...document.querySelectorAll('.dg-zoom button')].filter((b) => b.offsetWidth).map((b) => b.offsetWidth) }));
-  check(phone.overflow <= 0 && phone.zoomButtons.join() === '32', `390px Sơ đồ: overflow ${phone.overflow}px, zoom bar ${phone.zoomButtons} (only ⤢, 32 px)`);
+  check(phone.overflow <= 0 && phone.zoomButtons.join() === '32', `390px Sơ đồ: overflow ${phone.overflow}px, zoom bar ${phone.zoomButtons} (only ⤢, 32 px; no minimap button, 0014)`);
+  check(await m.$eval('#dg-minimap', (e) => getComputedStyle(e).display === 'none'), '390px Sơ đồ: the minimap is drawn on a phone');
   await m.tap('#canvas .step-card[data-id="__start"] .type');
   await m.waitForSelector('#inspector.open');
   await settle(m);
@@ -1952,7 +2048,7 @@ async function flowProductivityRun() {
     // Independent flows, one context each, in parallel. A flow that throws (timed-out wait) is
     // reported and the others still finish.
     // Longest first; at most 2 × CPUs run at once (review 0012: the flows are CPU-bound).
-    let flows = { flowPicker, flowFiles, flowLayoutNarrow, flowCanvas, flowProductivity, flowEach, flowVarsLoops, flowProductivityRun, flowLibrary, flowHistoryWide, flowEditing, flowDark, flowCanvasPhone };
+    let flows = { flowPicker, flowFiles, flowLayoutNarrow, flowCanvas, flowProductivity, flowEach, flowVarsLoops, flowProductivityRun, flowLibrary, flowHistoryWide, flowEditing, flowDark, flowCanvasPhone, flowMinimap };
     // SMOKE_ONLY=flowCanvas,flowEach runs only those flows (while working on one area).
     const only = process.env.SMOKE_ONLY?.split(',').filter(Boolean);
     if (only?.length) flows = Object.fromEntries(Object.entries(flows).filter(([n]) => only.includes(n)));
