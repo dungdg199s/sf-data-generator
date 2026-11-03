@@ -400,6 +400,7 @@ export function describeCached(org, sobject) {
 export function clearDescribeCache() {
   describeCache.clear();
   sobjectLists.clear();
+  hintDescribe.clear();
 }
 
 /**
@@ -765,8 +766,7 @@ function renderFields(node) {
 
 // ---------- example values of the open field (design 0012 E) ----------
 
-let samplesSeq = 0;
-let samplesAbort = null;
+const samplesCache = new Map(); // JSON of a /api/field-samples request → Promise of its answer
 
 /** Local midnight today: the examples stand still while typing and change only with the options. */
 const todayMidnight = () => { const d = new Date(); d.setHours(0, 0, 0, 0); return d.getTime(); };
@@ -808,6 +808,8 @@ function dependentFields(step) {
 function sampleRow(step, f) {
   const el = h('div', { class: 'samples-row', 'aria-live': 'polite' });
   let timer = 0;
+  let samplesSeq = 0; // per row: an older answer is dropped
+  let samplesAbort = null;
   const fill = () => {
     if (!el.isConnected) return;
     const live = stepById(step.id);
@@ -833,10 +835,19 @@ function sampleRow(step, f) {
     const raw = document.getElementById('seed')?.value.trim() ?? '';
     const seed = /^\d+$/.test(raw) ? Number(raw) : 1;
     const seq = ++samplesSeq;
-    samplesAbort?.abort();
-    samplesAbort = new AbortController();
-    api.fieldSamples({ sobject: live.config.sobject, fields: fields.slice(0, index + 1), index, seed, now: todayMidnight(), count: 3 }, { signal: samplesAbort.signal })
-      .then(({ values }) => {
+    const body = { sobject: live.config.sobject, fields: fields.slice(0, index + 1), index, seed, now: todayMidnight(), count: 3 };
+    // The same request again (a re-render of the inspector): its answer, without a call.
+    const key = JSON.stringify(body);
+    let p = samplesCache.get(key);
+    if (!p) {
+      samplesAbort?.abort();
+      samplesAbort = new AbortController();
+      p = api.fieldSamples(body, { signal: samplesAbort.signal });
+      samplesCache.set(key, p);
+      p.catch(() => samplesCache.delete(key));
+      if (samplesCache.size > 50) samplesCache.delete(samplesCache.keys().next().value);
+    }
+    p.then(({ values }) => {
         if (seq !== samplesSeq || !el.isConnected) return;
         el.className = 'samples-row';
         el.title = `Ba giá trị sinh riêng cho field này (seed ${seed}) để thấy ngay tác dụng của tùy chọn. Xem trước có thể ra giá trị khác.`;
@@ -860,6 +871,7 @@ function sampleRow(step, f) {
 // ---------- required fields still missing (design 0012 F2) ----------
 
 const hintDismissed = new Set(); // Record step ids whose "Thiếu field bắt buộc" box was dismissed (session)
+const hintDescribe = new Map(); // `${org}|${sobject}` → Promise<describe | null> for the box
 
 /**
  * "Thiếu 2 field bắt buộc của Opportunity trong dev-sb: StageName, CloseDate." above the field
@@ -872,14 +884,16 @@ function requiredHint(node) {
   const sobject = node.config?.sobject;
   if (!org || !/^[A-Za-z][A-Za-z0-9_]*$/.test(sobject ?? '') || hintDismissed.has(node.id)) return box;
   (async () => {
-    let described;
-    try {
-      const known = await suggestContext(node).sobjects('create');
-      if (!known.some((x) => x.name === sobject)) return;
-      described = await describeCached(org, sobject);
-    } catch {
-      return;
+    const key = `${org}|${sobject}`;
+    if (!hintDescribe.has(key)) {
+      // Once per org and sObject in the session (a failure is not asked again until ⟳).
+      hintDescribe.set(key, (async () => {
+        const known = await suggestContext(node).sobjects('create');
+        return known.some((x) => x.name === sobject) ? describeCached(org, sobject) : null;
+      })().catch(() => null));
     }
+    const described = await hintDescribe.get(key);
+    if (!described) return;
     const live = stepById(node.id);
     if (!box.isConnected || !live || live.config?.sobject !== sobject || state.org !== org) return;
     const have = new Set((live.config.fields ?? []).map((f) => String(f?.name ?? '').toLowerCase()));

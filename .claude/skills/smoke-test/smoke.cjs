@@ -1534,6 +1534,177 @@ async function flowVarsLoops() {
   await page.context().close();
 }
 
+/**
+ * Flow 18 (design 0012): estimate chips (H), source highlight (I), example values (E), several
+ * selected steps with wrap / undo / copy / paste / off (B), the library (A) and the Record default
+ * fields with the noNameField fix (G). Flow 18b (flowProductivityRun) runs alongside: live insert
+ * chips and the insert-error tag (D, a page-side fake stream: nothing reaches an org), "Thêm … vào
+ * SELECT" (F1), wrapping in a Lặp each (C) and the phone's "Chọn nhiều bước" toolbar.
+ */
+async function flowProductivity() {
+  const page = await newPage('productivity');
+  const sel = () => page.$$eval('#process .step-card[aria-selected="true"]', (n) => n.map((x) => x.dataset.id));
+  const toastHas = (re) => page.waitForFunction((src) => new RegExp(src).test(document.getElementById('toast').textContent), re.source);
+  const libItems = () => page.evaluate(() => JSON.parse(localStorage.getItem('sfdg.library')).items.map((i) => i.name));
+  await page.goto(base);
+  await page.waitForSelector('.step-card[data-id="con"]');
+
+  // H: estimates before any run; the Start card totals them.
+  check(/^≈ \d+ bản ghi$/.test(await page.textContent('.step-card[data-id="con"] .stat.est')), `no "≈ n bản ghi" estimate on con (${await page.textContent('.step-card[data-id="con"] .stat')})`);
+  check(/≈ \d+ bản ghi · ≤ /.test(await page.textContent('.start-card .sum')), `Start card estimate: ${await page.textContent('.start-card .sum')}`);
+
+  // I: hovering the Lookup chip outlines the parent's card.
+  await page.click('.step-card[data-id="con"] .toggle');
+  await page.hover('.step[data-step="con"] .field-chip:has-text("→ acc")');
+  check(await page.isVisible('.step-card[data-id="acc"].is-ref-target'), 'hovering "AccountId → acc" did not outline acc');
+  await page.hover('.start-card');
+  check(!(await page.$('.is-ref-target')), 'the outline stayed after the pointer left the chip');
+
+  // E: three example values of a Picklist, renewed when its options change.
+  await page.click('.step-card[data-id="acc"] .type');
+  const ind = page.locator('#inspector .field-card[data-field="fields.Industry"]');
+  const first = page.waitForResponse((r) => r.url().endsWith('/api/field-samples'));
+  await ind.locator('button[title="Tùy chọn"]').click();
+  await first;
+  await page.waitForFunction(() => /^Ví dụ: ".+" · ".+" · ".+"$/.test(document.querySelector('#inspector .samples-row')?.textContent ?? ''));
+  const changed = page.waitForResponse((r) => r.url().endsWith('/api/field-samples') && (r.request().postData() ?? '').includes('Insurance'));
+  await ind.locator('[data-key="values"]').fill('Insurance');
+  await changed;
+  await page.waitForFunction(() => document.querySelector('#inspector .samples-row')?.textContent === 'Ví dụ: "Insurance" · "Insurance" · "Insurance"');
+
+  // B: Shift+click two cards → "2 bước đã chọn"; Bọc trong Lặp, one ↶ restores; copy / paste; off.
+  await page.click('.step-card[data-id="acc"] .type');
+  await page.click('.step-card[data-id="loopCon"] .type', { modifiers: ['Shift'] });
+  check(String(await sel()) === 'acc,loopCon' && (await page.getAttribute('#process', 'aria-multiselectable')) === 'true', `Shift+click selection: ${await sel()}`);
+  check((await page.textContent('#inspector h2')) === '2 bước đã chọn', 'the inspector does not say "2 bước đã chọn"');
+  await page.click('#inspector button:text-is("Bọc trong Lặp")');
+  await page.waitForFunction(() => smokeStored()?.steps[0].slots.body.length === 1);
+  await page.click('#btn-undo');
+  await page.waitForFunction(() => smokeStored()?.steps[0].slots.body.map((s) => s.id).join() === 'acc,loopCon');
+  await page.click('.step-card[data-id="acc"] .type');
+  await page.click('.step-card[data-id="loopCon"] .type', { modifiers: ['Shift'] });
+  await page.keyboard.press('Control+c');
+  await page.keyboard.press('Control+v');
+  await toastHas(/Đã dán 2 bước\. Đổi tên alias: acc → acc2/);
+  check(String(await page.$$eval('#process .step-card[aria-selected="true"] .alias', (n) => n.map((x) => x.textContent))) === 'acc2,loop', 'the pasted steps are not selected with their new alias');
+  await page.keyboard.press('Control+/');
+  await page.waitForFunction(() => smokeStored()?.steps[0].slots.body.filter((s) => s.disabled).length === 2);
+
+  // A: a new workflow of the library; back to the first one (undo starts empty there).
+  const firstName = await page.inputValue('#wf-name');
+  await page.click('#btn-library');
+  await page.click('.popup-item:has-text("+ Workflow mới")');
+  await page.waitForSelector('#process .add-first');
+  check((await libItems()).length === 2, `"+ Workflow mới" did not add an item (${await libItems()})`);
+
+  // G: a Record for Task gets Subject; renamed to Name it warns, "Đổi thành Subject" fixes it.
+  await page.click('#palette-items .palette-item[data-type="record"]');
+  await page.fill('#inspector input[data-key="sobject"]', 'Task');
+  await page.waitForFunction(() => [...document.querySelectorAll('#inspector .field-card input[aria-label="Tên field"]')].map((i) => i.value).join() === 'Subject');
+  const nameInput = page.locator('#inspector .field-card input[aria-label="Tên field"]');
+  await nameInput.fill('Name');
+  await nameInput.press('Tab');
+  const fix = await page.waitForSelector('#inspector .fix-btn[data-fix="renameField"]', { timeout: 3000 }).catch(() => null);
+  check(fix && (await fix.textContent()) === 'Đổi thành Subject', 'no "Đổi thành Subject" fix on a Task with Name');
+  if (fix) {
+    await fix.click();
+    await page.waitForFunction(() => !document.querySelector('#inspector .fix-btn[data-fix="renameField"]') && !document.querySelector('.step-card .badge.warn'));
+  }
+  await page.keyboard.press('Control+o');
+  await page.click(`.popup-item[role="menuitemradio"]:has-text("${firstName}")`);
+  await page.waitForSelector('.step-card[data-id="con"]');
+  await page.click('#btn-undo');
+  await toastHas(/Không còn gì để hoàn tác/);
+  // A: a sample while the workflow has steps opens as a new item; the others stay.
+  await page.click('#sample-items .palette-item:has-text("Contact cho Account có sẵn")');
+  await page.waitForSelector('.step-card[data-id="accs"]');
+  const names = await libItems();
+  check(names.length === 3 && names.includes(firstName), `Mẫu replaced a workflow of the library (${names})`);
+}
+
+/** Flow 18b (design 0012, in parallel with 18): D, F1, C and the phone's "Chọn nhiều bước". */
+async function flowProductivityRun() {
+  const page = await newPage('productivity-run');
+  await mockOrgs(page, [{ alias: 'dev', username: 'u@x.com', isSandbox: true, isScratch: false, connectedStatus: 'Connected' }]);
+  await page.route('**/api/history/status', (r) => r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ enabled: true, full: false }) }));
+  // D: an insert's NDJSON comes from a stream the test writes (no timer, no org).
+  await page.addInitScript(() => {
+    const real = window.fetch;
+    window.fetch = (url, opts) => {
+      if (!String(url).endsWith('/api/run') || !String(opts?.body ?? '').includes('"kind":"org"')) return real(url, opts);
+      let ctl;
+      const body = new ReadableStream({ start(c) { ctl = c; } });
+      window.smokeInsert = { push: (ev) => ctl.enqueue(new TextEncoder().encode(`${JSON.stringify(ev)}\n`)), close: () => ctl.close() };
+      return Promise.resolve(new Response(body, { status: 200, headers: { 'Content-Type': 'application/x-ndjson' } }));
+    };
+  });
+  const sel = () => page.$$eval('#process .step-card[aria-selected="true"]', (n) => n.map((x) => x.dataset.id));
+  await page.goto(base);
+  await page.waitForSelector('.step-card[data-id="con"]');
+
+  // D: during an insert the Record card shows "insert n/total" and an error tag that opens its group.
+  await page.selectOption('#org-select', 'dev');
+  await page.click('#btn-insert');
+  await page.click('[data-action="confirm-insert"]');
+  await page.waitForFunction(() => window.smokeInsert);
+  const preview = await page.evaluate(async () => (await import('/js/store.js')).state.result);
+  const total = preview.stats.byStep.con.records;
+  const byStep = { acc: { inserted: 5, failed: 0 }, con: { inserted: 3, failed: 2 } };
+  await page.evaluate(({ t, byStep }) => {
+    smokeInsert.push({ type: 'start', runId: 'r-smoke' });
+    smokeInsert.push({ type: 'plan', total: t, bySobject: {}, steps: [] });
+    smokeInsert.push({ type: 'progress', phase: 'insert', inserted: 8, failed: 2, total: t, bySobject: {}, byStep });
+  }, { t: total + 5, byStep });
+  await page.waitForFunction((t) => document.querySelector('.step-card[data-id="con"] .stat.live')?.textContent === `insert 5/${t}`, total);
+  check((await page.textContent('.step-card[data-id="con"] .tag-insert-err')) === 'lỗi 2', 'no "lỗi 2" tag on con while inserting');
+  await page.evaluate(({ preview, byStep }) => {
+    const groups = [{ sobject: 'Contact', nodeId: 'con', message: 'REQUIRED_FIELD_MISSING', count: 2, refs: ['con#1', 'con#2'] }];
+    smokeInsert.push({ type: 'done', result: { ...preview, insert: { inserted: 8, failed: 2, errorsTotal: 2, errors: [], errorGroups: groups, ids: {}, bySobject: {}, byStep, notSent: 0, cancelled: false, stopped: null } } });
+    smokeInsert.close();
+  }, { preview, byStep });
+  await page.waitForSelector('.step-card[data-id="con"] .stat:not(.live)');
+  await page.click('.step-card[data-id="con"] .tag-insert-err');
+  await page.waitForSelector('.tabs .tab-issues.active');
+  check(await page.isVisible('table.error-groups tr.current[data-node="con"]'), 'the error tag did not highlight the step\'s error group');
+  await page.selectOption('#org-select', '');
+  await page.click('#sample-items .palette-item:has-text("Contact cho Account có sẵn")');
+  await page.waitForSelector('.step-card[data-id="accs"]');
+
+  // F1: {{acc.Industry}} from a Query that does not read Industry → one-click fix.
+  await page.click('.step-card[data-id="con"] .type');
+  const title = page.locator('#inspector .field-card[data-field="fields.Title"]');
+  await title.locator('button[title="Tùy chọn"]').click();
+  await title.locator('[data-key="template"]').fill('{{acc.Industry}}');
+  const add = await page.waitForSelector('#inspector .fix-btn[data-fix="addSelectField"]', { timeout: 3000 }).catch(() => null);
+  check(add && (await add.textContent()) === 'Thêm Industry vào SELECT của "accs"', 'no "Thêm Industry vào SELECT" fix');
+  if (add) {
+    await add.click();
+    await page.waitForFunction(() => smokeStored()?.steps[0].config.fields.includes('Industry') && !document.querySelector('.step-card[data-id="con"] .badge:not(.warn)'));
+  }
+
+  // C: ⋯ → Bọc trong Lặp qua từng bản ghi: a Lặp each over accs around con; [Đổi] relinks the Lookup.
+  await page.click('.step-card[data-id="con"] .menu-btn');
+  await page.click('.popup [role="menuitem"]:has-text("Bọc trong Lặp qua từng bản ghi")');
+  await page.click('#toast .toast-action:text-is("Đổi")');
+  const each = await page.evaluate(() => {
+    const loop = smokeStored().steps[1].slots.body[1];
+    return { mode: loop.config.mode, from: loop.config.from, body: loop.slots.body.map((s) => s.id).join(), ref: loop.slots.body[0].config.fields.find((f) => f.name === 'AccountId').options.ref, item: loop.config.itemAlias };
+  });
+  check(each.mode === 'each' && each.from === 'accs' && each.body === 'con' && each.ref === each.item, `Bọc trong Lặp qua từng bản ghi: ${JSON.stringify(each)}`);
+
+  // B on a phone: ⋯ → Chọn nhiều bước, a tap adds a card, Xong leaves.
+  await page.setViewportSize({ width: 390, height: 800 });
+  await page.keyboard.press('Escape');
+  await page.click('.step-card[data-id="accs"] .menu-btn');
+  await page.click('.popup-item:has-text("Chọn nhiều bước")');
+  await page.waitForSelector('.select-bar[role="toolbar"]');
+  await page.click('.step-card[data-id="loopCon"] .type');
+  check((await page.textContent('.select-bar .sb-count')) === '2 đã chọn', `select bar: ${await page.textContent('.select-bar .sb-count')}`);
+  check(!(await page.evaluate(() => document.getElementById('inspector').classList.contains('open'))), 'the sheet opened in "Chọn nhiều bước" mode');
+  await page.click('.select-bar .sb-done');
+  check(!(await page.$('.select-bar')) && String(await sel()) === 'loopCon', `Xong did not leave the mode (${await sel()})`);
+}
+
 (async () => {
   // A Playwright error outside a flow's promise (e.g. in an event handler) fails the run.
   process.on('uncaughtException', (e) => { console.error('SMOKE FAILED\n' + e); process.exit(1); });
@@ -1548,7 +1719,7 @@ async function flowVarsLoops() {
     check(orgs.status === 503 && /smoke:/.test((await orgs.json()).error), 'the smoke server is not using the sf CLI stub');
     // Independent flows, one context each, in parallel. A flow that throws (timed-out wait) is
     // reported and the others still finish.
-    let flows = { flowEditing, flowPicker, flowFiles, flowDark, flowLayoutWide, flowLayoutNarrow, flowEach, flowCanvas, flowHistory, flowVarsLoops };
+    let flows = { flowEditing, flowPicker, flowFiles, flowDark, flowLayoutWide, flowLayoutNarrow, flowEach, flowCanvas, flowHistory, flowVarsLoops, flowProductivity, flowProductivityRun };
     // SMOKE_ONLY=flowCanvas,flowEach runs only those flows (while working on one area).
     const only = process.env.SMOKE_ONLY?.split(',').filter(Boolean);
     if (only?.length) flows = Object.fromEntries(Object.entries(flows).filter(([n]) => only.includes(n)));
