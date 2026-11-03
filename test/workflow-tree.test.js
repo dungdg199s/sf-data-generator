@@ -575,3 +575,11 @@ test('pasteSteps follows a renamed alias into the 0013 options: number variables
   assert.deepEqual([p.config.from, p.config.filterValue], ['acc2', '{{acc2.Industry}}']);
   assert.deepEqual([p.config.filterField, p.config.weightField], ['Industry', 'NumberOfEmployees'], 'field names of the pool are not aliases');
 });
+
+test('review 0012 N2: a renamed pasted alias never takes a name the paste refers to without defining it', () => {
+  const host = tree([r('acc')]);
+  const res = pasteSteps(host, { parentId: null, slot: null, index: 1 }, [r('x', 'acc'), r('c', 'con', [{ name: 'AccountId', type: 'lookup', options: { ref: 'acc2', mode: 'random' } }])], { catalog, slotKeys });
+  const [x, c] = res.ids.map((id) => findStep(host, id, slotKeys).step);
+  assert.notEqual(x.config.alias, 'acc2');
+  assert.equal(c.config.fields[0].options.ref, 'acc2', 'the outside reference stays pointing at acc2');
+});

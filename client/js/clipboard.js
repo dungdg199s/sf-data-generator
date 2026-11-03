@@ -6,7 +6,7 @@
 //   { "sfdg": "steps", "version": 2, "from": "<workflow name>", "steps": [ … ] }
 // A whole workflow file { "version": 2, "steps": [ … ] } is accepted too.
 
-import { malformedSteps, walkSteps } from '../../shared/workflow-tree.js';
+import { malformedSteps } from '../../shared/workflow-tree.js';
 
 export const CLIPBOARD_LIMITS = { maxSteps: 2000, maxBytes: 5 * 1024 * 1024 };
 
@@ -23,6 +23,15 @@ const fmt = (n) => String(n ?? 0).replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
  * `notSteps` is said only when the user pasted into the tree (the caller decides).
  */
 export function parseClipboard(text, meta) {
+  try {
+    return parse(text, meta);
+  } catch (e) {
+    // e.g. a RangeError of a pathological file: refused like any other bad paste.
+    return { error: 'malformed', message: `Không dán được: ${e.message}.` };
+  }
+}
+
+function parse(text, meta) {
   const raw = String(text ?? '');
   const notSteps = { error: 'notSteps', message: 'Bộ nhớ tạm không chứa bước nào của SF Data Generator. Chọn bước rồi bấm Ctrl+C để sao chép.' };
   if (!raw.trim().startsWith('{')) return notSteps;
@@ -39,14 +48,20 @@ export function parseClipboard(text, meta) {
   if (!ours || !Array.isArray(obj.steps) || !obj.steps.length) return notSteps;
   const bad = malformedSteps({ steps: obj.steps });
   if (bad) return { error: 'malformed', message: `Không dán được: ${bad}.` };
+  // Iterative and stopped past the limit (review 0012 N5): a very deep or huge paste never
+  // overflows the stack.
   let count = 0;
   let unknown = null;
   const types = new Set((meta?.nodeTypes ?? []).map((t) => t.type));
-  walkSteps(obj.steps, (s) => {
-    count++;
-    if (unknown === null && !types.has(s.type)) unknown = s.type;
-  });
-  if (count > CLIPBOARD_LIMITS.maxSteps) return { error: 'tooBig', message: `Nội dung dán quá lớn (${fmt(count)} bước). Dán tối đa ${fmt(CLIPBOARD_LIMITS.maxSteps)} bước mỗi lần.` };
+  const todo = [obj.steps];
+  while (todo.length && count <= CLIPBOARD_LIMITS.maxSteps) {
+    for (const st of todo.pop()) {
+      if (++count > CLIPBOARD_LIMITS.maxSteps) break;
+      if (unknown === null && !types.has(st.type)) unknown = st.type;
+      for (const children of Object.values(st.slots ?? {})) todo.push(children);
+    }
+  }
+  if (count > CLIPBOARD_LIMITS.maxSteps) return { error: 'tooBig', message: `Nội dung dán quá lớn (hơn ${fmt(CLIPBOARD_LIMITS.maxSteps)} bước). Dán tối đa ${fmt(CLIPBOARD_LIMITS.maxSteps)} bước mỗi lần.` };
   if (unknown !== null) return { error: 'unknownType', message: `Không dán được: bước loại "${unknown}" không có trong phiên bản này.` };
   return { steps: obj.steps, from: typeof obj.from === 'string' ? obj.from : '' };
 }

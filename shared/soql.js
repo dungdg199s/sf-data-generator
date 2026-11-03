@@ -201,9 +201,18 @@ export function addSelectField(soql, field) {
   const head = /^\s*SELECT\s/i.exec(s);
   const from = topLevel(s, /\bFROM\s+([A-Za-z][A-Za-z0-9_]*)/i, head[0].length);
   if (!from) return null;
+  // Review 0012 N1: an aggregate query (COUNT, SUM…, GROUP BY) cannot take a plain field.
+  const list = raw.slice(head[0].length, from.index);
+  if (/\b(?:COUNT|COUNT_DISTINCT|SUM|AVG|MIN|MAX)\s*\(/i.test(blankStrings(list)) || topLevel(s.slice(from.index), /\bGROUP\s+BY\b/i)) return null;
   let end = from.index;
   while (end > head[0].length && /\s/.test(raw[end - 1])) end--;
-  return `${raw.slice(0, end)}, ${name}${raw.slice(end)}`;
+  // A trailing comma (an empty last item) takes the field without another comma; FROM keeps a space before it.
+  const trailingComma = raw[end - 1] === ',';
+  const gap = end === from.index ? ' ' : '';
+  const out = `${raw.slice(0, end)}${trailingComma ? ' ' : ', '}${name}${gap}${raw.slice(end)}`;
+  const after = parseSoql(out);
+  if (checkSoql(out).some((i) => i.level === 'error') || !after.fields.some((f) => f.toLowerCase() === name.toLowerCase()) || after.sobject !== p.sobject) return null;
+  return out;
 }
 
 /**

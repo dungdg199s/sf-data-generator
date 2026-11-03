@@ -10,7 +10,7 @@
 // An insertion point ("target") is { parentId: null | stepId, slot: null | key, index }:
 // parentId null means the root sequence `wf.steps`.
 
-import { analyzeScope, referenceOptions, refsToRecords, tokenize, stripPath, exposesOf, exposesList, poolFieldOptions } from './scope.js';
+import { analyzeScope, referenceOptions, refsToRecords, tokenize, stripPath, exposesOf, exposesList, poolFieldOptions, pathsIn } from './scope.js';
 
 const ownSlots = (step) => Object.keys(step?.slots ?? {});
 
@@ -459,7 +459,18 @@ export function cloneSteps(steps, { ids = new Set(), aliases = new Set(), makeId
   // keepFree (paste, design 0012 B): a name still free in `aliases` is kept; a clash gets a name
   // free among `aliases` and every name of the copy.
   const own = new Set();
-  if (keepFree) walkSteps(copy, (s) => { for (const e of stepNames(s, catalog)) own.add(e.value); });
+  if (keepFree) {
+    walkSteps(copy, (s) => {
+      for (const e of stepNames(s, catalog)) own.add(e.value);
+      // Review 0012 N2: a name the copy refers to without defining it (a step left behind) is taken
+      // too, so a renamed alias never captures those references.
+      if (catalog) {
+        for (const o of referenceOptions(s, catalog, { includeHidden: true })) {
+          for (const { path } of pathsIn(o.mode, storedValue(o))) own.add(String(path).split('.')[0]);
+        }
+      }
+    });
+  }
   walkSteps(copy, (s) => {
     const entry = { id: s.id, copyId: makeId(s.id, ids) };
     ids.add(entry.copyId);

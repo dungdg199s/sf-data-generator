@@ -115,3 +115,16 @@ test('addSelectField adds a field to the outer SELECT list (design 0012 F1)', ()
   assert.equal(addSelectField('DELETE FROM Account', 'Name'), null);
   assert.equal(addSelectField('SELECT Id FROM Account', 'bad field'), null);
 });
+
+test('review 0012 N1: addSelectField with a trailing comma, no space before FROM, aggregates; the result passes checkSoql', () => {
+  assert.equal(addSelectField('SELECT Id,FROM Account', 'Industry'), 'SELECT Id, Industry FROM Account');
+  assert.equal(addSelectField('SELECT Id, FROM Account', 'Industry'), 'SELECT Id, Industry FROM Account');
+  assert.equal(addSelectField('SELECT COUNT(Id) c FROM Account', 'Industry'), null);
+  assert.equal(addSelectField('SELECT COUNT() FROM Account', 'Industry'), null);
+  assert.equal(addSelectField('SELECT Industry FROM Account GROUP BY Industry', 'Name'), null);
+  for (const q of ['SELECT Id FROM Account', 'SELECT Id,FROM Account', "SELECT Id FROM Account WHERE Name = 'a FROM b'", 'select id\nfrom account']) {
+    const out = addSelectField(q, 'Industry');
+    assert.ok(out && !checkSoql(out).some((i) => i.level === 'error'), q);
+    assert.ok(parseSoql(out).fields.includes('Industry'), q);
+  }
+});

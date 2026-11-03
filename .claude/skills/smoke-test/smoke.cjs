@@ -1655,7 +1655,8 @@ async function flowProductivityRun() {
     smokeInsert.push({ type: 'plan', total: t, bySobject: {}, steps: [] });
     smokeInsert.push({ type: 'progress', phase: 'insert', inserted: 8, failed: 2, total: t, bySobject: {}, byStep });
   }, { t: total + 5, byStep });
-  await page.waitForFunction((t) => document.querySelector('.step-card[data-id="con"] .stat.live')?.textContent === `insert 5/${t}`, total);
+  // Inserted only (review 0012 N4: 3 inserted, 2 failed ⇒ "insert 3/n" and "lỗi 2").
+  await page.waitForFunction((t) => document.querySelector('.step-card[data-id="con"] .stat.live')?.textContent === `insert 3/${t}`, total);
   check((await page.textContent('.step-card[data-id="con"] .tag-insert-err')) === 'lỗi 2', 'no "lỗi 2" tag on con while inserting');
   await page.evaluate(({ preview, byStep }) => {
     const groups = [{ sobject: 'Contact', nodeId: 'con', message: 'REQUIRED_FIELD_MISSING', count: 2, refs: ['con#1', 'con#2'] }];

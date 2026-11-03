@@ -51,8 +51,8 @@ export function chipFor(step, { stale = false } = {}) {
   if (live) {
     const ins = live.phase === 'insert' ? live.insertByStep?.[step.id] : null;
     if (live.phase === 'insert' && step.type === 'record' && live.totals?.[step.id] !== undefined) {
-      const done = (ins?.inserted ?? 0) + (ins?.failed ?? 0);
-      return { text: `insert ${fmt(done)}/${fmt(live.totals[step.id])}`, class: 'stat live', title: 'Đang insert: số bản ghi của bước này đã gửi / tổng của bản xem trước.' };
+      // Inserted only (review 0012 N4); the failures are the "lỗi n" tag next to it.
+      return { text: `insert ${fmt(ins?.inserted ?? 0)}/${fmt(live.totals[step.id])}`, class: 'stat live', title: 'Đang insert: số bản ghi của bước này đã insert / tổng của bản xem trước (bản ghi lỗi ở tag "lỗi").' };
     }
     const text = live.byStep ? statChip(step, live.byStep) : null;
     if (text) return { text, class: 'stat live', title: 'Đang chạy: số liệu cập nhật trực tiếp.' };

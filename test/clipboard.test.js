@@ -30,5 +30,12 @@ test('not JSON, no steps, unknown step type, malformed, too many steps', () => {
   const many = Array.from({ length: CLIPBOARD_LIMITS.maxSteps + 1 }, (_, i) => ({ id: `s${i}`, type: 'record', config: {} }));
   const big = parseClipboard(toClipboard(many, ''), meta);
   assert.equal(big.error, 'tooBig');
-  assert.match(big.message, /\(2 001 bước\)\. Dán tối đa 2 000 bước mỗi lần\./);
+  assert.match(big.message, /\(hơn 2 000 bước\)\. Dán tối đa 2 000 bước mỗi lần\./);
+});
+
+test('review 0012 N5: a deeply nested paste is counted without recursion and refused past 2 000 steps', () => {
+  const n = 20000; // built as text: JSON.stringify of such a tree overflows the stack itself
+  const text = `{"sfdg":"steps","version":2,"steps":${'[{"id":"l","type":"loop","slots":{"body":'.repeat(n)}[]${'}}]'.repeat(n)}}`;
+  const res = parseClipboard(text, meta);
+  assert.equal(res.error, 'tooBig');
 });
