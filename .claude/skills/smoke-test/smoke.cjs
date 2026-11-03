@@ -531,6 +531,14 @@ async function flowFiles() {
   check(/accs: 5 bản ghi mẫu/.test(await page.textContent('#results-summary')), 'results summary does not mention the sample rows');
   check(/Contact: 10/.test(await page.textContent('#results-summary')), 'the Query sample did not generate 10 Contacts');
   check(await page.isVisible('.step-card[data-id="accs"].has-warning'), 'no warning on the Query card without an org');
+  // Design 0014 §7: at 390 px no card row is wider than its card (stat chip + ▲ badge + no-org tag pushed ⋯ off screen).
+  await page.setViewportSize({ width: 390, height: 844 });
+  const fit = await page.$$eval('#process .step-card', (cards) => cards.map((c) => {
+    const menu = c.querySelector('.menu-btn')?.getBoundingClientRect();
+    return { id: c.dataset.id, over: c.scrollWidth - c.clientWidth, menu: menu ? menu.right <= innerWidth && menu.left >= 0 : true };
+  }).filter((x) => x.over > 0 || !x.menu));
+  check(!fit.length, `390px: cards wider than the screen or with ⋯ off screen (${JSON.stringify(fit)})`);
+  await page.setViewportSize({ width: 1440, height: 900 });
   const staleDone = page.waitForEvent('requestfinished', (q) => q === heldValidate);
   releaseValidate();
   await staleDone;
@@ -985,6 +993,9 @@ async function flowLayoutNarrow() {
     return r.height > 0 && r.top < Math.min(innerHeight, document.getElementById('inspector').getBoundingClientRect().top);
   });
   check(!s.open && (await m.isVisible('.step-card.selected[data-id="con"]')) && table, `Xem trước with the sheet open (${JSON.stringify(s)}, table ${table})`);
+  // Design 0014 §7: nested cards with stat chips still fit (⋯ and the chevron on screen).
+  const over = await m.$$eval('#process .step-card', (cards) => cards.filter((c) => c.scrollWidth > c.clientWidth).map((c) => c.dataset.id));
+  check(!over.length, `390px: card rows wider than their card after Xem trước (${over})`);
   const typedIn = await m.evaluate(() => ({ inSheet: document.getElementById('inspector').contains(document.activeElement), inert: document.getElementById('inspector').inert }));
   await m.keyboard.type('ZZ');
   check(!typedIn.inSheet && typedIn.inert && (await m.inputValue('#inspector input[data-key="alias"]')) === 'con', `typing after a run edited the hidden sheet (${JSON.stringify(typedIn)})`);

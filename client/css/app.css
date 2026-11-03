@@ -1210,6 +1210,14 @@ dialog .actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap
   #btn-dl-json, #btn-dl-csv { display: none; }
   .dl-menu { display: inline-flex; }
   .var-picker { max-height: min(360px, 45dvh); }
+  /* A card row is never wider than the card (design 0014 §7): the "chưa chọn org" tag goes (the ▲ badge
+     and the issues bar say the same), the summary shrinks first, then the stat chip, then the alias;
+     type label, badges and buttons keep their size, so ⋯ and the chevron stay on screen. */
+  .process .step-card .tag-sample { display: none; }
+  .process .step-card > .stat { flex: 0 1 auto; min-width: 3em; overflow: hidden; text-overflow: ellipsis; }
+  .process .step-card > .alias { flex: 0 0.05 auto; min-width: 0; max-width: 72px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .process .step-card > .type, .process .step-card > .badges, .process .step-card > button, .process .step-card > .handle,
+  .process .step-card > .tag-off, .process .step-card > .tag-insert-err { flex: none; }
 }
 
 /* ---------- Query / Chọn bản ghi (design 0006) ---------- */
