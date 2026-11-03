@@ -8,7 +8,7 @@
 // be typed. The confirmed delete itself runs in main.js (same "running" state as an insert).
 
 import { api } from './api.js';
-import { h, toast, download } from './dom.js';
+import { h, ico, toast, download } from './dom.js';
 import { state } from './store.js';
 import { openPopup, closePopup } from './popup.js';
 import { planDelete } from '/shared/insert-plan.js';
@@ -148,7 +148,7 @@ function rowOf(r) {
         e.stopPropagation();
         openPopup(e.currentTarget, { title: 'Lần insert này', items: [{ label: 'Quên lần insert này', onSelect: () => confirmForget(r) }] });
       },
-    }, '⋯'));
+    }, ico('more')));
   const row = h('tr', {
     class: `history-row${expanded ? ' open' : ''}`, 'data-hid': r.id, tabindex: '0', 'aria-expanded': String(expanded),
     title: 'Bấm (hoặc Enter) để xem chi tiết',
@@ -160,7 +160,7 @@ function rowOf(r) {
       }
     },
   },
-  h('td', { title: new Date(r.startedAt).toLocaleString('vi-VN') }, h('span', { class: 'history-caret', 'aria-hidden': 'true' }, expanded ? '▾' : '▸'), ` ${shortTime(r.startedAt)}`),
+  h('td', { title: new Date(r.startedAt).toLocaleString('vi-VN') }, h('span', { class: 'history-caret', 'aria-hidden': 'true' }, ico(expanded ? 'chevron-down' : 'chevron-right')), ` ${shortTime(r.startedAt)}`),
   h('td', { title: [r.org?.username, r.org?.orgId, KIND_LABEL[r.org?.kind] ?? r.org?.kind].filter(Boolean).join(' · ') }, orgName(r.org)),
   h('td', { class: 'wrap' }, r.workflowName || '—'),
   h('td', { class: 'num' }, records, r.failed ? h('span', { class: 'err' }, ` · lỗi ${fmt(r.failed)}`) : ''),

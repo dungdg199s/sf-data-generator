@@ -3,7 +3,7 @@
 // goes (the sheet stays closed). Xong, Esc or an empty selection leave the mode; the selection
 // shrinks to the main step.
 
-import { h } from './dom.js';
+import { h, ico } from './dom.js';
 import { subscribe, stepById } from './store.js';
 import { selectedIds, selectionInfo, inSelectMode, setSelectMode, onSelectMode, collapseToMain } from './selection.js';
 import { wrapItems } from './menus.js';
@@ -47,9 +47,9 @@ function show() {
   count = h('span', { class: 'sb-count', 'aria-live': 'polite' });
   bar = h('div', { class: 'select-bar', role: 'toolbar', 'aria-label': 'Thao tác với các bước đã chọn' },
     count,
-    menuBtn('Bọc ▾', { class: 'sb-wrap' }, () => wrapItems(selectionInfo())),
+    menuBtn(['Bọc', ico('chevron-down')], { class: 'sb-wrap' }, () => wrapItems(selectionInfo())),
     h('button', { class: 'danger sb-delete', onclick: () => ops.deleteSelection() }, 'Xóa'),
-    menuBtn('⋯', { class: 'icon sb-more', title: 'Thao tác khác', 'aria-label': 'Thao tác khác' }, moreItems),
+    menuBtn(ico('more'), { class: 'icon sb-more', title: 'Thao tác khác', 'aria-label': 'Thao tác khác' }, moreItems),
     h('button', { class: 'primary sb-done', onclick: done }, 'Xong'));
   document.body.append(bar);
   update();

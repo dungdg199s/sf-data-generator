@@ -10,7 +10,7 @@
 // The header is one row at every width (0009 §4): on phones the summary scrolls sideways and the
 // two download buttons become one "⤓ Tải" menu that calls them.
 
-import { h, download, toast } from './dom.js';
+import { h, ico, download, toast } from './dom.js';
 import { state, subscribe, stepById } from './store.js';
 import { stepAlias } from './summary.js';
 import { api } from './api.js';
@@ -67,14 +67,14 @@ export function initResults({ onRefresh: refresh, onGoTo: goTo, onHistory: histo
 
 const fileBase = () => (state.workflow.name || 'workflow').replace(/[^\w.-]+/g, '_');
 
-/** Opens or collapses the panel; the toggle says which (aria-expanded, ▾ open / ▴ collapsed). */
+/** Opens or collapses the panel; the toggle says which (aria-expanded, chevron down open / up collapsed). */
 function setOpen(open) {
   panel.classList.toggle('collapsed', !open);
   toggle.setAttribute('aria-expanded', String(open));
-  toggle.querySelector('.caret').textContent = open ? '▾' : '▴';
+  toggle.querySelector('.caret').dataset.ico = open ? 'chevron-down' : 'chevron-up';
 }
 
-/** "⤓ Tải" (phones): the two download buttons as a menu; each row calls its button. */
+/** "Tải" (phones): the two download buttons as a menu; each row calls its button. */
 function openDownloadMenu() {
   const row = (btn) => ({ label: btn.textContent, disabled: btn.disabled, title: btn.title, onSelect: () => btn.click() });
   dlMenu.setAttribute('aria-expanded', 'true');
@@ -181,7 +181,7 @@ function querySummary(queries) {
   return [
     ...parts,
     ' · ',
-    h('button', { class: 'link', title: 'Đọc lại org cho các bước Query rồi xem trước (Ctrl+Shift+Enter)', onclick: () => onRefresh?.() }, '⟳ Đọc lại'),
+    h('button', { class: 'link', title: 'Đọc lại org cho các bước Query rồi xem trước (Ctrl+Shift+Enter)', onclick: () => onRefresh?.() }, ico('refresh'), 'Đọc lại'),
   ];
 }
 
@@ -234,7 +234,7 @@ function render() {
     ` ${fmt(r.stats.total)} bản ghi · seed `,
     h('code', {}, String(r.seed)),
     ' ',
-    h('button', { class: 'link', title: 'Dùng seed này cho lần chạy sau để ra đúng dữ liệu này', onclick: () => keepSeed(r.seed) }, '📌 giữ seed'),
+    h('button', { class: 'link', title: 'Dùng seed này cho lần chạy sau để ra đúng dữ liệu này', onclick: () => keepSeed(r.seed) }, ico('pin'), 'giữ seed'),
     ` · ${fmt(r.stats.durationMs)} ms`,
     r.cancelled && !r.insert ? ' · đã dừng' : '',
     ...querySummary(r.queries),
@@ -318,7 +318,7 @@ export function showDeleteErrors() {
 function dataTable(records, ids, total, { viaBulk = false, failedRefs = new Set() } = {}) {
   const idCell = (x) => ids[x.ref] ?? (viaBulk && !failedRefs.has(x.ref)
     ? h('span', { class: 'null', title: 'Gửi bằng Bulk API 2.0: Id có trong "Tải Id" (Bulk không trả Id theo từng dòng).' }, 'Bulk')
-    : h('span', { class: 'err' }, '✕'));
+    : h('span', { class: 'err', title: 'Insert lỗi: xem tab "Lỗi insert"' }, ico('error'), h('span', { class: 'sr-only' }, 'lỗi')));
   const cols = [...new Set(records.flatMap((x) => Object.keys(x.fields)))];
   const rows = records.slice(0, previewRows());
   const table = h(

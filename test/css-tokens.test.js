@@ -308,3 +308,98 @@ test('0011 review: the ghost Lịch sử button of the results header uses the t
   assert.equal(rule?.color, 'var(--color-text)');
   assert.equal(rule?.background, 'transparent');
 });
+
+// ---------- icons (design 0014 §1) ----------
+
+const ICON_TOKENS = declarations(TOKENS).filter((d) => d.prop.startsWith('--ico-')).map((d) => d.prop.slice('--ico-'.length));
+const CLIENT_JS = fs.readdirSync(new URL('../client/js/', import.meta.url)).filter((n) => n.endsWith('.js'))
+  .map((n) => ({ name: `client/js/${n}`, src: read(`client/js/${n}`) }));
+const INDEX_HTML = read('client/index.html');
+/** JS without comments (string contents kept; good enough for this code base: no `//` or `/*` in strings that matter). */
+const stripJsComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`\\])\/\/.*$/gm, '$1');
+
+/** Icon names used by the client: data-ico="x" in HTML, ico('x') (each quoted name in the call) and `dataset.ico = …`. */
+function usedIcons() {
+  const used = new Map(); // name → first file
+  const add = (name, where) => { if (!used.has(name)) used.set(name, where); };
+  for (const m of INDEX_HTML.matchAll(/data-ico="([\w-]+)"/g)) add(m[1], 'client/index.html');
+  for (const { name, src } of CLIENT_JS) {
+    const code = stripJsComments(src);
+    for (const m of code.matchAll(/\bico\(([^()]*)\)/g)) for (const q of m[1].matchAll(/'([\w-]+)'/g)) add(q[1], name);
+    for (const m of code.matchAll(/dataset\.ico\s*=\s*([^;]+);/g)) for (const q of m[1].matchAll(/'([\w-]+)'/g)) add(q[1], name);
+    for (const m of code.matchAll(/'data-ico':\s*'([\w-]+)'/g)) add(m[1], name);
+  }
+  return used;
+}
+
+test('every icon the client uses has a --ico-* token and an .ico[data-ico] rule', () => {
+  const used = usedIcons();
+  assert.ok(used.size >= 20, `expected the action icons of design 0014, found ${[...used.keys()]}`);
+  for (const [name, where] of used) {
+    assert.ok(ICON_TOKENS.includes(name), `${where}: icon "${name}" has no --ico-${name} token`);
+  }
+  // Every icon token (old and new) has its selector rule, so an .ico never inherits a step type's --ico.
+  for (const name of ICON_TOKENS) {
+    const rule = blocks(COMPONENTS, `.ico[data-ico="${name}"]`)[0];
+    assert.equal(rule?.['--ico'], `var(--ico-${name})`, `.ico[data-ico="${name}"] rule missing`);
+  }
+  // ico() itself sets data-ico and hides the icon from screen readers.
+  const dom = read('client/js/dom.js');
+  assert.match(dom, /export function ico\(name\) \{\s*return h\('span', \{ class: 'ico', 'data-ico': name, 'aria-hidden': 'true' \}\);/);
+  // The icon size tokens of design 0014.
+  const all = Object.fromEntries(declarations(TOKENS).map((d) => [d.prop, d.value]));
+  assert.deepEqual([all['--icon-xs'], all['--icon-sm'], all['--icon-md']], ['12px', '14px', '16px']);
+  assert.equal(blocks(COMPONENTS, '.ico')[0]?.width, 'var(--icon-md)');
+});
+
+test('every --ico-* token has a row in the icon table (§5) of docs/ui-design-system.md', () => {
+  const doc = read('docs/ui-design-system.md');
+  const section = doc.slice(doc.indexOf('## 5. Icon'), doc.indexOf('## 6.'));
+  const firstCells = section.split('\n').filter((l) => l.startsWith('| ')).map((l) => l.split('|')[1]);
+  for (const name of ICON_TOKENS) {
+    assert.ok(firstCells.some((c) => c.includes(`\`${name}\``)), `--ico-${name} has no row in §5`);
+  }
+});
+
+// Glyphs that were used as icons (design 0014 §1). Text arrows (↑ ↓ → in sentences, key names) are not in the list.
+const ICON_GLYPHS = [...'⋯▸▾▴⠿↶↷⟳⤓⤒⤢▶📌⚙✕⊘◉⧉ⓘ‹✓✗⚠'];
+
+/** Glyphs from ICON_GLYPHS inside string / template literals of a JS source (comments ignored). */
+function glyphsInJsStrings(src) {
+  const code = stripJsComments(src);
+  const found = [];
+  for (const m of code.matchAll(/'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"|`(?:[^`\\]|\\.)*`/g)) {
+    for (const g of ICON_GLYPHS) if (m[0].includes(g)) found.push(`${g} in ${m[0].slice(0, 60)}`);
+  }
+  return found;
+}
+
+test('the glyph scanner finds icon glyphs in strings and ignores comments', () => {
+  assert.notDeepEqual(glyphsInJsStrings("h('button', {}, '⋯')"), []);
+  assert.notDeepEqual(glyphsInJsStrings('const t = `${n} ▾`;'), []);
+  assert.notDeepEqual(glyphsInJsStrings("menuBtn('Bọc ▾', {})"), []);
+  assert.deepEqual(glyphsInJsStrings('// the ⋯ menu\nconst a = 1; /* ▸ */'), []);
+  assert.deepEqual(glyphsInJsStrings("h('li', {}, 'Alt+↑ / Alt+↓: di chuyển bước')"), []);
+});
+
+test('no glyph is used as an icon in client/js, index.html or CSS content (design 0014: ico() / data-ico)', () => {
+  for (const { name, src } of CLIENT_JS) assert.deepEqual(glyphsInJsStrings(src), [], name);
+  const html = INDEX_HTML.replace(/<!--[\s\S]*?-->/g, '');
+  for (const g of ICON_GLYPHS) assert.ok(!html.includes(g), `client/index.html contains ${g}`);
+  for (const { prop, value } of declarations(COMPONENTS)) {
+    if (prop !== 'content') continue;
+    for (const g of ICON_GLYPHS) assert.ok(!value.includes(g), `app.css content: ${value}`);
+  }
+});
+
+test('the icon rules cover the 0011 / 0012 / 0013 controls (library ▾, select bar, history, delete errors)', () => {
+  // Controls added after design 0014 was written: they must use ico() like the rest.
+  const src = (n) => stripJsComments(read(`client/js/${n}`));
+  assert.match(INDEX_HTML, /id="btn-library"[^>]*aria-label="Thư viện workflow"[^>]*><span class="ico" data-ico="chevron-down" aria-hidden="true"><\/span><\/button>/);
+  assert.match(src('select-bar.js'), /menuBtn\(\['Bọc', ico\('chevron-down'\)\]/);
+  assert.match(src('select-bar.js'), /menuBtn\(ico\('more'\), \{ class: 'icon sb-more', title: 'Thao tác khác', 'aria-label': 'Thao tác khác' \}/);
+  assert.match(src('history.js'), /'aria-label': 'Thao tác khác'[\s\S]*?ico\('more'\)/);
+  assert.match(src('library-ui.js'), /'aria-label': `Thao tác khác với "\$\{it\.name\}"`[\s\S]*?ico\('more'\)/);
+  // The "Lỗi insert" / "Lỗi xóa" tabs draw the warning icon with a CSS mask, not a glyph.
+  assert.match(blocks(COMPONENTS, '.tabs button.tab-issues::before')[0]?.['mask'] ?? '', /var\(--ico-warning\)/);
+});

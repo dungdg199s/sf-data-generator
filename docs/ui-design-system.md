@@ -187,36 +187,50 @@ Icon chỉ để trang trí (`aria-hidden="true"`), nhãn chữ luôn có.
 | `stale` | đồng hồ | (tùy chọn) chip số liệu cũ |
 | `theme` | vòng tròn tô nửa | Ô **Giao diện** thu gọn ở thanh trên ([0009](design/0009-bo-cuc-man-hinh.md)) |
 
-**Icon thao tác ([0014](design/0014-hoan-thien-giao-dien.md), dự kiến).** Thay mọi ký tự dùng làm icon. Hình ghi bằng lệnh
+**Icon thao tác ([0014](design/0014-hoan-thien-giao-dien.md)).** Thay mọi ký tự từng dùng làm icon. Hình ghi bằng lệnh
 SVG trên lưới 24 (cùng nét 2 px, đầu tròn):
 
 | Tên | Hình | Thay ký tự | Dùng cho |
 | --- | --- | --- | --- |
-| `more` | 3 chấm ngang | `⋯` | Menu ⋯ thanh trên, menu bước |
-| `chevron-right` / `-down` / `-up` / `-left` | `M9 6l6 6-6 6` (xoay theo hướng) | `▸ ▾ ▴ ‹` | Thu gọn/mở khung và chi tiết field (phải = đóng, xuống = mở); nút `Kết quả` (xuống = mở, lên = thu gọn); "Ẩn tùy chọn" field; `Xong` của sheet |
+| `more` | 3 chấm ngang | `⋯` | Menu ⋯ thanh trên, menu bước (Quy trình, Sơ đồ), `⋯` của hàng Lịch sử / Thư viện, `⋯` của thanh chọn nhiều |
+| `chevron-right` | `M9 6l6 6-6 6` | `▸` | Khung / chi tiết field đang đóng, hàng Lịch sử đang đóng |
+| `chevron-down` | `M6 9l6 6 6-6` | `▾` | Khung / chi tiết field đang mở; `Kết quả` đang mở; nút Thư viện `#btn-library`; `Bọc` của thanh chọn nhiều |
+| `chevron-up` | `M6 15l6-6 6 6` | `▴` | `Kết quả` đang thu gọn; "Ẩn tùy chọn" của field |
+| `chevron-left` | `M15 6l-6 6 6 6` | `‹` | `Xong` của bottom sheet |
 | `grip` | 6 chấm, 2 cột × 3 hàng | `⠿` | Tay nắm kéo trên thẻ |
-| `undo` / `redo` | mũi tên cong trái / phải | `↶ ↷` | Hoàn tác / Làm lại |
+| `undo` | mũi tên cong sang trái | `↶` | Hoàn tác |
+| `redo` | mũi tên cong sang phải | `↷` | Làm lại |
 | `refresh` | vòng tròn mở có mũi tên | `⟳` | Tải lại danh sách org, "Đọc lại" |
-| `download` | mũi tên xuống chạm vạch | `⤓` | "Tải" (điện thoại), `Id` (0011) |
+| `download` | mũi tên xuống chạm vạch | `⤓` | "Tải" (điện thoại) |
 | `insert` | vạch trên, mũi tên lên | `⤒` | "Insert vào org" |
 | `run` | tam giác **tô đặc** | `▶` | "Xem trước" (khác `start` viền rỗng) |
 | `fit` | 4 góc chéo ra ngoài | `⤢` | Vừa khung (Sơ đồ) |
-| `plus` / `minus` | dấu + / − | `+ −` | "+" thêm bước, thu phóng |
+| `plus` | dấu + | `+` | "+" thêm bước, phóng to |
+| `minus` | dấu − | `−` | Thu nhỏ |
 | `x` | dấu × | `✕ ✗` | Xóa field; nhãn nhánh "Sai" |
 | `check` | dấu ✓ | `✓` | Hàng menu chọn một; nhãn nhánh "Đúng" |
 | `trash` | thùng rác | `✕` | Xóa bước (đầu inspector) |
 | `duplicate` | hai ô chồng | `⧉` | Nhân bản |
 | `options` | ba thanh trượt | `⚙` | Tùy chọn field |
-| `arrow-up` / `arrow-down` | mũi tên thẳng | `↑ ↓` | Lên / Xuống field |
+| `arrow-up` | mũi tên thẳng lên | `↑` | Lên (field) |
+| `arrow-down` | mũi tên thẳng xuống | `↓` | Xuống (field) |
 | `pin` | đinh ghim | `📌` | "giữ seed" |
 | `minimap` | khung có ô nhỏ bên trong | — | Bật/tắt minimap Sơ đồ |
-| (có sẵn) `off`, `info`, `error` | | `⊘ ◉`, `ⓘ`, `✕` ô Id lỗi | Tắt/bật bước (cả hai trạng thái), hộp thông tin, ô Id insert lỗi trong bảng |
+
+Icon có sẵn dùng thêm: `off` cho nút tắt/bật bước (cả hai trạng thái, nhãn đổi), `info` cho hộp `.info-box`, `error` cho
+ô Id insert lỗi trong bảng (kèm chữ ẩn "lỗi").
 
 **Cách dùng.** Phần tử `<span class="ico" data-ico="<tên>" aria-hidden="true">` (JS: `ico('<tên>')` trong `dom.js`); mỗi
 icon có một luật `.ico[data-ico="<tên>"] { --ico: var(--ico-<tên>); }`, **kể cả icon cũ**: thiếu luật thì `.ico` lấy `--ico`
-kế thừa từ `[data-type]` gần nhất và vẽ nhầm icon loại bước. Không đặt `--ico` bằng `style`. Nút chỉ có icon phải có
-`aria-label` bằng chữ. **Giữ là chữ:** mũi tên trong câu và tên phím (`Alt+↑`, `↑↓ chọn`), `→ acc#1`, `↓ accs` (tab Query),
-`≤ · …`, `{x}`, `＋` trong `<option>` (không chứa được SVG).
+kế thừa từ `[data-type]` gần nhất và vẽ nhầm icon loại bước. Không đặt `--ico` bằng `style`. Cỡ: `.ico` mặc định
+`--icon-md` (16 px, trong nút), `--icon-sm` (14 px) trong link và cạnh chữ 13 px, `--icon-xs` (12 px) trong ô bảng, badge,
+chip và nhãn làn. Icon nằm trước chữ, khoảng cách là `gap` của nút (`--space-1`). Nút chỉ có icon phải có `aria-label`
+bằng chữ (đúng `title`, bỏ phần phím trong ngoặc); nút có chữ đọc lên chỉ còn chữ. Icon không có trạng thái riêng: màu là
+màu chữ của nút (vô hiệu: `text-disabled`), trạng thái mở/đóng nằm ở hình (`chevron-down` / `chevron-right`) và
+`aria-expanded` / `aria-pressed`. `test/css-tokens.test.js` kiểm: mọi icon dùng trong `client/` có token và luật, mọi token
+có dòng trong bảng này, và không còn ký tự `⋯ ▸ ▾ ▴ ⠿ ↶ ↷ ⟳ ⤓ ⤒ ⤢ ▶ 📌 ⚙ ✕ ⊘ ◉ ⧉ ⓘ ‹ ✓ ✗ ⚠` trong chuỗi của `client/js`,
+`index.html` và `content:` của CSS. **Giữ là chữ:** mũi tên trong câu và tên phím (`Alt+↑`, `↑↓ chọn`), `→ acc#1`, `↓ accs`
+(tab Query), `≤ · … × ›`, `{x}`, `＋` trong `<option>` (không chứa được SVG).
 
 ## 6. Thành phần
 

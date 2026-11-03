@@ -97,7 +97,7 @@ function brokenToast(message, json, key) {
 function loadInitialWorkflow() {
   const { announce, legacy } = bootLibrary({ sample: SAMPLES[0].workflow, migrateV1: (wf) => migrateV1(wf, migrateOptions()) });
   if (legacy) return loadLegacyWorkflow();
-  if (announce?.kind === 'v2') return () => toast('Workflow đang soạn đã được đưa vào Thư viện (nút ▾ cạnh tên). Bản lưu cũ vẫn được giữ trong trình duyệt.', 8000);
+  if (announce?.kind === 'v2') return () => toast('Workflow đang soạn đã được đưa vào Thư viện (nút Thư viện cạnh tên workflow). Bản lưu cũ vẫn được giữ trong trình duyệt.', 8000);
   if (announce?.kind === 'v1') return () => announceMigration(announce.report, announce.raw, { name: state.workflow.name, autosave: true });
   if (announce?.kind === 'v1failed') return () => toast(`Không chuyển được workflow cũ trong trình duyệt (${announce.error}). Bản cũ vẫn được giữ nguyên.`, 6000);
   if (announce?.kind === 'broken') return () => brokenToast(announce.error, announce.raw, announce.backup);
@@ -1036,7 +1036,7 @@ function confirmInsert(org, previewed) {
         : null,
       // Within the 10-minute cache the insert reuses the previewed rows as they were; only a re-read
       // (cache expired, server restarted) can notice that the org changed.
-      read.length ? h('p', { class: 'hint query-reuse' }, 'Insert dùng lại đúng các dòng đã đọc lúc xem trước. Nếu đã quá 10 phút (hoặc server vừa khởi động lại), app đọc lại org và dừng trước khi ghi nếu dữ liệu đã đổi. Muốn insert theo dữ liệu mới nhất, bấm ⟳ Đọc lại rồi Insert.') : null,
+      read.length ? h('p', { class: 'hint query-reuse' }, 'Insert dùng lại đúng các dòng đã đọc lúc xem trước. Nếu đã quá 10 phút (hoặc server vừa khởi động lại), app đọc lại org và dừng trước khi ghi nếu dữ liệu đã đổi. Muốn insert theo dữ liệu mới nhất, bấm Đọc lại rồi Insert.') : null,
       eligible.length && stats.total
         ? h('div', { class: 'bulk-box' },
           h('label', { class: 'bulk-check', title: help }, h('input', {

@@ -11,7 +11,7 @@
 // anchor. ARIA: role=menu holds only menu items and role=group (one per group header, named by
 // it); the title and headers are aria-hidden text, inputs always sit in a group.
 
-import { h, icoTile } from './dom.js';
+import { h, ico, icoTile } from './dom.js';
 
 let popup = null; // { el, anchor, onClose }
 
@@ -101,7 +101,7 @@ export function openPopup(anchor, { title, items, search = false, searchLabel = 
         it.onSelect();
       },
     },
-    h('span', { class: 'pi-label' }, it.type ? icoTile() : null, radio ? h('span', { class: 'pi-check', 'aria-hidden': 'true' }, it.checked ? '✓' : '') : null, it.label),
+    h('span', { class: 'pi-label' }, it.type ? icoTile() : null, radio ? h('span', { class: 'pi-check', 'aria-hidden': 'true' }, it.checked ? ico('check') : null) : null, it.label),
     it.desc ? h('small', {}, it.desc) : null,
     it.kbd ? h('kbd', {}, it.kbd) : null);
     if (!it.disabled) focusables.push(b);
@@ -133,7 +133,7 @@ export function openPopup(anchor, { title, items, search = false, searchLabel = 
       const buttons = focusables.filter((x) => x.matches('button'));
       const at = buttons.indexOf(document.activeElement);
       const order = [...buttons.slice(at + 1), ...buttons.slice(0, at + 1)];
-      order.find((b) => b.textContent.replace(/^✓/, '').trim().toLowerCase().startsWith(k))?.focus();
+      order.find((b) => b.textContent.trim().toLowerCase().startsWith(k))?.focus();
     }
   });
   // Inside a modal dialog (Lịch sử insert, design 0011) the popup must be in the dialog's top layer.

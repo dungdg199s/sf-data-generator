@@ -32,6 +32,15 @@ export function icoTile() {
   return h('span', { class: 'ico-tile', 'aria-hidden': 'true' }, h('span', { class: 'ico' }));
 }
 
+/**
+ * Action icon (design 0014 §1): `<span class="ico" data-ico="name" aria-hidden="true">`. The SVG is the
+ * `--ico-<name>` token, picked by one `.ico[data-ico="<name>"]` rule in app.css; the colour is the
+ * text colour of the button around it. A button with only an icon needs an `aria-label` in words.
+ */
+export function ico(name) {
+  return h('span', { class: 'ico', 'data-ico': name, 'aria-hidden': 'true' });
+}
+
 let toastTimer;
 let toastGeneration = 0;
 let toastEl = null;

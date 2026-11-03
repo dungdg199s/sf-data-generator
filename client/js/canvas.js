@@ -11,7 +11,7 @@
 // Workflow / view / result events rebuild; selection and issue events only re-decorate.
 // While the Quy trình view is shown (views.js) this view is empty and does not render.
 
-import { h, icoTile } from './dom.js';
+import { h, ico, icoTile } from './dom.js';
 import { state, subscribe, select, nodeType, stepById, setCollapsed } from './store.js';
 import { layout, START_ID } from './layout.js';
 import {
@@ -344,9 +344,9 @@ function cardEl(n) {
     off: step.disabled ? h('span', { class: 'tag-off', title: 'Bước này đang tắt: không chạy và không được kiểm tra. Ctrl+/ để bật lại.' }, 'Đã tắt') : null,
     sample: type?.needsOrg && !state.org && !step.disabled ? h('span', { class: 'tag-sample', title: 'Chưa chọn org: Xem trước dùng bản ghi mẫu (Id giả). Chọn org ở thanh trên để đọc dữ liệu thật.' }, 'chưa chọn org') : null,
     note: n.collapsed ? h('span', { class: 'dg-note', 'data-count': String(innerCount(step)) }) : null,
-    menu: h('button', { class: 'icon menu-btn', title: 'Thao tác với bước', 'aria-label': `Thao tác với bước ${stepLabel(step)}`, onclick: (e) => openStepMenu(e.currentTarget, step.id) }, '⋯'),
+    menu: h('button', { class: 'icon menu-btn', title: 'Thao tác với bước', 'aria-label': `Thao tác với bước ${stepLabel(step)}`, onclick: (e) => openStepMenu(e.currentTarget, step.id) }, ico('more')),
     toggle: n.container
-      ? h('button', { class: 'icon toggle', title: n.collapsed ? 'Mở khung' : 'Thu gọn khung', 'aria-label': n.collapsed ? 'Mở khung' : 'Thu gọn khung', onclick: () => setCollapsed([step.id], !n.collapsed) }, n.collapsed ? '▸' : '▾')
+      ? h('button', { class: 'icon toggle', title: n.collapsed ? 'Mở khung' : 'Thu gọn khung', 'aria-label': n.collapsed ? 'Mở khung' : 'Thu gọn khung', onclick: () => setCollapsed([step.id], !n.collapsed) }, ico(n.collapsed ? 'chevron-right' : 'chevron-down'))
       : null,
   };
   const attrs = {
@@ -404,7 +404,7 @@ function addEl(a) {
     'aria-label': addPointLabel([a.after, a.before], 1),
     ...targetAttrs(a.parentId, a.slot, a.index),
     onclick: (e) => openAddMenu(e.currentTarget, target),
-  }, '+');
+  }, ico('plus'));
   return el;
 }
 

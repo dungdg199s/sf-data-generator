@@ -244,6 +244,25 @@ async function flowEditing() {
     return scrolled ? gap : 0;
   });
   check(Math.abs(stickyGap) < 0.5, `sticky table header is ${stickyGap}px away from the tab row`);
+  // Design 0014 §1: icons are SVG masks picked by data-ico (never a step type's inherited --ico);
+  // icon-only buttons have a name in words; 16 px in buttons, 14 px in links.
+  await page.click('.step-card[data-id="con"] .type');
+  await page.waitForSelector('#inspector .field-card .actions button[aria-label="Xóa field"]');
+  const icons = await page.evaluate(() => {
+    const shown = (el) => el.getClientRects().length > 0;
+    const root = getComputedStyle(document.documentElement);
+    const unnamed = [...document.querySelectorAll('button')].filter((b) => shown(b) && !b.textContent.trim() && !b.getAttribute('aria-label'))
+      .map((b) => b.id || b.className);
+    const stray = [...document.querySelectorAll('.ico:not([data-ico])')].filter((i) => !i.closest('.ico-tile, .var-chip')).length;
+    const wrong = [...document.querySelectorAll('.ico[data-ico]')]
+      .filter((i) => getComputedStyle(i).getPropertyValue('--ico').trim() !== root.getPropertyValue(`--ico-${i.dataset.ico}`).trim()).map((i) => i.dataset.ico);
+    const width = (sel, px) => [...document.querySelectorAll(sel)].filter(shown).map((i) => i.getBoundingClientRect().width).filter((w) => Math.abs(w - px) > 0.5);
+    const head = [...document.querySelectorAll('#inspector .node-head button.icon')].map((b) => b.getAttribute('aria-label'));
+    return { unnamed, stray, wrong, inButtons: width('button:not(.link):not(.add-btn) > .ico', 16), inLinks: width('button.link > .ico', 14), head,
+      caret: document.querySelector('#btn-results-toggle .caret').dataset.ico };
+  });
+  check(!icons.unnamed.length && !icons.stray && !icons.wrong.length && !icons.inButtons.length && !icons.inLinks.length && icons.caret === 'chevron-down'
+    && icons.head.join() === 'Tắt bước,Nhân bản,Xóa bước', `icons (0014): ${JSON.stringify(icons)}`);
   console.log(`steps=${before + 1}`);
   console.log(`summary=${summary.trim()}`);
   if (outDir) await page.screenshot({ path: path.join(outDir, 'smoke-1440.png') });
@@ -672,7 +691,7 @@ async function flowDark() {
   await d.waitForSelector('dialog[open]');
   const confirmText = await d.textContent('dialog[open]');
   check(/Đọc từ org, không ghi: Account 2 \(accs, đọc lúc/.test(confirmText), `confirmation does not list the rows read (${confirmText})`);
-  check(/quá 10 phút/.test(confirmText) && /⟳ Đọc lại/.test(confirmText), 'confirmation over-promises change detection');
+  check(/quá 10 phút/.test(confirmText) && /bấm Đọc lại rồi Insert/.test(confirmText), 'confirmation over-promises change detection');
   check(!/null/.test(confirmText), 'confirmation prints "null"');
   await d.click('dialog[open] .actions button:has-text("Hủy")');
   check(!insertSent, 'an insert request was sent');

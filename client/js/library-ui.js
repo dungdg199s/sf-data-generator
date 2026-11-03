@@ -2,7 +2,7 @@
 // autosave of the open item (quota, two tabs), the "▾" popup next to the name (Ctrl+O) and the
 // "Quản lý thư viện" dialog. Storage rules: library.js.
 
-import { h, toast, download, keepToast, releaseToast } from './dom.js';
+import { h, ico, toast, download, keepToast, releaseToast } from './dom.js';
 import { state, setPersistHook, loadWorkflow, updateWorkflow, emptyWorkflow } from './store.js';
 import {
   KEYS, readIndex, repairIndex, copyName, migrateToLibrary, saveItem, readItem, exportLibrary, byRecent, trySet,
@@ -373,7 +373,7 @@ export function openManager() {
         { label: 'Tải JSON', disabled: !r.workflow, onSelect: dl },
         { label: 'Xóa', danger: true, disabled: it.id === ctl.activeId && isRunning(), title: it.id === ctl.activeId && isRunning() ? BUSY : undefined, onSelect: () => { remove(it.id); openManager(); } },
       ] }),
-    }, '⋯');
+    }, ico('more'));
     return h('div', { class: `lib-row${it.id === ctl.activeId ? ' active' : ''}`, role: 'row', 'data-id': it.id },
       h('span', { role: 'cell', class: 'lib-cell-name' }, name),
       h('span', { role: 'cell', class: 'lib-meta' }, r.workflow ? `${it.steps ?? countSteps(r.workflow)} bước · ${hhmm(it.updatedAt)} · ${kb(it.bytes ?? 0)}` : 'không mở được'),
