@@ -3,7 +3,8 @@
 // byte-identical for the same seed and `now`: the palette samples plus nested cases covering
 // random Lookups (count-only pools), Chọn bản ghi from generated and Query pools, branch/loop
 // nesting, unique values and pick "skip". Cases added later (the each-loop sample and nested
-// case of design 0010) were recorded when added; adding them changed none of the earlier hashes.
+// case of design 0010, the two cases of design 0013) were recorded when added; adding them changed
+// none of the earlier hashes.
 //
 // To re-record after a deliberate data change: node test/fixtures/golden-record.js > test/fixtures/golden-hashes.json
 
@@ -110,6 +111,46 @@ export const GOLDEN_CASES = [
       ]),
     ]),
     queryResults: { q: accRows(3) },
+  },
+  {
+    // Design 0013, recorded when added (every case above kept its hash).
+    name: 'each extras: filter, shuffle, limit over Query and Record pools (0013)',
+    workflow: wf([
+      query('q', 'accs', { fields: ['Id', 'Name', 'Industry'] }),
+      query('qc', 'cons', { sobject: 'Contact', fields: ['Id', 'AccountId', 'LastName'] }),
+      record('gen', 'Account', 'gen', [name, { name: 'Industry', type: 'picklist', options: { values: ['Banking', 'Retail'] } }], { count: 8 }),
+      loop('la', { mode: 'each', from: 'accs', itemAlias: 'acc' }, [
+        loop('lc', { mode: 'each', from: 'cons', itemAlias: 'con', alias: 'k', filter: 'compare', filterField: 'AccountId', filterOp: 'eq', filterValue: '{{acc.Id}}', order: 'shuffle', limit: 2 }, [
+          record('task', 'Task', 'task', [lookup('WhoId', 'con'), lookup('WhatId', 'acc'), { name: 'Subject', type: 'template', options: { template: '{{con.LastName}} {{k.index}}/{{k.count}}' } }]),
+        ]),
+      ]),
+      loop('lg', { mode: 'each', from: 'gen', itemAlias: 'g', filter: 'compare', filterField: 'Industry', filterOp: 'neq', filterValue: 'Banking', order: 'shuffle' }, [
+        record('opp', 'Opportunity', 'opp', [lookup('AccountId', 'g'), { name: 'Amount', type: 'currency', options: {} }]),
+      ]),
+      loop('ll', { mode: 'each', from: 'gen', itemAlias: 'g2', limit: 3 }, [record('case', 'Case', 'cs', [lookup('AccountId', 'g2')])]),
+    ]),
+    queryResults: {
+      q: accRows(4),
+      qc: rows(Array.from({ length: 11 }, (_, i) => ({ Id: `003${String(i).padStart(15, '0')}`, AccountId: `001${String(i % 5).padStart(15, '0')}`, LastName: `L${i}` })), 'Contact'),
+    },
+  },
+  {
+    name: 'values loop, number-variable counts, branch right variable, weighted pick, run vars (0013)',
+    workflow: wf([
+      query('q', 'accs', { fields: ['Id', 'Name', 'Employees'] }),
+      loop('lv', { mode: 'values', values: ['Hot', 'Warm', 'Cold'], alias: 'r' }, [
+        record('lead', 'Lead', 'lead', [{ name: 'Rating', type: 'copy', options: { path: 'r.value' } }, { name: 'Description', type: 'template', options: { template: 'Batch {{run.seed}} {{run.today}} {{r.index}}' } }]),
+      ]),
+      loop('la', { mode: 'each', from: 'accs', itemAlias: 'acc' }, [
+        loop('ln', { count: '{{acc.Employees}}', alias: 'n' }, [
+          record('con', 'Contact', 'con', [lookup('AccountId', 'acc'), { name: 'Amount__c', type: 'number', options: { min: 0, max: 10 } }]),
+          branch('b', { kind: 'compare', left: 'con.Amount__c', op: 'gt', right: '{{n.count}}' }, [record('t', 'Task', 'task', [lookup('WhatId', 'acc')])], []),
+        ]),
+        loop('lr', { mode: 'range', min: 1, max: '{{accs.$count}}' }, [record('ev', 'Event', 'ev', [])]),
+      ]),
+      loop('lw', { count: 6 }, [pick('p', 'big', 'accs', { mode: 'weighted', weightField: 'Employees' }), record('opp', 'Opportunity', 'opp', [lookup('AccountId', 'big'), { name: 'When__c', type: 'copy', options: { path: 'run.now' } }])]),
+    ]),
+    queryResults: { q: rows(Array.from({ length: 5 }, (_, i) => ({ Id: `001${String(i).padStart(15, '0')}`, Name: `Org ${i}`, Employees: [3, 0, '', 2, 7][i] }))) },
   },
 ];
 

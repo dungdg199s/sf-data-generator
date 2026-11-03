@@ -234,7 +234,7 @@ export function nextId(id, taken) {
 /** A usable alias / loop variable name (same rule as server/workflow/schema.js). */
 export const isAliasName = (name) => typeof name === 'string' && /^[A-Za-z_][A-Za-z0-9_]*$/.test(name) && name !== 'this';
 
-/** Options holding references, without a catalogue: the built-in ones (template, ref, left). */
+/** Options holding references, without a catalogue: the built-in ones (template, ref, branch left/right, loop numbers, filters). */
 function legacyReferenceOptions(step) {
   const out = [];
   (step.config?.fields ?? []).forEach((f, fieldIndex) => {
@@ -243,11 +243,19 @@ function legacyReferenceOptions(step) {
       if (typeof f.options[key] === 'string') out.push({ field: `fields.${f.name}`, option: key, mode, stored: f.options[key], fieldIndex, set: (v) => { f.options[key] = v; } });
     }
   });
-  if (step.type === 'branch' && typeof step.config?.left === 'string') {
-    out.push({ field: 'left', option: 'left', mode: 'path', value: step.config.left, set: (v) => { step.config.left = v; } });
+  if (step.type === 'branch') {
+    for (const [key, mode] of [['left', 'path'], ['right', 'template']]) {
+      if (typeof step.config?.[key] === 'string') out.push({ field: key, option: key, mode, value: step.config[key], set: (v) => { step.config[key] = v; } });
+    }
+  }
+  if (step.type === 'loop') {
+    // Number options holding one variable (design 0013).
+    for (const key of ['count', 'min', 'max']) {
+      if (typeof step.config?.[key] === 'string') out.push({ field: key, option: key, mode: 'number', value: step.config[key], set: (v) => { step.config[key] = v; } });
+    }
   }
   if (step.type === 'pick' || (step.type === 'loop' && step.config?.mode === 'each')) {
-    for (const [key, mode] of step.type === 'pick' ? [['from', 'ref'], ['filterValue', 'template']] : [['from', 'ref']]) {
+    for (const [key, mode] of [['from', 'ref'], ['filterValue', 'template']]) {
       if (typeof step.config?.[key] === 'string') out.push({ field: key, option: key, mode, value: step.config[key], set: (v) => { step.config[key] = v; } });
     }
   }

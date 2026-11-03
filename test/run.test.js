@@ -274,3 +274,59 @@ test('an Id append failing mid-run stops after the call in flight (stopped.reaso
   assert.deepEqual([ins.stopped.reason, ins.historyId, ins.inserted], ['history', entry.id, 600]);
   assert.deepEqual([finished[0].status, finished[0].inserted, finished[0].stopped.reason], ['stopped', 600, 'history']);
 });
+
+// ---------- design 0013 ----------
+
+import { prefetchQueries } from '../server/sf/query.js';
+
+const q0013 = wf([
+  { id: 'q', type: 'query', config: { sobject: 'Account', alias: 'accs', fields: ['Id', 'Name', 'NumberOfEmployees', 'Industry'] } },
+  loop('la', { mode: 'each', from: 'accs', itemAlias: 'acc', order: 'shuffle', limit: 4 }, [
+    loop('ln', { count: '{{acc.NumberOfEmployees}}', alias: 'n' }, [
+      record('c', 'Contact', 'con', [{ name: 'LastName', type: 'text', options: { mode: 'lastName' } }, { name: 'AccountId', type: 'lookup', options: { ref: 'acc' } }, { name: 'Title', type: 'template', options: { template: '{{acc.Name}} {{n.index}}/{{n.count}} {{run.seed}}' } }]),
+    ]),
+  ]),
+  loop('lw', { count: 5 }, [
+    { id: 'p', type: 'pick', config: { from: 'accs', alias: 'big', mode: 'weighted', weightField: 'NumberOfEmployees' } },
+    record('o', 'Opportunity', 'opp', [{ name: 'AccountId', type: 'lookup', options: { ref: 'big' } }, { name: 'Name', type: 'template', options: { template: '{{big.Name}} {{run.today}}' } }]),
+  ]),
+]);
+
+test('sample Query rows give numbers for fields used as numbers', async () => {
+  const { results } = await prefetchQueries({ client: null, org: null, workflow: q0013 });
+  const rows0 = results.q.records;
+  assert.deepEqual(rows0.map((r) => r.NumberOfEmployees), [1, 2, 3, 4, 5]);
+  assert.equal(rows0[0].Industry, 'Industry mẫu 1', 'other fields stay text');
+  assert.equal(rows0[0].Id, 'mẫu:accs#1');
+  // Deterministic, and the preview without an org loops by them.
+  assert.deepEqual((await prefetchQueries({ client: null, org: null, workflow: q0013 })).results, results);
+  const r = runWorkflow(q0013, { seed: 3, now: NOW, queryResults: results });
+  assert.ok(r.stats.byStep.ln.iterations > 0);
+  assert.ok(!r.warnings.some((w) => w.code === 'numberVarEmpty' || w.code === 'pickWeightZero'));
+});
+
+test('preview and insert give the same data with number variables, shuffle and weighted pick on Query rows', async () => {
+  const qr = { q: { sobject: 'Account', records: Array.from({ length: 6 }, (_, i) => ({ Id: `001000000000000AA${i}`, Name: `Org ${i}`, NumberOfEmployees: [2, 0, 3, null, 1, 4][i] })) } };
+  const client = fakeClient();
+  const preview = await drive({ run: createRun(q0013, { seed: 8, now: NOW, queryResults: qr }) });
+  const insert = await drive({ run: createRun(q0013, { seed: 8, now: NOW, queryResults: qr }), target: 'dev', sfClient: client });
+  assert.equal(insert.end.type, 'done');
+  const sent = client.calls.flatMap((c) => c.recs);
+  assert.deepEqual(sent, preview.end.result.records.map((r) => r.fields));
+  assert.ok(sent.some((x) => / 8$/.test(x.Title ?? '')), '{{run.seed}} is the seed in both passes');
+  assert.ok(sent.some((x) => (x.Name ?? '').endsWith(' 2025-06-15')));
+  assert.deepEqual(insert.end.result.samples, preview.end.result.samples);
+});
+
+test('a cancelled preview still returns the samples it has', async () => {
+  const controller = new AbortController();
+  const events = [];
+  const end = await executeRun({
+    run: createRun(accCon(600), { seed: 5, now: NOW }), signal: controller.signal, progressIntervalMs: 0, clock: () => 0,
+    emit: (e) => { events.push(e); if (e.type === 'start') controller.abort(); },
+  });
+  assert.equal(end.type, 'done');
+  assert.equal(end.result.cancelled, true);
+  assert.deepEqual(Object.keys(end.result.samples).sort(), ['a', 'c']);
+  assert.equal(typeof end.result.samples.a.Name, 'string');
+});

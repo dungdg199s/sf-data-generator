@@ -12,7 +12,8 @@
 
 import { createHash } from 'node:crypto';
 import { LIMITS } from '../workflow/nodes.js';
-import { WorkflowError } from '../workflow/schema.js';
+import { WorkflowError, scopeCatalog } from '../workflow/schema.js';
+import { numericSampleFields } from '../../shared/scope.js';
 import { buildSoql, soqlSobject, maxFetchFor, normalizeRow, rekeyRow, sampleRows, selectFields, checkSoql, checkBuilder } from '../../shared/soql.js';
 
 const CACHE_MAX_ENTRIES = 50;
@@ -94,6 +95,7 @@ export async function prefetchQueries({
   const changed = [];
   const started = clock().getTime();
   let identity = null; // cache key of the org, looked up once
+  let numeric = null; // sample rows: Query fields used as numbers (design 0013), worked out once
   for (const step of queryStepsOf(workflow)) {
     const c = step.config ?? {};
     const alias = c.alias;
@@ -106,7 +108,8 @@ export async function prefetchQueries({
     if (unsafe) throw new WorkflowError([{ message: unsafe.message, nodeId: step.id, field: unsafe.field ?? 'soql', code: unsafe.code }]);
     let entry;
     if (!org) {
-      const records = sampleRows(c, alias);
+      numeric ??= numericSampleFields(workflow, scopeCatalog());
+      const records = sampleRows(c, alias, { numeric: numeric[step.id] ?? [] });
       entry = { records, totalSize: records.length, done: true, source: 'sample', fetchedAt: null, org: null, fingerprint: fingerprint(records) };
       warnings.push({ message: `Chưa chọn org nên bước Query "${alias}" dùng ${records.length} bản ghi mẫu (Id giả). Chọn org ở thanh trên để đọc dữ liệu thật.`, nodeId: step.id, code: 'querySample' });
     } else {

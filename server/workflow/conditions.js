@@ -1,4 +1,4 @@
-import { resolvePath } from './paths.js';
+import { resolvePath, renderTemplate } from './paths.js';
 
 // Branch conditions are structured data (never eval'd strings), so the UI can build them
 // with plain form controls and the server can validate them up front.
@@ -6,7 +6,13 @@ import { resolvePath } from './paths.js';
 export function evaluateCondition(config, scope, rng) {
   if ((config.kind ?? 'chance') === 'chance') return rng.bool(Number(config.probability ?? 0.5));
 
-  return compareValues(resolvePath(config.left, scope, undefined), config.op, config.right);
+  // Design 0013: a Lookup on the left compares by its ref (`acc#3`), like the Chọn bản ghi filter;
+  // `right` holding `{{…}}` is rendered like a template first (no `{{`: compared as is, as before).
+  const raw = resolvePath(config.left, scope, undefined);
+  const left = raw && typeof raw === 'object' && raw.$ref ? raw.$ref : raw;
+  const r = config.right;
+  const right = typeof r === 'string' && r.includes('{{') ? renderTemplate(r, scope, undefined) : r;
+  return compareValues(left, config.op, right);
 }
 
 /**
@@ -45,7 +51,7 @@ export function compareValues(left, op, right) {
   }
 }
 
-function toNumber(v) {
+export function toNumber(v) {
   if (typeof v === 'number') return Number.isFinite(v) ? v : null;
   if (typeof v === 'string' && v.trim() !== '' && !Number.isNaN(Number(v))) return Number(v);
   return null;

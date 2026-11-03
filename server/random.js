@@ -53,6 +53,20 @@ export function createRandom(seed = Date.now()) {
       }
       return idx.slice(0, Math.min(k, list.length)).sort((a, b) => a - b).map((i) => list[i]);
     },
+    /**
+     * The first `k` items of a shuffled copy of `list` (partial Fisher–Yates, design 0013): for
+     * i = 0…k−1, j = i + floor(next() · (len − i)), swap. Draws exactly k numbers (k ≤ len).
+     */
+    shuffleTake(list, k) {
+      const a = Array.from(list);
+      const take = Math.max(0, Math.min(k, a.length));
+      for (let i = 0; i < take; i++) {
+        const j = i + Math.floor(next() * (a.length - i));
+        [a[i], a[j]] = [a[j], a[i]];
+      }
+      a.length = take;
+      return a;
+    },
     digits(n) {
       let s = '';
       for (let i = 0; i < n; i++) s += Math.floor(next() * 10);

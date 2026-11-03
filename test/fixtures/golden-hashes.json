@@ -98,5 +98,25 @@
     "records": "4aa71a979e611b86157a498fdfc9b3dea2f48bd3940686f479e1dad239b4fa8c",
     "count": 18,
     "byStep": "5fab98b367777d8c7114646d45175fdbe77e28f13563930888f2be784b7428a8"
+  },
+  "each extras: filter, shuffle, limit over Query and Record pools (0013) @42": {
+    "records": "e4f816e58aecd8330c864480514d5e7606820f9869fa1def1161cd30b2bcc693",
+    "count": 25,
+    "byStep": "20c93288d4db35cc68cad31276a8e52ce666d97324e00b22bf62fad0d8254c82"
+  },
+  "each extras: filter, shuffle, limit over Query and Record pools (0013) @7": {
+    "records": "de809a3670963024ee6eb5d79a1162910ad840d672135650d0affcfd33540a5e",
+    "count": 22,
+    "byStep": "91de3cc155dc923db6bb5de8d04eb0af867f5de2d87d21dc0ee77b4f5c882307"
+  },
+  "values loop, number-variable counts, branch right variable, weighted pick, run vars (0013) @42": {
+    "records": "542279370626a2d6c58f013c45440357f515da9a7f4488d4bc08fe7e8a1a8b22",
+    "count": 44,
+    "byStep": "9b1e0deef95afa1f40bcc9fcd7384610fc76abab719e3cb56c49a06f9316b2f9"
+  },
+  "values loop, number-variable counts, branch right variable, weighted pick, run vars (0013) @7": {
+    "records": "70edd1f78bc7168c37819faab32d0e16ec1df7a0ee688031314c751cf94603c0",
+    "count": 43,
+    "byStep": "85f48bf71c6b6582a0e0cb090d81fd005e97bafb0bd688883c171d708b6205c8"
   }
 }

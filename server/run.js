@@ -305,7 +305,7 @@ export async function executeRun({
       warnings: [...run.warnings, ...extraWarnings],
       stats: { total: live.total, bySobject: { ...live.bySobject }, byStep: live.byStep, durationMs: clock() - started, previewRows, truncated: true },
       records: kept,
-      samples: {},
+      samples: { ...(it.samples ?? {}) }, // what was sampled before Dừng (design 0013)
       ...(queries ? { queries } : {}),
     };
     result.cancelled = true;

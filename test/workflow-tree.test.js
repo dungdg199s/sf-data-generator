@@ -394,3 +394,55 @@ test('renameField follows references through the record of an each loop and a Ch
   assert.equal(res.count, 6);
   assert.deepEqual(res.names.sort(), ['a', 'acc', 'pk', 'pk2']);
 });
+
+// ---------- design 0013 ----------
+
+test('renameAlias follows number variables, branch right and each filterValue', () => {
+  const catalog = scopeCatalog();
+  const br = { id: 'br', type: 'branch', config: { kind: 'compare', left: 'acc.N', op: 'gt', right: '{{acc.N}} + {{other.N}}' }, slots: { true: [], false: [] } };
+  const wf = tree([
+    r('a', 'acc', [{ name: 'N', type: 'number' }]),
+    loop('l', [r('x')], { count: '{{acc.N}}' }),
+    loop('m', [r('y')], { mode: 'range', min: 1, max: ' {{ acc.N }} ' }),
+    { id: 'q', type: 'query', config: { sobject: 'Contact', alias: 'cons', fields: ['Id', 'AccountId'] } },
+    each('e', 'cons', 'con', [r('z')], { filter: 'compare', filterField: 'AccountId', filterValue: '{{acc.Id}}' }),
+    br,
+  ]);
+  const n = renameAlias(wf.steps, 'acc', 'account', { catalog });
+  assert.equal(n, 5); // count, max, filterValue, branch left and right
+  assert.equal(findStep(wf, 'l').step.config.count, '{{account.N}}');
+  assert.equal(findStep(wf, 'm').step.config.max, ' {{ account.N }} ');
+  assert.equal(findStep(wf, 'e').step.config.filterValue, '{{account.Id}}');
+  assert.equal(br.config.right, '{{account.N}} + {{other.N}}');
+  // Numbers are left alone; the legacy (catalogue-less) path follows the same options.
+  const legacy = tree([loop('l', [r('x')], { count: '{{acc.N}}' }), { ...br, config: { kind: 'compare', left: 'acc.N', op: 'gt', right: '{{acc.N}}' } }, loop('k', [], { count: 3 })]);
+  assert.equal(renameAlias(legacy.steps, 'acc', 'b'), 3);
+  assert.equal(findStep(legacy, 'k').step.config.count, 3);
+});
+
+test('renameField follows number variables and each filter values', () => {
+  const catalog = scopeCatalog();
+  const wf = tree([
+    r('a', 'acc', [{ name: 'N', type: 'number' }]),
+    loop('l', [r('x')], { count: '{{acc.N}}' }),
+    r('g', 'gen', [{ name: 'Key', type: 'text' }]),
+    each('e', 'gen', 'g2', [r('z')], { filter: 'compare', filterField: 'Key', filterValue: '{{acc.N}}' }),
+  ]);
+  const res = renameField(wf, 'a', 'N', 'Size', { catalog });
+  assert.equal(res.count, 2);
+  assert.equal(findStep(wf, 'l').step.config.count, '{{acc.Size}}');
+  assert.equal(findStep(wf, 'e').step.config.filterValue, '{{acc.Size}}');
+});
+
+test('setStepAlias on a loop does not rename its own count variable from an outer loop', () => {
+  const catalog = scopeCatalog();
+  // The inner loop's count reads the outer loop (also called "loop"): renaming the inner one must
+  // leave it, and move only the references inside its body.
+  const wf = tree([loop('outer', [loop('inner', [r('b', 'b', [T('T', '{{loop.index}}')])], { count: '{{loop.index}}' })])]);
+  setStepAlias(wf, 'inner', 'k', { memo: new Map(), slotKeys, catalog });
+  assert.equal(findStep(wf, 'inner').step.config.count, '{{loop.index}}');
+  assert.equal(fieldsOf(wf, 'b')[0].options.template, '{{k.index}}');
+  // Renaming the outer loop moves the inner loop's count along.
+  setStepAlias(wf, 'outer', 'o', { memo: new Map(), slotKeys, catalog });
+  assert.equal(findStep(wf, 'inner').step.config.count, '{{o.index}}');
+});
