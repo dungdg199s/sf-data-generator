@@ -80,7 +80,11 @@ nhất trước, kèm `bản ghi cuối` / `có thể trống`; các bước kh�
 Khóa thêm của option ([0005](design/0005-variable-picker.md)):
 
 - `vars: 'template' | 'path'`: option nhận biến. UI gắn bảng chọn biến (nút `{x}`, gõ `{{`, Ctrl+Space) và dải chip;
-  validate kiểm tra mọi tham chiếu trong option đó.
+  validate kiểm tra mọi tham chiếu trong option đó. `vars: 'number'` ([0013](design/0013-mo-rong-bien-va-lap.md)) cho option
+  `kind: 'integer' | 'number'`: số, hoặc đúng một biến kiểu Số `{{path}}`; hôm nay chỉ `count`/`min`/`max` của bước Lặp dùng
+  nó — option số của generator (Number min/max, Date from/to) **chưa** nhận biến (để sau, 0013 mục 15).
+- `showIf` bắc cầu (0013): option ẩn khi option nó phụ thuộc đang ẩn. Template dùng được `{{loop.value}}` (Lặp "Mỗi giá trị
+  trong danh sách") và `{{run.seed}}`, `{{run.now}}`, `{{run.today}}` (biến của lần chạy).
 - `accepts` (chỉ với `kind: 'ref'`, không bắt buộc): lọc nguồn theo cờ của `exposes`, ví dụ `{ "pool": true }`. Mặc định
   là mọi nguồn có `lookupParent: true`. `placeholder` / `empty` (không bắt buộc): chữ của dòng trống khi có / chưa có
   nguồn nào (Chọn bản ghi: `— chọn pool —` / `— chưa có pool nào —`).

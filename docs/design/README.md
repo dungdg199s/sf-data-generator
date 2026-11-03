@@ -23,7 +23,7 @@ viết và cập nhật các file này theo skill `design-doc`; người viết 
 | [0010](0010-lap-theo-ban-ghi.md) | Lặp theo từng bản ghi trong pool | Đã làm |
 | [0011](0011-thao-tac-du-lieu-org.md) | Thao tác dữ liệu org: Bulk API 2.0, lịch sử chạy, xóa dữ liệu đã insert | Đã làm |
 | [0012](0012-nang-suat-soan-thao.md) | Năng suất soạn thảo: thư viện workflow, chọn nhiều bước, copy/paste, sửa nhanh | Đã duyệt |
-| [0013](0013-mo-rong-bien-va-lap.md) | Mở rộng biến và lặp | Đã duyệt |
+| [0013](0013-mo-rong-bien-va-lap.md) | Mở rộng biến và lặp | Đã làm |
 | [0014](0014-hoan-thien-giao-dien.md) | Hoàn thiện giao diện: icon SVG, đổi cao panel kết quả, sheet hai nấc, dấu hiệu cuộn ngang, minimap, phím chọn biến | Đã duyệt |
 
 ## Nguyên tắc tiện dụng
@@ -66,15 +66,15 @@ Các mục "Câu hỏi mở" / "Việc tiếp theo" / "Chưa làm" của 0001–
 | Giá trị mẫu ngay trong inspector | [0012](0012-nang-suat-soan-thao.md) | 0001 |
 | Sửa nhanh "Thêm `<Field>` vào SELECT" | [0012](0012-nang-suat-soan-thao.md) | 0005 câu 8, 0006, 0007 mâu thuẫn 3: lỗi `unknownMember` đã có |
 | Import từ org gợi ý field bắt buộc còn thiếu | [0012](0012-nang-suat-soan-thao.md) | 0001 |
-| `right` của Rẽ nhánh nhận biến | [0013](0013-mo-rong-bien-va-lap.md) | 0005 câu 3, 0007 |
-| Option số nhận biến (số lần lặp = `{{accs.$count}}`) | [0013](0013-mo-rong-bien-va-lap.md) | 0005 câu 4, 0007, 0010 |
-| Lọc / giới hạn N / xáo trộn trong Lặp `each` | [0013](0013-mo-rong-bien-va-lap.md) | 0010 |
-| Lặp theo danh sách giá trị cố định | [0013](0013-mo-rong-bien-va-lap.md) | 0010 |
-| Chọn N bản ghi một lần, chọn theo trọng số | [0013](0013-mo-rong-bien-va-lap.md) | 0006 câu 9, 0007 |
-| `minIterations` thông minh hơn | [0013](0013-mo-rong-bien-va-lap.md) | 0010 |
-| Mẫu (`samples`) theo mọi bước | [0013](0013-mo-rong-bien-va-lap.md) | 0005: hiện chỉ có cho Chọn bản ghi |
-| Biến trong `pick.filterValue` | [0013](0013-mo-rong-bien-va-lap.md) | Phần cơ bản đã có (`vars: 'template'`, 0006); 0013 chỉ mở rộng nếu cần |
-| Option phạm vi pool (chỉ bản ghi của lượt hiện tại) | [0013](0013-mo-rong-bien-va-lap.md) | 0010 |
+| `right` của Rẽ nhánh nhận biến | [0013](0013-mo-rong-bien-va-lap.md) — **Đã làm** | 0005 câu 3, 0007 |
+| Option số nhận biến (số lần lặp = `{{accs.$count}}`) | [0013](0013-mo-rong-bien-va-lap.md) — **Đã làm** | 0005 câu 4, 0007, 0010 |
+| Lọc / giới hạn N / xáo trộn trong Lặp `each` | [0013](0013-mo-rong-bien-va-lap.md) — **Đã làm** | 0010 |
+| Lặp theo danh sách giá trị cố định | [0013](0013-mo-rong-bien-va-lap.md) — **Đã làm** | 0010 |
+| Chọn N bản ghi một lần, chọn theo trọng số | [0013](0013-mo-rong-bien-va-lap.md) — **Đã làm** (trọng số); N bản ghi: **Không làm** (dòng dưới) | 0006 câu 9, 0007 |
+| `minIterations` thông minh hơn | [0013](0013-mo-rong-bien-va-lap.md) — **Đã làm** | 0010 |
+| Mẫu (`samples`) theo mọi bước | [0013](0013-mo-rong-bien-va-lap.md) — **Đã làm** | 0005: hiện chỉ có cho Chọn bản ghi |
+| Biến trong `pick.filterValue` | [0013](0013-mo-rong-bien-va-lap.md) — **Đã có** | Đã có từ 0006 (`vars: 'template'`); 0013 không đổi gì; chỉ mục `eq` dùng chung cho Chọn bản ghi để sau |
+| Option phạm vi pool (chỉ bản ghi của lượt hiện tại) | [0013](0013-mo-rong-bien-va-lap.md) → **Hoãn** (dòng dưới) | 0010 |
 | Icon SVG cho các ký tự còn lại (`⋯ ▸ ▾ ⠿ ↶ ↷ ⟳ ⤓`) | [0014](0014-hoan-thien-giao-dien.md) | 0008, 0009 |
 | Kéo đổi chiều cao panel kết quả; bottom sheet hai nấc | [0014](0014-hoan-thien-giao-dien.md) | 0009 |
 | Dấu hiệu "còn mục" ở palette ngang | [0014](0014-hoan-thien-giao-dien.md) | 0009 |
@@ -86,7 +86,7 @@ Các mục "Câu hỏi mở" / "Việc tiếp theo" / "Chưa làm" của 0001–
 | Ước tính số bản ghi theo bước trước khi chạy | [0012](0012-nang-suat-soan-thao.md) | 0003 (phần H) |
 | Rê chuột lên chip Lookup thì tô thẻ cha | [0012](0012-nang-suat-soan-thao.md) | 0003 (phần I) |
 | Record: đổi sObject thì thay field `Name` bằng name field thật (Task → `Subject`) | [0012](0012-nang-suat-soan-thao.md) | 0003; lỗi thật, làm đầu tiên (phần G) |
-| Biến cấp workflow `{{run.seed}}`, `{{run.now}}`, `{{run.today}}` | [0013](0013-mo-rong-bien-va-lap.md) | 0005 "Ý tưởng để sau" |
+| Biến cấp workflow `{{run.seed}}`, `{{run.now}}`, `{{run.today}}` | [0013](0013-mo-rong-bien-va-lap.md) — **Đã làm** | 0005 "Ý tưởng để sau" |
 | Khung nhiều nhánh kiểu Switch (`slots` động) | **Hoãn** | 0003; 0013: cần đổi hợp đồng `slots` cố định theo loại bước |
 | Hàm trong template; bước Đặt biến | **Hoãn** | 0005, 0006; 0013: cần design riêng vì đổi ngữ pháp token |
 | `{{acc.Id}}` thành Id thật lúc insert | **Hoãn** | 0005; 0013: cần giữ Id qua cửa sổ insert, xem trước sẽ khác insert |

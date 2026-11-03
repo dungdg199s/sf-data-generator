@@ -92,9 +92,9 @@ Bản cũ của app không đọc được file version 2.
 | --- | --- | --- |
 | `record` | – | `sobject` (API name), `alias`, `count` (mặc định 1), `fields[]` |
 | `query` ([0006](design/0006-query-pick-nodes.md)) | – | `mode`: `builder` (`sobject`, `fields[]` chuỗi tên field, `where`, `orderBy` mặc định `Id`, `limit` 1–2000 mặc định 200) hoặc `soql` (`soql`); `alias` (tên pool, bắt buộc) |
-| `pick` (0006) | – | `from` (alias của pool phía trên), `alias` (bắt buộc), `mode`: `random` \| `unique` \| `sequential`; `filter`: `none` \| `compare` (`filterField`, `filterOp`, `filterValue` nhận `{{…}}`); `onEmpty`: `skip` \| `error` |
-| `loop` | `body` | `mode`: `fixed` (`count`), `range` (`min`, `max`) hoặc `each` ([0010](design/0010-lap-theo-ban-ghi.md): `from` = alias của pool Query/Record/Chọn bản ghi phía trên, `itemAlias` = tên bản ghi đang lặp, bắt buộc); `alias` của biến lặp (mặc định `loop`). Thiếu `count` = 0 lần, thiếu `max` = 1. Khóa của chế độ khác bị bỏ qua (không kiểm tra, không xóa) |
-| `branch` | `true` (Đúng), `false` (Sai) | `kind`: `chance` (`probability`) hoặc `compare` (`left`, `op`, `right`) |
+| `pick` (0006) | – | `from` (alias của pool phía trên), `alias` (bắt buộc), `mode`: `random` \| `unique` \| `sequential` \| `weighted` ([0013](design/0013-mo-rong-bien-va-lap.md): `weightField`, field số của bản ghi trong pool, bắt buộc); `filter`: `none` \| `compare` (`filterField`, `filterOp`, `filterValue` nhận `{{…}}`); `onEmpty`: `skip` \| `error` |
+| `loop` | `body` | `mode`: `fixed` (`count`), `range` (`min`, `max`), `each` ([0010](design/0010-lap-theo-ban-ghi.md): `from` = alias của pool Query/Record/Chọn bản ghi phía trên, `itemAlias` = tên bản ghi đang lặp, bắt buộc; 0013: `filter` `none` \| `compare` với `filterField`, `filterOp`, `filterValue` như Chọn bản ghi, `order` `pool` \| `shuffle`, `limit` số nguyên 0–100 000, 0 = tất cả) hoặc `values` (0013: `values`, mảng chuỗi, hoặc một chuỗi nhiều dòng; dòng trống bị bỏ, giá trị được trim); `alias` của biến lặp (mặc định `loop`). `count`, `min`, `max` là số **hoặc** chuỗi đúng một biến `"{{acc.NumberOfEmployees}}"` (0013, khoảng trắng hai đầu được bỏ qua). Thiếu `count` = 0 lần, thiếu `max` = 1. Khóa của chế độ khác bị bỏ qua (không kiểm tra, không xóa) |
+| `branch` | `true` (Đúng), `false` (Sai) | `kind`: `chance` (`probability`) hoặc `compare` (`left`, `op`, `right`; `right` nhận `{{…}}` từ 0013) |
 
 Danh mục nằm ở `server/workflow/nodes.js` và được `GET /api/meta` trả về (`nodeTypes[]`): mỗi loại có `label`,
 `category` (`data` hoặc `control`, nhãn nhóm trong `stepCategories`), `description`, `slots` (`key`, `label`, và tùy chọn
@@ -120,10 +120,26 @@ phạm vi (`analyzeScope` trong `shared/scope.js`) chỉ đọc hai khóa này, 
 | `exposes.builtins` | `[{ key, valueType, label, level? }]`, key bắt đầu bằng `$` | Biến có sẵn, ví dụ `$n` của Record |
 | `exposes.current` | `last`, `picked`, `item`, `none` | `none`: không có bản ghi hiện tại (Query, 0006), `{{q.Field}}` là lỗi; `item`: bản ghi đang lặp của Lặp `each` (một bản ghi, không phải pool) |
 | `exposes.pool` / `origin` / `lookupParent` / `open` | | Dùng cho Lookup "Ngẫu nhiên"/`pick.from`; `generated` (chưa có Id) hay `org`; có trong ô "Bản ghi cha" không; danh sách field chưa đầy đủ (field lạ chỉ là cảnh báo) |
+| `exposes.nonEmpty` (0013) | `true` | Mỗi lần chạy qua bước thêm ít nhất một bản ghi vào pool (Record). Lặp `each` không lọc qua pool như vậy ở trạng thái `always`/`last` chạy ≥ 1 lần (`minIterations(config, { poolNonEmpty })`) |
+| `exposes.members[].when` (0013) | `{ key, in }`, như `showIf` | Member chỉ có khi config khớp: `loop.value` chỉ có khi `mode` = `values`; ngoài đó là `unknownMember` với câu riêng |
 
-Option nhận biến khai báo `vars: "template"` (chèn `{{path}}`) hoặc `vars: "path"` (cả ô là một đường dẫn, như `left`).
-Option chọn một nguồn có `kind: "ref"` (thêm `accepts`, ví dụ `{ "pool": true }`, nếu không phải mọi bước cha đều hợp).
-Validate kiểm tra mọi option có hai khóa này; UI gắn bảng chọn biến theo `vars`.
+`GET /api/meta` có thêm `globals` (0013, `WORKFLOW_GLOBALS` trong `server/workflow/nodes.js`): biến cấp lần chạy
+`[{ name: "run", label: "Lần chạy", members: [seed (Số), now (Ngày giờ), today (Ngày)] }]`. `analyzeScope` dựng nguồn `$run`
+(`global: true`, `nodeId` = `null`) thấy ở mọi bước, luôn đứng cuối danh sách. Tên do người dùng đặt thắng: biến lặp trong
+phạm vi, rồi alias, rồi `run`. Alias hay biến lặp tên `run` không bị cấm; khi đó nhóm Lần chạy nằm trong "Không dùng được ở
+đây" (`shadowed`, `bị alias "run" che` / `bị biến lặp "run" che`).
+
+Option nhận biến khai báo `vars: "template"` (chèn `{{path}}`), `vars: "path"` (cả ô là một đường dẫn, như `left`) hoặc
+`vars: "number"` (0013, option `kind: "integer"`/`"number"`: giá trị là số, hoặc chuỗi đúng một token `{{path}}`; validate
+kiểm tra định dạng (`numberFormat`), phạm vi biến như template, và `valueType` của biến: Số hoặc field đọc từ org (`any`)
+hợp lệ, Chuỗi là cảnh báo `notNumber`, kiểu khác là lỗi `notNumber`). Option chọn một nguồn có `kind: "ref"` (thêm
+`accepts`, ví dụ `{ "pool": true }`, nếu không phải mọi bước cha đều hợp). Validate kiểm tra mọi option có hai khóa này; UI
+gắn bảng chọn biến theo `vars`. Option có `numberField: "<khóa pool>"` (0013, `pick.weightField`) đặt tên một field số của
+bản ghi trong pool đó (dòng Query mẫu cho ra số ở field này). `placeholder` có thể có ở option `kind: "list"`/`"text"` (0013).
+
+**`showIf` bắc cầu** (0013, `optionShown` trong `shared/scope.js`, dùng ở `forms.js`, `referenceOptions` và validate): một
+option hiện khi điều kiện của nó đúng **và** option nó phụ thuộc cũng đang hiện. Ví dụ `filterField` của Lặp (`showIf: filter =
+compare`) ẩn ở chế độ `fixed` vì `filter` có `showIf: mode = each`.
 
 Field của bước record có dạng `{ "name": "<API name>", "type": "<field type>", "options": { ... } }`;
 xem [field-types.md](field-types.md). **Thứ tự field là thứ tự sinh**: `{{this.X}}` và Email theo tên
@@ -145,20 +161,45 @@ chỉ thấy các field ở phía trên.
   chưa có: 0 lần lặp và **một** cảnh báo gắn `from` cho mỗi bước (`eachEmpty`). Quá `maxCountPerNode` (100 000) bản ghi trong
   một lượt: lỗi gắn `from`. Pool là `from` của một Lặp `each` thì giữ bản ghi đầy đủ (như Chọn bản ghi). Đổi một Lặp `range`
   sang `each` bỏ một lần rút `rng`, nên dữ liệu phía sau đổi theo (chỉnh workflow, không phải lỗi tất định).
+- `loop` có số lần là biến (0013, `count`/`min`/`max` = `"{{path}}"`): biến được đọc **mỗi lần chạy qua bước Lặp**, với
+  phạm vi tại bước đó (ngoài thân; `{{acc.NumberOfEmployees}}` là bản ghi hiện tại của `acc` lúc đó). Số hoặc chuỗi số:
+  phần thập phân bị cắt (2,7 → 2); trống, âm, chữ, Đúng/Sai, object → 0 lần; lớn hơn 100 000 → 100 000. Mỗi loại cuối lần
+  chạy có **một** cảnh báo cho mỗi bước + ô (`numberVarEmpty`, `numberVarClamped`, gắn `count`/`min`/`max`). `range` có biến:
+  `max < min` thì dùng `min`; vẫn rút đúng **một** số `rng.int`. Không có biến thì chạy y như trước (số rút, dữ liệu, `byStep`).
+- `loop` `each` có lọc / xáo trộn / giới hạn (0013), theo thứ tự lọc → xáo trộn → giới hạn: `filterValue` được thay `{{…}}`
+  **một lần khi vòng lặp bắt đầu**; vế trái là `filterField` của bản ghi (`{ $ref }` thành ref, dòng Query không phân biệt hoa
+  thường), so như Chọn bản ghi; giữ thứ tự pool. Phép `eq` đi qua một chỉ mục theo bước (quét pool một lần, nối thêm khi pool
+  dài ra), nên Lặp lồng "2 000 Account × 2 000 Contact lọc `AccountId = {{acc.Id}}`" không thành 4 triệu phép so sánh; kết quả
+  y như lọc tuyến tính. `order: "shuffle"`: `rng.shuffleTake` (Fisher–Yates một phần) rút **đúng** `k = min(limit hoặc m, m)`
+  số (m = số bản ghi sau lọc) lúc vòng lặp bắt đầu, trước mọi bước trong thân, kể cả khi thân rỗng; `m = 0` thì không rút.
+  `order: "pool"` (mặc định) không rút số. `limit` > 0: chỉ `limit` bản ghi đầu (sau lọc và xáo trộn). `count` của biến lặp
+  = số lần lặp thật. Lọc mà **mọi** lượt (pool không rỗng) không khớp bản ghi nào: **một** cảnh báo `eachFilterEmpty` gắn
+  `filterValue`. Còn hơn 100 000 bản ghi sau lọc: lỗi gắn `from` (`Pool "cons" còn … bản ghi sau khi lọc…`).
+- `loop` `values` (0013): chạy `slots.body` một lần cho mỗi giá trị (đã trim, bỏ dòng trống), theo thứ tự, với
+  `{{<alias>.value}}` = giá trị đó (chuỗi), `index`/`index0`/`count` như cũ. Không dùng `rng`. Danh sách rỗng là lỗi
+  `valuesEmpty`; quá 100 000 giá trị là lỗi.
 - `branch`: luôn tính điều kiện (kể cả khi hai nhánh rỗng), chạy `slots.true` hoặc `slots.false`, rồi **đi tiếp bước kế**.
   `chance` chọn nhánh Đúng với xác suất `probability`. `compare` so sánh `left` (một đường dẫn tham chiếu; viết
-  `loop.index` hay `{{loop.index}}` đều được) với `right` (giá trị cố định). Nếu cả hai là số thì so theo số, không thì so theo chuỗi.
+  `loop.index` hay `{{loop.index}}` đều được) với `right`. `right` có `{{` thì được thay như template trước (0013:
+  `{{opp.Amount}}`, `{{acc.Name}} Inc`); không có `{{` thì dùng nguyên như cũ. `left` là field Lookup (`{ "$ref": "acc#3" }`)
+  thì so theo ref `acc#3` (0013; trước đó là `"[object Object]"`). Nếu cả hai là số thì so theo số, không thì so theo chuỗi.
   Phép so sánh: `eq`, `neq`, `gt`, `gte`, `lt`, `lte`, `contains`, `empty`, `notEmpty`, `divisibleBy`.
 - `query` ([0006](design/0006-query-pick-nodes.md)): executor **không** gọi org. Server đọc mọi bước Query đang bật trước
   (theo thứ tự đọc, tuần tự; xem [org-connection.md](org-connection.md#đọc-dữ-liệu-query)) rồi đưa các dòng vào executor.
   Mỗi lần chạy qua, bước gán pool `<alias>` = các dòng (bản ghi `existing` có `id` thật, `ref` = `accs#1`…), **không** có bản
   ghi hiện tại, không sinh bản ghi, không dùng `rng`. Query nằm trong Lặp vẫn chỉ đọc org một lần (có cảnh báo).
   Chưa chọn org khi xem trước: `min(LIMIT, 5)` dòng mẫu tất định (`Id` = `mẫu:accs#1`, `Name` = `Account mẫu 1`, field khác
-  `<field> mẫu 1`, `Owner.Name` thành object lồng) kèm cảnh báo.
+  `<field> mẫu 1`, `Owner.Name` thành object lồng) kèm cảnh báo. Field của Query được dùng làm số (0013: trong một option
+  `vars: "number"`, qua pool, Chọn bản ghi từ nó hoặc bản ghi đang lặp của nó; hoặc `weightField` của Chọn bản ghi trên pool đó;
+  `numericSampleFields` trong `shared/scope.js`) có giá trị là **số thứ tự dòng** (1, 2, 3…), để xem trước không org vẫn lặp và
+  chọn theo trọng số được.
 - `pick`: ứng viên = pool `from` lúc đó (Query: các dòng; Record: mọi bản ghi đã sinh tới lúc đó; Chọn bản ghi: mọi bản ghi
   đã chọn). Lọc `compare`: vế trái là `filterField` của ứng viên (đường dẫn có dấu chấm), vế phải là `filterValue` thay
   `{{…}}` như template; so sánh như Rẽ nhánh. `random` = `rng.pick`; `unique` = không lặp lại trong lần chạy; `sequential`
-  = lần lượt, quay vòng, không dùng `rng` (con trỏ riêng theo giá trị lọc). Bản ghi được chọn (chính object trong pool) thành
+  = lần lượt, quay vòng, không dùng `rng` (con trỏ riêng theo giá trị lọc). `weighted` (0013): luôn rút đúng **một** số
+  `r = rng.next()`, chọn có hoàn lại ứng viên đầu tiên có tổng tiền tố trọng số > `r · tổng`; trọng số = số trong
+  `weightField` (trống, âm, không phải số → 0). Tổng = 0: chọn đều `ứng viên[floor(r · số ứng viên)]` và cuối lần chạy có
+  **một** cảnh báo `pickWeightZero` gắn `weightField`. Bản ghi được chọn (chính object trong pool) thành
   bản ghi hiện tại của `alias` và được thêm vào pool `alias`. Không có gì để chọn: `onEmpty: skip` bỏ qua phần còn lại của
   lượt hiện tại (lên tới thân Lặp gần nhất: sang lần lặp sau; ở gốc: dừng lần chạy) và cuối lần chạy có **một** cảnh báo
   ghi số lần bỏ qua; `error` báo lỗi gắn bước.
@@ -169,6 +210,9 @@ chỉ thấy các field ở phía trên.
   trừ khi một bước đọc cả bản ghi của pool đó (option bước `kind: "ref"` có `accepts.pool`: Chọn bản ghi `from`, Lặp `each`
   `from`). Ý nghĩa
   không đổi: Lookup "Ngẫu nhiên" vẫn chọn đều trong mọi bản ghi đã sinh, với đúng số ngẫu nhiên như trước.
+- `run` (0013): `{{run.seed}}` = seed của lần chạy, `{{run.now}}` = `now` dạng ISO 8601 UTC (`2026-10-28T03:00:00.000Z`),
+  `{{run.today}}` = 10 ký tự đầu (`2026-10-28`, UTC như các mốc `today` của field ngày). Insert và `/api/export` chạy lại
+  seed + `now` của lần xem trước nên có cùng giá trị (ghi `Batch {{run.seed}}` vào một field để tìm lại đúng lô đã insert).
 - **Chạy dạng luồng (0004):** executor sinh bản ghi lần lượt (cha luôn trước con); server không giữ hết bản ghi. Cùng
   workflow, `seed`, `now` và cùng dòng Query ⇒ cùng chuỗi bản ghi, từng byte, ở xem trước, insert và tải về.
 - Thứ tự gọi `rng` giống executor version 1, nên workflow v1 chuyển sang v2 sinh đúng dữ liệu cũ với cùng seed, **trừ ở các
@@ -187,6 +231,8 @@ chỉ thấy các field ở phía trên.
 | `<pick>.Field` | Field của bản ghi bước Chọn bản ghi vừa chọn; field quan hệ của Query lồng được: `acc.Owner.Name`. Với bản ghi đọc từ org, tên field **không phân biệt hoa thường** (như Salesforce) |
 | `<itemAlias>.Field` | Field của bản ghi đang lặp của Lặp `each` (0010), **chỉ bên trong thân** vòng lặp đó; như `<pick>.Field` (`<itemAlias>.$n` với pool Record) |
 | `<loopAlias>.index` / `.index0` / `.count` | Biến lặp (từ 1 / từ 0 / tổng số lần) |
+| `<loopAlias>.value` | Giá trị đang lặp của Lặp `values` (0013); ở chế độ khác là lỗi `unknownMember` |
+| `run.seed` / `run.now` / `run.today` | Biến của lần chạy (0013), sau mọi tên do người dùng đặt |
 
 Template dùng `{{path}}` (regex `\{\{\s*([\w.$]+)\s*\}\}`, khai báo một lần ở `shared/scope.js` và gửi qua
 `meta.syntax.templateToken`). Field và biến lặp so khớp **có phân biệt hoa thường**, giống lúc chạy.
@@ -215,8 +261,8 @@ Trạng thái của một nguồn tại một bước:
 | Trạng thái | Nghĩa | Kết quả validate |
 | --- | --- | --- |
 | `always` | Nguồn chạy trước, trực tiếp trong một dãy đang bao bước này; biến lặp của vòng lặp bao quanh | Hợp lệ |
-| `last` | Nguồn nằm trong thân một Lặp đã chạy xong ở phía trên, và Lặp luôn chạy ≥ 1 lần (`fixed` với `count ≥ 1`, hoặc `range` với `min ≥ 1`). Giá trị là bản ghi của lần lặp cuối (Lookup `random`: một bản ghi bất kỳ đã sinh) | Hợp lệ |
-| `maybe` | Nguồn nằm trong một nhánh rẽ, hoặc trong một Lặp có thể chạy 0 lần (kể cả mọi Lặp `each`: pool có thể rỗng), ở phía trên | Cảnh báo |
+| `last` | Nguồn nằm trong thân một Lặp đã chạy xong ở phía trên, và Lặp luôn chạy ≥ 1 lần (`fixed` với `count ≥ 1`, `range` với `min ≥ 1`, `values` có giá trị, hoặc — 0013 — `each` không lọc qua pool Record luôn có bản ghi: `always`/`last` tại bước Lặp). Giá trị là bản ghi của lần lặp cuối (Lookup `random`: một bản ghi bất kỳ đã sinh) | Hợp lệ |
+| `maybe` | Nguồn nằm trong một nhánh rẽ, hoặc trong một Lặp có thể chạy 0 lần (số lần là biến; `each` có lọc, qua Query hay Chọn bản ghi, hoặc qua pool `maybe`), ở phía trên | Cảnh báo |
 | `after` | Nguồn nằm sau bước này, hoặc chính là bước này | Lỗi |
 | `otherBranch` | Nguồn ở nhánh còn lại của một Rẽ nhánh đang bao bước này | Lỗi |
 | `outsideLoop` | Biến lặp, hoặc bản ghi đang lặp (0010), của một vòng lặp không bao bước này | Lỗi |
@@ -252,7 +298,14 @@ Tham chiếu hỏng là **lỗi** (chặn Xem trước và Insert, HTTP 422 khi 
 | `currentOfPool` | lỗi | Lookup "Bản ghi hiện tại" trỏ vào alias của Query (0006) |
 | `itemNotPool` | lỗi | `from` của Chọn bản ghi hoặc Lặp `each` là bản ghi đang lặp của một Lặp khác, không phải pool (0010) |
 | `randomOfItem` | lỗi | Lookup "Ngẫu nhiên trong pool" trỏ vào bản ghi đang lặp (0010) |
-| `eachEmpty` | cảnh báo (khi chạy) | Pool của Lặp `each` không có bản ghi nào; gắn `from` (0010) |
+| `eachEmpty` | cảnh báo (khi chạy) | Pool của Lặp `each` không có bản ghi nào (trước khi lọc); gắn `from` (0010) |
+| `numberFormat` | lỗi | Ô số (`vars: "number"`) có chữ quanh biến hoặc nhiều biến: `"Số lần lặp" phải là một số nguyên, hoặc đúng một biến…` (0013) |
+| `notNumber` | lỗi / cảnh báo | Biến của ô số là Ngày, Ngày giờ, Giờ, Đúng/Sai, Tham chiếu, Đối tượng (lỗi) hoặc Chuỗi (cảnh báo) (0013) |
+| `ownLoop` | lỗi | Ô của chính bước Lặp dùng biến lặp hoặc bản ghi đang lặp của chính nó (tính trước lần lặp đầu) (0013) |
+| `valuesEmpty` | lỗi | Lặp `values` không có giá trị nào; gắn `values` (0013) |
+| `numberVarEmpty`, `numberVarClamped` | cảnh báo (khi chạy) | Số lần từ biến trống/âm/không phải số (0 lần), hoặc > 100 000 (đã kẹp); một cảnh báo mỗi bước + ô, có số lần (0013) |
+| `eachFilterEmpty` | cảnh báo (khi chạy) | Lọc của Lặp `each` không khớp bản ghi nào ở mọi lượt; gắn `filterValue` (0013) |
+| `pickWeightZero` | cảnh báo (khi chạy) | Chọn bản ghi `weighted`: mọi trọng số bằng 0 ở n lần, đã chọn đều; gắn `weightField` (0013) |
 
 Kiểm tra riêng của Query và Chọn bản ghi (0006, câu chữ theo bảng "Thông báo" của doc đó, "node" đổi thành "bước"):
 Query builder (`sobject`, `fields` là API name hoặc `Owner.Name`, `limit` 1–2000, không `{{…}}`, không ORDER BY/LIMIT trong
@@ -266,6 +319,13 @@ Lặp `each` (0010, câu chữ theo bảng "Thông báo" của doc đó): thiế
 `… có lúc vòng lặp này không chạy lần nào.`), thiếu `itemAlias` (`Đặt tên cho bản ghi đang lặp…`), `itemAlias` không hợp lệ /
 trùng alias khác (câu sẵn có, gắn `itemAlias`), trùng tên biến lặp (`Tên bản ghi đang lặp "loop" trùng tên biến lặp…`).
 `count`/`min`/`max` không được kiểm tra khi `each`.
+
+Từ 0013 (câu chữ theo bảng "Thông báo" của doc đó): `count`/`min`/`max` (mọi option `vars: "number"` đang hiện) dùng câu số
+sẵn có (`Số lần lặp phải là số nguyên từ 0 đến 100000.`) hoặc `numberFormat`; `"Ít nhất" lớn hơn "Nhiều nhất"` chỉ khi cả hai là
+số. Lọc của Lặp `each` dùng đúng câu của Chọn bản ghi (`filterField`, `filterOp`, `filter`); `Thứ tự "x" không hợp lệ.`;
+`"Tối đa số bản ghi" phải là số nguyên từ 0 đến 100000 (0 = tất cả).`; ô lọc, `order`, `limit` chỉ được kiểm tra ở `each`.
+Chọn bản ghi `weighted` thiếu `weightField` (`Chưa nhập field trọng số…`) hoặc tên không hợp lệ. Mọi câu phạm vi của 0005 áp
+dụng cho `right`, ô số và `filterValue` của Lặp như ô template; ở ô số câu có tiền tố `"<nhãn ô>": `.
 
 Câu thông báo đúng như bảng "Thông báo lỗi" của [0005](design/0005-variable-picker.md) (đổi "node" thành "bước").
 
@@ -414,7 +474,9 @@ workflow, `{ $ref }` ghi thành ref. `json`: mảng bản ghi, mỗi bản ghi m
   ghi, cha luôn trước con (xem [org-connection.md](org-connection.md#insert)).
 - `queries` (0006): mỗi bước Query đã đọc `{ nodeId, alias, sobject, soql, org, source: "org" | "cache" | "sample",
   fetchedAt, count, totalSize, truncated, fingerprint, fields, records }`. Các dòng này **không** nằm trong `records`/`stats`
-  và không bao giờ được insert. `samples`: bản ghi đầu tiên mỗi bước Chọn bản ghi đã chọn (giá trị mẫu cho bảng chọn biến).
+  và không bao giờ được insert. `samples`: field của bản ghi đầu tiên của **mọi bước Record** (0013) và bản ghi đầu tiên mỗi
+  bước Chọn bản ghi đã chọn (giá trị mẫu cho bảng chọn biến, kể cả bước Record thứ hai cùng sObject mà 200 dòng đầu của bảng
+  kết quả không có); lần chạy bị Dừng vẫn trả các mẫu đã có.
   `stats.byStep` của Query có `rows`, của Chọn bản ghi có `picked` và `skipped`.
 
 Request `/api/run` có thêm: `org` (org để Query đọc khi **xem trước**; bị bỏ qua khi có `target` vì lúc insert Query luôn đọc

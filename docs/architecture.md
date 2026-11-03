@@ -76,7 +76,7 @@ thư mục này ở `/shared/…` với cùng cách chặn path traversal như `
 | `shared/migrate-v1.js` | Chuyển workflow v1 (đồ thị) sang v2 (cây) và mô tả báo cáo chuyển đổi |
 | `shared/soql.js` | SOQL của bước Query ([0006](design/0006-query-pick-nodes.md)): dựng câu từ builder, đọc danh sách field / sObject của SOQL tự viết, kiểm tra chỉ đọc (`checkSoql`, `checkBuilder`), dòng mẫu khi chưa chọn org |
 | `shared/insert-plan.js` | `planInsert` / `planDelete` ([0011](design/0011-thao-tac-du-lieu-org.md)): bước nào đi Bulk API 2.0 (lá, ≥ `bulkMinRecords`, `target.bulk`) và số lời gọi API ước tính; dùng cho sự kiện `plan` và các hộp xác nhận |
-| `shared/scope.js` | `analyzeScope(wf, catalog)` ([0005](design/0005-variable-picker.md)): nguồn biến, biến dùng được ở từng bước (`always`/`last`/`maybe`) và lý do bị ẩn (`after`/`otherBranch`/`outsideLoop`/`shadowed`/`disabled`), mọi tham chiếu đã phân giải; `refChoices` cho ô "Bản ghi cha"; regex token `{{…}}` (`TEMPLATE_TOKEN_SOURCE`); `poolUsage` ([0004](design/0004-streaming-execution.md)): pool nào phải giữ bản ghi đầy đủ, alias nào cần giữ Id khi insert |
+| `shared/scope.js` | `analyzeScope(wf, catalog)` ([0005](design/0005-variable-picker.md)): nguồn biến, biến dùng được ở từng bước (`always`/`last`/`maybe`) và lý do bị ẩn (`after`/`otherBranch`/`outsideLoop`/`shadowed`/`disabled`), mọi tham chiếu đã phân giải; `refChoices` cho ô "Bản ghi cha"; regex token `{{…}}` (`TEMPLATE_TOKEN_SOURCE`); `poolUsage` ([0004](design/0004-streaming-execution.md)): pool nào phải giữ bản ghi đầy đủ, alias nào cần giữ Id khi insert; từ [0013](design/0013-mo-rong-bien-va-lap.md): `optionShown` (`showIf` bắc cầu), `numberVarPath`/`isVar`/`valueList`, `valueType` và mã `notNumber`/`ownLoop` trên tham chiếu, nguồn `$run` từ `catalog.globals`, `numericSampleFields` (field Query dùng làm số, cho dòng mẫu) |
 
 Thứ tự slot được truyền vào qua tham số `slotKeys(type)`: server lấy từ `nodeTypeMap`, client lấy từ `state.meta`.
 `analyzeScope` nhận cả danh mục `{ nodeTypes, fieldTypes }` (server: `scopeCatalog()` trong `schema.js`; client:
@@ -106,7 +106,11 @@ Thứ tự slot được truyền vào qua tham số `slotKeys(type)`: server l�
   [0010](design/0010-lap-theo-ban-ghi.md)) mới giữ bản ghi đầy đủ — `poolUsage` tính từ danh mục, không hard-code loại bước.
   Lookup tới bản ghi đang lặp giữ Id của pool phía sau nó khi insert (`referencedAliases` đi theo `fromSource`).
 - **Lặp `each` không dùng `rng`** (0010): chụp pool lúc bắt đầu và lặp theo thứ tự pool, nên chèn hay bỏ một Lặp `each` không
-  làm lệch số ngẫu nhiên của các bước khác; xem trước và insert cùng seed ra cùng số lần lặp (dòng Query có dấu vân tay). Phần bộ nhớ còn tăng theo số bản ghi: tập giá trị `unique`
+  làm lệch số ngẫu nhiên của các bước khác; xem trước và insert cùng seed ra cùng số lần lặp (dòng Query có dấu vân tay).
+  Ngoại lệ có chủ đích ([0013](design/0013-mo-rong-bien-va-lap.md)): `order: 'shuffle'` rút đúng `min(limit, m)` số
+  (`rng.shuffleTake`) lúc vòng lặp bắt đầu. Lọc (`eq` qua chỉ mục theo bước), `limit`, Lặp `values` và ô số lần là biến
+  không rút số; `range` có biến vẫn rút đúng một số; Chọn bản ghi `weighted` rút đúng một số mỗi lần chọn. Workflow không dùng
+  khóa mới chạy y như cũ (hash vàng cũ không đổi). `run.seed`/`run.now`/`run.today` lấy từ seed + `now` của lần chạy. Phần bộ nhớ còn tăng theo số bản ghi: tập giá trị `unique`
   (khoảng 165 B/giá trị) và Id của alias có Lookup trỏ tới khi insert (khoảng 100 B/bản ghi).
 - **Lookup dùng placeholder `{ "$ref": "alias#n" }`.** Executor không biết Id thật; `sf/insert.js` chèn
   theo từng "đợt" (wave) để bản ghi cha luôn có Id trước bản ghi con.
@@ -165,7 +169,7 @@ sObject, tối đa 1 000 lỗi chi tiết trong kết quả (nhóm lỗi luôn �
 | `client/js/inspector.js` | Cấu hình bước (nơi duy nhất sửa cấu hình), trình soạn field, import field từ org, đổi alias tự cập nhật tham chiếu; bottom sheet trên màn hình hẹp (`body.sheet-open`, `openSheet`/`closeSheet`: chạy thì đóng, lỗi validate thì mở lại, [0009](design/0009-bo-cuc-man-hinh.md)) |
 | `client/js/popup.js` | Popup menu dùng chung ([0009](design/0009-bo-cuc-man-hinh.md)): menu "+", menu bước, menu **⋯** của thanh trên, menu `⤓ Tải`; hàng thường, hàng chọn một (`menuitemradio`), hàng ô nhập; bàn phím |
 | `client/js/issues.js` | Thanh lỗi dưới canvas ([0009](design/0009-bo-cuc-man-hinh.md)): số đếm, danh sách, thu gọn (`sfdg.issuesCollapsed`, không vào undo), F8 / Shift+F8, tự mở rộng khi chạy lỗi validate. Chỉ import `dom.js`, nên các hàm thuần (`issueCountsLabel`, `nextIssueIndex`) được test trong Node |
-| `client/js/forms.js` | Dựng form từ option schema (`showIf`, các `kind`); gắn bảng chọn biến cho option có `vars` |
+| `client/js/forms.js` | Dựng form từ option schema (`showIf` bắc cầu qua `optionShown`, các `kind`, `placeholder`); gắn bảng chọn biến cho option có `vars`; ô số `vars: 'number'` (0013) là ô chữ `inputmode="numeric"` lưu số, `undefined` hoặc chuỗi `{{path}}` |
 | `client/js/var-picker.js` | Bảng chọn biến (nút `{x}`, gõ `{{`, Ctrl+Space), tìm kiếm, phím tắt, ARIA, chèn bằng `execCommand('insertText')`; dải chip dưới ô và dòng "Lần xem trước" |
 | `client/js/variables.js` | Dữ liệu cho bảng chọn: nhóm biến theo bước từ `currentScope()` và meta (nhóm `this` dựng từ thứ tự field hiện tại), giá trị mẫu từ lần xem trước, chỗ đang dùng một biến (toast khi xóa/đổi tên) |
 | `client/js/results.js` | Bảng kết quả theo sObject (200 dòng đầu + tổng), tab chỉ đọc `↓ alias` cho dòng Query đã đọc, "⟳ Đọc lại", tab lỗi insert gom nhóm (bấm để chọn bước/field), tab "Lỗi xóa" của lần xóa gần nhất, link Tải Id / Lịch sử và nút Lịch sử ở đầu panel (0011), tải JSON/CSV qua `/api/export`; tiến độ, `<progress>` 3 px và nút Dừng khi đang chạy; đầu panel một hàng, ở ≤ 720 px gộp hai nút tải thành `⤓ Tải` |

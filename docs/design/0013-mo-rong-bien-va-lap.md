@@ -1,6 +1,6 @@
 # 0013 — Mở rộng biến và vòng lặp
 
-- **Trạng thái:** Đã duyệt (2026-10-28; người dùng giao chọn theo đề xuất cho mọi quyết định, xem [Đã chốt](#đã-chốt-2026-10-28))
+- **Trạng thái:** Đã làm (2026-11-03; duyệt 2026-10-28, người dùng giao chọn theo đề xuất cho mọi quyết định, xem [Đã chốt](#đã-chốt-2026-10-28); xem [Đã làm](#đã-làm))
 - **Ngày:** 2026-10-28
 - **Liên quan:** [0004](0004-streaming-execution.md) (executor dạng luồng, pool chỉ đếm, hash vàng),
   [0005](0005-variable-picker.md) (`analyzeScope`, `vars`, `valueType`; Câu hỏi mở 3 và 4; "Ý tưởng để sau"),
@@ -765,4 +765,64 @@ Không có câu hỏi chặn việc làm (mọi quyết định đã chốt ở 
 
 ## Đã làm
 
-(Cập nhật khi code xong: commit hoặc PR, chỗ nào khác với thiết kế và vì sao.)
+Ba đợt, ba commit code + một commit tài liệu trên nhánh `claude/salesforce-data-generator-xt3u27` (2026-11-03):
+
+- **Đợt A — hợp đồng và phân tích** (`Add the 0013 contract: …`): `server/workflow/nodes.js` (`filterOptions` dùng chung,
+  `count`/`min`/`max` `vars: 'number'`, `mode: 'values'` + `values` + `loop.value` có `when`, lọc/`order`/`limit` của `each`,
+  `weighted` + `weightField`, `branch.right` `vars: 'template'`, `exposes.nonEmpty` của Record, `WORKFLOW_GLOBALS` → `meta.globals`);
+  `shared/scope.js` (`optionShown` = `showIf` bắc cầu, `pathsIn('number')`, `numberVarPath`/`isVar`/`valueList`, `valueType` và
+  `notNumber` trên tham chiếu, `ownLoop`, member `when` không khớp → `unknownMember` có `when`, nguồn `$run`,
+  `loopMinIterations(config, { poolNonEmpty })`, `VAR_EXAMPLES` cho `values`/biến, `numericSampleFields`); `server/workflow/schema.js`
+  (kiểm tra chung mọi option `vars: 'number'`, `values`, `validateFilter` dùng chung, `order`, `limit`, `weightField`, câu mới của
+  `referenceIssue`).
+- **Đợt B — executor, đọc trước, kết quả** (`Run the 0013 features: …`): `numberOption`, `range` có biến, `runValues`, `runEach`
+  (chỉ mục `eq`, lọc tuyến tính có cache, `shuffleTake`, `limit`, câu lỗi "sau khi lọc"), `pickWeighted` (tổng tiền tố theo
+  `WeakMap`, tìm nhị phân), `samples` của mọi bước Record + `it.samples`, `scope.run`, bốn cảnh báo khi chạy (map riêng, không vào
+  `byStep`); `conditions.js` (`right` render khi có `{{`, `left` `{ $ref }` → ref); `paths.js` (`run` sau mọi tên); `random.js`
+  (`shuffleTake`); `sampleRows(…, { numeric })` + `prefetchQueries` gọi `numericSampleFields`; `run.js` `finish` trả mẫu đã có;
+  `legacyReferenceOptions` thêm `right`, ô số và `filterValue` của Lặp. Hai ca vàng mới (× 2 seed); 20 hash vàng cũ **không đổi**
+  (so file trước/sau).
+- **Đợt C — giao diện** (`Show the 0013 options in the UI: …`): `forms.js` (ô số nhận biến: ô chữ `inputmode="numeric"`, số → số,
+  trống → `undefined`, `{{` → chuỗi; `showIf` bắc cầu qua `optionShown`; `placeholder` cho list/text), `var-picker.js` (mode
+  `number`: thay cả ô bằng `{{path}}`, mở bằng {x}/`{{`/Ctrl+Space, dải chip; dòng `Chỉ hiện biến kiểu Số…`), `variables.js` (lọc
+  theo `valueType` ở mode `number`, nhóm **Lần chạy** màu trung tính với mẫu từ seed/`now` của lần xem trước), `inspector.js`
+  (`suggestionText` cho `number`; bật lọc → `fillParentFilter` cùng bước undo + toast), `ops.js` (`fillParentFilter`), `summary.js`
+  (câu tóm tắt của bảng Thiết kế UI). Smoke: luồng mới `flowVarsLoops`.
+
+**Kiểm tra lại giả định sau 0011** (Bulk, lịch sử, `shared/insert-plan.js`):
+
+- `planInsert` (server và hộp xác nhận) lấy số bản ghi theo bước từ lần chạy thử / `stats.byStep`, nên Lặp `values`, `each` có
+  lọc/giới hạn và số lần từ biến được ước tính đúng mà không sửa `insert-plan.js`.
+- `poolUsage`: `readers` vẫn chỉ là option `kind: 'ref'` có `accepts.pool` (`from` của Chọn bản ghi và Lặp `each`); ô lọc,
+  `weightField`, ô số không làm pool nào phải giữ thêm; `referenced` (Id giữ khi insert, và điều kiện Bulk "không ai trỏ tới")
+  không đổi vì không có Lookup mới. `filterValue` của Lặp đang ẩn (chế độ khác) không được đếm (`showIf` bắc cầu).
+- `{{run.seed}}`/`{{run.now}}`/`{{run.today}}`: insert và `/api/export` chạy lại đúng `seed` + `now` của lần xem trước (UI gửi
+  lại; `/api/export` bắt buộc có cả hai), nên cùng giá trị; test `preview and insert give the same data with number variables,
+  shuffle and weighted pick on Query rows` kiểm tra cả `run.seed`/`run.today` và `samples`.
+- Ảnh chụp workflow trong Lịch sử chỉ lưu JSON: khóa mới là thêm, không ảnh hưởng đọc lại hay xóa.
+- `LIMITS`: không thêm khóa; mỗi lần lặp của `values`/`each` vẫn là một lần thăm (`countVisit`), biến số kẹp ở `maxCountPerNode`.
+
+**Khác với thiết kế / quyết định khi làm:**
+
+1. `numericSampleFields` không hard-code `weightField`: option có khóa mới **`numberField: '<khóa pool>'`** (đặt ở
+   `pick.weightField`) nói "ô này là tên một field số của bản ghi trong pool đó". Hợp đồng chung, ghi ở `workflow-schema.md`.
+2. `ownLoop` cũng áp dụng cho biến lặp của chính bước trong ô của nó (hôm nay ra `after`, không phải `outsideLoop` như doc viết,
+   vì nguồn biến lặp có id = id bước). Bản ghi đang lặp (`{{con.Id}}` trong `filterValue`) ra `ownLoop` như doc.
+3. Một tham chiếu vừa `maybe` vừa không phải số chỉ giữ mã `notNumber` (một mã cho mỗi tham chiếu; lỗi kiểu quan trọng hơn).
+4. `eachFilterEmpty` chỉ đếm các lượt mà pool **không rỗng** (pool rỗng đã có `eachEmpty`), nên hai cảnh báo không chồng nhau.
+5. Câu phạm vi của 0005 ở ô số có tiền tố `"<nhãn ô>": ` (như bảng Thông báo cho `notNumber`/`ownLoop`); ở `right` và `filterValue`
+   giữ câu không tiền tố như ô template của bước.
+6. Mẫu của nhóm Lần chạy chỉ có sau một lần Xem trước (seed và `now` thật của lần đó); trước đó cột mẫu trống.
+7. Ô "Danh sách giá trị" là `kind: 'list'` sẵn có, tách cả theo dấu phẩy như mọi ô list: giá trị chứa dấu phẩy chỉ nhập được qua
+   file JSON (executor nhận nguyên mảng). Ghi lại, không đổi hành vi chung của `kind: 'list'`.
+8. Luồng smoke là **17** (`flowVarsLoops`), vì số 15 đã thuộc Sơ đồ (0003) và 16 thuộc Lịch sử (0011).
+9. `numberOption` coi số không hữu hạn là "trống" (0 lần) như chuỗi chữ.
+
+**Test đã đổi có chủ đích** (3, không đổi nghĩa cũ): `scope: upstream record and enclosing loop vars are visible…` (`visible`/`view`
+có thêm `$run` / `run:always` ở cuối), `GET /api/meta: loop has mode each…` (chỉ so các khóa của 0010 trong danh sách option và 3
+lựa chọn đầu của "Lặp theo"), `GET /api/meta (0006): …` (danh sách option của Chọn bản ghi có thêm `weightField`).
+`test/stream.test.js` không sửa. **Test mới** (đúng tên trong Kế hoạch): 10 ở `scope.test.js`, 1 ở `server.test.js`, 6 + 16 ở
+`workflow.test.js`, 3 ở `run.test.js`, 3 ở `workflow-tree.test.js`; `npm test` 326 → 365, xanh, cả khi chạy 3 bản song song.
+
+**Chưa làm / để sau:** như mục "Để sau / không làm" (14–24) và "Câu hỏi mở / Việc tiếp theo"; thêm: chỉ mục `eq` dùng chung cho
+Chọn bản ghi (24) vẫn để sau.
