@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   KEYS, itemKey, readIndex, repairIndex, copyName, migrateToLibrary, saveItem, readItem, exportLibrary, libraryWorkflows, trySet,
+  createLibrary,
 } from '../client/js/library.js';
 import { migrateV1 } from '../shared/migrate-v1.js';
 import { SAMPLES } from '../client/js/samples.js';
@@ -120,4 +121,70 @@ test('library file round trip: export, then libraryWorkflows reads it back', () 
   assert.deepEqual(libraryWorkflows(obj).map((w) => w.name), ['B', 'A'], 'most recent first');
   assert.equal(libraryWorkflows({ version: 2, steps: [] }), null, 'a workflow file is not a library file');
   assert.match(readItem(s, 'bad').error, /không đọc được/);
+});
+
+// ---------- review 0012: the open item of a tab (createLibrary) ----------
+
+const wfOf = (name, n = 0) => ({ version: 2, name, steps: Array.from({ length: n }, (_, i) => ({ id: `s${i}`, type: 'record', config: {} })) });
+function libWith(storage, ids) {
+  for (const id of ids) saveItem(storage, id, wfOf(id), { now: 1 });
+  let k = 0;
+  return createLibrary({ storage, now: () => 10, newId: () => `n${++k}`, activeId: ids[0] });
+}
+
+test('review B1: a pause (another tab wrote the item) ends when another item is opened or created; the new one is saved', () => {
+  const s = fakeStorage();
+  const lib = libWith(s, ['a', 'b']);
+  lib.pause();
+  assert.equal(lib.isPaused(), true);
+  assert.deepEqual(lib.save(wfOf('a edited')), { ok: false, paused: true });
+  assert.equal(readItem(s, 'a').workflow.name, 'a', 'the other tab\'s version is not overwritten');
+  const created = lib.create(wfOf('Mới'));
+  assert.equal(lib.isPaused(), false);
+  assert.equal(lib.save(wfOf('Mới', 1)).ok, true);
+  assert.equal(readItem(s, created.id).workflow.steps.length, 1, 'edits of the new workflow are saved');
+  // The pause of "a" no longer applies: a late "Giữ bản của tab này" for it does nothing.
+  assert.equal(lib.resume('a'), false);
+  lib.open('a');
+  lib.pause();
+  lib.open('b');
+  assert.equal(lib.isPaused(), false);
+  assert.equal(lib.save(wfOf('b edited')).ok, true);
+});
+
+test('review B2 / S1: deleting keeps the undo in memory (trash not writable), opens a successor first, never sfdg.wf.null', () => {
+  const big = JSON.stringify(wfOf('x', 30));
+  // Room for the items and the index, not for a copy in the trash.
+  const s = fakeStorage({}, { quota: 3 * big.length });
+  for (const id of ['a', 'b']) saveItem(s, id, wfOf(id, 30), { now: id === 'a' ? 2 : 1 });
+  const lib = createLibrary({ storage: s, now: () => 10, newId: () => 'n1', activeId: 'a' });
+  const res = lib.remove('a', { empty: wfOf('Workflow mới') });
+  assert.equal(res.ok, true);
+  assert.equal(s.getItem(KEYS.trash), null, 'the trash could not be written');
+  assert.deepEqual([res.opened.id, lib.activeId], ['b', 'b']);
+  assert.equal(s.getItem(itemKey('a')), null);
+  assert.ok(![...s.map.keys()].includes(itemKey('null')));
+  const back = lib.restore(res.undo);
+  assert.deepEqual(back, { ok: true, id: 'a' });
+  assert.equal(readItem(s, 'a').workflow.steps.length, 30);
+  assert.ok(readIndex(s).items.some((it) => it.id === 'a'));
+  // The last item: an empty workflow is created and opened first.
+  const one = fakeStorage();
+  const l1 = libWith(one, ['only']);
+  const r1 = l1.remove('only', { empty: wfOf('Workflow mới') });
+  assert.equal(r1.opened.id, 'n1');
+  assert.equal(readItem(one, 'n1').workflow.name, 'Workflow mới');
+  assert.ok(![...one.map.keys()].includes(itemKey('null')));
+});
+
+test('review N3: restoring never overwrites an existing item (a new id then)', () => {
+  const s = fakeStorage();
+  const lib = libWith(s, ['a', 'b']);
+  const res = lib.remove('b');
+  saveItem(s, 'b', wfOf('another b'), { now: 3 });
+  const back = lib.restore(res.undo);
+  assert.equal(back.ok, true);
+  assert.notEqual(back.id, 'b');
+  assert.equal(readItem(s, 'b').workflow.name, 'another b');
+  assert.equal(readItem(s, back.id).workflow.name, 'b');
 });

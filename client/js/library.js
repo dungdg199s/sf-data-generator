@@ -226,3 +226,109 @@ export function usedBytes(storage) {
   }
   return n;
 }
+
+/**
+ * The open item of one tab and what may change it (review 0012 B1, B2, S1, N3): pure apart from
+ * `storage`, so the rules are tested in Node. `now()` and `newId()` are injected.
+ *   - Autosave pauses **per item** (another tab wrote it); opening or creating another item, or
+ *     deleting the open one, ends the pause, so a new workflow is never left unsaved.
+ *   - Deleting keeps the item and its JSON in the returned `undo` (restore works even when the
+ *     trash could not be written); the open item is replaced only after its successor is ready.
+ *   - Restoring never overwrites an existing `sfdg.wf.<id>` (a new id then).
+ */
+export function createLibrary({ storage, now, newId, activeId = null }) {
+  const lib = { activeId, pausedId: null };
+  const setIndexActive = (id) => {
+    const index = readIndex(storage);
+    if (!index) return;
+    index.activeId = id;
+    trySet(storage, KEYS.index, JSON.stringify(index));
+  };
+  return {
+    get activeId() { return lib.activeId; },
+    /** Autosave of the open item. → { ok, error?, paused?, readded? } */
+    save(wf) {
+      if (!lib.activeId) return { ok: false, error: 'error' };
+      if (lib.pausedId === lib.activeId) return { ok: false, paused: true };
+      return saveItem(storage, lib.activeId, wf, { now: now() });
+    },
+    /** Another tab wrote the open item: pause it until the user chooses. */
+    pause() { lib.pausedId = lib.activeId; },
+    /** The user chose (only for the item that was paused; another item opened since: no-op). → boolean */
+    resume(id = lib.activeId) {
+      if (id !== lib.activeId || lib.pausedId !== id) return false;
+      lib.pausedId = null;
+      return true;
+    },
+    isPaused: () => lib.pausedId !== null && lib.pausedId === lib.activeId,
+    /** Open item `id`. → { workflow } | { error, raw } (the open item does not change then). */
+    open(id) {
+      const r = readItem(storage, id);
+      if (!r.workflow) return r;
+      lib.activeId = id;
+      lib.pausedId = null;
+      setIndexActive(id);
+      return r;
+    },
+    /** A new item with `wf` (or `reuseId`), opened. → { ok, id } | { ok: false, error } */
+    create(wf, { reuseId = null } = {}) {
+      const id = reuseId ?? newId();
+      const res = saveItem(storage, id, wf, { now: now() });
+      if (!res.ok) return { ok: false, error: res.error };
+      lib.activeId = id;
+      lib.pausedId = null;
+      return { ok: true, id };
+    },
+    /** Add `wf` as an item without opening it. → boolean */
+    add(wf) { return saveItem(storage, newId(), wf, { now: now(), activeId: lib.activeId }).ok; },
+    /**
+     * Delete item `id`. The open one: its successor (most recent readable, else a new empty
+     * workflow `empty`) is opened first; nothing is deleted when that fails.
+     * → { ok: true, undo: { item, raw }, opened?: { id, workflow } } | { ok: false, error: 'missing' | 'quota' }
+     */
+    remove(id, { empty } = {}) {
+      const index = readIndex(storage);
+      const item = index?.items.find((it) => it.id === id);
+      const raw = storage.getItem(itemKey(id));
+      if (!item || raw === null) return { ok: false, error: 'missing' };
+      let opened;
+      if (id === lib.activeId) {
+        const next = byRecent(index.items).filter((it) => it.id !== id).map((it) => ({ id: it.id, r: readItem(storage, it.id) })).find((x) => x.r.workflow);
+        if (next) opened = { id: next.id, workflow: next.r.workflow };
+        else {
+          const nid = newId();
+          if (!saveItem(storage, nid, empty, { now: now(), activeId: id }).ok) return { ok: false, error: 'quota' };
+          opened = { id: nid, workflow: empty };
+        }
+      }
+      trySet(storage, KEYS.trash, JSON.stringify({ item, workflow: raw })); // best effort: the undo is in memory
+      storage.removeItem(itemKey(id));
+      const after = readIndex(storage) ?? index;
+      after.items = after.items.filter((it) => it.id !== id);
+      if (opened) {
+        lib.activeId = opened.id;
+        lib.pausedId = null;
+        after.activeId = opened.id;
+      }
+      trySet(storage, KEYS.index, JSON.stringify(after));
+      return { ok: true, undo: { item, raw }, ...(opened ? { opened } : {}) };
+    },
+    /** Undo a delete from memory. → { ok, id } (a new id when the old one is taken) | { ok: false, error } */
+    restore({ item, raw }) {
+      const id = storage.getItem(itemKey(item.id)) === null ? item.id : newId();
+      if (trySet(storage, itemKey(id), raw)) return { ok: false, error: 'quota' };
+      const index = readIndex(storage) ?? { version: 1, activeId: lib.activeId, items: [] };
+      index.items = index.items.filter((it) => it.id !== id);
+      index.items.push({ ...item, id });
+      if (trySet(storage, KEYS.index, JSON.stringify(index))) {
+        storage.removeItem(itemKey(id));
+        return { ok: false, error: 'quota' };
+      }
+      try {
+        const t = JSON.parse(storage.getItem(KEYS.trash) ?? 'null');
+        if (t?.item?.id === item.id) storage.removeItem(KEYS.trash);
+      } catch { /* not ours */ }
+      return { ok: true, id };
+    },
+  };
+}
