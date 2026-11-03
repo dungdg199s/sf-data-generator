@@ -591,7 +591,7 @@ export function createApp({
         if (data === STREAMED) return undefined;
         return sendJson(res, 200, data);
       }
-      return await serveStatic(url.pathname, res);
+      return await serveStatic(url.pathname, res, req);
     } catch (e) {
       if (res.headersSent) {
         // A streamed response cannot change its status any more: cut it so the client sees it failed.
@@ -683,7 +683,12 @@ async function readJson(req) {
   }
 }
 
-async function serveStatic(pathname, res) {
+/**
+ * Client files: `Cache-Control: no-cache` (always revalidated, so an edit shows on the next load)
+ * with a weak ETag from mtime + size; an unchanged file is a 304 without its body (review 0012:
+ * module loads were most of a page load).
+ */
+async function serveStatic(pathname, res, req) {
   let decoded;
   try {
     decoded = decodeURIComponent(pathname);
@@ -695,12 +700,22 @@ async function serveStatic(pathname, res) {
   const rel = pathname === '/' ? 'index.html' : decoded.slice(shared ? '/shared/'.length : 0).replace(/^\/+/, '');
   const file = path.resolve(dir, rel);
   if (!file.startsWith(dir + path.sep)) throw httpError(403, 'Forbidden');
+  let st;
   try {
-    if (!(await stat(file)).isFile()) throw new Error();
+    st = await stat(file);
+    if (!st.isFile()) throw new Error();
   } catch {
     throw httpError(404, 'Not found');
   }
-  res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] ?? 'application/octet-stream', 'Cache-Control': 'no-cache' });
+  const etag = `W/"${st.size.toString(16)}-${Math.floor(st.mtimeMs).toString(16)}"`;
+  const headers = { 'Content-Type': MIME[path.extname(file)] ?? 'application/octet-stream', 'Cache-Control': 'no-cache', ETag: etag };
+  const match = String(req?.headers?.['if-none-match'] ?? '').split(',').map((x) => x.trim());
+  if (match.includes(etag) || match.includes('*')) {
+    res.writeHead(304, headers);
+    res.end();
+    return;
+  }
+  res.writeHead(200, headers);
   res.end(await readFile(file));
 }
 

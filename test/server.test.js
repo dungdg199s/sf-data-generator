@@ -678,3 +678,17 @@ test('review 0012 S3 / S4: /api/field-samples refuses word counts over the cap a
   const v = await (await post('/api/validate', { workflow: wf([record('a', 'Account', 'acc', [{ name: 'D', type: 'textarea', options: { maxSentences: 5000 } }])]) })).json();
   assert.ok(v.errors.some((e) => e.nodeId === 'a' && e.field === 'fields.D' && /tối đa|đến 1000/.test(e.message)));
 });
+
+test('review 0012: static files have a weak ETag and no-cache; an unchanged file is a 304 without body', async () => {
+  const first = await fetch(`${base}/js/main.js`);
+  assert.equal(first.status, 200);
+  const etag = first.headers.get('etag');
+  assert.match(etag, /^W\/"[0-9a-f]+-[0-9a-f]+"$/);
+  assert.equal(first.headers.get('cache-control'), 'no-cache');
+  await first.text();
+  const again = await fetch(`${base}/js/main.js`, { headers: { 'If-None-Match': etag } });
+  assert.equal(again.status, 304);
+  assert.equal(await again.text(), '');
+  const other = await fetch(`${base}/js/main.js`, { headers: { 'If-None-Match': 'W/"0-0"' } });
+  assert.equal(other.status, 200);
+});
