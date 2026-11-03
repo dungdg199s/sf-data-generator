@@ -83,6 +83,10 @@ Khóa thêm của option ([0005](design/0005-variable-picker.md)):
   validate kiểm tra mọi tham chiếu trong option đó. `vars: 'number'` ([0013](design/0013-mo-rong-bien-va-lap.md)) cho option
   `kind: 'integer' | 'number'`: số, hoặc đúng một biến kiểu Số `{{path}}`; hôm nay chỉ `count`/`min`/`max` của bước Lặp dùng
   nó — option số của generator (Number min/max, Date from/to) **chưa** nhận biến (để sau, 0013 mục 15).
+- `kind: 'list'`: **mỗi dòng một giá trị**, dấu phẩy là một phần của giá trị, khoảng trắng hai đầu bị bỏ, dòng trống bị bỏ
+  (`splitList` trong `shared/list.js`, dùng chung cho form, server và Lặp "Mỗi giá trị trong danh sách"; sửa sau review 0013 —
+  trước đó form và server tách cả theo dấu phẩy và dấu chấm phẩy). Ngoại lệ: danh sách tên field của Query vẫn nhận dấu phẩy
+  (tên field không chứa dấu phẩy); `kind: 'numberList'` vẫn tách theo dòng, dấu phẩy và dấu chấm phẩy.
 - `showIf` bắc cầu (0013): option ẩn khi option nó phụ thuộc đang ẩn. Template dùng được `{{loop.value}}` (Lặp "Mỗi giá trị
   trong danh sách") và `{{run.seed}}`, `{{run.now}}`, `{{run.today}}` (biến của lần chạy).
 - `accepts` (chỉ với `kind: 'ref'`, không bắt buộc): lọc nguồn theo cờ của `exposes`, ví dụ `{ "pool": true }`. Mặc định

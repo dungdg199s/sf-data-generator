@@ -813,8 +813,10 @@ Ba đợt, ba commit code + một commit tài liệu trên nhánh `claude/salesf
 5. Câu phạm vi của 0005 ở ô số có tiền tố `"<nhãn ô>": ` (như bảng Thông báo cho `notNumber`/`ownLoop`); ở `right` và `filterValue`
    giữ câu không tiền tố như ô template của bước.
 6. Mẫu của nhóm Lần chạy chỉ có sau một lần Xem trước (seed và `now` thật của lần đó); trước đó cột mẫu trống.
-7. Ô "Danh sách giá trị" là `kind: 'list'` sẵn có, tách cả theo dấu phẩy như mọi ô list: giá trị chứa dấu phẩy chỉ nhập được qua
-   file JSON (executor nhận nguyên mảng). Ghi lại, không đổi hành vi chung của `kind: 'list'`.
+7. Ô "Danh sách giá trị" là `kind: 'list'` sẵn có. ~~Tách cả theo dấu phẩy như mọi ô list~~ → **đổi sau review (N4):** mọi ô
+   `kind: 'list'` (form, server `toList`, `valueList`) dùng một luật duy nhất `splitList` (`shared/list.js`): mỗi dòng một giá
+   trị, dấu phẩy là một phần của giá trị. Danh sách field của Query vẫn nhận dấu phẩy (`builderFields` tách từng mục), `numberList`
+   không đổi.
 8. Luồng smoke là **17** (`flowVarsLoops`), vì số 15 đã thuộc Sơ đồ (0003) và 16 thuộc Lịch sử (0011).
 9. `numberOption` coi số không hữu hạn là "trống" (0 lần) như chuỗi chữ.
 
@@ -826,3 +828,52 @@ lựa chọn đầu của "Lặp theo"), `GET /api/meta (0006): …` (danh sách
 
 **Chưa làm / để sau:** như mục "Để sau / không làm" (14–24) và "Câu hỏi mở / Việc tiếp theo"; thêm: chỉ mục `eq` dùng chung cho
 Chọn bản ghi (24) vẫn để sau.
+
+### Sửa sau review
+
+Commit `Fix the 0013 review: …` (2026-11-03). Mỗi mục có test, kiểm tra là **trượt** khi bỏ phần sửa (chạy lại test với file
+nguồn của trước khi sửa) và qua khi có.
+
+- **B1 — bảng tổng tiền tố của Chọn bản ghi `weighted` dùng chung giữa hai bước.** `weightSums` là `WeakMap` theo mảng ứng viên,
+  nên hai bước `weighted` trên cùng pool với `weightField` khác nhau dùng chung một bảng (bước sau chọn theo field của bước trước,
+  dữ liệu sai âm thầm). Nay khóa theo **id bước** rồi mảng ứng viên. Test `0013 review B1: two weighted picks on one pool with
+  different weight fields keep their own weights` và ca vàng `two weighted picks on one pool with different weight fields (0013
+  review)` (× 2 seed); 24 khóa vàng cũ không đổi.
+- **S1 — Chọn bản ghi "Bỏ qua…" trong thân Lặp.** `poolNonEmpty` coi pool Record đặt sau một Chọn bản ghi `onEmpty: skip` trong cùng
+  thân là luôn có bản ghi, làm mất một cảnh báo `maybe` đúng (ở 104f3fc cảnh báo đó có, vì Lặp `each` khi ấy luôn là 0 lần; còn
+  Lookup tới chính bản ghi đó thì cả khi ấy cũng không được cảnh báo). Sửa gốc: danh mục khai báo `flow.canSkip: { key: 'onEmpty',
+  in: ['skip'] }` cho Chọn bản ghi; `analyzeScope` đánh dấu mọi nguồn đặt sau bước đó trong thân Lặp gần nhất (qua cả các cột Rẽ
+  nhánh; Lặp lồng bên trong tự "bắt" bỏ qua của nó) và sau vòng lặp chúng là `maybe` với `why.skip`, câu `bước "pp" có thể bỏ qua
+  phần còn lại của vòng lặp "loop" (khi không còn bản ghi để chọn), nên "acc" có thể chưa có bản ghi. Đặt "acc" trước bước "pp"
+  hoặc chọn "Báo lỗi và dừng".` Vì nguồn là `maybe`, `poolNonEmpty` trả `false`. Ở gốc workflow không đổi gì (bỏ qua là dừng
+  cả lần chạy). Test `0013 review S1: …`.
+- **S2 — câu `numberVarEmpty` của `min`/`max`.** "nên các lần đó lặp 0 lần" sai với khoảng: nay `min` → `nên các lần đó lấy "Ít
+  nhất" = 0`, `max` → `nên các lần đó lặp đúng "Ít nhất" lần` (đúng là `max < min` ⇒ dùng `min`). Test `0013 review S2: …`.
+- **S3 — smoke.** Ba race theo đúng nguyên nhân reviewer tìm: (1) `flowCanvas` gõ `#wf-name` trước khi mẫu hiện (với `/api/meta`
+  chậm, mẫu ghi đè và không có autosave) → gõ sau khi có thẻ, `count()` chịu được autosave chưa có; (2) 16d đọc `sent.forgets`
+  trước khi request forget xong → chờ response; (3) kiểm tra "xác thực lại" lấy response `/api/validate` đầu tiên → khớp theo tên
+  workflow trong body request. Thêm: `flowEditing` chờ kết quả mới (khác dòng tóm tắt cũ, Dừng đã ẩn) rồi mới bấm tab Contact; khi
+  một luồng ném lỗi, smoke lưu ảnh chụp toàn trang của các trang đang mở của luồng đó và selector đang chờ vào `failures/` trong
+  thư mục tạm (giữ lại) và in đường dẫn; trần thời gian `SMOKE_BUDGET_MS` (mặc định 12 000). Ảnh chụp đó bắt được ngay một lần
+  trượt của 3b (cũng thấy ở commit gốc, 1/23 lần): Ctrl+Enter của 3b rơi vào lúc một lần xem trước khác chưa xong (chỉ ra toast
+  "Đang chạy"), nên 3b nay chờ Dừng ẩn và Xem trước bật lại trước khi giữ request. Kiểm chứng: bản smoke cũ có chèn độ trễ
+  của reviewer (`/api/meta` +400 ms, forget +150 ms, validate +600 ms) trượt đúng ba chỗ đó; bản đã sửa với cùng độ trễ, và ba bản
+  sao của reviewer, đều `SMOKE OK`.
+- **N1 — `now` ngoài khoảng của `Date`.** `|now| > 8,64·10^15` làm `new Date(now).toISOString()` ném lỗi thô: nay `/api/run` và
+  `/api/export` trả 400 tiếng Việt (giữ câu cũ cho `now` không phải số), `createRun` cũng từ chối (`NOW_MESSAGE`).
+- **N2 — tổng trọng số vô cực** (hai giá trị 1e308): trước chọn theo `r · ∞`; nay chọn đều như tổng 0, với câu riêng `… tổng trọng số
+  của field "W" quá lớn để tính nên đã chọn đều…` (mã `pickWeightZero`).
+- **N3 — `filterField`/`weightField` trên pool Record.** `renameField` nay đổi cả các option `suggest: { kind: 'poolFields' }` mà pool
+  của chúng là bản ghi của bước đó (trực tiếp hoặc qua Chọn bản ghi), giữ phần sau dấu chấm (`Industry.Sub`); toast nêu `Industry →
+  Sector` khi chỉ các ô đó đổi. Validate cảnh báo `unknownPoolField` khi field không có trong các field mà pool Record sinh ra
+  (Chọn bản ghi và Lặp `each`; pool Query không kiểm tra vì org mới biết). Hàm chung `poolFieldOptions` trong `shared/scope.js`.
+- **N4 — một luật cho ô danh sách.** Xem mục 7 ở trên: `splitList` (`shared/list.js`), mỗi dòng một giá trị, dấu phẩy giữ nguyên;
+  help của "Danh sách giá trị" và "Field cần lấy" nói rõ. Hash vàng và các mẫu trong `client/js/samples.js` không đổi (mẫu lưu mảng,
+  không có giá trị chứa dấu phẩy); workflow đã lưu là mảng nên không đổi. Chỉ chuỗi gõ tay (file JSON) `"a, b"` ở option list của
+  generator nay là **một** giá trị.
+- **N5 —** `numberVarPath` dựng regex từ `TEMPLATE_TOKEN_SOURCE` (một cú pháp token duy nhất).
+- **N6 — bước đang tắt tên `run`** không còn che `{{run.*}}` (executor cũng không bao giờ thấy nó); thứ tự phân giải ghi ở
+  `workflow-schema.md`.
+
+Test: `npm test` 365 → 376 (11 test mới, không sửa test cũ).
+
