@@ -861,42 +861,9 @@ async function flowLayoutWide() {
   check((await page.$$('#issues .issue.current')).length === 1, 'F8 does not mark the current row');
   await page.keyboard.press('Shift+F8');
   check((await selected()) === 'opp', 'Shift+F8 did not go back to the last row (opp)');
-  // Collapse: one 32 px row, kept after a reload; its first line jumps to the first issue.
-  await page.click('#btn-issues-toggle');
-  const collapsed = () => page.evaluate(() => ({
-    h: document.getElementById('issues').getBoundingClientRect().height,
-    expanded: document.getElementById('btn-issues-toggle').getAttribute('aria-expanded'),
-    first: document.getElementById('issues-first').hidden ? '' : document.getElementById('issues-first').textContent,
-  }));
-  let c = await collapsed();
-  check(c.h <= 40 && c.expanded === 'false' && /\[task\] Chưa nhập sObject/.test(c.first), `collapsed issues bar (${JSON.stringify(c)})`);
-  await page.reload();
-  await page.waitForSelector('#issues:not([hidden])');
-  c = await collapsed();
-  check(c.h <= 40 && c.expanded === 'false', `collapsed state not kept after reload (${JSON.stringify(c)})`);
-  await page.click('#issues-first');
-  check((await selected()) === 'task', 'the collapsed first line did not go to its step');
-  // A run that fails validation expands the bar (background validation never does).
-  await page.click('.step-card[data-id="opp"] .type');
-  await page.keyboard.press('Control+Enter');
-  await page.waitForSelector('#issues:not(.collapsed)', { timeout: 3000 }).catch(() => errors.push('the issues bar did not expand when the run failed validation'));
-  check((await selected()) === 'task', 'a failed run did not select the first step with an error');
-  // 13e (wide): both download buttons, no "⤓ Tải".
+  // Design 0014 §2: the results panel height handle (keyboard, mouse; kept over the reload below), never
+  // breaking 0009's guarantees (issues bar ≤ 25 % of the middle column, the selected card in view).
   await page.setViewportSize({ width: 1440, height: 900 });
-  const dl = await page.evaluate(() => ['btn-dl-json', 'btn-dl-csv', 'btn-dl-menu'].map((id) => document.getElementById(id).getBoundingClientRect().width > 0));
-  check(dl.join() === 'true,true,false', `1440px: download buttons ${dl} (JSON, CSV shown; ⤓ Tải hidden)`);
-  // N5: a selection on a wide screen does not pop a sheet open when the window gets narrow.
-  await page.setViewportSize({ width: 800, height: 900 });
-  await settle(page);
-  const narrowed = await page.evaluate(() => {
-    const insp = document.getElementById('inspector');
-    return { open: insp.classList.contains('open'), top: insp.getBoundingClientRect().top, inert: insp.inert, sheet: document.body.classList.contains('sheet-open') };
-  });
-  check(!narrowed.open && !narrowed.sheet && narrowed.inert && narrowed.top >= 899, `narrowing the window popped the sheet open (${JSON.stringify(narrowed)})`);
-  await page.setViewportSize({ width: 1440, height: 900 });
-  await page.waitForFunction(() => !document.getElementById('inspector').inert, null, { timeout: 2000 }).catch(() => errors.push('the inspector stays inert on a wide screen'));
-  check(!(await page.$('.palette[data-overflow], #results-summary[data-overflow]')), '1440px: the palette or the summary is marked as overflowing sideways');
-  // Design 0014 §2: the results panel height handle (keyboard, mouse, remembered), never breaking 0009's guarantees.
   await page.click('.step-card[data-id="con"] .type');
   if ((await page.getAttribute('#btn-results-toggle', 'aria-expanded')) !== 'true') await page.click('#btn-results-toggle');
   await page.focus('#btn-results-toggle');
@@ -931,14 +898,47 @@ async function flowLayoutWide() {
   await page.mouse.up();
   const dragged = await panelH();
   check(Math.abs(dragged - 260) <= 1, `dragging the handle up 100 px gave ${dragged} px (260 expected)`);
+  // Collapse: one 32 px row, kept after a reload; its first line jumps to the first issue.
+  await page.click('#btn-issues-toggle');
+  const collapsed = () => page.evaluate(() => ({
+    h: document.getElementById('issues').getBoundingClientRect().height,
+    expanded: document.getElementById('btn-issues-toggle').getAttribute('aria-expanded'),
+    first: document.getElementById('issues-first').hidden ? '' : document.getElementById('issues-first').textContent,
+  }));
+  let c = await collapsed();
+  check(c.h <= 40 && c.expanded === 'false' && /\[task\] Chưa nhập sObject/.test(c.first), `collapsed issues bar (${JSON.stringify(c)})`);
   await page.reload();
-  await page.waitForSelector('.step-card[data-id="con"]');
+  await page.waitForSelector('#issues:not([hidden])');
+  c = await collapsed();
+  check(c.h <= 40 && c.expanded === 'false', `collapsed state not kept after reload (${JSON.stringify(c)})`);
   await page.click('#btn-results-toggle');
   check(Math.abs((await panelH()) - dragged) <= 1, `the panel height was not kept after a reload (${await panelH()} vs ${dragged})`);
   await page.focus('#results-resize');
   await page.keyboard.press('Enter');
   const shut = await page.evaluate(() => ({ expanded: document.getElementById('btn-results-toggle').getAttribute('aria-expanded'), focus: document.activeElement?.id, hidden: document.getElementById('results-resize').hidden }));
   check(shut.expanded === 'false' && shut.focus === 'btn-results-toggle' && shut.hidden, `Enter on the handle (${JSON.stringify(shut)}: collapsed, focus on Kết quả)`);
+  await page.click('#issues-first');
+  check((await selected()) === 'task', 'the collapsed first line did not go to its step');
+  // A run that fails validation expands the bar (background validation never does).
+  await page.click('.step-card[data-id="opp"] .type');
+  await page.keyboard.press('Control+Enter');
+  await page.waitForSelector('#issues:not(.collapsed)', { timeout: 3000 }).catch(() => errors.push('the issues bar did not expand when the run failed validation'));
+  check((await selected()) === 'task', 'a failed run did not select the first step with an error');
+  // 13e (wide): both download buttons, no "⤓ Tải".
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const dl = await page.evaluate(() => ['btn-dl-json', 'btn-dl-csv', 'btn-dl-menu'].map((id) => document.getElementById(id).getBoundingClientRect().width > 0));
+  check(dl.join() === 'true,true,false', `1440px: download buttons ${dl} (JSON, CSV shown; ⤓ Tải hidden)`);
+  // N5: a selection on a wide screen does not pop a sheet open when the window gets narrow.
+  await page.setViewportSize({ width: 800, height: 900 });
+  await settle(page);
+  const narrowed = await page.evaluate(() => {
+    const insp = document.getElementById('inspector');
+    return { open: insp.classList.contains('open'), top: insp.getBoundingClientRect().top, inert: insp.inert, sheet: document.body.classList.contains('sheet-open') };
+  });
+  check(!narrowed.open && !narrowed.sheet && narrowed.inert && narrowed.top >= 899, `narrowing the window popped the sheet open (${JSON.stringify(narrowed)})`);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.waitForFunction(() => !document.getElementById('inspector').inert, null, { timeout: 2000 }).catch(() => errors.push('the inspector stays inert on a wide screen'));
+  check(!(await page.$('.palette[data-overflow], #results-summary[data-overflow]')), '1440px: the palette or the summary is marked as overflowing sideways');
   const theme = await page.evaluate(() => ({ title: document.getElementById('theme-select').title, color: getComputedStyle(document.querySelector('#theme-select option')).color }));
   check(theme.title === 'Giao diện: Theo hệ thống' && !/rgba\(0, 0, 0, 0\)|transparent/.test(theme.color), `theme select title/option colour (${JSON.stringify(theme)})`);
   await page.context().close();
@@ -1095,9 +1095,13 @@ async function flowLayoutNarrow() {
   await settle(m);
   s = await sheet();
   check(s.open && s.card <= s.sheet + 0.5 && (await notch()).expanded === 'false', `back to the mid notch, con not above the sheet (${JSON.stringify(s)})`);
-  // Dragging the sheet head with a pointer: up 200 px → full; down 400 px → closed like Xong (inert, focus on the card).
+  // From here on with reduced motion: no transitions to wait out (the smoke's time budget), and the 0 ms
+  // path of the notches (no transitionend) is covered too.
+  await m.emulateMedia({ reducedMotion: 'reduce' });
+  // Dragging the sheet head with a pointer: up 200 px → full; then down 600 px (under half of mid, so at any
+  // speed) → closed like Xong (inert, focus on the card).
   const headAt = () => m.$eval('#inspector .sheet-head', (e) => { const r = e.getBoundingClientRect(); return { x: r.x + r.width * 0.8, y: r.y + r.height / 2 }; });
-  for (const dy of [-200, 400]) {
+  for (const dy of [-200, 600]) {
     const at = await headAt();
     await m.mouse.move(at.x, at.y);
     await m.mouse.down();
@@ -1106,7 +1110,7 @@ async function flowLayoutNarrow() {
     await settle(m);
     n = await notch();
     if (dy < 0) check(n.open && Math.abs(n.top - n.bar) <= 1, `dragging the sheet head up 200 px (${JSON.stringify(n)}: full notch expected)`);
-    else check(!n.open && n.inert && n.focus === 'con', `dragging the sheet head down 400 px (${JSON.stringify(n)}: closed, inert, focus on con)`);
+    else check(!n.open && n.inert && n.focus === 'con', `dragging the sheet head down 600 px (${JSON.stringify(n)}: closed, inert, focus on con)`);
   }
   await m.tap('.step-card[data-id="con"] .type');
   await m.waitForSelector('#inspector.open');
@@ -2048,7 +2052,8 @@ async function flowProductivityRun() {
     // Independent flows, one context each, in parallel. A flow that throws (timed-out wait) is
     // reported and the others still finish.
     // Longest first; at most 2 × CPUs run at once (review 0012: the flows are CPU-bound).
-    let flows = { flowPicker, flowFiles, flowLayoutNarrow, flowCanvas, flowProductivity, flowEach, flowVarsLoops, flowProductivityRun, flowLibrary, flowHistoryWide, flowEditing, flowDark, flowCanvasPhone, flowMinimap };
+    // Longest first (measured after design 0014): the queue order is the start order of the lanes.
+    let flows = { flowLayoutNarrow, flowHistoryWide, flowPicker, flowFiles, flowCanvas, flowVarsLoops, flowEditing, flowProductivityRun, flowEach, flowLibrary, flowDark, flowMinimap, flowProductivity, flowCanvasPhone };
     // SMOKE_ONLY=flowCanvas,flowEach runs only those flows (while working on one area).
     const only = process.env.SMOKE_ONLY?.split(',').filter(Boolean);
     if (only?.length) flows = Object.fromEntries(Object.entries(flows).filter(([n]) => only.includes(n)));
