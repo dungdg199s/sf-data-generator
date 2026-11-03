@@ -30,7 +30,7 @@ Nếu máy chưa cài `sf` thì `/api/orgs` trả 503 kèm thông báo; UI vẫn
 | `GET /api/orgs` | Org từ sf CLI: `alias`, `username`, `isSandbox`, `isScratch`, `isDefault` |
 | `GET /api/orgs/:org/sobjects` | sObject có thể tạo (createable) |
 | `GET /api/orgs/:org/sobjects?for=query` | sObject đọc được (`queryable`, bỏ `deprecatedAndHidden`), cho ô sObject của bước Query |
-| `GET /api/orgs/:org/sobjects/:name` | Describe đã map sang field spec (`server/sf/describe-map.js`) |
+| `GET /api/orgs/:org/sobjects/:name` | Describe đã map sang field spec (`server/sf/describe-map.js`): `{ sobject, label, nameField, fields }`; `nameField` (0012) là field có `nameField: true` trong describe (`Name`, `Subject`, `CaseNumber`…) hoặc `null` |
 | `GET /api/orgs/:org/limits` | Hạn mức 24 giờ (`conn.limits()`, chỉ đọc): `{ api: { max, remaining }, bulkBatches }`; cache 60 giây, quá 3 giây ⇒ 504. Cho hộp xác nhận Insert (chỉ cảnh báo, không chặn) |
 | `GET /api/orgs/:org/sobjects/:name/fields` | **Mọi** field (`name`, `label`, `type`, `referenceTo`, `relationshipName`, `filterable`, `sortable`) và `nameField`; thứ tự `Id`, name field, rồi theo nhãn. Cho hộp "Chọn field…" |
 
@@ -41,6 +41,27 @@ Nếu máy chưa cài `sf` thì `/api/orgs` trả 503 kèm thông báo; UI vẫn
 - `required` = không nillable và không có giá trị mặc định khi tạo; UI chọn sẵn các field này khi import.
 - Lookup: master-detail nhận ra qua `relationshipOrder`. `ref` để trống; UI tự chọn bản ghi cha
   nếu chỉ có một bước Record phía trên khớp `referenceTo`.
+
+### Field mặc định của bước Record ([0012](design/0012-nang-suat-soan-thao.md))
+
+- Không cần org: bước Record mới và việc đổi sObject dùng `meta.recordPresets` của server (Task → `Subject`, Contact →
+  `FirstName` + `LastName`…, [workflow-schema.md](workflow-schema.md#bước)); chỉ thay khi danh sách field **chưa bị sửa**
+  (bằng preset của sObject cũ hoặc bằng danh sách vừa tự điền).
+- Đã chọn org và sObject có trong danh sách sObject tạo được của org: 500 ms sau khi đổi sObject, inspector gọi describe
+  (`GET /api/orgs/:org/sobjects/:name`, cache trong phiên); nếu danh sách vẫn là cái vừa tự điền thì thay bằng **mọi field bắt
+  buộc tạo được** (cùng hàm với Import: Lookup bắt buộc tự chọn bản ghi cha theo luật Import, kể cả "＋ … có sẵn trong org"
+  thêm bước Query), không có field bắt buộc ⇒ `nameField`; toast `Đã đặt field mặc định cho Task theo dev-sb: Subject.` Không có
+  bước undo riêng: Ctrl+Z bỏ việc đổi sObject cũng trả lại danh sách field.
+- Workflow cũ có `Name` trên sObject `noName` (Task, Contact…): cảnh báo `noNameField` với nút `Đổi thành Subject`.
+
+### Khung "Thiếu field bắt buộc" ([0012](design/0012-nang-suat-soan-thao.md) F2)
+
+Khi một bước Record được chọn, đã chọn org và sObject có trong org: inspector so field bắt buộc của describe (`required`) với
+field đã có (không phân biệt hoa thường) và hiện trên danh sách field
+`Thiếu 2 field bắt buộc của Opportunity trong dev-sb: StageName, CloseDate.` [Thêm 2 field] [Chọn…] [Bỏ qua]. "Thêm" dùng đúng
+hàm của Import (một bước undo); "Chọn…" mở hộp Import với nhóm `Bắt buộc, chưa có (n)` đứng đầu, đã tích; "Bỏ qua" ẩn khung của
+bước đó tới khi tải lại trang. Describe lỗi / sObject không có: không hiện gì. Không vào thanh lỗi (validate ở server chạy không
+cần org). Cache describe của phiên xóa khi bấm ⟳ danh sách org.
 
 ## Insert
 

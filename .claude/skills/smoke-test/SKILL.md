@@ -21,7 +21,7 @@ flows
 
 **Speed (since design 0009).** The flows are grouped into seven independent functions that run **in parallel**, each in
 its own browser context (so storage, routes and dialogs never leak between them): `flowEditing` (1–5), `flowPicker`
-(5b), `flowFiles` (5c–10), `flowDark` (12), `flowLayoutWide` and `flowLayoutNarrow` (11, 13), `flowEach` (14), `flowCanvas` (15), `flowHistory` (16), `flowVarsLoops` (17). The browser launches
+(5b), `flowFiles` (5c–10), `flowDark` (12), `flowLayoutWide` and `flowLayoutNarrow` (11, 13), `flowEach` (14), `flowCanvas` (15), `flowHistory` (16), `flowVarsLoops` (17), `flowProductivity` and `flowProductivityRun` (18, 18b). The browser launches
 while the server starts; a fresh context starts with empty storage, so no `localStorage.clear()` + reload; storage a flow
 needs before its first load is written by `addInitScript` (once, guarded by a marker key, so reloads keep it); layout
 checks resize one page (`setViewportSize`) instead of opening a context per width; waits for the sheet or toast
@@ -72,8 +72,11 @@ the others; never add a fixed `waitForTimeout`.
    The first `/api/validate` (of the workflow before the sample) is held until after the preview: when it lands, the
    Query warning stays (stale responses are dropped). Editing the name and putting it back (a validation of the same
    workflow) also keeps the run's warning.
-6. **v1 autosave.** A `sfdg.workflow.v1` autosave is migrated on load (toast), `sfdg.workflow.v2` is
-   written and the v1 key is left untouched.
+6. **v1 and v2 autosaves (design 0012 A).** A `sfdg.workflow.v1` autosave is migrated on load (toast) into one item of the
+   library (`sfdg.library`, `sfdg.wf.<id>`); `sfdg.workflow.v2` is **not** written and the v1 key is left untouched. A
+   `sfdg.workflow.v2` autosave becomes the first item (toast "… đã được đưa vào Thư viện"); after an edit (saved to the item)
+   the v2 key is unchanged byte for byte. Flows read what was saved with `smokeStored()` (the tab's open item) and start again
+   from an autosave with `smokeSetAutosave(wf)` (library keys removed), both defined by `newPage`.
 7. **Malformed v2 autosave.** The sample is shown with a recovery toast and a "Tải bản lưu" button; the
    broken autosave is neither overwritten nor lost (`sfdg.workflow.v2.broken` keeps a copy).
 8. **Malformed v2 file.** Opening it is refused with a toast naming the bad entry (`steps[1]`); the
@@ -190,6 +193,20 @@ the others; never add a fixed `waitForTimeout`.
     "So với" inserts `{{opp.Amount}}`. A new Lặp switched to "Mỗi giá trị trong danh sách" has the `Hot/Warm/Cold`
     placeholder, an outlined list and the valuesEmpty message; typing `Hot⏎Warm⏎Cold` gives `3 giá trị: Hot, Warm, Cold ·
     {{loop.value}}`.
+18. **Năng suất soạn thảo (design 0012), `flowProductivity`, own context.** "Account + Contact": `con` shows `≈ n bản ghi`
+    (`.stat.est`) and the Start card `≈ n bản ghi · ≤ …` before any run (H); hovering `AccountId → acc` outlines `acc`
+    (`.is-ref-target`), leaving removes it (I); the Industry options end with `Ví dụ: "…" · "…" · "…"`, and changing the values
+    renews it (waits for the `/api/field-samples` response whose body has the new value, E). Shift+click `acc`, `loopCon` →
+    two `aria-selected`, `aria-multiselectable`, "2 bước đã chọn"; Bọc trong Lặp, one ↶ restores; Ctrl+C / Ctrl+V pastes them
+    selected as `acc2` / `loop` with the rename toast; Ctrl+/ turns both off (B). `▾` → `+ Workflow mới` adds an item (A); a
+    Record switched to Task gets `Subject`, renamed `Name` it gets the `Đổi thành Subject` fix, which clears the warning (G);
+    Ctrl+O back to the first item, where ↶ has nothing to undo; a sample opens as a third item, the others kept (A).
+18b. **`flowProductivityRun`, own context, alongside 18.** With a mocked org and a page-side fake NDJSON stream for the insert
+    (nothing reaches an org): `insert 5/n` (`.stat.live`) and `lỗi 2` (`.tag-insert-err`) on `con` while inserting; after
+    `done` the tag opens "Lỗi insert" with the step's group `.current` (D). "Contact cho Account có sẵn": `{{acc.Industry}}` in
+    con's Title → `Thêm Industry vào SELECT của "accs"` adds it to the Query and the error goes (F1); ⋯ → Bọc trong Lặp qua
+    từng bản ghi → a Lặp `each` over `accs` around `con`, and the toast's [Đổi] points the Lookup at the record looped over (C).
+    At 390 px: ⋯ → Chọn nhiều bước shows `.select-bar`, a tap gives `2 đã chọn` without opening the sheet, Xong leaves.
 
 It also fails on any page error or a run over the time budget, `SMOKE_BUDGET_MS` (default 12 000 ms, review 0013: raise it
 on a slow or loaded machine, e.g. `SMOKE_BUDGET_MS=20000`; keep 12 000 for normal runs). When a flow throws (a timed-out
@@ -197,7 +214,7 @@ wait), its open pages are saved as full-page screenshots plus a `<flow>.txt` wit
 stack, under `failures/` in the smoke temp dir (kept when that happens); the paths are printed after `failure artefacts:`.
 Waits never race a previous state: after Ctrl+Enter wait for the new result before clicking its tab, wait for a mocked
 request's response before reading what it recorded, and match a request by its body (e.g. the workflow name) rather than
-take the first one (review 0013 S3). Typical durations: ~5.5–6.5 s since the flows run in parallel, flow 14 included, ~7–8.5 s with flow 15 on a 4-CPU machine, ~8–9.5 s with flow 16, ~9–10 s with flow 17; ~10 s before;
+take the first one (review 0013 S3). Typical durations: ~5.5–6.5 s since the flows run in parallel, flow 14 included, ~7–8.5 s with flow 15 on a 4-CPU machine, ~8–9.5 s with flow 16, ~9–10 s with flow 17, ~10.5–11 s with flows 18 / 18b (the same machine ran the 0013 suite in ~9.5–10 s); ~10 s before;
 ~7–8 s with two CPU-bound processes running alongside).
 Screenshots (only when a directory is given): `smoke-1440.png`, `smoke-390.png`, `smoke-390-sheet.png`,
 `smoke-390-dark.png`, `smoke-390-topbar.png`, `smoke-1280-issues.png`, `smoke-1440-dark.png`, `smoke-1440-dark-insert.png`,

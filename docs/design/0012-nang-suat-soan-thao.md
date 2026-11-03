@@ -1,6 +1,6 @@
 # 0012 — Năng suất soạn thảo: thư viện workflow, chọn nhiều, copy/paste, sửa nhanh, số liệu trên thẻ
 
-- **Trạng thái:** Đã duyệt
+- **Trạng thái:** Đã làm
 - **Ngày:** 2026-10-28
 - **Liên quan:** [0003](0003-process-mode.md) (cây bước, phím, "Việc tiếp theo": chọn nhiều, copy/paste, ước tính số bản
   ghi, tô thẻ cha, field tên mặc định), [0004](0004-streaming-execution.md) (sự kiện tiến độ, nhóm lỗi insert),
@@ -797,4 +797,87 @@ Không có câu hỏi chặn việc làm. Để sau:
 
 ## Đã làm
 
-(Chưa làm.)
+Làm đủ chín phần theo thứ tự của kế hoạch (G, F1 cùng F2, C, I, H, D, E, B1, B2, A, rồi tài liệu), mỗi phần một commit trên nhánh
+`claude/salesforce-data-generator-xt3u27`. Workflow JSON không đổi; seed và hash vàng (`test/stream.test.js`) không đổi.
+
+### Kiểm lại giả định (doc viết trước 0011 và 0013)
+
+| Giả định | Thực tế sau 0011 / 0013 | Đã làm |
+| --- | --- | --- |
+| `insert.byStep` phải thêm | 0011 đã có `byStep` trong tóm tắt của inserter và trong `result.insert` (cho Lịch sử); chỉ `progress` insert chưa có | Thêm `byStep` vào `progress` insert (và số tạm của job Bulk đang xử lý, như `inserted`); `insert.byStep` giữ nguyên dạng 0011 |
+| Tiến độ insert chỉ có `bySobject` | 0011 thêm `bulk`, `phase: "stopping"`, `waitingBulk` | Chip trực tiếp đọc `byStep` của `progress` insert; sự kiện `stopping` không đổi chip |
+| Tab "Lỗi insert" | 0011 thêm tab "Lỗi xóa" và `groupTarget` cho hàng nhóm lỗi | Tag lỗi mở đúng tab "Lỗi insert" (`showInsertErrorsFor`), hàng có `data-node`; tab "Lỗi xóa" không đổi |
+| Thư viện và Lịch sử | 0011 lưu ảnh chụp workflow của mỗi lần insert ở server | Thư viện chỉ ở `localStorage`, không đọc / ghi Lịch sử; đổi workflow không đụng Lịch sử. Cảnh báo "cùng seed đã insert" thành danh sách ≤ 20 `{ key, org }` (`state.lastInserts`) qua mọi workflow |
+| Ước tính chỉ có Lặp fixed / range / each | 0013 thêm số lần lặp từ biến, `values`, lọc / xáo trộn / tối đa của `each`, `flow.canSkip` | `shared/estimate.js`: `values` chính xác; biến ⇒ chưa biết (chip `? bản ghi`), trừ `{{pool.$count}}` (số dòng / bản ghi của pool, không chính xác); lọc ⇒ kỳ vọng chưa biết, tối đa = pool (`≤ n`); `limit` kẹp; `canSkip` (Chọn bản ghi "Bỏ qua") ⇒ phần còn lại của thân vòng lặp có thể không chạy (tối thiểu 0); thêm: pool lớn dần trong cùng vòng lặp ngoài ⇒ trung bình (tổng + một lượt) / 2 |
+| Dán đổi tên theo `cloneSteps` | 0013 thêm option nhận biến (`count`/`min`/`max` `vars: 'number'`, `right`, `filterValue`) và option tên field của pool (`filterField`, `weightField`, `poolFieldOptions`) | `pasteSteps` đổi alias qua `renameAlias` với danh mục, nên mọi option `vars` / `kind: 'ref'` đi theo (test riêng); `filterField` / `weightField` là tên field nên không đổi khi đổi alias (đúng), vẫn đi theo khi đổi tên field (0013) |
+| Chọn nhiều và `run.*` | 0013 thêm biến toàn cục `run` | `run.*` không phải bước: không tô thẻ nguồn (I), field dùng `{{run.seed}}` vẫn là "độc lập" (E) |
+| Icon (0014) | `ico()` của 0014 **chưa có** (chỉ `icoTile()`) | Không thêm glyph mới: tag lỗi là chữ `lỗi 3` (không ⊗), nút `Chưa lưu` không ▲, mục popup `+ Workflow mới`, `Mở file JSON…` không ⇪. `▾` và `⋯` là ký tự đã có. Mục "(0014, dự kiến)" của `ui-design-system.md` không sửa |
+
+### Đã làm theo phần
+
+- **G** — `RECORD_PRESETS` / `recordPreset` (`server/workflow/nodes.js`), `meta.recordPresets` (thêm `nameField` cho preset
+  `noName`), `nameField` trong `mapDescribe`, cảnh báo `noNameField` + `fix: renameField` (không có `fix` khi bước đã có field
+  đích). Client: `recordDefaultFields` (store), `newStep` dùng preset (Account không đổi ⇒ mẫu và hash vàng không đổi),
+  `applyRecordPreset` khi đổi sObject (danh sách vẽ lại tại chỗ, focus ở ô sObject), describe sau 500 ms (field bắt buộc theo
+  hàm chung `addDescribedFields` của Import, rồi `nameField`), nút "Đổi thành …" (cảnh báo có `fix` hiện trong thẻ field).
+- **F1** — `addSelectField` (`shared/soql.js`), `fix: addSelectField` trên `unknownMember` của nguồn org (cả qua Chọn bản ghi và
+  bản ghi đang lặp, `stepId` = Query gốc; SOQL không sửa an toàn được ⇒ không có `fix`), nút ở `fillErrors`, toast.
+- **F2** — khung `.hint-box` "Thiếu n field bắt buộc …" (describe cache theo phiên, một lần mỗi org + sObject, xóa khi ⟳),
+  [Thêm n field] (cùng hàm Import, một bước undo), [Chọn…] (Import với nhóm `Bắt buộc, chưa có (n)` đứng đầu), [Bỏ qua].
+- **C** — `eachWrapPlan` / `wrapInEach` (`client/js/ops.js`): pool được tham chiếu nhiều nhất (Chọn bản ghi tính cho pool nó
+  chọn), rồi gần nhất; mục khóa kèm `title` khi không có pool; toast 8 s [Đổi] nối Lookup (bước undo riêng).
+- **I** — `client/js/ref-target.js`: chip biến (dải chip 0005) và chip Lookup trên thẻ Quy trình tô `.is-ref-target`; `title`
+  có `Nguồn: …`. Sơ đồ: thẻ trong khung nhìn được tô như Quy trình (thẻ Sơ đồ không có chip field).
+- **H** — `shared/estimate.js`, `currentEstimate()` (cache theo phiên bản + kết quả), chip `.stat.est` trên Record khi chưa chạy
+  / kết quả cũ (thay chip `.stale` của Record; khung giữ chip cũ), tổng và tag `.tag-over` trên thẻ Bắt đầu của hai view.
+- **D** — `client/js/run-info.js`: `chipFor` / `insertErrorTag` dùng khi dựng thẻ, `paintRunInfo` vá chip và tag theo `data-id`
+  (sự kiện `kind: 'live'`, inspector bỏ qua); `insert n/tổng` (tổng từ `byStep` của bản xem trước được xác nhận), tag `lỗi n`
+  (cả `stale`), ghi chú khung thu gọn `· lỗi insert n`. Bấm tag khi chưa xong: toast nói nhóm lỗi hiện khi insert xong.
+- **E** — `POST /api/field-samples` (`server/workflow/samples.js`), `api.fieldSamples`, hàng `Ví dụ:` cuối option của field đang
+  mở (debounce 300 ms, số thứ tự + `AbortController` theo từng hàng, câu trả lời của request giống hệt được dùng lại), field phụ
+  thuộc (Lookup, tham chiếu bước khác / biến lặp, bắc cầu qua `{{this.X}}`) đọc 3 bản ghi đầu của lần xem trước. Dòng "Lần xem
+  trước" một giá trị dưới ô field không hiện nữa (hàng mới thay); bảng chọn biến giữ dòng của nó.
+- **B1** — `normalizeSelection`, `rangeBetween`, `wrapSteps`, `removeSteps`, `moveBlock`, `neighbourTargetBlock`, `pasteSteps`,
+  `cloneSteps({ keepFree })` (`shared/workflow-tree.js`); `client/js/clipboard.js`. Sửa kèm: nhiều lần đổi tên trong một bản sao
+  áp cùng lúc (qua tên tạm), nên `acc → acc2` rồi `acc2 → acc3` không nối nhau (lỗi tiềm ẩn của `cloneSteps`, Ctrl+D cũng hưởng).
+- **B2** — `client/js/selection.js` (bước chính + `ids` + `anchor`), chuột / phím ở hai view, `aria-multiselectable`, `#sel-live`,
+  thao tác nhóm trong `ops.js` (một bước undo; di chuyển / bọc chỉ với dải, khóa kèm `title`), menu ⋯ theo nhóm (nhóm cuối tên
+  `Tắt / xóa`), panel "n bước đã chọn", copy / cut / paste qua sự kiện của trang (bỏ qua khi focus ở ô nhập, popup, hộp thoại,
+  hoặc đang bôi đen chữ), "Dán sau bước này" (`readText`, rồi bản sao trong tab), chế độ "Chọn nhiều bước" + `.select-bar`
+  (`client/js/select-bar.js`; sheet giữ đóng, toast nằm trên thanh). Undo / redo giữ bước chính.
+- **A** — `client/js/library.js` (thuần) và `client/js/library-ui.js`; store: `setPersistHook`, `loadWorkflow`, `rememberInsert`.
+  `#btn-library` (▾) và `#btn-unsaved` cạnh ô tên, `#btn-open` rời thanh trên (`#file-input` giữ), menu ⋯ ở ≤ 720 px có `Thư viện…`
+  và `Mở file JSON…`; `Lưu` giữ Ctrl+S với `title` mới. Ctrl+O ở mọi chỗ. Mới / Mở file / Mẫu không còn hỏi `Thay workflow hiện
+  tại?`. Toast có nút hiện trên hộp thoại modal thì nằm trong hộp (để bấm được Hoàn tác trong "Quản lý thư viện"); toast nhận
+  nhiều nút (hai tab).
+
+### Quyết định khi làm
+
+- Chip ước tính: `exp: null` ⇒ `≤ n bản ghi` (biết tối đa) hoặc `? bản ghi`; `vi-VN` của trình duyệt viết `50.000` (như thẻ Bắt
+  đầu trước đây), không phải `50 000`.
+- "Nhân bản" trong Quản lý thư viện: bản sao lấy cùng giờ sửa với bản gốc nên đứng ngay dưới nó (danh sách theo giờ sửa).
+- Mục hỏng khi khởi động: tab mở mục đọc được gần nhất (hoặc tạo mục mẫu), không bao giờ ghi đè mục hỏng; workflow đang hiện
+  không vẽ được ⇒ mẫu vào một **mục mới**, mục cũ còn nguyên (chế độ cũ: bản sao `.broken` như trước).
+- Ô tên trong "Quản lý thư viện" đổi tên mục đang mở bằng `updateWorkflow` (một bước undo như gõ ở thanh trên).
+- Bước smoke G dựng Task-có-`Name` bằng UI (đổi tên `Subject` thành `Name`) thay cho `addInitScript`: cùng cảnh báo, ít tải lại.
+
+### Kiểm thử
+
+- `npm test`: **409 / 409** (376 cũ + 33 mới), chạy 3 lần song song đều qua. Không test cũ nào bị sửa ý; thêm khẳng định vào hai test
+  có sẵn: `test/sf.test.js` "failure cascades across windows…" (`byStep` đếm bản ghi con bị bỏ vào bước con), `test/server.test.js`
+  "cross-site requests are refused…" (thêm `/api/field-samples` vào danh sách endpoint bị chặn).
+- Mới: `test/estimate.test.js` (9, gồm pool lớn dần trong vòng lặp ngoài), `test/clipboard.test.js` (3), `test/library.test.js` (7), và trong `server.test.js`
+  (`recordPresets`, `/api/field-samples`), `sf.test.js` (`nameField`), `workflow.test.js` (`noNameField`, `addSelectField` fix),
+  `soql.test.js` (`addSelectField`), `run.test.js` (`byStep` của `progress` insert), `workflow-tree.test.js` (dải, chọn, bọc, di
+  chuyển khối, dán, dán với option 0013), `safety.test.js` (`samples.js` không import gì ngoài generator và rng).
+- Smoke: `flowProductivity` (H, I, E, B, A, G) và `flowProductivityRun` (D qua luồng NDJSON giả trong trang, F1, C, chế độ chọn ở
+  390 px), chạy song song, chỉ chờ response / trạng thái cụ thể. Sửa có chủ đích: luồng 6 (v1 ⇒ mục thư viện, v2 không ghi; thêm v2
+  ⇒ mục đầu, khóa v2 không đổi từng byte), luồng 13c (menu ⋯ có `Thư viện…`, `Mở file JSON…`), các chỗ đọc autosave đọc mục đang
+  mở (`smokeStored()`), các chỗ ghi autosave rồi tải lại dùng `smokeSetAutosave()`, chờ chip thật `.stat:not(.est)`, và mục ⋯
+  "Lặp qua từng bản ghi" khớp đúng nhãn. 5 lần liền: OK, 10,5–11,1 s (trần 12 s); cùng máy, bản 0013 chạy 9,5–10 s.
+
+### Còn lại
+
+- Smoke gần trần 12 s trên máy 4 CPU (khoảng 1 s dư): luồng mới nhỏ (≈ 3,8 s riêng) nhưng thêm tải CPU cho các luồng song song.
+- Câu hỏi mở / việc tiếp theo ở trên giữ nguyên (thư viện ra đĩa, sửa hàng loạt option, kéo thẻ trên Sơ đồ, khai báo ý nghĩa ước
+  tính trong danh mục, gợi ý field bắt buộc từ `REQUIRED_FIELD_MISSING`, mũi tên cho thẻ nguồn ngoài khung nhìn).

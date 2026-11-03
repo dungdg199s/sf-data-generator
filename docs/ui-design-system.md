@@ -286,6 +286,16 @@ viền nét đứt `border-strong`, chữ `text-muted` nghiêng. Trên thẻ "Đ
 nền `surface` và viền `border-strong` để không chìm. Không dùng màu accent, vì chip này không bấm được và không phải
 trạng thái chọn.
 
+Từ [0012](design/0012-nang-suat-soan-thao.md):
+
+| Thành phần | Quy tắc |
+| --- | --- |
+| Chọn nhiều bước | Mọi thẻ trong lựa chọn có kiểu "Đang chọn" ở bảng trên và `aria-selected="true"`; bước chính (`.main`) giữ viền `accent` và là chỗ dừng Tab duy nhất (roving tabindex), có vòng focus khi focus bàn phím. Cây (`role="tree"`) của cả hai chế độ có `aria-multiselectable="true"`; `#sel-live` (`.sr-only`, `aria-live="polite"`) đọc `Đã chọn 3 bước.` khi số bước chọn đổi (không đọc khi về 1) |
+| Thẻ nguồn (`.is-ref-target`) | Khi rê / focus chip biến hay chip Lookup: outline 2 px **nét đứt** `accent`, hở 2 px (`--space-0-5`), khác vòng chọn liền nét và vòng focus. Không cuộn, không đổi lựa chọn; chip đỏ không tô gì; `title` của chip có `Nguồn: Record "acc"` |
+| Chip ước tính (`.stat.est`) | Trên thẻ Record khi chưa chạy hoặc kết quả đã cũ: `12 bản ghi` (chắc chắn), `≈ 12 bản ghi`, `≤ 40 bản ghi` (chỉ biết tối đa), `? bản ghi`, `> 200 000 bản ghi`; nền trong suốt, viền nét đứt `border`, chữ `text-muted`, **không nghiêng** (khác `.stale`); `title` có khoảng `(khoảng 3–48)`. Khung không có chip ước tính. Thẻ Bắt đầu: `≈ 18 bản ghi · ≤ 50.000`, quá giới hạn thì thêm tag `.tag-over` `Ước tính vượt giới hạn` (nền `warning-subtle`, viền `warning`, chữ `warning-text`) với `title` nói cách sửa |
+| Chip trực tiếp (`.stat.live`) | Khi đang chạy: như `.stat`, số `tabular-nums`, không animation, không `aria-live` trên thẻ (tiến độ đọc ở đầu panel kết quả). Xem trước / lượt kiểm tra: số liệu `byStep` như sau khi xong; insert: Record `insert 1 200/5 000`, khung giữ chip của lượt kiểm tra |
+| Tag lỗi insert (`.tag-insert-err`) | Nút, cao 22 px, viền 1 px `danger`, nền `danger-subtle`, chữ `danger-text` `lỗi 3` (chữ, không icon mới vì chưa có `ico()` của 0014), khác badge validate (nền đỏ đặc). `title`/`aria-label` `3 bản ghi của bước này insert lỗi. Bấm để xem nhóm lỗi.` Bấm: tab "Lỗi insert", dòng nhóm đầu của bước `.current` và có focus. Workflow sửa sau đó: `.stale` (viền nét đứt, chữ `text-muted`). Khung thu gọn: ghi chú `… · lỗi insert 12`. Sơ đồ: ở hàng `dg-tags` |
+
 **Điện thoại (≤ 720 px, [0014](design/0014-hoan-thien-giao-dien.md), dự kiến):** hàng thẻ không bao giờ rộng hơn thẻ; `⋯` và
 chevron luôn thấy. Tag `chưa chọn org` ẩn (badge ▲ và thanh lỗi đã nói cùng điều). Thứ tự co: tóm tắt → chip số liệu
 (`min-width: 3em`, cắt `…`, `title` đủ câu) → alias (tối đa 72 px). Nhãn loại, badge, nút không co.
@@ -382,6 +392,10 @@ bằng chữ đó, trừ khi đang ở trong ô nhập; Esc, Tab và Shift+Tab �
 | Hộp Lịch sử insert (`dialog.history`, 0011) | Rộng `min(960px, 100vw − 2 × --space-4)`, cao tối đa 80dvh, cột flex: tiêu đề + nút "Đóng" (phụ, `aria-label="Đóng Lịch sử insert"`), dòng nơi lưu 12 px `text-muted`, checkbox `Chỉ org đang chọn (<org>)` (focus đầu tiên; ẩn khi chưa chọn org), bảng `table.data.history-table` cuộn bên trong (đầu bảng dính `top: 0`). Hàng: `tabindex="0"`, `aria-expanded`, Enter / Space / bấm mở hàng chi tiết (nền `surface-sunken`, 12 px); ▸/▾ là ký tự có sẵn. `Bị gián đoạn` màu `warning-text` có `title`. Nút trong hàng `button.small`: `Tải Id`, `Xóa khỏi org…` / `Xóa phần còn lại…` (`.danger`), `⋯` (popup "Quên lần insert này"; popup mở trong hộp thoại nằm trong chính hộp đó). ≤ 720 px: hộp toàn màn hình, không bo góc; mỗi hàng là lưới 3 dòng (thời gian · org · trạng thái / workflow · bản ghi / nút) |
 | Xác nhận "Quên" (0011) | Trong `#modal`, nút "Quên lần insert này" là nút **phụ** (không đỏ: không đụng org), "Hủy" focus mặc định |
 | Hộp cảnh báo (`.warn-box`) | Nền `warning-subtle`, viền 1 px `warning` + viền trái 4 px, icon ▲ màu `warning-text`, chữ `text`, bo 6 px |
+| Khung gợi ý (`.hint-box`, [0012](design/0012-nang-suat-soan-thao.md) F2) | Như `.info-box` (nền `accent-subtle`, viền `accent` + viền trái 4 px, 13 px), câu + hàng nút `[Thêm n field]` (chính) `[Chọn…]` `[Bỏ qua]` (ghost); `aria-live="polite"` vì điền sau describe |
+| Thanh chọn nhiều (`.select-bar`, 0012) | Màn hình ≤ 900 px / cảm ứng, chế độ "Chọn nhiều bước": `position: fixed` đáy, cao tối thiểu 56 px, nền `surface-raised`, viền trên `border`, `shadow-3`, `--z-sheet` (chỗ của bottom sheet, sheet đóng). `role="toolbar"`, `aria-label="Thao tác với các bước đã chọn"`: `[3 đã chọn] [Bọc ▾] [Xóa] [⋯] [Xong]`, vừa 360 px; toast nằm trên thanh |
+| Thư viện ([0012](design/0012-nang-suat-soan-thao.md) A) | Nút `▾` (`#btn-library`, 32 px, dính phải ô tên, `aria-haspopup="menu"`, `aria-expanded`) mở popup chung: `+ Workflow mới`, `Mở file JSON…`, nhóm `Gần đây` (hàng `menuitemradio`, ✓ mục đang mở, mô tả `4 bước · 10:24`; tối đa 20, còn lại qua ô tìm khi > 6 mục), `Quản lý thư viện…`; đang chạy: hàng đổi workflow khóa với `title`. Nút `Chưa lưu` (`#btn-unsaved`, viên thuốc `warning-subtle`/`warning`/`warning-text`) khi bộ nhớ đầy. Hộp "Thư viện workflow" (`#modal[data-dialog=library]`): bảng ô Tên sửa tại chỗ, `n bước · giờ · KB`, `[Mở] [Nhân bản] [Tải JSON] [Xóa]`, dòng nơi lưu + origin 12 px; ≤ 720 px toàn màn hình, mỗi mục hai dòng và nút hiếm vào `⋯` |
+| Toast có nút trong hộp thoại | Toast có nút (Hoàn tác) hiện khi một hộp thoại modal đang mở thì nằm trong lớp trên cùng của hộp đó để bấm được; toast không nút vẫn ở trang |
 | Toast | Nền `inverse-bg`, chữ `inverse-text`, bo 6 px, `shadow-2`, `--z-toast`. Nút trong toast viền `currentColor`, nhấn không đổi nền, vòng focus `focus-ring-inverse` |
 | Thanh lỗi (`#issues.issues`, [0009](design/0009-bo-cuc-man-hinh.md) §1) | **Trong luồng** của cột giữa, ngay dưới canvas (không `position: absolute`, không bóng, không bo góc), nên không bao giờ che thẻ: canvas co lại đúng bằng chiều cao thanh. Cao tối đa 25 % cột giữa (tối thiểu bằng đầu thanh), không tràn xuống dưới đầu panel kết quả. Nền `surface`, viền trên `border`, sọc trái 4 px `danger` (hoặc `warning` khi chỉ có cảnh báo, `.only-warnings`). `role="region"`, `aria-label="Lỗi và cảnh báo"`; ẩn khi không có gì |
 | Đầu thanh lỗi (`.issues-head`) | Cao 32 px: số đếm `2 lỗi · 1 cảnh báo` (600, 13 px, icon ⊗ / ▲ từng phần, `aria-live="polite"`, chỉ viết lại khi nhãn đổi để không đọc lại sau mỗi lần validate), gợi ý `Bấm một dòng để tới bước · F8: lỗi tiếp theo` (12 px `text-muted`, ẩn ở ≤ 720 px), nút ghost `Thu gọn` / `Hiện (n)` (`aria-expanded`, `aria-controls="issues-list"`). Thu gọn: sau số đếm là dòng lỗi đầu, một dòng, cắt `…`; bấm vào thì tới bước đó |
@@ -548,6 +562,12 @@ Với người mù màu đỏ–lục, vài cặp chỉ còn khác về độ s�
   `title` theo giá trị (`Giao diện: Tối`…). Ở ≤ 720 px ô này vào menu ⋯ (nhóm Giao diện, hàng chọn một).
 - Nút `⤒ Insert` ở điện thoại: phần ` vào org` chỉ ẩn bằng mắt (kiểu `.sr-only`), nên tên đọc lên vẫn là "⤒ Insert vào org";
   `title` vẫn là câu đầy đủ `Sinh dữ liệu và insert vào <org>`.
+- **Chọn nhiều bước** ([0012](design/0012-nang-suat-soan-thao.md), cả hai chế độ): Shift+bấm = dải từ bước chính trước đó (nâng
+  lên dãy chung gần nhất), Ctrl/⌘+bấm = bật/tắt một bước, Shift+↑ / Shift+↓ = mở rộng / thu hẹp dải trong dãy của anchor,
+  Ctrl+A (focus trong cây) = cả dãy, Esc hai nấc (về bước chính, rồi bỏ chọn); Delete, Ctrl+/, Ctrl+D, Alt+↑/↓, ContextMenu
+  áp cho cả lựa chọn (di chuyển và bọc chỉ với dải, khóa kèm `title` lý do). Ctrl+C / Ctrl+X / Ctrl+V qua sự kiện `copy` /
+  `cut` / `paste` của trang (không hỏi quyền), chỉ khi focus không ở ô nhập. **Ctrl+O** mở Thư viện ở mọi chỗ, kể cả trong ô
+  nhập (chặn hộp mở file của trình duyệt).
 - **F8 / Shift+F8** tới lỗi hoặc cảnh báo tiếp theo / trước đó (theo thứ tự trong thanh lỗi, vòng lại), kể cả khi focus đang
   trong ô nhập của inspector. Không có gì thì toast `Không có lỗi hay cảnh báo.`
 - **Bảng chọn biến** ([0014](design/0014-hoan-thien-giao-dien.md), dự kiến): mở bằng `{{` (ô Mẫu), ↓ (ô đường dẫn), nút

@@ -22,7 +22,7 @@ viết và cập nhật các file này theo skill `design-doc`; người viết 
 | [0009](0009-bo-cuc-man-hinh.md) | Bố cục màn hình: danh sách lỗi, thanh trên, bottom sheet, panel kết quả | Đã làm |
 | [0010](0010-lap-theo-ban-ghi.md) | Lặp theo từng bản ghi trong pool | Đã làm |
 | [0011](0011-thao-tac-du-lieu-org.md) | Thao tác dữ liệu org: Bulk API 2.0, lịch sử chạy, xóa dữ liệu đã insert | Đã làm |
-| [0012](0012-nang-suat-soan-thao.md) | Năng suất soạn thảo: thư viện workflow, chọn nhiều bước, copy/paste, sửa nhanh | Đã duyệt |
+| [0012](0012-nang-suat-soan-thao.md) | Năng suất soạn thảo: thư viện workflow, chọn nhiều bước, copy/paste, sửa nhanh | Đã làm |
 | [0013](0013-mo-rong-bien-va-lap.md) | Mở rộng biến và lặp | Đã làm |
 | [0014](0014-hoan-thien-giao-dien.md) | Hoàn thiện giao diện: icon SVG, đổi cao panel kết quả, sheet hai nấc, dấu hiệu cuộn ngang, minimap, phím chọn biến | Đã duyệt |
 
@@ -59,13 +59,13 @@ Các mục "Câu hỏi mở" / "Việc tiếp theo" / "Chưa làm" của 0001–
 | Chạy tiếp lần chạy đã dừng | [0011](0011-thao-tac-du-lieu-org.md) | 0004 |
 | Update / Upsert / Delete bản ghi có sẵn | [0011](0011-thao-tac-du-lieu-org.md) | 0006 "Các node khác" và "Chưa làm" |
 | Gửi song song nhiều lô, worker thread | [0011](0011-thao-tac-du-lieu-org.md) | 0004; thứ tự sinh và kết quả vẫn phải tất định |
-| Thư viện workflow (nhiều workflow có tên) | [0012](0012-nang-suat-soan-thao.md) | 0001; cũng là điều kiện của sub-workflow (0006) |
-| Chọn nhiều bước (Shift+bấm), copy/paste bước | [0012](0012-nang-suat-soan-thao.md) | 0003 "Việc tiếp theo" |
-| "Bọc trong Lặp qua từng bản ghi" (menu ⋯) | [0012](0012-nang-suat-soan-thao.md) | 0010 |
-| Badge lỗi insert trên thẻ; chip `byStep` cập nhật trực tiếp khi chạy | [0012](0012-nang-suat-soan-thao.md) | 0003, 0004: server đã gửi `byStep` trong `progress`, thẻ chỉ đọc kết quả cuối |
-| Giá trị mẫu ngay trong inspector | [0012](0012-nang-suat-soan-thao.md) | 0001 |
-| Sửa nhanh "Thêm `<Field>` vào SELECT" | [0012](0012-nang-suat-soan-thao.md) | 0005 câu 8, 0006, 0007 mâu thuẫn 3: lỗi `unknownMember` đã có |
-| Import từ org gợi ý field bắt buộc còn thiếu | [0012](0012-nang-suat-soan-thao.md) | 0001 |
+| Thư viện workflow (nhiều workflow có tên) | [0012](0012-nang-suat-soan-thao.md) — **Đã làm** | 0001; cũng là điều kiện của sub-workflow (0006) |
+| Chọn nhiều bước (Shift+bấm), copy/paste bước | [0012](0012-nang-suat-soan-thao.md) — **Đã làm** | 0003 "Việc tiếp theo" |
+| "Bọc trong Lặp qua từng bản ghi" (menu ⋯) | [0012](0012-nang-suat-soan-thao.md) — **Đã làm** | 0010 |
+| Badge lỗi insert trên thẻ; chip `byStep` cập nhật trực tiếp khi chạy | [0012](0012-nang-suat-soan-thao.md) — **Đã làm** | 0003, 0004: server đã gửi `byStep` trong `progress`, thẻ chỉ đọc kết quả cuối |
+| Giá trị mẫu ngay trong inspector | [0012](0012-nang-suat-soan-thao.md) — **Đã làm** | 0001 |
+| Sửa nhanh "Thêm `<Field>` vào SELECT" | [0012](0012-nang-suat-soan-thao.md) — **Đã làm** | 0005 câu 8, 0006, 0007 mâu thuẫn 3: lỗi `unknownMember` đã có |
+| Import từ org gợi ý field bắt buộc còn thiếu | [0012](0012-nang-suat-soan-thao.md) — **Đã làm** | 0001 |
 | `right` của Rẽ nhánh nhận biến | [0013](0013-mo-rong-bien-va-lap.md) — **Đã làm** | 0005 câu 3, 0007 |
 | Option số nhận biến (số lần lặp = `{{accs.$count}}`) | [0013](0013-mo-rong-bien-va-lap.md) — **Đã làm** | 0005 câu 4, 0007, 0010 |
 | Lọc / giới hạn N / xáo trộn trong Lặp `each` | [0013](0013-mo-rong-bien-va-lap.md) — **Đã làm** | 0010 |
@@ -83,9 +83,9 @@ Các mục "Câu hỏi mở" / "Việc tiếp theo" / "Chưa làm" của 0001–
 | Kéo thẻ / vị trí tự do trên Sơ đồ | **Không làm** | Trái mô hình cây (bố cục tự tính). Đổi thứ tự bằng Alt+↑/↓, menu ⋯, hoặc kéo trong Quy trình (M) |
 | Sửa cấu hình ngay trong thẻ | **Không làm** | 0003 câu 3: chỉ sửa ở inspector, một nơi sửa cho cả hai chế độ |
 | Nhánh song song | **Không làm** | 0003, 0004: phá tính tất định theo seed |
-| Ước tính số bản ghi theo bước trước khi chạy | [0012](0012-nang-suat-soan-thao.md) | 0003 (phần H) |
-| Rê chuột lên chip Lookup thì tô thẻ cha | [0012](0012-nang-suat-soan-thao.md) | 0003 (phần I) |
-| Record: đổi sObject thì thay field `Name` bằng name field thật (Task → `Subject`) | [0012](0012-nang-suat-soan-thao.md) | 0003; lỗi thật, làm đầu tiên (phần G) |
+| Ước tính số bản ghi theo bước trước khi chạy | [0012](0012-nang-suat-soan-thao.md) — **Đã làm** | 0003 (phần H) |
+| Rê chuột lên chip Lookup thì tô thẻ cha | [0012](0012-nang-suat-soan-thao.md) — **Đã làm** | 0003 (phần I) |
+| Record: đổi sObject thì thay field `Name` bằng name field thật (Task → `Subject`) | [0012](0012-nang-suat-soan-thao.md) — **Đã làm** | 0003; lỗi thật, làm đầu tiên (phần G) |
 | Biến cấp workflow `{{run.seed}}`, `{{run.now}}`, `{{run.today}}` | [0013](0013-mo-rong-bien-va-lap.md) — **Đã làm** | 0005 "Ý tưởng để sau" |
 | Khung nhiều nhánh kiểu Switch (`slots` động) | **Hoãn** | 0003; 0013: cần đổi hợp đồng `slots` cố định theo loại bước |
 | Hàm trong template; bước Đặt biến | **Hoãn** | 0005, 0006; 0013: cần design riêng vì đổi ngữ pháp token |
@@ -97,5 +97,5 @@ Các mục "Câu hỏi mở" / "Việc tiếp theo" / "Chưa làm" của 0001–
 | Query phụ thuộc (chạy mỗi lượt) | **Không làm** | 0013: phá mô hình đọc trước và xem trước == insert; dùng Lặp `each` có lọc |
 | Chạy tiếp lần đã dừng; Update/Upsert; gửi song song; nâng `maxRecordsHard` | **Không làm** (đợt này) | 0011: xóa rồi chạy lại; Update/Upsert cần design lưu giá trị cũ |
 | Trùng alias ở các nhánh loại trừ nhau | **Không làm** | 0003: làm phân tích phạm vi phức tạp; đặt hai tên khác nhau |
-| Sub-workflow | **Hoãn** | 0006: cần thư viện workflow (0012) trước |
+| Sub-workflow | **Hoãn** | 0006: cần thư viện workflow (0012, nay đã có) trước |
 | Nút "Biến" trên thẻ | **Không làm** | 0005: đã có bộ chọn biến ở inspector và tô thẻ nguồn (0012 phần I) |

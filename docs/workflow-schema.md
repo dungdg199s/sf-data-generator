@@ -103,7 +103,15 @@ Danh mục nằm ở `server/workflow/nodes.js` và được `GET /api/meta` tr�
 `default` của option là giá trị bước dùng khi **thiếu** khóa đó (executor, inspector và thẻ đều theo nó); `initial`, nếu có,
 là giá trị của bước mới thêm từ UI (Lặp mới chạy 3 lần, `count` mặc định 0). `needsOrg: true` (Query): thẻ hiện "chưa chọn org"
 khi chưa chọn org. `/api/meta` còn có `queryPresets` (giá trị builder theo sObject: `User`, `Product2`, `Pricebook2`,
-`PricebookEntry`, `RecordType`, `Case`, `Task`, `Event`).
+`PricebookEntry`, `RecordType`, `Case`, `Task`, `Event`) và `recordPresets` ([0012](design/0012-nang-suat-soan-thao.md) G,
+`RECORD_PRESETS` trong `server/workflow/nodes.js`): field mặc định của bước Record theo sObject chuẩn,
+`{ "<sObject>": { "fields": [{ name, type, options }], "noName"?: true, "nameField"?: "Subject" } }`. Có: `Account` (`Name`,
+Tên công ty), `Contact` (`FirstName`, `LastName`), `Lead` (thêm `Company`), `Task` (`Subject`, danh sách `Call`, `Send Letter`,
+`Send Quote`, `Other`), `Event` (`Subject`, `ActivityDateTime` 0–30 ngày tới, `DurationInMinutes` 30–90), `Case` (`Subject`, 3–6
+từ), `Opportunity` (`Name`, `StageName` = `Prospecting`, `CloseDate` hôm nay → +90 ngày). `noName: true`: sObject không có
+field `Name` tạo được; `nameField` là field thay nó (cảnh báo `noNameField` bên dưới). sObject khác: `Name` (Họ tên). Bước
+Record mới có field của preset; đổi sObject khi danh sách field chưa bị sửa thì danh sách theo preset mới (rồi theo describe
+khi có org, [org-connection.md](org-connection.md#field-mặc-định-của-bước-record-0012)).
 
 Từ [0005](design/0005-variable-picker.md), mỗi loại bước còn khai báo cách chạy các slot và biến nó cung cấp; phân tích
 phạm vi (`analyzeScope` trong `shared/scope.js`) chỉ đọc hai khóa này, không biết riêng về `loop` hay `branch`:
@@ -389,7 +397,7 @@ Các sự kiện NDJSON:
 {"type":"start","runId":"r7f3k2a9","seed":42,"now":1761552000000,"warnings":[],"queries":[]}
 {"type":"progress","phase":"generate","generated":120000,"bySobject":{"Account":24000,"Contact":96000},"byStep":{…}}
 {"type":"plan","total":200000,"bySobject":{"Account":40000,"Contact":160000},"apiCalls":393,"apiCallsBy":{"collections":201,"bulk":192},"steps":[{"nodeId":"acc","sobject":"Account","mode":"collections","probe":0,"jobs":0},{"nodeId":"con","sobject":"Contact","mode":"bulk","probe":200,"jobs":16}],"historyId":"h20261028T103200Z-a1b2c3"}
-{"type":"progress","phase":"insert","inserted":12400,"failed":3,"total":200000,"bySobject":{"Account":{"inserted":2480,"failed":0,"total":40000},"Contact":{"inserted":9920,"failed":3,"total":160000}},"bulk":{"nodeId":"con","sobject":"Contact","jobId":"7504x…","job":1,"jobs":16,"processed":6200,"failed":0,"records":10000}}
+{"type":"progress","phase":"insert","inserted":12400,"failed":3,"total":200000,"bySobject":{"Account":{"inserted":2480,"failed":0,"total":40000},"Contact":{"inserted":9920,"failed":3,"total":160000}},"byStep":{"acc":{"inserted":2480,"failed":0},"con":{"inserted":9920,"failed":3}},"bulk":{"nodeId":"con","sobject":"Contact","jobId":"7504x…","job":1,"jobs":16,"processed":6200,"failed":0,"records":10000}}
 {"type":"progress","phase":"stopping","waitingBulk":{"jobId":"7504x…","sobject":"Contact","processed":6200,"records":10000,"forced":false},"inserted":12400,"failed":3,"total":200000}
 {"type":"done","result":{ …cùng hình dạng như JSON một cục… }}
 {"type":"error","error":"Lỗi khi sinh dữ liệu, chưa ghi bản ghi nào vào org: …","issues":[{"message":"…","nodeId":"acc","field":"fields.AccountNumber"}],"insert":null}
@@ -403,7 +411,10 @@ Các sự kiện NDJSON:
   `apiCalls` (bước Collections `ceil(n / 200)`, bước Bulk `1 + jobs × 12`) và `apiCallsBy`, và `historyId` của mục Lịch sử
   vừa tạo (0011; mục được tạo **trước** lời gọi ghi đầu tiên, không tạo được ⇒ sự kiện `error` với `insert: null` và câu
   `Không ghi được Lịch sử (…), nên chưa ghi gì vào org. …`). Sau đó là `progress` (`insert`) sau các lô và mỗi lần theo dõi job
-  Bulk (`bulk`: job đang chạy; `inserted` cộng tạm `processed − failed` của job), rồi `done`.
+  Bulk (`bulk`: job đang chạy; `inserted` cộng tạm `processed − failed` của job), rồi `done`. Từ
+  [0012](design/0012-nang-suat-soan-thao.md) D, `progress` (`insert`) có `byStep: { <nodeId>: { inserted, failed } }` của các bước
+  Record đã gửi bản ghi (đếm đủ, kể cả bản ghi con "Bỏ qua vì bản ghi cha lỗi" ở bước con; job Bulk đang xử lý cộng tạm như
+  `inserted`); số bước có hạn nên dòng không lớn theo số bản ghi. Thẻ bước vẽ `insert n/tổng` và tag lỗi từ đó.
 - `progress` (`stopping`, 0011): đã bấm Dừng nhưng đang chờ job Bulk đang xử lý xong (`waitingBulk`); Dừng ngay
   (`cancel` với `force`) hủy job đó.
 - `done.result`: ở chế độ NDJSON, `records` chỉ có **200 bản ghi đầu mỗi sObject** (`stats.previewRows`;
@@ -423,7 +434,8 @@ Các sự kiện NDJSON:
   `inserted` chính xác. `insert.stopped: { reason: "allFailing", sobject, nodeId, message, batches, records }`: 3 lô đầu của
   một sObject lỗi 100 % nên app tự dừng. `notSent`: số bản ghi chưa gửi. Bản ghi đã insert **không** tự xóa; xóa được qua
   Lịch sử (bên dưới).
-- 0011: `insert.historyId` (mục Lịch sử, cả ở chế độ JSON một cục), `byStep: { <nodeId>: { inserted, failed } }`,
+- 0011: `insert.historyId` (mục Lịch sử, cả ở chế độ JSON một cục), `byStep: { <nodeId>: { inserted, failed } }` (cùng
+  dạng với `byStep` của `progress` insert, 0012),
   `bulk: [{ nodeId, sobject, jobs, records, inserted, failed }]` (bước đã gửi bằng Bulk), `bulkAborted: { jobId, sobject,
   nodeId, processed, records, idsKnown }` (Dừng ngay hủy job). `stopped.reason` có thêm `"bulkFailing"` (2 job liên tiếp của
   một bước lỗi 100 %: `{ sobject, nodeId, message, jobs, records }`), `"history"` (không ghi được Id vào Lịch sử: dừng sau lô
@@ -437,6 +449,20 @@ Mọi `/api/*` từ chối (403) yêu cầu có `Origin` khác địa chỉ củ
 có `Host` không phải máy này (`127.0.0.1`, `localhost`, `::1`, hoặc `HOST` đã đặt); mọi POST phải là `Content-Type:
 application/json` (không thì 415). curl và script không gửi `Origin` nên vẫn dùng được. Xem
 [org-connection.md](org-connection.md#an-toàn).
+
+### `POST /api/field-samples` ([0012](design/0012-nang-suat-soan-thao.md) E)
+
+Giá trị ví dụ của một field cho inspector. Request `{ "sobject": "Account", "fields": [{ name, type, options }, …], "index": 2,
+"seed": 1, "now": 1761552000000, "count": 3 }`: `fields` là các field của bước **tới và gồm** field `index` (để
+`{{this.FirstName}}` và Email "theo tên" chạy đúng). Response `{ "values": ["Banking", "Retail", "Banking"] }`.
+
+- Server sinh `count` (mặc định 3, kẹp vào 1–5) bản ghi chỉ gồm các field đó, theo thứ tự, `n` = 1…count, scope rỗng (biến
+  `run.*` có), rng có seed (`server/random.js`), `now` gửi lên; template trỏ tới bước khác ra chuỗi rỗng (UI chỉ gọi cho field
+  không phụ thuộc bước khác). `server/workflow/samples.js`.
+- Không I/O, không org (`test/safety.test.js` kiểm import). ≤ 500 field, body theo giới hạn chung, cùng `requestGuard`.
+- Lỗi 422: tên field sai / kiểu lạ / `options` không phải object ⇒ `{ error, issues: [{ field: "fields.<Name>", message }] }`;
+  lỗi khi sinh (giá trị duy nhất cạn, mốc ngày sai) ⇒ `{ error: "<câu của generator>", issues: [{ field, message }] }`;
+  `index` ngoài danh sách hoặc `now` không phải số ⇒ 422 với câu nói cách sửa.
 
 ### `POST /api/runs/:runId/cancel`
 
@@ -495,11 +521,48 @@ Request `/api/run` có thêm: `org` (org để Query đọc khi **xem trước**
 Lỗi validate trả về HTTP 422: `{ "error": "...", "issues": [{ "message", "nodeId", "field" }] }`.
 Issue về tham chiếu biến có thêm `code`, `path` (đường dẫn bị lỗi, ví dụ `acc.Nmae`), `option` (khóa option chứa nó, ví dụ
 `template`, `left`, `ref`) và có thể có `suggestion: { option, from, to }` (UI hiện nút "Sửa thành {{acc.Name}}").
+Từ [0012](design/0012-nang-suat-soan-thao.md), issue có thể có `fix` (sửa nhanh một bấm, inspector hiện nút dưới câu lỗi):
+
+| `fix` | Trên issue | Nút |
+| --- | --- | --- |
+| `{ kind: "addSelectField", stepId, field }` | `unknownMember` của nguồn đọc từ org (Query, hoặc Chọn bản ghi / bản ghi đang lặp có gốc là Query); `stepId` là bước Query gốc, `field` là đường dẫn cần lấy (`Industry`, `Owner.Name`). Không có khi SOQL tự viết không sửa được an toàn (subquery, `FIELDS(…)`, TYPEOF, hàm, template: `addSelectField` của `shared/soql.js` trả `null`) | `Thêm Industry vào SELECT của "accs"` |
+| `{ kind: "renameField", stepId, from: "Name", to }` | cảnh báo `noNameField` (gắn `fields.Name`): bước Record cho sObject `noName` của `recordPresets` vẫn có field `Name`, câu `Task không có field Name nên insert sẽ lỗi. Đổi thành Subject hoặc xóa field này.` Không có `fix` khi bước đã có field đích | `Đổi thành Subject` (tham chiếu `{{task.Name}}` đi theo) |
 `POST /api/validate` trả `{ errors, warnings, derived }`; phạm vi biến không gửi kèm vì trình duyệt tự tính bằng `shared/scope.js`.
 `derived[<id>]` (0006): Query `{ soql, sobject, fields }` (câu SOQL server sẽ chạy), Chọn bản ghi `{ sobject, fields, from }`.
 `nodeId` là id bước. `field` có dạng `alias`, `count`, … cho option của bước; `fields.<Name>` cho field của record;
 `slots.<key>` cho một ô bước con (ví dụ `slots.body`: vòng lặp chưa có bước nào). Lỗi không gắn với bước nào thì không
 có `nodeId`.
+
+## Định dạng phụ ([0012](design/0012-nang-suat-soan-thao.md))
+
+Không phải workflow JSON (không gửi lên server), nhưng là JSON người dùng thấy và mang đi được.
+
+**Bộ nhớ tạm** (Ctrl+C / Ctrl+X trên bước, `text/plain`): các bước theo thứ tự đọc của lựa chọn (chọn rời: thành một dãy).
+
+```json
+{ "sfdg": "steps", "version": 2, "from": "Account + Contact",
+  "steps": [ { "id": "acc", "type": "record", "config": { … } }, { "id": "loopCon", "type": "loop", "slots": { "body": [ … ] } } ] }
+```
+
+Dán (Ctrl+V) cũng nhận một file workflow `{ "version": 2, "steps": [ … ] }`. Từ chối (toast, workflow không đổi): không phải
+JSON hay không có bước (chỉ báo khi dán vào cây bước), bước sai dạng (`malformedSteps`), loại bước không có trong `/api/meta`,
+quá 2 000 bước hoặc 5 MB, workflow version 1 (mở bằng Thư viện → Mở file JSON…). Khi dán (`pasteSteps` của
+`shared/workflow-tree.js`): id luôn mới; alias / bản ghi đang lặp giữ tên nếu còn trống ở đích, trùng thì đổi (`acc` → `acc2`) và
+tham chiếu bên trong bản dán đi theo (template, Lookup, `from`, `filterValue`, `right`, số lần lặp `{{acc.X}}`); biến lặp đổi khi
+che biến của Lặp bao quanh chỗ dán; tham chiếu ra ngoài bản dán giữ nguyên (đích không có ⇒ lỗi tham chiếu thường).
+
+**File thư viện** ("Tải tất cả (JSON)" của Thư viện; "Mở file JSON…" nhận lại, mỗi workflow thành mục mới):
+
+```json
+{ "sfdg": "library", "version": 1, "exportedAt": "2026-10-28T10:24:00Z",
+  "workflows": [ { "version": 2, "name": "Account + Contact", "steps": [ … ] } ] }
+```
+
+**Thư viện trong trình duyệt** (`localStorage`, `client/js/library.js`): `sfdg.library` (chỉ mục `{ version: 1, activeId, items:
+[{ id, name, createdAt, updatedAt, steps, bytes }] }`), `sfdg.wf.<id>` (workflow v2 như file), `sfdg.library.trash` (mục vừa xóa,
+cho Hoàn tác), `sessionStorage['sfdg.activeId']` (mục đang mở của tab). Lần đầu: `sfdg.workflow.v2` (hoặc `sfdg.workflow.v1` qua
+`migrateV1`) thành mục đầu; hai khóa này **không bị ghi, không bị xóa** từ đó (v2 là bản sao lưu đóng băng). Bộ nhớ đầy khi
+chuyển ⇒ tab chạy như trước (một autosave `sfdg.workflow.v2`).
 
 ## Version 1 (cũ) và chuyển đổi
 
@@ -515,8 +578,8 @@ Version 1 là **đồ thị**: `nodes[]` (có `position` cho canvas, đúng mộ
   từ chối với HTTP 422 `{ "error": "Workflow version 1 này phải đổi cấu trúc khi chuyển sang version 2 … bấm Lưu trước khi
   insert. …" }` (không có `issues`): người dùng phải mở file trong trình soạn, xem hộp thoại chuyển đổi rồi lưu bản v2.
 - **Trình soạn** chuyển ngay trong trình duyệt khi mở file version 1 hoặc khi autosave cũ (`sfdg.workflow.v1`) còn đó.
-  Khóa `sfdg.workflow.v1` không bao giờ bị ghi đè hay xóa; bản mới lưu ở `sfdg.workflow.v2`. Nếu chuyển có thay đổi thì
-  có hộp thoại báo cáo với nút **Tải bản gốc (v1)**.
+  Khóa `sfdg.workflow.v1` không bao giờ bị ghi đè hay xóa; bản mới thành một mục của Thư viện (0012; trước đó: lưu ở
+  `sfdg.workflow.v2`). Nếu chuyển có thay đổi thì có hộp thoại báo cáo với nút **Tải bản gốc (v1)**.
 
 Quy tắc chuyển (`migrateV1(wf, { maxDepth, fieldTypes })` → `{ workflow, report }`; `maxDepth` = `LIMITS.maxDepth`,
 `fieldTypes` = `fieldTypes` của `/api/meta`, để biết mặc định của tùy chọn "Giá trị duy nhất"):
