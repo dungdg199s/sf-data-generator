@@ -452,18 +452,26 @@ function aliasTaken(wf, at, name, slotKeys, catalog, key = 'alias') {
  * Returns { steps, renamed: [{ id, copyId, alias, newAlias, names? }] } (`names`: other renamed
  * keys, [{ key, from, to }]).
  */
-export function cloneSteps(steps, { ids = new Set(), aliases = new Set(), makeId = nextId, catalog } = {}) {
+export function cloneSteps(steps, { ids = new Set(), aliases = new Set(), makeId = nextId, catalog, keepFree = false } = {}) {
   const copy = structuredClone(steps);
   const renamed = [];
   const aliasMap = new Map();
+  // keepFree (paste, design 0012 B): a name still free in `aliases` is kept; a clash gets a name
+  // free among `aliases` and every name of the copy.
+  const own = new Set();
+  if (keepFree) walkSteps(copy, (s) => { for (const e of stepNames(s, catalog)) own.add(e.value); });
   walkSteps(copy, (s) => {
     const entry = { id: s.id, copyId: makeId(s.id, ids) };
     ids.add(entry.copyId);
     s.id = entry.copyId;
     for (const { key, value } of stepNames(s, catalog)) {
-      const next = nextName(value, aliases);
+      let next = value;
+      if (!keepFree || aliases.has(value)) {
+        next = nextName(value, keepFree ? new Set([...aliases, ...own]) : aliases);
+        aliasMap.set(value, next);
+        own.add(next);
+      }
       aliases.add(next);
-      aliasMap.set(value, next);
       if (key === 'alias') {
         entry.alias = value;
         entry.newAlias = next;
@@ -472,8 +480,198 @@ export function cloneSteps(steps, { ids = new Set(), aliases = new Set(), makeId
     }
     renamed.push(entry);
   });
-  for (const [from, to] of aliasMap) renameAlias(copy, from, to, { catalog });
+  renameAll(copy, aliasMap, { catalog });
   return { steps: copy, renamed };
+}
+
+/**
+ * Apply several renames at once (from → to) inside `steps`: through unique temporary names, so
+ * `acc → acc2` and `acc2 → acc3` never chain.
+ */
+function renameAll(steps, map, opts) {
+  const temps = [];
+  let i = 0;
+  for (const [from, to] of map) {
+    const tmp = `__sfdg_rename_${i++}`;
+    renameAlias(steps, from, tmp, opts);
+    temps.push([tmp, to]);
+  }
+  for (const [tmp, to] of temps) renameAlias(steps, tmp, to, opts);
+}
+
+// ---------- selections of several steps (design 0012 B) ----------
+
+/** Ids of the containers (Lặp, Rẽ nhánh) around step `id`, outermost first, plus the step: the path from the root. */
+function chainOf(wf, id, slotKeys) {
+  const at = findStep(wf, id, slotKeys);
+  return at ? { at, chain: [...at.ancestors, at.step] } : null;
+}
+
+/**
+ * A selection in reading order: steps inside a selected container are dropped (they are in it
+ * already), unknown ids too. → { ids, contiguous, parentId, slot, index } — `contiguous` when the
+ * steps are neighbours in one sequence (then parentId / slot / index say where the run starts).
+ */
+export function normalizeSelection(wf, ids, slotKeys) {
+  const want = new Set(ids);
+  const out = [];
+  walkSteps(wf?.steps, (s) => {
+    if (!want.has(s.id)) return true;
+    out.push(s.id);
+    return false; // its children are part of it
+  }, slotKeys);
+  if (!out.length) return { ids: [], contiguous: false, parentId: null, slot: null, index: -1 };
+  const first = findStep(wf, out[0], slotKeys);
+  const contiguous = out.every((id, i) => first.list[first.index + i]?.id === id);
+  return { ids: out, contiguous, parentId: first.parentId, slot: first.slot, index: first.index };
+}
+
+/**
+ * Shift+click from `anchorId` to `id` (design 0012 B): both ends are lifted to their ancestors in
+ * the nearest sequence holding both, so the run can always be wrapped or moved. An end inside the
+ * other (a step in a frame and the frame) gives the frame; two columns of one Rẽ nhánh give it.
+ * → ids of the run in reading order (just `id` when the anchor is gone).
+ */
+export function rangeBetween(wf, anchorId, id, slotKeys) {
+  const a = chainOf(wf, anchorId, slotKeys);
+  const b = chainOf(wf, id, slotKeys);
+  if (!b) return [];
+  if (!a) return [id];
+  let p = 0;
+  while (p < a.chain.length && p < b.chain.length && a.chain[p] === b.chain[p]) p++;
+  if (p === a.chain.length || p === b.chain.length) return [a.chain[p - 1].id]; // one holds the other
+  const x = a.chain[p];
+  const y = b.chain[p];
+  const ax = findStep(wf, x.id, slotKeys);
+  const ay = findStep(wf, y.id, slotKeys);
+  if (ax.list !== ay.list) {
+    // Different slots of the same container: the container itself.
+    return p > 0 ? [a.chain[p - 1].id] : [id];
+  }
+  const [i, j] = ax.index <= ay.index ? [ax.index, ay.index] : [ay.index, ax.index];
+  return ax.list.slice(i, j + 1).filter((s) => s && typeof s === 'object').map((s) => s.id);
+}
+
+/**
+ * Replace the run of neighbours `ids` (in order, one sequence) by `container`, holding them in
+ * its first slot (or `slot`). → the container, or null when `ids` is not such a run.
+ */
+export function wrapSteps(wf, ids, container, { slot, slotKeys } = {}) {
+  const at = ids.length ? findStep(wf, ids[0], slotKeys) : null;
+  if (!at || ids.some((id, i) => at.list[at.index + i]?.id !== id)) return null;
+  const key = slot ?? slotKeysOf(container, slotKeys)[0];
+  container.slots ??= {};
+  for (const k of slotKeysOf(container, slotKeys)) container.slots[k] ??= [];
+  container.slots[key] = at.list.splice(at.index, ids.length, container);
+  return container;
+}
+
+/** Remove several steps (with everything inside them). → the removed steps, reading order. */
+export function removeSteps(wf, ids, { slotKeys } = {}) {
+  const { ids: list } = normalizeSelection(wf, ids, slotKeys);
+  return list.map((id) => removeStep(wf, id, { slotKeys })).filter(Boolean);
+}
+
+/**
+ * Move the run of neighbours `ids` to `target` (before-move coordinates, like moveStep); into
+ * itself is refused. → true when moved.
+ */
+export function moveBlock(wf, ids, target, slotKeys) {
+  if (ids.length === 1) return moveStep(wf, ids[0], target, slotKeys);
+  const at = ids.length ? findStep(wf, ids[0], slotKeys) : null;
+  if (!at || ids.some((id, i) => at.list[at.index + i]?.id !== id)) return false;
+  const block = at.list.slice(at.index, at.index + ids.length);
+  if (target.parentId && block.some((st) => subtreeIds(st, slotKeys).has(target.parentId))) return false;
+  const sameList = (target.parentId ?? null) === at.parentId && (target.parentId ? target.slot === at.slot : true);
+  let index = target.index ?? Infinity;
+  if (sameList) {
+    if (index >= at.index && index <= at.index + ids.length) return false; // already there
+    if (index > at.index) index -= ids.length;
+  }
+  at.list.splice(at.index, ids.length);
+  const list = targetList(wf, { parentId: target.parentId ?? null, slot: target.slot ?? null });
+  if (!list) return false;
+  list.splice(Math.max(0, Math.min(index, list.length)), 0, ...block);
+  return true;
+}
+
+/**
+ * Alt+↑ / Alt+↓ for a run of neighbours (neighbourTarget for several steps): the previous / next
+ * insertion point in reading order with the run taken out, entering and leaving open containers,
+ * jumping over collapsed ones. Before-move coordinates (for moveBlock), or null at either end.
+ */
+export function neighbourTargetBlock(wf, ids, dir, collapsed = new Set(), slotKeys) {
+  if (ids.length === 1) return neighbourTarget(wf, ids[0], dir, collapsed, slotKeys);
+  const at = ids.length ? findStep(wf, ids[0], slotKeys) : null;
+  if (!at || ids.some((id, i) => at.list[at.index + i]?.id !== id)) return null;
+  const without = structuredClone(wf);
+  const w = findStep(without, ids[0], slotKeys);
+  w.list.splice(w.index, ids.length);
+  const points = insertionPoints(without, { slotKeys, skip: (s) => collapsed.has(s.id) });
+  const same = (p) => p.parentId === at.parentId && (p.parentId ? p.slot === at.slot : true);
+  const here = points.findIndex((p) => same(p) && p.index === at.index);
+  const next = points[here + dir];
+  if (here < 0 || !next) return null;
+  return same(next) && next.index >= at.index ? { ...next, index: next.index + ids.length } : next;
+}
+
+/** Loop variables of the Lặp steps around `target` (and of `target.parentId` itself). */
+function loopVarsAround(wf, target, slotKeys) {
+  const out = new Set();
+  if (!target?.parentId) return out;
+  const at = findStep(wf, target.parentId, slotKeys);
+  for (const s of at ? [...at.ancestors, at.step] : []) if (s.type === 'loop') out.add(s.config?.alias || 'loop');
+  return out;
+}
+
+/**
+ * Paste `steps` (from the clipboard: another workflow, another tab, this one) at `target`
+ * (design 0012 B). Ids are always new; a record alias (or record looped over) defined in the
+ * pasted steps keeps its name while it is free here, else gets a new one (cloneSteps keepFree);
+ * a loop variable is renamed when it would shadow a loop around the target or equals a record
+ * alias. References inside the pasted steps follow; references to names not defined in them stay
+ * as they are (in the same workflow they point at the original steps, elsewhere validation says
+ * what is missing). → { ids: ids of the pasted top-level steps, renamed: [{ from, to }] } or null
+ * when the target is gone.
+ */
+export function pasteSteps(wf, target, steps, { catalog, slotKeys } = {}) {
+  const loopVars = new Set();
+  walkSteps(wf.steps, (s) => { if (s.type === 'loop') loopVars.add(s.config?.alias || 'loop'); }, slotKeys);
+  const aliases = new Set([...collectAliases(wf, catalog), ...loopVars]);
+  const { steps: copy, renamed } = cloneSteps(steps, { ids: collectIds(wf), aliases, catalog, keepFree: true });
+  const changes = [];
+  for (const r of renamed) {
+    if (r.newAlias !== undefined && r.newAlias !== r.alias) changes.push({ from: r.alias, to: r.newAlias });
+    for (const n of r.names ?? []) if (n.from !== n.to) changes.push({ from: n.from, to: n.to });
+  }
+  // Loop variables: not shadowing a loop around the target, nor a record alias (here or pasted).
+  const around = loopVarsAround(wf, target, slotKeys);
+  const records = new Set([...collectAliases(wf, catalog), ...collectAliases({ steps: copy }, catalog)]);
+  const tmp = { steps: copy };
+  const visit = (list, outer) => {
+    for (const s of list) {
+      if (!s || typeof s !== 'object') continue;
+      let inner = outer;
+      if (s.type === 'loop') {
+        const name = s.config?.alias || 'loop';
+        if (outer.has(name) || records.has(name)) {
+          const taken = new Set([...outer, ...records, ...loopVars]);
+          walkSteps(copy, (x) => { if (x.type === 'loop') taken.add(x.config?.alias || 'loop'); }, slotKeys);
+          const next = nextName(name, taken);
+          setStepAlias(tmp, s.id, next, { slotKeys, catalog });
+          if ((s.config?.alias || 'loop') !== next) s.config = { ...(s.config ?? {}), alias: next };
+          changes.push({ from: name, to: next });
+        }
+        inner = new Set([...outer, s.config?.alias || 'loop']);
+      }
+      for (const key of slotKeysOf(s, slotKeys)) visit(s.slots?.[key] ?? [], inner);
+    }
+  };
+  visit(copy, around);
+  const list = targetList(wf, target);
+  if (!list) return null;
+  list.splice(Math.max(0, Math.min(target.index ?? list.length, list.length)), 0, ...copy);
+  return { ids: copy.map((s) => s.id), renamed: changes };
 }
 
 // ---------- insertion targets ----------

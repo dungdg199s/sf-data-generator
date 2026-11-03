@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   walkSteps, findStep, insertStep, removeStep, moveStep, wrapStep, cloneSteps, renameAlias, setStepAlias, isAliasName, malformedSteps,
   defaultInsertTarget, neighbourTarget, allSteps, collectAliases, collectIds, renameField, aliasTypes, stepNames,
+  normalizeSelection, rangeBetween, wrapSteps, removeSteps, moveBlock, neighbourTargetBlock, pasteSteps,
 } from '../shared/workflow-tree.js';
 import { scopeCatalog } from '../server/workflow/schema.js';
 
@@ -466,4 +467,94 @@ test('0013 review N3: renameField follows filterField and weightField on a Recor
   fieldsOf(wf, 'a')[1].name = 'Headcount';
   assert.equal(renameField(wf, 'a', 'Size', 'Headcount', { catalog }).count, 1);
   assert.equal(findStep(wf, 'p').step.config.weightField, 'Headcount');
+});
+
+// ---------- design 0012 B: several steps, paste ----------
+
+test('rangeBetween: a range across two sequences is lifted to the nearest common one', () => {
+  const w = tree([r('a'), loop('l', [r('con'), r('task')]), r('opp'), branch('b', [r('y')], [r('n')])]);
+  assert.deepEqual(rangeBetween(w, 'con', 'task', slotKeys), ['con', 'task']);
+  assert.deepEqual(rangeBetween(w, 'con', 'opp', slotKeys), ['l', 'opp'], 'anchor inside the loop, other end at the root');
+  assert.deepEqual(rangeBetween(w, 'opp', 'a', slotKeys), ['a', 'l', 'opp'], 'either direction, reading order');
+  assert.deepEqual(rangeBetween(w, 'y', 'n', slotKeys), ['b'], 'two columns of one branch: the branch');
+  assert.deepEqual(rangeBetween(w, 'l', 'task', slotKeys), ['l'], 'a frame and a step inside it: the frame');
+  assert.deepEqual(rangeBetween(w, 'gone', 'opp', slotKeys), ['opp']);
+});
+
+test('normalizeSelection: reading order, children of a selected frame dropped, contiguity', () => {
+  const w = tree([r('a'), loop('l', [r('con'), r('task')]), r('opp')]);
+  assert.deepEqual(normalizeSelection(w, ['opp', 'con', 'l', 'a'], slotKeys), { ids: ['a', 'l', 'opp'], contiguous: true, parentId: null, slot: null, index: 0 });
+  const loose = normalizeSelection(w, ['opp', 'con'], slotKeys);
+  assert.deepEqual([loose.ids, loose.contiguous], [['con', 'opp'], false]);
+  assert.deepEqual(normalizeSelection(w, ['task', 'con'], slotKeys), { ids: ['con', 'task'], contiguous: true, parentId: 'l', slot: 'body', index: 0 });
+  assert.deepEqual(normalizeSelection(w, ['zz'], slotKeys).ids, []);
+});
+
+test('wrapSteps keeps the order of the run; removeSteps removes a loose selection', () => {
+  const w = tree([r('a'), r('b'), r('c'), r('d')]);
+  const box = loop('L');
+  box.slots.body = [];
+  assert.equal(wrapSteps(w, ['b', 'c'], box, { slotKeys }), box);
+  assert.equal(shape(w.steps), 'a,L{b,c},d');
+  assert.equal(wrapSteps(w, ['a', 'd'], loop('X'), { slotKeys }), null, 'not neighbours');
+  removeSteps(w, ['d', 'b'], { slotKeys });
+  assert.equal(shape(w.steps), 'a,L{c}');
+});
+
+test('moveBlock and neighbourTargetBlock move a run into and out of frames in reading order, over collapsed ones', () => {
+  const w = tree([r('a'), r('b'), loop('l', [r('x')]), r('c')]);
+  // Alt+↓ on [a, b]: into the loop body, before x.
+  const t1 = neighbourTargetBlock(w, ['a', 'b'], 1, new Set(), slotKeys);
+  assert.deepEqual(t1, { parentId: 'l', slot: 'body', index: 0 });
+  assert.ok(moveBlock(w, ['a', 'b'], t1, slotKeys));
+  assert.equal(shape(w.steps), 'l{a,b,x},c');
+  // Alt+↑ goes back out, before the loop.
+  const t2 = neighbourTargetBlock(w, ['a', 'b'], -1, new Set(), slotKeys);
+  assert.deepEqual(t2, { parentId: null, slot: null, index: 0 });
+  assert.ok(moveBlock(w, ['a', 'b'], t2, slotKeys));
+  assert.equal(shape(w.steps), 'a,b,l{x},c');
+  // A collapsed loop is jumped over like one step.
+  const t3 = neighbourTargetBlock(w, ['a', 'b'], 1, new Set(['l']), slotKeys);
+  assert.ok(moveBlock(w, ['a', 'b'], t3, slotKeys));
+  assert.equal(shape(w.steps), 'l{x},a,b,c');
+  assert.equal(moveBlock(w, ['a', 'b'], { parentId: null, slot: null, index: 2 }, slotKeys), false, 'already there');
+  assert.equal(neighbourTargetBlock(tree([r('a'), r('b')]), ['a', 'b'], -1, new Set(), slotKeys), null);
+});
+
+test('pasteSteps keeps free aliases, renames clashes with the references inside, renames a shadowing loop variable, ids always new', () => {
+  const con = r('con', 'con', [T('Title', '{{acc.Name}} {{loop.index}}'), { name: 'AccountId', type: 'lookup', options: { ref: 'acc' } }]);
+  const copied = [r('acc'), loop('lc', [con])];
+  // Into an empty workflow: names kept.
+  const empty = tree([]);
+  const a = pasteSteps(empty, { parentId: null, slot: null, index: 0 }, structuredClone(copied), { catalog, slotKeys });
+  assert.deepEqual(a.renamed, []);
+  assert.deepEqual(collectAliases(empty, catalog), new Set(['acc', 'con']));
+  assert.deepEqual(a.ids, ['acc_2', 'lc_2'], 'ids are always new (nextId)');
+  // Into a workflow that has them: acc → acc2, con → con2, the template and the Lookup follow.
+  const w = tree(structuredClone(copied));
+  const b = pasteSteps(w, { parentId: null, slot: null, index: 2 }, structuredClone(copied), { catalog, slotKeys });
+  assert.deepEqual(b.renamed, [{ from: 'acc', to: 'acc2' }, { from: 'con', to: 'con2' }]);
+  assert.ok(b.ids.every((id) => !['acc', 'lc'].includes(id)));
+  assert.equal(new Set(allSteps(w, slotKeys).map((s) => s.id)).size, 6, 'no id twice');
+  const pasted = findStep(w, b.ids[1], slotKeys).step.slots.body[0];
+  assert.equal(pasted.config.fields[0].options.template, '{{acc2.Name}} {{loop.index}}');
+  assert.equal(pasted.config.fields[1].options.ref, 'acc2');
+  // A loop pasted inside a loop of the same variable: loop → loop2, {{loop.index}} inside follows.
+  const host = tree([loop('outer', [])]);
+  const c = pasteSteps(host, { parentId: 'outer', slot: 'body', index: 0 }, [loop('in', [r('x', 'x', [T('T', '#{{loop.index}}')])])], { catalog, slotKeys });
+  assert.deepEqual(c.renamed, [{ from: 'loop', to: 'loop2' }]);
+  const inner = host.steps[0].slots.body[0];
+  assert.equal(inner.config.alias, 'loop2');
+  assert.equal(inner.slots.body[0].config.fields[0].options.template, '#{{loop2.index}}');
+  // Chained names never double-rename: pasting acc and acc2 next to acc.
+  const chain = tree([r('acc')]);
+  const d = pasteSteps(chain, { parentId: null, slot: null, index: 1 }, [r('p1', 'acc'), r('p2', 'acc2', [T('T', '{{acc.Name}}/{{acc2.Name}}')])], { catalog, slotKeys });
+  const [p1, p2] = d.ids.map((id) => findStep(chain, id, slotKeys).step);
+  assert.equal(p2.config.alias, 'acc2', 'acc2 was free');
+  assert.notEqual(p1.config.alias, 'acc2');
+  assert.equal(p2.config.fields[0].options.template, `{{${p1.config.alias}.Name}}/{{acc2.Name}}`);
+  // Outside references stay as they are.
+  const out = tree([]);
+  pasteSteps(out, { parentId: null, slot: null, index: 0 }, [r('c2', 'c2', [{ name: 'OwnerId', type: 'lookup', options: { ref: 'users' } }])], { catalog, slotKeys });
+  assert.equal(out.steps[0].config.fields[0].options.ref, 'users');
 });
