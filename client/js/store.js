@@ -29,7 +29,9 @@ export const state = {
   orgs: [],
   org: '',
   result: null, // last run (design 0004: first previewRows records per sObject + totals)
-  lastInsert: null, // { key: runKey(workflow, seed), org } of the last insert that wrote records
+  // Inserts that wrote records, newest first (≤ 20, in this tab, across the library's workflows,
+  // design 0012 A): { key: runKey(workflow, seed), org }; the Insert confirmation warns on a repeat.
+  lastInserts: [],
   deleteResult: null, // last delete of the insert history (design 0011): its "Lỗi xóa" tab
   resultRun: null, // { workflow, seed, now, org, expectQueries } of that run: downloads regenerate from it
   lastRunKey: null,
@@ -119,12 +121,48 @@ export function select(selection) {
   emit('app', 'selection');
 }
 
+let persistHook = null;
+/** Where edits are saved (design 0012 A: the library's item); null = the single autosave of before. */
+export function setPersistHook(fn) {
+  persistHook = fn;
+}
+
 export function persist() {
+  if (persistHook) {
+    persistHook(state.workflow);
+    return;
+  }
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state.workflow));
   } catch {
     // Storage full or disabled: autosave is a convenience, not a requirement.
   }
+}
+
+/**
+ * Show another workflow of the library (design 0012 A): undo / redo start empty (Ctrl+Z never
+ * brings workflow A into B), nothing selected, no run result. Not saved here (the library did).
+ */
+export function loadWorkflow(wf) {
+  past.length = 0;
+  future.length = 0;
+  lastCoalesce = { key: null, at: 0 };
+  state.workflow = wf;
+  state.selection = null;
+  state.result = null;
+  state.resultRun = null;
+  state.lastRunKey = null;
+  state.lastRunSteps = null;
+  state.lastRunOrg = null;
+  revision++;
+  emit('replace', 'workflow');
+  emit('app', 'selection');
+  emit('run', 'result');
+}
+
+/** Remember an insert that wrote records (newest first, at most 20). */
+export function rememberInsert(key, org) {
+  state.lastInserts = [{ key, org }, ...state.lastInserts.filter((x) => !(x.key === key && x.org === org))].slice(0, 20);
 }
 
 export function loadPersisted() {

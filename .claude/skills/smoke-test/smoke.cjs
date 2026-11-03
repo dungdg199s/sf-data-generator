@@ -123,6 +123,20 @@ let base;
 /** A fresh context (empty storage) and page; page errors are reported with `label`. */
 async function newPage(label, ctxOpts = {}) {
   const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, ...ctxOpts });
+  // Design 0012 A: edits are saved in the library's item, not sfdg.workflow.v2. smokeStored() is
+  // the open item of the tab; smokeSetAutosave(wf) makes the next load start from a v2 autosave
+  // again (library keys and the tab's item removed), as the flows did before the library.
+  await ctx.addInitScript(() => {
+    window.smokeStored = () => {
+      const id = sessionStorage.getItem('sfdg.activeId') ?? JSON.parse(localStorage.getItem('sfdg.library') ?? '{}').activeId;
+      return JSON.parse(localStorage.getItem(`sfdg.wf.${id}`) ?? 'null');
+    };
+    window.smokeSetAutosave = (wf) => {
+      for (const k of Object.keys(localStorage)) if (k === 'sfdg.library' || k.startsWith('sfdg.wf.')) localStorage.removeItem(k);
+      sessionStorage.removeItem('sfdg.activeId');
+      localStorage.setItem('sfdg.workflow.v2', JSON.stringify(wf));
+    };
+  });
   const page = await ctx.newPage();
   const flowName = flowOf.getStore() ?? '?';
   if (!pages.has(flowName)) pages.set(flowName, []);
@@ -306,11 +320,11 @@ async function flowEditing() {
   const aliasInput = '#inspector input[data-key="alias"]';
   await page.fill(aliasInput, '');
   await page.type(aliasInput, 'account');
-  const ref = await page.evaluate(() => JSON.stringify(JSON.parse(localStorage.getItem('sfdg.workflow.v2'))).match(/"ref":"(\w+)"/)?.[1]);
+  const ref = await page.evaluate(() => JSON.stringify(smokeStored()).match(/"ref":"(\w+)"/)?.[1]);
   check(ref === 'account', `Lookup ref did not follow the alias rename (${ref})`);
   check(await page.evaluate((sel) => document.activeElement === document.querySelector(sel), aliasInput), 'alias input lost focus while typing');
   for (let i = 0; i < 'account'.length + 1; i++) await page.keyboard.press('Control+z');
-  await page.waitForFunction(() => /"ref":"acc"/.test(localStorage.getItem('sfdg.workflow.v2')));
+  await page.waitForFunction(() => /"ref":"acc"/.test(JSON.stringify(smokeStored())));
 
   // "Hoàn tác" in the delete toast only undoes the delete: another edit removes the button.
   await page.click(`.step-card[data-id="${added}"] .type`);
@@ -380,12 +394,12 @@ async function flowPicker() {
   const industry = await page.$('#inspector .field-card[data-field="fields.Industry"] input[aria-label="Tên field"]');
   await industry.fill('Industry__c');
   await industry.press('Tab');
-  const followed = await page.evaluate(() => JSON.stringify(JSON.parse(localStorage.getItem('sfdg.workflow.v2'))).match(/"name":"Title","type":"template","options":\{"template":"([^"]*)"/)?.[1]);
+  const followed = await page.evaluate(() => JSON.stringify(smokeStored()).match(/"name":"Title","type":"template","options":\{"template":"([^"]*)"/)?.[1]);
   check(followed === '{{acc.Industry__c}} #{{loop.index}} {{acc.Name}}', `field rename did not follow (${followed})`);
   check(/Đã cập nhật 1 tham chiếu: acc.Industry → acc.Industry__c/.test(await page.textContent('#toast')), 'no rename toast');
   // One undo restores both the name and the references.
   await page.click('#btn-undo');
-  const undone = await page.evaluate(() => JSON.stringify(JSON.parse(localStorage.getItem('sfdg.workflow.v2'))));
+  const undone = await page.evaluate(() => JSON.stringify(smokeStored()));
   check(undone.includes('"name":"Industry","type":"picklist"') && undone.includes('"template":"{{acc.Industry}} #{{loop.index}} {{acc.Name}}"'), 'one Ctrl+Z did not undo the field rename and its references together');
 
   // Renaming the field that owns a chip strip keeps the strip live; $n chips are neutral; ⊗ on unresolved error chips.
@@ -414,7 +428,7 @@ async function flowPicker() {
     const rec = { id: 'a', type: 'record', config: { sobject: 'Account', alias: 'acc', fields: [{ name: 'Name', type: 'text', options: {} }] } };
     const top = { id: 'top', type: 'branch', config: { kind: 'chance', probability: 0.5 }, slots: { true: [], false: [] } };
     const inner = { id: 'B', type: 'branch', config: { kind: 'compare', left: '', op: 'eq', right: '1' }, slots: { true: [], false: [] } };
-    localStorage.setItem('sfdg.workflow.v2', JSON.stringify({ version: 2, name: 'p', steps: [rec, top, { id: 'L', type: 'loop', config: { count: 2, alias: 'loop' }, slots: { body: [inner] } }] }));
+    smokeSetAutosave({ version: 2, name: 'p', steps: [rec, top, { id: 'L', type: 'loop', config: { count: 2, alias: 'loop' }, slots: { body: [inner] } }] });
   });
   await page.reload();
   await page.waitForSelector('.step-card[data-id="top"]');
@@ -489,20 +503,29 @@ async function flowFiles() {
   await page.fill('#inspector input[data-key="where"]', 'AccountId = {{acc.Id}}');
   check(await page.waitForSelector('#inspector input[data-key="where"].invalid', { timeout: 3000 }).catch(() => null), '"{{" in WHERE is not outlined');
 
-  // Migration of a v1 autosave on load.
+  // Migration of a v1 autosave on load (design 0012 A: into a library item; v1 untouched, v2 not written).
   const v1Text = JSON.stringify(V1_SAMPLE);
-  await page.evaluate((t) => { localStorage.clear(); localStorage.setItem('sfdg.workflow.v1', t); }, v1Text);
+  await page.evaluate((t) => { localStorage.clear(); sessionStorage.clear(); localStorage.setItem('sfdg.workflow.v1', t); }, v1Text);
   await page.reload();
   await page.waitForSelector('.step-card[data-id="a"]');
   const toastText = await page.textContent('#toast');
   check(/Đã chuyển workflow đang soạn sang định dạng mới/.test(toastText), `no migration toast (${toastText})`);
-  const kept = await page.evaluate(() => [localStorage.getItem('sfdg.workflow.v1'), JSON.parse(localStorage.getItem('sfdg.workflow.v2') || '{}').version]);
+  const kept = await page.evaluate(() => [localStorage.getItem('sfdg.workflow.v1'), localStorage.getItem('sfdg.workflow.v2'), JSON.parse(localStorage.getItem('sfdg.library') ?? 'null')?.items?.length, smokeStored()?.version]);
   check(kept[0] === v1Text, 'sfdg.workflow.v1 was modified');
-  check(kept[1] === 2, 'sfdg.workflow.v2 was not written');
+  check(kept[1] === null && kept[2] === 1 && kept[3] === 2, `the v1 autosave did not become one library item (v2 ${kept[1] === null ? 'not written' : 'written'}, items ${kept[2]}, version ${kept[3]})`);
+  // A v2 autosave becomes the first item; the v2 key is kept byte for byte.
+  const v2Text = JSON.stringify({ version: 2, name: 'Bản v2', steps: [{ id: 'v2a', type: 'record', config: { sobject: 'Account', alias: 'v2a', fields: [] } }] });
+  await page.evaluate((t) => { localStorage.clear(); sessionStorage.clear(); localStorage.setItem('sfdg.workflow.v2', t); }, v2Text);
+  await page.reload();
+  await page.waitForSelector('.step-card[data-id="v2a"]');
+  check(/đã được đưa vào Thư viện/.test(await page.textContent('#toast')), `no "đưa vào Thư viện" toast (${await page.textContent('#toast')})`);
+  await page.fill('#wf-name', 'Bản v2 đã sửa');
+  await page.waitForFunction(() => smokeStored()?.name === 'Bản v2 đã sửa');
+  check(await page.evaluate((t) => localStorage.getItem('sfdg.workflow.v2') === t, v2Text), 'sfdg.workflow.v2 changed after the move into the library');
 
   // A malformed v2 autosave: the sample is shown, the autosave is not overwritten.
   const broken = JSON.stringify({ version: 2, name: 'Hỏng', steps: [{ id: 'x', type: 'loop', config: {}, slots: { body: 5 } }] });
-  await page.evaluate((t) => { localStorage.clear(); localStorage.setItem('sfdg.workflow.v2', t); }, broken);
+  await page.evaluate((t) => { localStorage.clear(); sessionStorage.clear(); localStorage.setItem('sfdg.workflow.v2', t); }, broken);
   await page.reload();
   await page.waitForSelector('.step-card[data-id="con"]');
   const brokenToast = await page.textContent('#toast');
@@ -862,7 +885,7 @@ async function flowLayoutNarrow() {
     seed: Boolean(document.querySelector('.popup input[data-field="seed"]')),
     radio: document.querySelector('.popup [role="group"][aria-label="Giao diện"] [role="menuitemradio"][aria-checked="true"]')?.textContent ?? '',
   }));
-  const want = ['Mới', 'Mở…', 'Lưu', 'Account + Contact', 'Tối'];
+  const want = ['Mới', 'Thư viện…', 'Mở file JSON…', 'Lưu', 'Account + Contact', 'Tối'];
   check(want.every((w) => menu.items.some((x) => x.includes(w))) && menu.seed && /Theo hệ thống/.test(menu.radio), `⋯ menu at 390px (${JSON.stringify(menu)})`);
   check(!menu.aria.length, `text or input directly inside role=menu: ${menu.aria.join(' | ')}`);
   await m.fill('.popup input[data-field="seed"]', '42');
@@ -949,7 +972,7 @@ async function flowLayoutNarrow() {
   await m.tap('#inspector .sheet-close');
 
   // Going to an issue on a phone: the card ends up fully between the palette and the sheet.
-  await m.evaluate((wf) => localStorage.setItem('sfdg.workflow.v2', JSON.stringify(wf)), await issuesWorkflow());
+  await m.evaluate((wf) => smokeSetAutosave(wf), await issuesWorkflow());
   await m.reload();
   await m.waitForSelector('#issues:not([hidden]) .issue.error');
   const cardBetween = (id) => m.evaluate((id) => {
@@ -1031,7 +1054,7 @@ async function flowEach() {
   // Renaming the record looped over moves the references inside the body.
   await page.click(`${loopCard} .type`);
   await page.fill('#inspector input[data-key="itemAlias"]', 'a');
-  const con = await page.evaluate(() => JSON.parse(localStorage.getItem('sfdg.workflow.v2')).steps[1].slots.body[0].config.fields);
+  const con = await page.evaluate(() => smokeStored().steps[1].slots.body[0].config.fields);
   check(con.find((f) => f.name === 'AccountId')?.options.ref === 'a' && /\{\{a\.Name\}\}/.test(con.find((f) => f.name === 'Title')?.options.template), `itemAlias rename did not follow: ${JSON.stringify(con)}`);
   await page.click('#btn-undo');
 
@@ -1053,7 +1076,7 @@ async function flowEach() {
     { id: 'e', type: 'loop', config: { mode: 'each', from: 'acc', itemAlias: 'a' }, slots: { body: [{ id: 'c', type: 'record', config: { sobject: 'Contact', alias: 'c', fields: [tpl('LastName')] } }] } },
     { id: 'e2', type: 'loop', config: { mode: 'each', from: 'accs', itemAlias: 'row', alias: 'k' }, slots: { body: [{ id: 'c2', type: 'record', config: { sobject: 'Contact', alias: 'c2', fields: [tpl('Title')] } }] } },
   ] };
-  await page.evaluate((w) => localStorage.setItem('sfdg.workflow.v2', JSON.stringify(w)), wfN);
+  await page.evaluate((w) => smokeSetAutosave(w), wfN);
   await page.reload();
   await page.click('.step-card[data-id="e"] .type');
   const accOpt = await page.$eval('#inspector select[data-key="from"] option:checked', (o) => o.textContent);
@@ -1111,7 +1134,7 @@ async function flowCanvas() {
   }));
   check(sw.process === 0 && sw.hidden && sw.pressed === 'true' && sw.saved === 'canvas' && sw.tree === 'tree' && sw.tabStops.join() === 'con' && sw.posinset === '1' && /100%/.test(sw.zoomLabel), `switch state ${JSON.stringify(sw)}`);
   // Enter on a focused "+" opens its menu (review S5) → Record, added right after con.
-  const count = () => page.evaluate(() => (JSON.stringify(JSON.parse(localStorage.getItem('sfdg.workflow.v2') ?? '{}')?.steps ?? []).match(/"type":"record"/g) ?? []).length);
+  const count = () => page.evaluate(() => (JSON.stringify(smokeStored()?.steps ?? []).match(/"type":"record"/g) ?? []).length);
   const before = await count();
   await page.focus('#canvas button.dg-add[aria-label="Thêm bước sau \\"con\\""]');
   await page.keyboard.press('Enter');
@@ -1119,7 +1142,7 @@ async function flowCanvas() {
   await page.click('.popup [role="menuitem"][data-type="record"]');
   const added = await page.waitForFunction(() => {
     const id = document.querySelector('#canvas .step-card.selected')?.dataset.id;
-    const wf = JSON.parse(localStorage.getItem('sfdg.workflow.v2'));
+    const wf = smokeStored();
     const find = (list) => { for (const s of list) { for (const k of Object.keys(s.slots ?? {})) { const at = s.slots[k].findIndex((x) => x.id === id); if (at >= 0) return { prev: s.slots[k][at - 1]?.id, type: s.slots[k][at].type }; const deep = find(s.slots[k]); if (deep) return deep; } } return null; };
     return id && id !== 'con' && find(wf.steps);
   }, null, { timeout: 3000 }).then((x) => x.jsonValue()).catch(() => null);
@@ -1414,7 +1437,7 @@ async function flowVarsLoops() {
   await seedStorage(page, { workflow: wf });
   await page.goto(base);
   await page.waitForSelector('.step-card[data-id="lf"]');
-  const stored = () => page.evaluate(() => JSON.parse(localStorage.getItem('sfdg.workflow.v2')));
+  const stored = () => page.evaluate(() => smokeStored());
   const findIn = (steps, id) => {
     for (const s of steps) {
       if (s.id === id) return s;

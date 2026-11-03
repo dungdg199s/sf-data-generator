@@ -34,32 +34,42 @@ export function icoTile() {
 
 let toastTimer;
 let toastGeneration = 0;
+let toastEl = null;
 /**
- * Short status message at the bottom. With `action: { label, onClick }` the toast gets a
- * button (e.g. "Hoàn tác") and stays a little longer. Returns { removeAction() } to drop the
- * button later (no-op once another toast replaced this one).
+ * Short status message at the bottom. With `action: { label, onClick }` (or a list of them) the
+ * toast gets buttons (e.g. "Hoàn tác") and stays a little longer; `ms` Infinity: until a button is
+ * used or another toast replaces it. Returns { removeAction() } to drop the buttons later (no-op
+ * once another toast replaced this one).
  */
 export function toast(message, ms = 2600, action = null) {
-  const el = document.getElementById('toast');
+  toastEl ??= document.getElementById('toast');
+  const el = toastEl;
+  // One action, or several (design 0012 A: "Dùng bản ở tab kia" / "Giữ bản của tab này").
+  const actions = Array.isArray(action) ? action : action ? [action] : [];
+  // Over a modal dialog (Quản lý thư viện, design 0012 A) a toast with a button must be in the
+  // dialog's top layer to be clickable; other toasts stay on the page.
+  const host = (actions.length && document.querySelector('dialog[open]')) || document.body;
+  if (el.parentElement !== host) host.append(el);
   const generation = ++toastGeneration;
   el.replaceChildren(document.createTextNode(message));
-  if (action) {
+  for (const a of actions) {
     el.append(' ', h('button', {
       class: 'toast-action',
       onclick: () => {
         el.classList.remove('show');
-        action.onClick();
+        a.onClick();
       },
-    }, action.label));
+    }, a.label));
   }
-  el.classList.toggle('has-action', Boolean(action));
+  el.classList.toggle('has-action', actions.length > 0);
   el.classList.add('show');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => el.classList.remove('show'), action ? Math.max(ms, 6000) : ms);
+  // ms Infinity: stays until an action is chosen (or another toast replaces it).
+  if (ms !== Infinity) toastTimer = setTimeout(() => el.classList.remove('show'), actions.length ? Math.max(ms, 6000) : ms);
   return {
     removeAction() {
       if (generation !== toastGeneration) return;
-      el.querySelector('.toast-action')?.remove();
+      for (const b of el.querySelectorAll('.toast-action')) b.remove();
       el.classList.remove('has-action');
     },
   };
@@ -73,4 +83,14 @@ export function download(filename, content, type = 'application/json') {
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+/** A dialog re-rendered its content: keep a toast shown over it (its "Hoàn tác" button). */
+export function keepToast(dialog) {
+  if (toastEl?.classList.contains('show') && toastEl.parentElement !== dialog) dialog.append(toastEl);
+}
+
+/** The dialog closed: the toast goes back to the page. */
+export function releaseToast() {
+  if (toastEl && toastEl.parentElement !== document.body) document.body.append(toastEl);
 }
