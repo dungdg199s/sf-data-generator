@@ -305,6 +305,113 @@ export function wrapIn(id, type) {
   reveal(container.id, { flash: true });
 }
 
+/**
+ * Where "Bọc trong Lặp qua từng bản ghi" (design 0012 C) would loop for the steps `ids` (one step
+ * or a run of siblings, in order): the pools usable at the new loop's position, and the one the
+ * wrapped steps refer to most (Lookup ref, Chọn bản ghi from, {{accs.…}}); a tie or none: the
+ * nearest. → { from, pools } or null when no pool is usable there.
+ */
+export function eachWrapPlan(ids) {
+  const at = locate(ids[0]);
+  if (!at) return null;
+  const wf = structuredClone(state.workflow);
+  const steps = ids.map((id) => findStep(wf, id, slotKeys)?.step).filter(Boolean);
+  if (steps.length !== ids.length) return null;
+  const loop = newStep('loop', { parentId: at.parentId, slot: at.slot, index: at.index }, steps);
+  loop.config.mode = 'each';
+  if (!wrapStepsIn(wf, ids, loop)) return null;
+  const scope = analyzeScope(wf, state.meta);
+  const pools = refChoices(scope, loop.id, { pool: true }).filter((c) => c.usable);
+  if (!pools.length) return null;
+  const inside = new Set(steps.flatMap((st) => [...subtreeIds(st, slotKeys)]));
+  const names = new Set(pools.map((p) => p.name));
+  const count = new Map();
+  for (const r of scope.refs) {
+    if (!inside.has(r.nodeId) || r.disabled) continue;
+    const src = scope.sources[r.source];
+    if (!src) continue;
+    // A Chọn bản ghi counts for the pool it picks from (the loop replaces the pick).
+    const name = src.current === 'picked' && names.has(src.from) ? src.from : names.has(src.name) ? src.name : null;
+    if (name) count.set(name, (count.get(name) ?? 0) + 1);
+  }
+  const best = Math.max(0, ...count.values());
+  const top = pools.filter((p) => count.get(p.name) === best);
+  return { from: best > 0 && top.length === 1 ? top[0].name : pools[0].name, pools };
+}
+
+/** Replace the run of siblings `ids` by `container` holding them in its first slot. → true when done. */
+function wrapStepsIn(wf, ids, container) {
+  if (ids.length === 1) return Boolean(wrapStep(wf, ids[0], container, { slotKeys }));
+  const at = findStep(wf, ids[0], slotKeys);
+  if (!at || ids.some((id, i) => at.list[at.index + i]?.id !== id)) return false;
+  const moved = at.list.splice(at.index, ids.length, container);
+  const key = slotKeys(container.type)[0];
+  container.slots ??= {};
+  for (const k of slotKeys(container.type)) container.slots[k] ??= [];
+  container.slots[key] = moved;
+  return true;
+}
+
+/**
+ * ⋯ → "Bọc trong Lặp qua từng bản ghi" (design 0012 C): a Lặp `each` around the steps `ids` (one
+ * step or a run of siblings), over the pool of eachWrapPlan, the record named after it
+ * (accs → acc). One undo step; the loop is selected and flashed. Lookups of the wrapped steps that
+ * pick at random from that pool (or point at a Chọn bản ghi from it) are offered a switch to the
+ * record looped over by a toast [Đổi] (a separate undo step), never changed silently.
+ */
+export function wrapInEach(ids) {
+  const plan = eachWrapPlan(ids);
+  const at = locate(ids[0]);
+  if (!plan || !at) return null;
+  const around = ids.map((id) => stepById(id));
+  const loop = newStep('loop', { parentId: at.parentId, slot: at.slot, index: at.index }, around);
+  Object.assign(loop.config, { mode: 'each', from: plan.from, itemAlias: suggestPickAlias(plan.from, undefined, 'itemAlias') });
+  if (!updateWorkflow((wf) => wrapStepsIn(wf, ids, loop))) return null;
+  select({ kind: 'step', id: loop.id });
+  reveal(loop.id, { flash: true });
+  offerRelink(loop.id);
+  return loop;
+}
+
+/** Toast [Đổi] for the Lookups inside a new Lặp `each` that could use the record looped over. */
+function offerRelink(loopId) {
+  const loop = stepById(loopId);
+  const { from, itemAlias } = loop?.config ?? {};
+  if (!from || !itemAlias) return;
+  const pickAliases = new Set();
+  walkSteps(state.workflow.steps, (s) => { if (s.type === 'pick' && !s.disabled && s.config?.from === from && s.config?.alias) pickAliases.add(s.config.alias); }, slotKeys);
+  const hits = [];
+  walkSteps(loop.slots?.body ?? [], (s) => {
+    if (s.type !== 'record' || s.disabled) return;
+    for (const f of s.config?.fields ?? []) {
+      if (!['lookup', 'masterdetail'].includes(f?.type)) continue;
+      const mode = f.options?.mode ?? 'current';
+      if ((f.options?.ref === from && mode === 'random') || (pickAliases.has(f.options?.ref) && mode !== 'fixed')) hits.push({ stepId: s.id, field: f.name, alias: s.config?.alias || s.id });
+    }
+  }, slotKeys);
+  if (!hits.length) return;
+  const text = hits.length === 1
+    ? `Đổi Lookup ${hits[0].field} (${hits[0].alias}) sang bản ghi đang lặp "${itemAlias}"?`
+    : `Đổi ${hits.length} Lookup sang bản ghi đang lặp "${itemAlias}"?`;
+  const rev = workflowRevision();
+  toast(text, 8000, {
+    label: 'Đổi',
+    onClick: () => {
+      if (workflowRevision() !== rev) {
+        toast('Workflow đã thay đổi sau khi bọc. Đổi Lookup trong bảng cấu hình của bước.', 5000);
+        return;
+      }
+      updateWorkflow(() => {
+        for (const hit of hits) {
+          const f = (stepById(hit.stepId)?.config?.fields ?? []).find((x) => x?.name === hit.field);
+          if (f) f.options = { ...(f.options ?? {}), ref: itemAlias, mode: 'current' };
+        }
+      }, { source: 'inspector-structure' });
+      toast(`Đã đổi ${hits.length === 1 ? `Lookup ${hits[0].field}` : `${hits.length} Lookup`} sang bản ghi đang lặp "${itemAlias}". Ctrl+Z để hoàn tác.`, 4000);
+    },
+  });
+}
+
 /** Alt+↑ / Alt+↓. Consecutive presses for one step are one undo step. */
 export function moveBy(id, dir) {
   const target = neighbourTarget(state.workflow, id, dir, state.collapsed, slotKeys);

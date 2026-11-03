@@ -25,6 +25,15 @@ export function openAddMenu(anchor, target) {
 /** A step whose records a Lặp `each` can loop over: a pool (`exposes.pool`) named by `alias` (catalogue). */
 const isPoolStep = (step) => exposesOf(nodeType(step.type), step.config).some(({ ex }) => ex.pool === true && ex.name?.key === 'alias');
 
+const NO_POOL = 'Chưa có pool nào phía trên (bước Query, Record hoặc Chọn bản ghi có alias). Thêm một bước như vậy ở phía trên trước.';
+
+/** "Bọc trong Lặp qua từng bản ghi" (design 0012 C) for the steps `ids`: disabled without a usable pool. */
+export function eachItem(ids, { disabled = false, title } = {}) {
+  const plan = disabled ? null : ops.eachWrapPlan(ids);
+  if (disabled || !plan) return { label: 'Bọc trong Lặp qua từng bản ghi', disabled: true, title: title ?? NO_POOL };
+  return { label: 'Bọc trong Lặp qua từng bản ghi', title: `Thêm bước Lặp quanh ${ids.length > 1 ? 'các bước này' : 'bước này'}, chạy một lần cho mỗi bản ghi của "${plan.from}".`, onSelect: () => ops.wrapInEach(ids) };
+}
+
 /** ⋯ menu of a step (also ContextMenu / Shift+F10 on the selected step). */
 export function openStepMenu(anchor, id) {
   const step = stepById(id);
@@ -35,6 +44,7 @@ export function openStepMenu(anchor, id) {
     { label: 'Lên', kbd: 'Alt+↑', onSelect: () => ops.moveBy(id, -1) },
     { label: 'Xuống', kbd: 'Alt+↓', onSelect: () => ops.moveBy(id, 1) },
     { label: 'Bọc trong Lặp', onSelect: () => ops.wrapIn(id, 'loop') },
+    eachItem([id]),
     { label: 'Bọc trong Rẽ nhánh', onSelect: () => ops.wrapIn(id, 'branch') },
     // Design 0010: a Lặp over each record of this step's pool, right after it.
     isPoolStep(step)
