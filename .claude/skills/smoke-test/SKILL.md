@@ -191,7 +191,13 @@ the others; never add a fixed `waitForTimeout`.
     placeholder, an outlined list and the valuesEmpty message; typing `Hot⏎Warm⏎Cold` gives `3 giá trị: Hot, Warm, Cold ·
     {{loop.value}}`.
 
-It also fails on any page error or a run over 12 s (typically ~5.5–6.5 s since the flows run in parallel, flow 14 included, ~7–8.5 s with flow 15 on a 4-CPU machine, ~8–9.5 s with flow 16, ~9–10 s with flow 17; ~10 s before;
+It also fails on any page error or a run over the time budget, `SMOKE_BUDGET_MS` (default 12 000 ms, review 0013: raise it
+on a slow or loaded machine, e.g. `SMOKE_BUDGET_MS=20000`; keep 12 000 for normal runs). When a flow throws (a timed-out
+wait), its open pages are saved as full-page screenshots plus a `<flow>.txt` with the selector it was waiting for and the
+stack, under `failures/` in the smoke temp dir (kept when that happens); the paths are printed after `failure artefacts:`.
+Waits never race a previous state: after Ctrl+Enter wait for the new result before clicking its tab, wait for a mocked
+request's response before reading what it recorded, and match a request by its body (e.g. the workflow name) rather than
+take the first one (review 0013 S3). Typical durations: ~5.5–6.5 s since the flows run in parallel, flow 14 included, ~7–8.5 s with flow 15 on a 4-CPU machine, ~8–9.5 s with flow 16, ~9–10 s with flow 17; ~10 s before;
 ~7–8 s with two CPU-bound processes running alongside).
 Screenshots (only when a directory is given): `smoke-1440.png`, `smoke-390.png`, `smoke-390-sheet.png`,
 `smoke-390-dark.png`, `smoke-390-topbar.png`, `smoke-1280-issues.png`, `smoke-1440-dark.png`, `smoke-1440-dark-insert.png`,

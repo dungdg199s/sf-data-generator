@@ -109,6 +109,14 @@ const V1_ORPHAN = {
 
 const errors = [];
 const check = (cond, msg) => { if (!cond) errors.push(msg); };
+// Time budget of the whole run (SMOKE_BUDGET_MS, default 12 s; review 0013 S3).
+const BUDGET_MS = Number(process.env.SMOKE_BUDGET_MS) > 0 ? Number(process.env.SMOKE_BUDGET_MS) : 12000;
+const { AsyncLocalStorage } = require('node:async_hooks');
+const flowOf = new AsyncLocalStorage(); // name of the flow a page is opened by
+const pages = new Map(); // flow name → its pages, for the failure screenshot
+const artefacts = []; // files written for a failed flow, printed at the end
+/** The selector a Playwright error was waiting for, if it says. */
+const pendingSelector = (e) => /(?:waiting for|locator\()\s*['"(]?([^'")\n]+)/.exec(String(e?.message ?? e))?.[1] ?? null;
 let browser;
 let base;
 
@@ -116,6 +124,9 @@ let base;
 async function newPage(label, ctxOpts = {}) {
   const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, ...ctxOpts });
   const page = await ctx.newPage();
+  const flowName = flowOf.getStore() ?? '?';
+  if (!pages.has(flowName)) pages.set(flowName, []);
+  pages.get(flowName).push({ label, page });
   page.on('pageerror', (e) => errors.push(`${label ? `[${label}] ` : ''}${e}`));
   page.on('dialog', (d) => d.accept());
   return page;
@@ -212,6 +223,9 @@ async function flowEditing() {
   // the header to say so (one snapshot right after #btn-stop showed was racy under CPU load, review 0011).
   let routedRun;
   const runRouted = new Promise((res) => { routedRun = res; });
+  // No run may still be going (a Ctrl+Enter during one only says "Đang chạy"): seen once under load,
+  // with a failure screenshot showing a second, unheld result (review 0013 S3).
+  await page.waitForFunction(() => document.getElementById('btn-stop').hidden && !document.getElementById('btn-preview').disabled, null, { timeout: 10000 });
   await page.route('**/api/run', async (r) => { routedRun(); await runGate; await r.continue().catch(() => {}); });
   await page.keyboard.press('Control+Enter');
   await Promise.race([runRouted, new Promise((res) => setTimeout(res, 10000))]);
@@ -268,7 +282,13 @@ async function flowEditing() {
   await page.click('.step-card[data-id="con"] .type');
   await page.fill('#inspector input[data-key="count"]', '60');
   await page.keyboard.press('Tab');
+  const prevSummary = await page.textContent('#results-summary');
   await page.keyboard.press('Control+Enter');
+  // The tab of the previous result can be replaced while it is clicked: wait for the new one.
+  await page.waitForFunction((prev) => {
+    const t = document.getElementById('results-summary').textContent;
+    return t !== prev && /bản ghi/.test(t) && document.getElementById('btn-stop').hidden;
+  }, prevSummary, { timeout: 10000 });
   await page.click('.tabs button:has-text("Contact (")');
   await page.waitForSelector('.table-more');
   const conTotal = Number((await page.textContent('.tabs button:has-text("Contact (")')).replace(/\D/g, ''));
@@ -453,7 +473,7 @@ async function flowFiles() {
   // A later validation of the same workflow (name edited and put back) keeps the run's warning.
   const name = await page.inputValue('#wf-name');
   await page.fill('#wf-name', `${name} x`);
-  const revalidated = page.waitForResponse((r) => r.url().endsWith('/api/validate'));
+  const revalidated = page.waitForResponse((r) => r.url().endsWith('/api/validate') && JSON.parse(r.request().postData() ?? '{}').workflow?.name === name);
   await page.fill('#wf-name', name);
   await revalidated;
   await page.evaluate(() => new Promise((r) => setTimeout(r, 0)));
@@ -1056,8 +1076,10 @@ async function flowCanvas() {
     await route.fulfill({ json: meta });
   });
   await page.goto(base);
-  await page.fill('#wf-name', 'Sơ đồ'); // an edit writes the autosave the checks read
+  // After the cards: with a slow /api/meta, an edit typed before the sample is shown was
+  // overwritten by it, and no autosave was written (review 0013 S3).
   await page.waitForSelector('#process .step-card[data-id="con"]');
+  await page.fill('#wf-name', 'Sơ đồ'); // an edit writes the autosave the checks read
   // Enter on a focused ⋯ opens the step menu, not the inspector (review S5, Quy trình).
   await page.focus('#process .step-card[data-id="con"] .menu-btn');
   await page.keyboard.press('Enter');
@@ -1087,7 +1109,7 @@ async function flowCanvas() {
   }));
   check(sw.process === 0 && sw.hidden && sw.pressed === 'true' && sw.saved === 'canvas' && sw.tree === 'tree' && sw.tabStops.join() === 'con' && sw.posinset === '1' && /100%/.test(sw.zoomLabel), `switch state ${JSON.stringify(sw)}`);
   // Enter on a focused "+" opens its menu (review S5) → Record, added right after con.
-  const count = () => page.evaluate(() => (JSON.stringify(JSON.parse(localStorage.getItem('sfdg.workflow.v2')).steps).match(/"type":"record"/g) ?? []).length);
+  const count = () => page.evaluate(() => (JSON.stringify(JSON.parse(localStorage.getItem('sfdg.workflow.v2') ?? '{}')?.steps ?? []).match(/"type":"record"/g) ?? []).length);
   const before = await count();
   await page.focus('#canvas button.dg-add[aria-label="Thêm bước sau \\"con\\""]');
   await page.keyboard.press('Enter');
@@ -1330,7 +1352,10 @@ async function flowHistory() {
   await page.click('.popup [role="menuitem"]:has-text("Quên lần insert này")');
   await page.waitForSelector('#modal[open] [data-action="forget"]');
   check(/Chỉ xóa ghi chép trên máy này, không xóa gì trong org/.test(await page.textContent('#modal[open]')), '16d: forget confirmation text');
-  await page.click('#modal[open] [data-action="forget"]');
+  await Promise.all([
+    page.waitForResponse((r) => /\/api\/history\/[^/]+\/forget$/.test(new URL(r.url()).pathname), { timeout: 5000 }).catch(() => {}),
+    page.click('#modal[open] [data-action="forget"]'),
+  ]);
   await page.waitForFunction(() => !document.querySelector('#modal[open]'));
   check(sent.forgets.join() === H3, `16d: forget request ${sent.forgets}`);
 
@@ -1502,7 +1527,26 @@ async function flowVarsLoops() {
     // SMOKE_ONLY=flowCanvas,flowEach runs only those flows (while working on one area).
     const only = process.env.SMOKE_ONLY?.split(',').filter(Boolean);
     if (only?.length) flows = Object.fromEntries(Object.entries(flows).filter(([n]) => only.includes(n)));
-    const results = await Promise.allSettled(Object.values(flows).map((f) => f()));
+    // A flow that throws leaves a full-page screenshot and the selector it waited for (in the
+    // smoke temp dir, kept when the run fails) so a timeout can be read after the fact.
+    const runFlow = async (name, f) => {
+      try {
+        await flowOf.run(name, f);
+      } catch (e) {
+        const dir = path.join(smokeTmp, 'failures');
+        fs.mkdirSync(dir, { recursive: true });
+        for (const { label, page } of pages.get(name) ?? []) {
+          if (page.isClosed()) continue;
+          const file = path.join(dir, `${name}${label ? `-${String(label).replace(/[^\w-]+/g, '_')}` : ''}-${artefacts.length}.png`);
+          await page.screenshot({ path: file, fullPage: true }).then(() => artefacts.push(file)).catch(() => {});
+        }
+        const info = path.join(dir, `${name}.txt`);
+        fs.writeFileSync(info, `pending selector: ${pendingSelector(e) ?? '?'}\n\n${e?.stack ?? e}\n`);
+        artefacts.push(info);
+        throw e;
+      }
+    };
+    const results = await Promise.allSettled(Object.entries(flows).map(([n, f]) => runFlow(n, f)));
     results.forEach((r, i) => { if (r.status === 'rejected') errors.push(`${Object.keys(flows)[i]}: ${r.reason}`); });
   } catch (e) {
     errors.push(String(e));
@@ -1511,13 +1555,15 @@ async function flowVarsLoops() {
     server?.closeAllConnections();
     server?.close();
     await browser?.close();
-    if (smokeTmp) fs.rmSync(smokeTmp, { recursive: true, force: true });
+    // Kept when a flow left failure artefacts in it.
+    if (smokeTmp && !artefacts.length) fs.rmSync(smokeTmp, { recursive: true, force: true });
   }
   const ms = Date.now() - t0;
   console.log(`duration=${ms}ms`);
   // 12 s budget. Since 0009 the flows run in parallel (≈ 5–6 s); the budget stays to catch a flow
   // that starts waiting on fixed timeouts again.
-  if (ms > 12000) errors.push(`smoke test took ${ms} ms (limit 12 s)`);
+  if (ms > BUDGET_MS) errors.push(`smoke test took ${ms} ms (limit ${BUDGET_MS / 1000} s, SMOKE_BUDGET_MS)`);
+  if (artefacts.length) console.error(`failure artefacts:\n${artefacts.join('\n')}`);
   if (errors.length) {
     console.error('SMOKE FAILED\n' + errors.join('\n'));
     process.exit(1);
