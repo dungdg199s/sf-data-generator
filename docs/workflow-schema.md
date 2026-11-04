@@ -103,8 +103,10 @@ Danh mục nằm ở `server/workflow/nodes.js` và được `GET /api/meta` tr�
 (Đúng trước Sai). Option có `summary: true` được dùng cho dòng tóm tắt chung trên thẻ của loại bước không có tóm tắt riêng.
 `showIf` **bắc cầu** (0013): option hiện khi điều kiện của nó đúng **và** option nó phụ thuộc cũng đang hiện (ô lọc của Lặp ẩn ở
 `fixed` vì "Lọc" đang ẩn; `optionShown` trong `shared/scope.js`). Option `kind: "list"`/`"text"` có thể có `placeholder`.
-Option `kind: "list"` có thể có `split: "lines"`: form tách giá trị **chỉ theo dòng** (giữ dấu phẩy trong một giá trị, như
-`values` của Lặp, 0013); không có thì tách theo dòng và dấu phẩy như trước.
+Mọi option `kind: "list"` / `"numberList"` tách giá trị **chỉ theo dòng** (giữ dấu phẩy, dấu chấm phẩy trong một giá trị), ở
+form cũng như ở server (`toList` của generator) khi giá trị là chuỗi; mảng giữ nguyên. `split: "lines"` (như `values` của Lặp,
+0013) vẫn được chấp nhận nhưng không còn khác gì. Trước đây form tách cả theo dấu phẩy; workflow đã lưu là mảng nên dữ liệu
+không đổi.
 `default` của option là giá trị bước dùng khi **thiếu** khóa đó (executor, inspector và thẻ đều theo nó); `initial`, nếu có,
 là giá trị của bước mới thêm từ UI (Lặp mới chạy 3 lần, `count` mặc định 0). `needsOrg: true` (Query): thẻ hiện "chưa chọn org"
 khi chưa chọn org. `/api/meta` còn có `queryPresets` (giá trị builder theo sObject: `User`, `Product2`, `Pricebook2`,

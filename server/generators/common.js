@@ -83,10 +83,11 @@ function coerce(def, raw) {
   }
 }
 
+/** A list option: an array, or a text with one value per line (commas and semicolons stay in the value). */
 export function toList(raw) {
   if (Array.isArray(raw)) return raw.map((v) => String(v).trim()).filter(Boolean);
   return String(raw)
-    .split(/[\n,;]/)
+    .split(/\r?\n/)
     .map((v) => v.trim())
     .filter(Boolean);
 }

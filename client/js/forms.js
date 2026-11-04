@@ -145,8 +145,8 @@ function renderControl(def, value, set, id, ctx, current) {
         placeholder: def.placeholder,
         value: Array.isArray(v) ? v.join('\n') : v ?? '',
         oninput: (e) => {
-          // `split: 'lines'`: one value per line, commas kept (Lặp "Mỗi giá trị trong danh sách", 0013).
-          const items = e.target.value.split(def.split === 'lines' ? /\r?\n/ : /\n|,/).map((s) => s.trim()).filter(Boolean);
+          // One value per line, commas kept (one rule for every list; the server's toList agrees).
+          const items = e.target.value.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
           set(def.kind === 'numberList' ? items.map(Number) : items);
         },
       });

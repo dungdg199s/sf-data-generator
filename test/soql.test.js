@@ -135,3 +135,13 @@ test('sampleRows: Id and Name keep their shape even when listed as numeric (revi
   const [row] = sampleRows({ sobject: 'Account', fields: ['Id', 'Name', 'NumberOfEmployees'], limit: 1 }, 'accs', { numeric: ['id', 'Name', 'NumberOfEmployees'] });
   assert.deepEqual(row, { Id: 'mẫu:accs#1', Name: 'Account mẫu 1', NumberOfEmployees: 1 });
 });
+
+test('addSelectField refuses aggregate queries, GROUP BY and a trailing comma, and re-checks its result (fix after merge)', () => {
+  assert.equal(addSelectField('SELECT COUNT(Id) n FROM Account', 'Industry'), null);
+  assert.equal(addSelectField('SELECT Industry, MAX(AnnualRevenue) m FROM Account GROUP BY Industry', 'Name'), null);
+  assert.equal(addSelectField('SELECT Id FROM Account GROUP BY Id', 'Name'), null);
+  assert.equal(addSelectField('SELECT Id, FROM Account', 'Name'), null);
+  assert.equal(addSelectField('SELECT Id,Name , FROM Account LIMIT 5', 'Industry'), null);
+  // A GROUP BY inside a string literal is only text.
+  assert.equal(addSelectField("SELECT Id FROM Account WHERE Name = 'GROUP BY'", 'Industry'), "SELECT Id, Industry FROM Account WHERE Name = 'GROUP BY'");
+});
