@@ -85,6 +85,8 @@ khoảng hoặc không phải số; validate dùng nó (lỗi `code: "optionRang
 Các `kind` của option mà UI dựng được: `string`, `text`, `integer`, `number`, `boolean`, `select` (cần `choices`),
 `list`, `numberList`, `time`, `ref` (dropdown dựng từ `refChoices` của `shared/scope.js`: bước dùng được ở vị trí này, gần
 nhất trước, kèm `bản ghi cuối` / `có thể trống`; các bước khác nằm trong nhóm "Không dùng được ở đây", bị tắt, kèm lý do).
+`list` và `numberList` luôn **mỗi dòng một giá trị** (dấu phẩy nằm trong giá trị); một dòng của `numberList` không phải số
+(ví dụ `70, 20, 10` trên một dòng) là lỗi `optionRange` gắn field, nói "mỗi dòng một số".
 Khóa thêm của option ([0005](design/0005-variable-picker.md)):
 
 - `vars: 'template' | 'path'`: option nhận biến. UI gắn bảng chọn biến (nút `{x}`, gõ `{{`, Ctrl+Space) và dải chip;

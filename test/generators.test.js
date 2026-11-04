@@ -111,3 +111,12 @@ test('numeric options are clamped to their min / max; optionIssues reports them 
   assert.deepEqual(optionIssues({ name: 'P', type: 'percent', options: { nullRatio: 2 } }).map((i) => i.option), ['nullRatio']);
   assert.equal(typeof generateValue({ name: 'X', type: 'picklist', options: null }, ctxFor()), 'string', 'null options = defaults');
 });
+
+test('numberList options are one number per line: "70, 20" on one line is an error saying so (fix after merge)', async () => {
+  const { optionIssues } = await import('../server/generators/index.js');
+  const f = (weights) => optionIssues({ name: 'Industry', type: 'picklist', options: { values: ['A', 'B'], weights } });
+  assert.deepEqual(f([70, 30]), []);
+  assert.deepEqual(f('70\n30'), []);
+  assert.deepEqual(f(['70, 30']).map((i) => [i.option, i.message]), [['weights', 'Field "Industry": "Trọng số" phải là các số, mỗi dòng một số (đang có "70, 30"). Sửa trong tùy chọn của field.']]);
+  assert.equal(f([null]).length, 1);
+});

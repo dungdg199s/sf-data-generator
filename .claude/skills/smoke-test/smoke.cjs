@@ -928,7 +928,7 @@ async function resultsHeightSteps(page) {
   const h0 = (await box()).h;
   for (let i = 0; i < 3; i++) await page.keyboard.press('ArrowUp');
   let b = await box();
-  check(Math.abs(b.h - h0 - 48) <= 1 && /^Cao \d+ px \(\d+ % màn hình\)$/.test(b.text), `↑ × 3 on the handle: ${h0} → ${b.h} (+48 expected; ${b.text})`);
+  check(Math.abs(b.h - h0 - 48) <= 1 && /^Cao \d+ px \(\d+ % của vùng dưới thanh trên\)$/.test(b.text), `↑ × 3 on the handle: ${h0} → ${b.h} (+48 expected; ${b.text})`);
   await page.keyboard.press('Home');
   b = await box();
   check(Math.abs(b.h - 160) <= 1, `Home on the handle: ${b.h} px (160 expected)`);
@@ -1506,7 +1506,7 @@ async function productivityRest(page) {
   check(/^Ví dụ: "[^"]+" · "[^"]+" · "[^"]+"$/.test(await samplesText(ind)) && /seed 1/.test(await page.getAttribute(`${ind} .field-samples`, 'title')), `Industry examples: ${await samplesText(ind)}`);
   await Promise.all([
     page.waitForResponse((res) => res.url().endsWith('/api/field-samples'), { timeout: 3000 }).catch(() => null),
-    page.fill(`${ind} textarea[data-key="weights"]`, '0, 0, 0, 1'),
+    page.fill(`${ind} textarea[data-key="weights"]`, '0\n0\n0\n1'), // one number per line (one list rule)
   ]);
   await page.waitForFunction((sel) => document.querySelector(`${sel} .field-samples`)?.textContent === 'Ví dụ: "Healthcare" · "Healthcare" · "Healthcare"', ind, { timeout: 3000 }).catch(() => {});
   check(await samplesText(ind) === 'Ví dụ: "Healthcare" · "Healthcare" · "Healthcare"', `Industry examples after new weights: ${await samplesText(ind)}`);

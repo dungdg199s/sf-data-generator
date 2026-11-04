@@ -147,7 +147,8 @@ function renderControl(def, value, set, id, ctx, current) {
         oninput: (e) => {
           // One value per line, commas kept (one rule for every list; the server's toList agrees).
           const items = e.target.value.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
-          set(def.kind === 'numberList' ? items.map(Number) : items);
+          // A line that is not a number stays as typed, so validation can quote it.
+          set(def.kind === 'numberList' ? items.map((x) => (Number.isFinite(Number(x)) ? Number(x) : x)) : items);
         },
       });
     case 'text':

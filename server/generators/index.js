@@ -88,6 +88,14 @@ export function optionIssues(field) {
   const values = resolveOptions(gen, given);
   const out = [];
   for (const def of allOptions(gen)) {
+    if (def.kind === 'numberList' && optionShown(def, values)) {
+      // One number per line (the one list rule): "70, 20, 10" on one line is not three numbers.
+      const raw = given[def.key];
+      const items = raw === undefined || raw === null || raw === '' ? [] : Array.isArray(raw) ? raw : String(raw).split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
+      const bad = items.find((x) => x === null || (typeof x === 'string' && !x.trim()) || !Number.isFinite(Number(x)));
+      if (bad !== undefined) out.push({ option: def.key, message: `Field "${field.name}": "${def.label}" phải là các số, mỗi dòng một số (đang có "${bad === null ? 'trống' : String(bad).slice(0, 40)}"). Sửa trong tùy chọn của field.` });
+      continue;
+    }
     if ((def.kind !== 'integer' && def.kind !== 'number') || !optionShown(def, values)) continue;
     const raw = given[def.key];
     if (raw === undefined || raw === null || raw === '') continue;

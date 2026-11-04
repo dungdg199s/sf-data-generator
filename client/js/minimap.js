@@ -120,9 +120,10 @@ export const pathCount = (p) => Object.keys(p.frames).length + Object.keys(p.car
  * Where a card goes so that nothing floating over the Sơ đồ (the zoom bar, the minimap) covers it
  * (viewport px). box: the card's screen rectangle { x, y, w, h }; overlays: [{ left, top, right,
  * bottom }]; W × H: the visible viewport; M: the margin kept around it. Tries the card where it is,
- * then left of / below / above each overlay it touches (two moves deep, so "left of the zoom bar"
- * can be followed by "above the minimap"), and keeps the nearest position inside the viewport and
- * clear of every overlay. None: the first move (as before). → { x, y }
+ * then left of / below / above each overlay it touches, in that order of preference (left keeps the
+ * card on its row, as before), two moves deep so "left of the zoom bar" can be followed by "above the
+ * minimap"; the first position inside the viewport and clear of every overlay wins (fewest moves
+ * first). None: the first move. → { x, y }
  */
 export function clearOfOverlays({ box, overlays = [], W, H, M = 0 }) {
   const { w, h } = box;
@@ -136,19 +137,16 @@ export function clearOfOverlays({ box, overlays = [], W, H, M = 0 }) {
     { x: p.x, y: o.bottom + M },
     { x: p.x, y: o.top - M - h },
   ]);
-  const dist = (p) => Math.hypot(p.x - start.x, p.y - start.y);
-  let best = null;
   let level = [start];
   for (let depth = 0; depth < 2 && level.length; depth++) {
     const next = [];
     for (const p of level) {
       for (const q of moves(p)) {
-        if (inside(q) && clear(q)) {
-          if (!best || dist(q) < dist(best)) best = q;
-        } else next.push(q);
+        if (inside(q) && clear(q)) return q;
+        next.push(q);
       }
     }
     level = next;
   }
-  return best ?? moves(start)[0] ?? start;
+  return moves(start)[0] ?? start;
 }
