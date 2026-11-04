@@ -681,7 +681,7 @@ Một lần đối chiếu tìm thấy lỗi mà review trước đã thấy ở
 - **§2 panel kết quả**: thẻ đang chọn được giữ trong tầm nhìn khi đổi cao nếu trước đó **thấy được một phần** (trước chỉ khi
   thấy trọn).
 - **§5 Sơ đồ**: `showRect` dùng hàm thuần `clearOfOverlays` (`client/js/minimap.js`) tránh cả thanh thu phóng lẫn minimap cùng
-  lúc (trước tránh lần lượt, có thể đẩy thẻ vào dưới cái kia).
+  lúc (trước tránh lần lượt, có thể đẩy thẻ vào dưới cái kia); vẫn ưu tiên dời sang trái (giữ hàng của thẻ), rồi xuống, rồi lên.
 - **§1 icon**: test cấm glyph làm icon mở rộng ra cả các khối ký hiệu Unicode (mũi tên, ký hiệu kỹ thuật, hình học, dingbat,
   emoji…), có danh sách ký tự được phép dùng như chữ (→ ← ↑ ↓ ⇒ ≤ ≥ ≈ − ⌥ ⌘ ›).
 - Smoke: luồng mới `flowFixes` (22) và kiểm tra thêm ở `flowLibrary`, `flowDark`, `flowHistory`, `flowHistoryProd`;
