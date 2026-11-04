@@ -267,6 +267,8 @@ export const NODE_TYPES = [
     flow: { kind: 'sequence' },
     // May end the rest of its sequence (onEmpty 'skip'): what follows in a loop body may not run.
     maySkip: pickMaySkip,
+    // The choice that makes it stop instead (named in the "có thể chưa có" warning after the loop).
+    skipFix: { key: 'onEmpty', value: 'error' },
     exposes: {
       kind: 'record',
       name: { key: 'alias' },

@@ -574,7 +574,9 @@ export function referenceIssue(ref, scope, step, stepOf = () => undefined) {
         break;
       case 'maybe':
         message = isLoop
-          ? `Pool "${s}" nằm trong một nhánh rẽ hoặc vòng lặp có thể không chạy, nên có lúc vòng lặp này không chạy lần nào.`
+          ? ref.why?.skip
+            ? `Pool "${s}" có thể rỗng vì bước "${ref.why.skipName || ref.why.skip}" phía trên có thể bỏ qua nó ở mọi lần lặp, nên có lúc vòng lặp này không chạy lần nào. Đặt "${s}" trước bước "${ref.why.skipName || ref.why.skip}"${skipFixText(ref.why.skipType) ? ` hoặc ${skipFixText(ref.why.skipType)}` : ''} nếu cần.`
+            : `Pool "${s}" nằm trong một nhánh rẽ hoặc vòng lặp có thể không chạy, nên có lúc vòng lặp này không chạy lần nào.`
           : maybeMessage(ref, s, true, false);
         break;
       default:
@@ -793,7 +795,25 @@ function whenOf(src, key) {
   return `"${opt?.label ?? m.when.key}" là ${labels.join(' hoặc ')}`;
 }
 
+/**
+ * `chọn "Báo lỗi và dừng" ở "Khi không còn bản ghi để chọn"`: the choice of a step type that makes
+ * it stop instead of skipping (catalogue `skipFix: { key, value }`), or null.
+ */
+function skipFixText(type) {
+  const t = nodeTypeMap.get(type);
+  const fix = t?.skipFix;
+  if (!fix) return null;
+  const opt = t.options.find((o) => o.key === fix.key);
+  const choice = opt?.choices?.find((c) => c.value === fix.value);
+  return opt && choice ? `chọn "${choice.label}" ở "${opt.label}"` : null;
+}
+
 function maybeMessage(ref, s, isLookup, isMD) {
+  if (ref.why?.skip) {
+    const name = ref.why.skipName || ref.why.skip;
+    const fix = skipFixText(ref.why.skipType);
+    return `bước "${name}" trong vòng lặp "${ref.why.loop}" có thể bỏ qua các bước sau nó ở mọi lần lặp, nên "${s}" có thể chưa có bản ghi. Đặt "${s}" trước bước "${name}"${fix ? ` hoặc ${fix}` : ''} nếu cần luôn có giá trị.${isMD ? ' Master-Detail sẽ báo lỗi khi chạy nếu chưa có bản ghi cha.' : ''}`;
+  }
   if (ref.why?.loop) {
     if (ref.why.each !== undefined) {
       return `vòng lặp "${ref.why.loop}" chạy 0 lần khi pool "${ref.why.each || '?'}" rỗng nên "${s}" có thể chưa có bản ghi.${isMD ? ' Master-Detail sẽ báo lỗi khi chạy nếu pool đó rỗng.' : ''}`;

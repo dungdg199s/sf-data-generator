@@ -127,7 +127,7 @@ phạm vi (`analyzeScope` trong `shared/scope.js`) chỉ đọc hai khóa này, 
 
 | Khóa | Giá trị | Ý nghĩa |
 | --- | --- | --- |
-| `flow.kind` | `sequence`; `loop` (`body`: khóa slot lặp lại); `branch` (`alternatives`: các slot loại trừ nhau) | Cách các slot chạy. Loop có thêm hàm `minIterations(config, ctx)` (không gửi qua meta; trình duyệt dùng bản trong `shared/scope.js`); `ctx.poolNonEmpty(name)` (0013): pool đó luôn có bản ghi tại bước Lặp. Chọn bản ghi có hàm `maySkip(config, ctx)` (`pickMaySkip`, sau review 0013): bước có thể bỏ qua phần còn lại của lượt (`onEmpty: "skip"`, trừ khi không lọc, không `unique` và pool `from` luôn có bản ghi) |
+| `flow.kind` | `sequence`; `loop` (`body`: khóa slot lặp lại); `branch` (`alternatives`: các slot loại trừ nhau) | Cách các slot chạy. Loop có thêm hàm `minIterations(config, ctx)` (không gửi qua meta; trình duyệt dùng bản trong `shared/scope.js`); `ctx.poolNonEmpty(name)` (0013): pool đó luôn có bản ghi tại bước Lặp. Chọn bản ghi có hàm `maySkip(config, ctx)` (`pickMaySkip`, sau review 0013): bước có thể bỏ qua phần còn lại của lượt (`onEmpty: "skip"`, trừ khi không lọc, không `unique` và pool `from` luôn có bản ghi). `skipFix: { key, value }` (Chọn bản ghi: `onEmpty` = `error`, gửi qua meta): lựa chọn làm bước dừng thay vì bỏ qua, được nêu trong cảnh báo `maybe` sau vòng lặp |
 | `exposes` | một object như các dòng dưới, hoặc **mảng** các object (0010) | Mỗi phần tử là một nguồn. Phần tử có `when` (`{ key, in }`, như `showIf`) chỉ có hiệu lực khi config khớp. Phần tử đầu có id nguồn = id bước; phần tử sau có id `<id bước>#<key>` (Lặp `each`: `<id>#item`) |
 | `exposes.kind` | `record`: `<tên>.<field>` là field của bản ghi hiện tại; `vars`: `<tên>.<key>` là biến rời; `value` (0015): một giá trị có tên trong nhóm `exposes.namespace` (`{{var.<name>}}`, `meta.syntax.varNamespace`), kiểu từ `exposes.valueType` (`{ key, map, whenMode }`: `valueType` của config qua `map`, trừ khi `mode` có trong `whenMode`), không thuộc không gian tên alias | Loại nguồn biến |
 | `exposes.name` | `{ key, default?, fallback? }` | Tên trong đường dẫn: `config[key]`, rỗng thì `default`, rồi `id` nếu `fallback: "id"` (Record: `alias` hoặc `id`) |
@@ -296,7 +296,7 @@ Trạng thái của một nguồn tại một bước:
 | --- | --- | --- |
 | `always` | Nguồn chạy trước, trực tiếp trong một dãy đang bao bước này; biến lặp của vòng lặp bao quanh | Hợp lệ |
 | `last` | Nguồn nằm trong thân một Lặp đã chạy xong ở phía trên, và Lặp luôn chạy ≥ 1 lần (`fixed` với `count ≥ 1`, `range` với `min ≥ 1`, `values` có ≥ 1 giá trị, hoặc `each` **không lọc** qua pool Record đang `always`/`last` tại Lặp đó, 0013 C4). Giá trị là bản ghi của lần lặp cuối (Lookup `random`: một bản ghi bất kỳ đã sinh) | Hợp lệ |
-| `maybe` | Nguồn nằm trong một nhánh rẽ, hoặc trong một Lặp có thể chạy 0 lần (số lần là biến; Lặp `each` có lọc, qua Query, Chọn bản ghi hay pool `maybe`), ở phía trên | Cảnh báo |
+| `maybe` | Nguồn nằm trong một nhánh rẽ, hoặc trong một Lặp có thể chạy 0 lần (số lần là biến; Lặp `each` có lọc, qua Query, Chọn bản ghi hay pool `maybe`), hoặc đứng sau một bước có thể bỏ qua phần còn lại của lần lặp (`maySkip` trong danh mục, ví dụ Chọn bản ghi "Bỏ qua các bước phía sau") trong thân Lặp gần nhất, ở phía trên | Cảnh báo |
 | `after` | Nguồn nằm sau bước này, hoặc chính là bước này | Lỗi |
 | `otherBranch` | Nguồn ở nhánh còn lại của một Rẽ nhánh đang bao bước này | Lỗi |
 | `outsideLoop` | Biến lặp, hoặc bản ghi đang lặp (0010), của một vòng lặp không bao bước này | Lỗi |
@@ -325,7 +325,7 @@ Tham chiếu hỏng là **lỗi** (chặn Xem trước và Insert, HTTP 422 khi 
 | `selfAlias` | lỗi | Dùng alias của chính bước trong template của nó (phải dùng `this`) |
 | `noIdYet` | lỗi | `{{acc.Id}}` với bản ghi được sinh ra (chưa có Id trước khi insert) |
 | `noCurrent` | lỗi | Field của nguồn không có bản ghi hiện tại (`current: "none"`, Query của 0006) |
-| `maybe` | cảnh báo | Nguồn `maybe` (câu chữ nêu nguyên nhân: nhánh rẽ, hoặc vòng lặp "x" có thể chạy 0 lần; Master-Detail nói thêm cách sửa) |
+| `maybe` | cảnh báo | Nguồn `maybe` (câu chữ nêu nguyên nhân: nhánh rẽ, vòng lặp "x" có thể chạy 0 lần, hoặc bước "p" có thể bỏ qua nó ở mọi lần lặp — kèm cách sửa từ `skipFix` của loại bước, ví dụ "chọn "Báo lỗi và dừng""; Master-Detail nói thêm cách sửa) |
 | `openMember` | cảnh báo | Field lạ của nguồn có `open: true` |
 | `unclosed` | cảnh báo | Template có `{{` không thành token, sẽ được giữ nguyên là chữ |
 | `wrongSobject` | cảnh báo | Lookup có `referenceTo` (điền khi Import từ org) nhưng bước cha sinh sObject khác |

@@ -1499,3 +1499,18 @@ test('set variable after review (N1, N2): an add past the largest number keeps t
   const set = validateWorkflow(wf([setVar('s', 's', '{{var.s}}-x')])).errors.find((e) => e.code === 'varUnset');
   assert.match(set.message, /hoặc chọn "Cộng thêm" nếu muốn cộng dồn\.$/);
 });
+
+test('a source made after a skipping Chọn bản ghi in a loop body is "maybe" after the loop, with a skip sentence (fix after merge)', () => {
+  const lk = { name: 'WhatId', type: 'lookup', options: { mode: 'current', ref: 'acc' } };
+  const skipPick = (onEmpty = 'skip') => pick('p', 'pp', 'accs', { filter: 'compare', filterField: 'Id', filterOp: 'eq', filterValue: 'zzz', onEmpty });
+  const make = (body) => wf([query('q', 'accs', { fields: ['Id'] }), loop('o', { count: 2 }, body), record('t', 'Task', 'tk', [lk])]);
+  const maybe = (w) => warningsOf(w).filter((i) => i.code === 'maybe').map((i) => [i.nodeId, i.field, i.message]);
+  assert.deepEqual(maybe(make([skipPick(), record('a', 'Account', 'acc', [])])), [['t', 'fields.WhatId',
+    'Field "WhatId": bước "pp" trong vòng lặp "loop" có thể bỏ qua các bước sau nó ở mọi lần lặp, nên "acc" có thể chưa có bản ghi. Đặt "acc" trước bước "pp" hoặc chọn "Báo lỗi và dừng" ở "Khi không còn bản ghi để chọn" nếu cần luôn có giá trị.']]);
+  // Before the pick, with "Báo lỗi và dừng", or with the pick turned off: always there.
+  assert.deepEqual(maybe(make([record('a', 'Account', 'acc', []), skipPick()])), []);
+  assert.deepEqual(maybe(make([skipPick('error'), record('a', 'Account', 'acc', [])])), []);
+  assert.deepEqual(maybe(make([{ ...skipPick(), disabled: true }, record('a', 'Account', 'acc', [])])), []);
+  // Inside a Rẽ nhánh after the pick too.
+  assert.deepEqual(maybe(make([skipPick(), branch('b', { kind: 'chance', probability: 1 }, [record('a', 'Account', 'acc', [])], [record('a2', 'Account', 'acc', [])])])).map((x) => x[0]), ['t']);
+});
