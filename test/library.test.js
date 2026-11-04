@@ -217,3 +217,25 @@ test('an imported library file gets valid step ids (review 2 of 0011, item 8)', 
   const out = parseLibraryFile({ sfdg: 'library', version: 1, workflows: [{ version: 2, name: 'x', steps: [{ id: '-bad id', type: 'record', config: {} }] }] });
   assert.deepEqual(out.workflows[0].steps.map((s) => s.id), ['bad_id']);
 });
+
+test('restore: a delete whose trash copy could not be written comes back from the copy in memory; nothing half-written when full (fix after merge)', () => {
+  const { lib, local } = setup();
+  const big = { version: 2, name: 'Big', steps: [{ id: 'a', type: 'record', config: { sobject: 'Account', alias: 'acc', note: 'x'.repeat(5000), fields: [] } }] };
+  const id = lib.create(big);
+  lib.create({ version: 2, name: 'Small', steps: [] });
+  const item = lib.item(id);
+  const raw = lib.raw(id);
+  local.limit = [...local.map].reduce((n, [k, v]) => n + k.length + v.length, 0) + 100; // no room for the trash copy
+  lib.remove(id);
+  assert.equal(local.getItem(TRASH_KEY), null, 'the trash could not be written');
+  assert.equal(lib.restoreTrash(id), null);
+  assert.equal(lib.restore(item, raw), id);
+  assert.equal(lib.read(id).workflow.name, 'Big');
+  assert.ok(lib.items().some((it) => it.id === id));
+  // Storage full even for the entry: throws, and leaves neither the entry nor an index row.
+  lib.remove(id);
+  local.limit = [...local.map].reduce((n, [k, v]) => n + k.length + v.length, 0) + 10;
+  assert.throws(() => lib.restore(item, raw), /full/);
+  assert.equal(local.getItem(`sfdg.wf.${id}`), null);
+  assert.ok(!lib.items().some((it) => it.id === id));
+});
