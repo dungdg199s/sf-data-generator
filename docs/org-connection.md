@@ -170,6 +170,12 @@ thật, `collectRefs` không coi là phụ thuộc, nên bản ghi con được 
   `failedResults` ⇒ Id thành công vẫn được ghi, phần còn lại vào `bulkUnknown` kèm cảnh báo. Mọi bản ghi của một job luôn nằm
   đúng một trong `inserted`, `failed`, `notSent`, `bulkUnknown` (N7). `check()` lỗi tạm thời được thử lại 2 lần (1 s, 2 s; N2).
   Job Salesforce mở phải đúng `operation`/`object` đã yêu cầu, không thì bị hủy trước khi tải dữ liệu (N3).
+- **Đóng job lỗi** (mất câu trả lời của `close()`, hoặc hủy job bị từ chối): server hỏi lại trạng thái job (`check()`). Job vẫn
+  `Open` hoặc đã `Aborted` ⇒ chưa có gì vào org, các dòng tính là lỗi như trước. Trạng thái khác (đã đóng, đang xử lý, xong)
+  hoặc không hỏi được ⇒ job ghi `state: "Unknown"`, `idsCollected: false`, các dòng vào `bulkUnknown` (không phải lỗi), lần
+  chạy dừng (`stopped.reason: "bulkError"`), và lần xóa sau đọc kết quả của job đó.
+- **Không ghi được Id vào Lịch sử** sau một job (đĩa đầy…): job giữ `idsCollected: false` để lần xóa sau đọc lại kết quả của
+  nó; lần chạy dừng với `stopped.reason: "history"`.
 - **Tiến độ:** `progress` (`insert`) có `bulk: { nodeId, sobject, jobId, job, jobs, processed, failed, records, state }`;
   `inserted` đã cộng `processed − failed` của job đang chạy (số tạm). Đang Dừng mà còn job: `{ "type": "progress", "phase":
   "stopping", "waitingBulk": { jobId, sobject, nodeId, processed, records } }`.

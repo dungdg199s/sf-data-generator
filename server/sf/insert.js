@@ -204,12 +204,15 @@ export function createInserter(client, target, {
   }
 
   /** Ids just created go to history before the next write; a failed write stops the insert. */
+  /** Appends Ids to the insert history. → true when they are on disk (or there is nothing to write). */
   async function saveIds(rows) {
-    if (!onInserted || !rows.length) return;
+    if (!onInserted || !rows.length) return true;
     try {
       await onInserted(rows);
+      return true;
     } catch (e) {
       stopped ??= { reason: 'history', message: e.message };
+      return false;
     }
   }
 
@@ -386,6 +389,29 @@ export function createInserter(client, target, {
     } catch (e) {
       stopped ??= { reason: 'history', message: e.message };
     }
+    // Upload or close failed: was the job closed anyway (a lost close() answer, an abort refused)?
+    // → 'open' (Salesforce processes nothing of it), 'aborted' or 'unknown'.
+    const settleFailed = async (closing) => {
+      const check = async () => {
+        try {
+          return (await handle.check())?.state ?? null;
+        } catch {
+          return null;
+        }
+      };
+      let state = closing ? await check() : 'Open';
+      if (state === 'Open') {
+        try {
+          await handle.abort();
+          return 'aborted';
+        } catch {
+          state = await check();
+        }
+      }
+      if (state === 'Open') return 'open';
+      if (state === 'Aborted') return 'aborted';
+      return 'unknown';
+    };
     const abortOpen = async () => {
       try {
         await handle.abort();
@@ -398,10 +424,12 @@ export function createInserter(client, target, {
       await onJob?.(job)?.catch?.(() => {});
     };
     if (stopped || isCancelled()) return abortOpen();
+    let closing = false;
     try {
       await handle.upload(csv);
       // Dừng while uploading: the job is still Open, nothing processed yet ⇒ abort it.
       if (isCancelled() || forceSignal?.aborted) return abortOpen();
+      closing = true;
       await handle.close();
     } catch (e) {
       if (isOrgChanged(e)) {
@@ -414,12 +442,19 @@ export function createInserter(client, target, {
         progress();
         return undefined;
       }
-      try {
-        await handle.abort();
-      } catch {
-        // ignore
+      const outcome = await settleFailed(closing);
+      if (outcome === 'unknown') {
+        // The close may have reached Salesforce (the job is processing or done): the records may be
+        // in the org. Their Ids are read from the job later (a delete of this run collects them).
+        job.state = 'Unknown';
+        job.idsCollected = false;
+        bulkUnknown += n;
+        stopped ??= { reason: 'bulkError', sobject: st.sobject, nodeId: st.nodeId, jobId: job.jobId, message: `Không rõ job Bulk ${job.jobId} (${st.sobject}) đã được đóng hay chưa: ${e.message}. Mở Lịch sử insert để xem kết quả của job trước khi chạy lại.`, records: n };
+        await onJob?.(job)?.catch?.(() => {});
+        progress();
+        return undefined;
       }
-      job.state = 'Aborted';
+      job.state = outcome === 'open' ? 'Open' : 'Aborted';
       job.idsCollected = true;
       for (const x of items) fail(x.record, e.message, { bulkJobId: job.jobId });
       st.summary.failed += n;
@@ -550,9 +585,10 @@ export function createInserter(client, target, {
       if (!failuresRead) warnings.push(`Không đọc được danh sách lỗi của job Bulk ${job.jobId} (${st.sobject}): ${readError?.message}. ${n - accounted} bản ghi không có kết quả.`);
     }
     st.summary.failed += job.failed;
-    job.idsCollected = true;
     active.processed = accounted;
-    await saveIds(created);
+    // Only Ids that reached the history count as collected; otherwise a later delete of this run
+    // reads the job's results again.
+    job.idsCollected = await saveIds(created);
     active = null;
     if (w.state !== 'Aborted') jobOutcome(st, created.length, job.failed, jobMessage);
     try {
