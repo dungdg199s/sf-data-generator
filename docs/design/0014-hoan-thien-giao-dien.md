@@ -668,3 +668,23 @@ trước review `24304bc` mất 14,7 s, sau review 12,4–14,3 s. **Chưa đạt
 CPU-giây của 4 nhân) và phần lớn nằm ở Chromium, nên không còn cách rẻ nào mà không bớt kiểm tra. Hướng đáng thử nếu cần:
 gộp các lần tải lại trong `flowFiles` (8 lần khởi động app, luồng tốn CPU nhất).
 
+### Sửa thêm sau khi gộp main (2026-11-04)
+
+Một lần đối chiếu tìm thấy lỗi mà review trước đã thấy ở bản cài đặt cũ (bản bị thay), cũng có trong bản của main. Đã sửa:
+
+- **§4 `watchOverflow`**: phần tử con nhận focus được cuộn ra khỏi vùng mờ ở cả hai mép (ngay lúc đó và sau một khung hình).
+  **Lệch khỏi §4 (có chủ ý):** hàng tab của panel kết quả không đổi bánh xe dọc thành cuộn ngang (`watchOverflow(tabs, { wheel:
+  false })`): đang đọc kết quả, lăn chuột trên hàng tab phải cuộn kết quả, không đẩy các tab sang ngang.
+- **§3 sheet**: ở nấc cao, `.palette`, `.view-wrap`, `#results` và thanh lỗi được đặt `inert` (bỏ ở nấc giữa và khi đóng, trước
+  khi focus về thẻ). `snapSheet` nhận `from`: vuốt nhanh xuống từ nấc cao dừng ở nấc giữa, trừ khi thả dưới một nửa nấc giữa.
+  Nhấn chuột vào đầu sheet đặt focus vào nút kéo. Câu đọc của thanh đổi cao: `… (37 % của vùng dưới thanh trên)`.
+- **§2 panel kết quả**: thẻ đang chọn được giữ trong tầm nhìn khi đổi cao nếu trước đó **thấy được một phần** (trước chỉ khi
+  thấy trọn).
+- **§5 Sơ đồ**: `showRect` dùng hàm thuần `clearOfOverlays` (`client/js/minimap.js`) tránh cả thanh thu phóng lẫn minimap cùng
+  lúc (trước tránh lần lượt, có thể đẩy thẻ vào dưới cái kia); vẫn ưu tiên dời sang trái (giữ hàng của thẻ), rồi xuống, rồi lên.
+- **§1 icon**: test cấm glyph làm icon mở rộng ra cả các khối ký hiệu Unicode (mũi tên, ký hiệu kỹ thuật, hình học, dingbat,
+  emoji…), có danh sách ký tự được phép dùng như chữ (→ ← ↑ ↓ ⇒ ≤ ≥ ≈ − ⌥ ⌘ ›).
+- Smoke: luồng mới `flowFixes` (22) và kiểm tra thêm ở `flowLibrary`, `flowDark`, `flowHistory`, `flowHistoryProd`;
+  `SMOKE_ONLY` báo lỗi khi gặp tên luồng không có. `flowProductivity` gõ trọng số cả cách nhau bằng dấu phẩy lẫn mỗi dòng một
+  số, và cả hai đều lưu thành bốn số. Test tiến độ xem trước (`test/run.test.js`) dùng đồng hồ đứng yên nên chỉ
+  phụ thuộc số bản ghi (trước đôi khi hỏng khi chạy song song).

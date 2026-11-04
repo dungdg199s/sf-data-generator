@@ -59,3 +59,16 @@ test('sf__Error parses to the SaveResult shape: same message, field and error gr
   assert.deepEqual(viaBulk, { message: 'REQUIRED_FIELD_MISSING: Required fields are missing: [LastName] [LastName]', field: 'fields.LastName' });
   assert.equal(errorPattern(describeFailure({ errors: [parseBulkError(cases[1][0])] }, record).message), errorPattern(describeFailure({ errors: [{ statusCode: 'DUPLICATE_VALUE', message: 'duplicate value found: Email__c duplicates value on record with id: 003000000000009AAA' }] }, record).message));
 });
+
+test('numbers are written in plain decimals, never with an exponent, in cells and row keys (fix after merge)', () => {
+  assert.equal(bulkCell(1e21), '1000000000000000000000');
+  assert.equal(bulkCell(1.5e22), '15000000000000000000000');
+  assert.equal(bulkCell(1e-7), '0.0000001');
+  assert.equal(bulkCell(-2.5e-8), '-0.000000025');
+  assert.equal(bulkCell(123456.789), '123456.789');
+  assert.equal(bulkCell(Number.NaN), '');
+  const { csv, keys } = toBulkCsv([{ Amount: 1e21, Rate: 1e-7 }]);
+  assert.equal(csv, 'Amount,Rate\n1000000000000000000000,0.0000001\n');
+  // The result CSV echoes the uploaded text: its key matches.
+  assert.equal(keys[0], rowKey(['1000000000000000000000', '0.0000001']));
+});

@@ -355,6 +355,17 @@ async function checkHistory() {
   }
 }
 
+/**
+ * True when a step shortcut may act with focus on `target`: the Quy trình / Sơ đồ views or the page
+ * itself, but nothing inside the inspector, the results, a variable picker, the sheet header, a
+ * popup or a dialog.
+ */
+function stepShortcutTarget(target) {
+  if (!target || target === document.body || target === document.documentElement) return true;
+  if (target.closest?.('#inspector, #results, .var-picker, .sheet-head, .popup, dialog')) return false;
+  return Boolean(target.closest?.('#process, #canvas'));
+}
+
 function wireShortcuts() {
   window.addEventListener('keydown', (e) => {
     if (!e.defaultPrevented && (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'o') {
@@ -368,6 +379,9 @@ function wireShortcuts() {
     }
     if (e.defaultPrevented || document.querySelector('dialog[open]') || e.target.closest('.popup')) return;
     const typing = e.target.closest('input, textarea, select, [contenteditable]');
+    // Step shortcuts (move, delete, duplicate, turn off, step menu, add, Esc) act only from the tree
+    // or with nothing focused — never from a button of the inspector, the results or a picker.
+    const stepKeys = stepShortcutTarget(e.target);
     const mod = e.ctrlKey || e.metaKey;
     const key = e.key.toLowerCase();
     const sel = ops.selectedId();
@@ -395,6 +409,9 @@ function wireShortcuts() {
     } else if (mod && key === 'y') {
       e.preventDefault();
       redo();
+    } else if (!stepKeys && (mod && key === 'd' || mod && (e.key === '/' || e.code === 'Slash') || e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')
+      || (!mod && !e.altKey && e.key === '/') || e.key === 'Delete' || e.key === 'Backspace' || e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10') || e.key === 'Escape')) {
+      // Native keys of the focused control (a button's Space / Enter, a list's arrows) stay.
     } else if (mod && key === 'd') {
       // One-step keys act on the whole selection (design 0012 B).
       e.preventDefault();
@@ -864,7 +881,7 @@ const deleteOffer = (hid, inserted) => (hid && inserted > 0 ? { label: 'Xóa d�
  * progress, Dừng (Dừng ngay while a Bulk job is processed), summary, toast, "Lỗi xóa" tab. Called by
  * the delete confirmation (history.js): a refusal before the stream starts is thrown back to it.
  */
-async function deleteRun({ hid, body, org, total, bySobject, onResponse, signal }) {
+async function deleteRun({ hid, body, org, total, bySobject, onResponse, signal, source = null }) {
   if (running) throw new Error('Đang chạy. Bấm "Dừng" hoặc chờ lần chạy xong rồi mới xóa.');
   // Children first: the chips follow the delete order (reverse insert order).
   const order = Object.keys(bySobject ?? {}).reverse();
@@ -914,7 +931,7 @@ async function deleteRun({ hid, body, org, total, bySobject, onResponse, signal 
         }
       },
     });
-    state.deleteResult = { result, org, hid };
+    state.deleteResult = { result, org, hid, source };
     emit('run', 'result');
     const msg = deleteEndMessage(result, { org, total });
     if (result.stopped || result.cancelled || result.failed || msg.extra) showRunning(msg.text);

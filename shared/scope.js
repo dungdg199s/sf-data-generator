@@ -543,10 +543,12 @@ export function analyzeScope(wf, catalog) {
     return false;
   };
   // `cut`: a step earlier in this loop iteration (this sequence, or a branch in it) may skip the
-  // rest of it. Entries pushed then are flagged `afterSkip`; when the loop ends they become `cut`.
-  // `escaped.skip` tells the caller a skip in `list` ends the enclosing sequence too.
+  // rest of it — false, or { skip, skipType, skipName } of that step. Entries pushed then are
+  // flagged `afterSkip` (the same object); when the loop ends they become `cut` and `maybe`
+  // (every iteration may have skipped them). `escaped.skip` tells the caller a skip in `list` ends
+  // the enclosing sequence too (false or the same object).
   function walk(list, head, vars, others, off, cut = false, escaped = { skip: false }) {
-    const mark = (e) => (cut && !e.afterSkip ? { ...e, afterSkip: true } : e);
+    const mark = (e) => (cut && !e.afterSkip ? { ...e, afterSkip: cut } : e);
     for (const step of Array.isArray(list) ? list : []) {
       if (!isStep(step)) continue;
       const stepOff = off || step.disabled === true;
@@ -577,7 +579,8 @@ export function analyzeScope(wf, catalog) {
         for (const [id, e0] of inner) {
           const { afterSkip, ...e } = e0;
           if (afterSkip) e.cut = true;
-          added.set(id, once ? { ...e, certainty: worse('last', e.certainty) } : { ...e, certainty: 'maybe', why: e.why ?? { loop: loopName, loopId: step.id, range: mode === 'range', ...(mode === 'each' ? { each: step.config?.from || '' } : {}) } });
+          if (once && afterSkip) added.set(id, { ...e, certainty: 'maybe', why: e.why ?? { ...afterSkip, loop: loopName, loopId: step.id } });
+          else added.set(id, once ? { ...e, certainty: worse('last', e.certainty) } : { ...e, certainty: 'maybe', why: e.why ?? { loop: loopName, loopId: step.id, range: mode === 'range', ...(mode === 'each' ? { each: step.config?.from || '' } : {}) } });
         }
       } else if (keys.length && flow.kind !== 'sequence') {
         const alts = flow.alternatives ?? keys;
@@ -588,8 +591,8 @@ export function analyzeScope(wf, catalog) {
           return addedSince(walk(step.slots?.[key], head, vars, others2, stepOff, cut, inner), head);
         });
         if (inner.skip && !stepOff) {
-          cut = true;
-          escaped.skip = true;
+          cut ||= inner.skip;
+          escaped.skip ||= inner.skip;
         }
         const ids = new Set(results.flatMap((r) => [...r.keys()]));
         added = new Map();
@@ -607,8 +610,8 @@ export function analyzeScope(wf, catalog) {
         const inner = { skip: false };
         for (const key of keys) head = walk(step.slots?.[key], head, vars, others, stepOff, cut, inner);
         if (inner.skip && !stepOff) {
-          cut = true;
-          escaped.skip = true;
+          cut ||= inner.skip;
+          escaped.skip ||= inner.skip;
         }
       }
       // Turned-off containers contribute nothing to the steps after them.
@@ -622,8 +625,9 @@ export function analyzeScope(wf, catalog) {
       }
       const skipFn = typeof type?.maySkip === 'function' ? type.maySkip : MAY_SKIP[step.type];
       if (!stepOff && skipFn?.(step.config ?? {}, { poolNonEmpty: (name) => poolNonEmptyAt(head, name) })) {
-        cut = true;
-        escaped.skip = true;
+        const by = { skip: step.id, skipType: step.type, skipName: own?.name ?? step.id };
+        cut ||= by;
+        escaped.skip ||= by;
       }
     }
     return head;
@@ -669,8 +673,11 @@ export function analyzeScope(wf, catalog) {
       for (let i = r.vars.length - 1; i >= 0; i--) if (r.vars[i].name === name) return r.vars[i];
       return null;
     };
-    /** A user-given name hides the run variables of the same name (design 0013 G). */
-    const shadowsGlobal = (name) => Boolean(varByName(name)) || (byName.get(name) ?? []).some((x) => !x.global && x.kind !== 'vars');
+    /**
+     * A user-given name hides the run variables of the same name (design 0013 G); not a turned-off
+     * step's (it never runs, so the run variable is what the executor reads).
+     */
+    const shadowsGlobal = (name) => Boolean(varByName(name)) || (byName.get(name) ?? []).some((x) => !x.global && x.kind !== 'vars' && !x.disabled);
     /** { certainty, why? } when visible, else { reason }. */
     const state = (sid) => {
       const s = sources[sid];
@@ -731,7 +738,7 @@ export function analyzeScope(wf, catalog) {
         for (const s of globals) if (!seen.has(s.id) && !shadowsGlobal(s.name)) list.push({ source: s.id, certainty: 'always', seq: -1 });
         for (const v of list) {
           delete v.seq;
-          if (v.certainty === 'maybe') v.note = v.why?.loop ? `vòng lặp "${v.why.loop}" có thể chạy 0 lần` : 'chỉ được tạo ở một số nhánh phía trên';
+          if (v.certainty === 'maybe') v.note = v.why?.skip ? `bước "${v.why.skipName}" có thể bỏ qua nó ở mọi lần lặp` : v.why?.loop ? `vòng lặp "${v.why.loop}" có thể chạy 0 lần` : 'chỉ được tạo ở một số nhánh phía trên';
           if (v.certainty === 'last') v.note = 'bản ghi cuối';
         }
         visible = list;
@@ -849,7 +856,7 @@ function resolveRef({ step, here, o, path, sources, byName, byVar, namespaces, l
     return resolveValue({ step, here, o, sources, byVar, base, fail, ns: name, rest });
   }
   const candidates = byName.get(name) ?? [];
-  const src = visibleVar ?? candidates.find((s) => s.kind !== 'vars') ?? candidates.find((s) => s.global)
+  const src = visibleVar ?? candidates.find((s) => s.kind !== 'vars' && !s.disabled) ?? candidates.find((s) => s.global) ?? candidates.find((s) => s.kind !== 'vars')
     ?? candidates.find((s) => !s.disabled) ?? candidates[0];
   if (!src) {
     // `loop.index` with no loop of that name: a loop variable shape. Point at the enclosing loop,

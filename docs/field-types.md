@@ -85,6 +85,10 @@ khoảng hoặc không phải số; validate dùng nó (lỗi `code: "optionRang
 Các `kind` của option mà UI dựng được: `string`, `text`, `integer`, `number`, `boolean`, `select` (cần `choices`),
 `list`, `numberList`, `time`, `ref` (dropdown dựng từ `refChoices` của `shared/scope.js`: bước dùng được ở vị trí này, gần
 nhất trước, kèm `bản ghi cuối` / `có thể trống`; các bước khác nằm trong nhóm "Không dùng được ở đây", bị tắt, kèm lý do).
+`list` (giá trị chữ) luôn **mỗi dòng một giá trị** (dấu phẩy nằm trong giá trị). `numberList` (ví dụ trọng số picklist) tách
+theo dòng, dấu phẩy **và** dấu chấm phẩy như trước (một số không chứa các dấu đó: `70, 20, 10` là ba trọng số; `toNumberList`
+trong `server/generators/common.js`); chỉ một phần tử vẫn không phải số sau khi tách (ví dụ `abc`) mới là lỗi `optionRange`
+gắn field.
 Khóa thêm của option ([0005](design/0005-variable-picker.md)):
 
 - `vars: 'template' | 'path'`: option nhận biến. UI gắn bảng chọn biến (nút `{x}`, gõ `{{`, Ctrl+Space) và dải chip;

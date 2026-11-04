@@ -3,23 +3,38 @@
 // Upload: columns = union of the fields of the job's records (after toSObject, so Lookups are real
 // Ids and geolocations are split into __Latitude__s / __Longitude__s), in first-seen order; never a
 // column that is not a field of the step (Salesforce refuses the whole job). null / missing → empty
-// cell, booleans true / false, numbers String(n), strings as generated; a cell holding `"`, `,` or
+// cell, booleans true / false, numbers in plain decimals (never 1e+21), strings as generated; a cell holding `"`, `,` or
 // a line break is quoted. Lines end with LF (the job is created with lineEnding LF).
 //
 // Results: successfulResults / failedResults come back as raw CSV text (server/sf/client.js) and
 // are parsed here: jsforce's parser treats `;`, `|`, tab… as delimiters too.
 
-/** One CSV cell of a value sent to Salesforce. */
-export function bulkCell(v) {
-  if (v === null || v === undefined) return '';
-  const s = typeof v === 'boolean' ? (v ? 'true' : 'false') : typeof v === 'object' ? JSON.stringify(v) : String(v);
-  return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+/**
+ * A number in plain decimal notation: String(n) writes 1e+21 or 1e-7, which a Bulk CSV number or
+ * currency column refuses. Not finite → empty cell.
+ */
+export function plainNumber(n) {
+  if (!Number.isFinite(n)) return '';
+  const s = String(n);
+  if (!/e/i.test(s)) return s;
+  const [mantissa, exp] = s.toLowerCase().split('e');
+  const e = Number(exp);
+  if (e > 0) return BigInt(n).toString(); // ≥ 1e21: an integer (every double that large is one)
+  const decimals = (mantissa.split('.')[1]?.length ?? 0) - e;
+  return n.toFixed(Math.min(100, decimals));
 }
 
 /** Same text as the cell, unquoted: how a value reads back in Salesforce's result CSV. */
 export function bulkText(v) {
   if (v === null || v === undefined) return '';
+  if (typeof v === 'number') return plainNumber(v);
   return typeof v === 'boolean' ? (v ? 'true' : 'false') : typeof v === 'object' ? JSON.stringify(v) : String(v);
+}
+
+/** One CSV cell of a value sent to Salesforce. */
+export function bulkCell(v) {
+  const s = bulkText(v);
+  return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
 /**

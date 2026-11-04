@@ -72,6 +72,11 @@
 //      and TEST-{{run.today}}; on acc.Name "{{lo" opens the picker with the "var · Biến" group, Enter inserts {{var.lo}}
 //      (copper chip); Ctrl+Enter: card chip "đặt 1 lần · = "TEST-…"", Name in the results table; renaming lo → ma
 //      renames {{var.ma}} (toast with Hoàn tác); a Chữ variable in "Số lần lặp" offers "Đổi Kiểu thành Số".
+//  22. fixes after the main merge (flowFixes): step keys never act from inspector buttons ({x} + Alt+↓ opens the
+//      picker), "Dùng bản ở tab kia" waits for the run, focused result tabs clear the fades and the tab row keeps the
+//      wheel (390 px), the tall sheet makes what is behind it inert and a mouse press focuses its grip, a partly
+//      visible selected card stays in view when the results grow; flowLibrary: "Hoàn tác" with the trash full;
+//      flowDark: an error row of a step not in the workflow is no button; flowHistory(Prod): cascade line, delete rows.
 //  0014 also adds: SVG icons and aria-labels (1), Alt+↓ opens the picker (5b), Quy trình cards never overflow at 390 px,
 //      fades of sideways rows (13d, 13e), the results panel's height handle (13, wide), the sheet's two snaps (11, 13d).
 // The flows run in parallel, one browser context each (independent storage): see SKILL.md.
@@ -709,7 +714,11 @@ async function flowDark() {
       insert: {
         inserted: 1, failed: 7, errorsTotal: 7, total: 8, notSent: 0, cancelled: false, stopped: null, ids: {}, bySobject: { Account: { inserted: 1, failed: 0 } },
         errors: [{ ref: 'con#1', sobject: 'Contact', nodeId: 'con', field: 'fields.LastName', message: 'REQUIRED_FIELD_MISSING: x' }],
-        errorGroups: [{ sobject: 'Contact', nodeId: 'con', field: 'fields.LastName', message: 'REQUIRED_FIELD_MISSING: x', count: 2, refs: ['con#1', 'con#2'] }],
+        errorGroups: [
+          { sobject: 'Contact', nodeId: 'con', field: 'fields.LastName', message: 'REQUIRED_FIELD_MISSING: x', count: 2, refs: ['con#1', 'con#2'] },
+          // A step that is not in the open workflow: a plain row, not a button (fix after merge).
+          { sobject: 'Lead', nodeId: 'gone', message: 'FIELD_CUSTOM_VALIDATION_EXCEPTION: y', count: 1, refs: ['ld#1'] },
+        ],
         errorGroupsOther: { groups: 3, count: 5 },
       },
     };
@@ -736,6 +745,8 @@ async function flowDark() {
   await d.click('.tabs .tab-issues');
   check(/và 3 nhóm lỗi khác/.test(await d.textContent('table.error-groups')), 'no remainder row for the groups past the cap');
   check((await d.getAttribute('table.error-groups tbody tr.clickable', 'role')) === 'button', 'error group rows are not role=button');
+  check(await d.$eval('table.error-groups tbody tr[data-node="gone"]', (tr) => tr.getAttribute('role') === null && tr.tabIndex === -1 && !tr.classList.contains('clickable')).catch(() => false),
+    'an error group of a step not in the workflow is still a button');
   await d.click('.step-card[data-id="acc"] .type');
   await d.focus('table.error-groups tbody tr.clickable');
   await d.keyboard.press(' ');
@@ -917,7 +928,7 @@ async function resultsHeightSteps(page) {
   const h0 = (await box()).h;
   for (let i = 0; i < 3; i++) await page.keyboard.press('ArrowUp');
   let b = await box();
-  check(Math.abs(b.h - h0 - 48) <= 1 && /^Cao \d+ px \(\d+ % màn hình\)$/.test(b.text), `↑ × 3 on the handle: ${h0} → ${b.h} (+48 expected; ${b.text})`);
+  check(Math.abs(b.h - h0 - 48) <= 1 && /^Cao \d+ px \(\d+ % của vùng dưới thanh trên\)$/.test(b.text), `↑ × 3 on the handle: ${h0} → ${b.h} (+48 expected; ${b.text})`);
   await page.keyboard.press('Home');
   b = await box();
   check(Math.abs(b.h - 160) <= 1, `Home on the handle: ${b.h} px (160 expected)`);
@@ -1495,10 +1506,21 @@ async function productivityRest(page) {
   check(/^Ví dụ: "[^"]+" · "[^"]+" · "[^"]+"$/.test(await samplesText(ind)) && /seed 1/.test(await page.getAttribute(`${ind} .field-samples`, 'title')), `Industry examples: ${await samplesText(ind)}`);
   await Promise.all([
     page.waitForResponse((res) => res.url().endsWith('/api/field-samples'), { timeout: 3000 }).catch(() => null),
-    page.fill(`${ind} textarea[data-key="weights"]`, '0, 0, 0, 1'),
+    page.fill(`${ind} textarea[data-key="weights"]`, '0, 0, 0, 1'), // number lists split on commas too (as main did)
   ]);
   await page.waitForFunction((sel) => document.querySelector(`${sel} .field-samples`)?.textContent === 'Ví dụ: "Healthcare" · "Healthcare" · "Healthcare"', ind, { timeout: 3000 }).catch(() => {});
   check(await samplesText(ind) === 'Ví dụ: "Healthcare" · "Healthcare" · "Healthcare"', `Industry examples after new weights: ${await samplesText(ind)}`);
+  check(JSON.stringify((await savedWorkflow(page)).steps.flatMap(function all(x) { return [x, ...Object.values(x.slots ?? {}).flat().flatMap(all)]; }).find((x) => x.id === 'acc').config.fields.find((f) => f.name === 'Industry').options.weights) === '[0,0,0,1]',
+    'comma-separated weights were not saved as four numbers');
+  // One per line gives the same weights.
+  await Promise.all([
+    page.waitForResponse((res) => res.url().endsWith('/api/field-samples'), { timeout: 3000 }).catch(() => null),
+    page.fill(`${ind} textarea[data-key="weights"]`, '1\n0\n0\n0'),
+  ]);
+  await page.waitForFunction((sel) => !/Healthcare/.test(document.querySelector(`${sel} .field-samples`)?.textContent ?? 'Healthcare'), ind, { timeout: 3000 }).catch(() => {});
+  check(!/Healthcare/.test(await samplesText(ind) ?? 'Healthcare'), `Industry examples after one-per-line weights: ${await samplesText(ind)}`);
+  check(await until(page, () => JSON.stringify(smokeSaved().steps.flatMap(function all(x) { return [x, ...Object.values(x.slots ?? {}).flat().flatMap(all)]; }).find((x) => x.id === 'acc').config.fields.find((f) => f.name === 'Industry').options.weights) === '[1,0,0,0]'),
+    'one-per-line weights were not saved as four numbers');
   await page.click('.step-card[data-id="con"] .type');
   const conTitle = '#inspector .field-card[data-field="fields.Title"]';
   if (await page.$(`${conTitle} .actions button[title="Tùy chọn"]`)) await page.click(`${conTitle} .actions button[title="Tùy chọn"]`); // still open since F1
@@ -1642,6 +1664,26 @@ async function librarySteps(page) {
   check(await entries() === 'Account + Contact | Lead theo xác suất', `390 px, ⋯ → Xóa in the dialog: ${await entries()}`);
   await page.click('dialog[open] button:has-text("Đóng")');
   await page.setViewportSize({ width: 1440, height: 900 });
+  // The trash copy cannot be written (storage full): "Hoàn tác" still brings the entry back, from
+  // the copy kept in memory (fix after merge).
+  await page.evaluate(() => {
+    const orig = Storage.prototype.setItem;
+    window.smokeRestoreSetItem = () => { Storage.prototype.setItem = orig; };
+    Storage.prototype.setItem = function setItem(k, v) {
+      if (k === 'sfdg.library.trash') throw new DOMException('full', 'QuotaExceededError');
+      return orig.call(this, k, v);
+    };
+  });
+  await page.click('#btn-library');
+  await page.click('.popup .popup-item:has-text("Quản lý thư viện")');
+  await page.waitForSelector('dialog[open] .lib-list');
+  const namesT = await page.$$eval('dialog[open] .lib-row .lib-name', (n) => n.map((x) => x.value));
+  await page.click(`dialog[open] .lib-row >> nth=${namesT.indexOf('Lead theo xác suất')} >> button:text-is("Xóa")`);
+  check(await entries() === 'Account + Contact', `Xóa with the trash full: ${await entries()}`);
+  await page.click('dialog[open] .lib-undo button:has-text("Hoàn tác")');
+  check(await entries() === 'Account + Contact | Lead theo xác suất', `Hoàn tác with the trash full: ${await entries()}`);
+  await page.evaluate(() => window.smokeRestoreSetItem());
+  await page.click('dialog[open] button:has-text("Đóng")');
 }
 
 /** 17 B: the "Account + Contact" sample (loopAcc { acc, loopCon { con } }). */
@@ -2279,6 +2321,8 @@ async function flowHistory() {
   check(JSON.stringify(deletes.map((d) => [d.confirm.username, d.confirm.count, d.confirm.typedOrg ?? null, d.bulk])) === JSON.stringify([['me@example.com', 12005, null, 'auto'], ['me@example.com', 12005, 'dev-sb', 'auto'], ['me@example.com', 12105, 'dev-sb', 'auto']]), `20b: delete requests ${JSON.stringify(deletes)}`);
   check(!/null|undefined/.test(await page.textContent('#results-summary')), `20b: the summary prints null (${await page.textContent('#results-summary')})`);
   check(/Lỗi xóa \(2\)/.test(await page.textContent('.tabs .tab-delete-errors').catch(() => '')) && /DELETE_FAILED/.test(await page.textContent('table.error-groups').catch(() => '')), '20b: no "Lỗi xóa (2)" tab with the group');
+  // The insert's workflow is the open one (same name, same steps): its rows go to the step (fix after merge).
+  check((await page.getAttribute('table.error-groups tbody tr[data-node="con"]', 'role').catch(() => null)) === 'button', '20b: the delete error row of the open workflow is not a button');
   check(await toastIs(page, /Đã xóa 12 100 bản ghi; 2 bản ghi không xóa được/), '20b: no delete result toast');
   // No history ⇒ no insert (review S7): Insert is locked with the reason and how to fix it, also said in a toast.
   await page.route('**/api/history', (r) => r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ enabled: false, reason: 'EACCES: permission denied', dir: '/smoke/history', maxRuns: 100, runs: [], prune: [] }) }));
@@ -2372,6 +2416,8 @@ async function flowHistoryProd() {
   await page.click(`#history-dialog .hist-run[data-hid="${PROD_HIDS[0]}"] .hist-delete`);
   await page.waitForSelector('#modal[open] .delete-ok');
   check(await page.evaluate(() => document.activeElement?.textContent === 'Hủy' && document.querySelector('#modal[open] .delete-ok').disabled), '20c: the production delete is not locked (or Hủy not focused)');
+  // One sObject only: the cascade line is still there, worded "có thể" (fix after merge).
+  check(/có thể làm Salesforce tự xóa/.test(await page.textContent('#modal[open] .cascade-note').catch(() => '')), '20c: no cascade-delete line for a one-sObject delete');
   check(/production/.test(await page.textContent('#modal[open] .type-org-box')), '20c: no production warn-box with the name field');
   await page.fill('#modal[open] input.type-org', 'dev-pro');
   check(await page.isDisabled('#modal[open] .delete-ok'), '20c: a wrong name unlocks the delete');
@@ -2509,6 +2555,174 @@ async function flowSetVar() {
   await page.context().close();
 }
 
+/** A page that starts on `wf` (the old autosave key, moved into the library on the first start). */
+async function seededPage(label, wf, ctxOpts) {
+  const page = await newPage(label, ctxOpts);
+  await page.addInitScript((w) => {
+    if (!localStorage.getItem('smoke.seeded')) {
+      localStorage.setItem('sfdg.workflow.v2', JSON.stringify(w));
+      localStorage.setItem('smoke.seeded', '1');
+    }
+  }, wf);
+  return page;
+}
+const frames = (page, n = 2) => page.evaluate((k) => new Promise((r) => { const f = (i) => (i ? requestAnimationFrame(() => f(i - 1)) : r()); f(k); }), n);
+const recStep = (id, sobject, fields = [{ name: 'Name', type: 'text', options: {} }], count = 1) => ({ id, type: 'record', config: { sobject, alias: id, count, fields } });
+const MANY = ['Account', 'Contact', 'Lead', 'Opportunity', 'Case', 'Task', 'Event', 'Campaign', 'Contract', 'Order', 'Product2', 'Pricebook2', 'Asset', 'Solution'];
+const manyWf = () => ({ version: 2, name: 'Nhiều sObject', steps: MANY.map((o, i) => recStep(`r${i}`, o, undefined, 3)) });
+
+/**
+ * 22. Fixes after the main merge (flowFixes): step shortcuts never act from the inspector ({x} + Alt+↓ opens
+ * the picker, "Xuống" + Alt+↓ and "Nhân bản" + Delete / Ctrl+D change nothing); "Dùng bản ở tab kia" during a
+ * run keeps the workflow; at 390 px a focused result tab is clear of the fades, the tab row leaves the wheel
+ * alone, the tall sheet makes what is behind it inert (cleared at the middle snap) and a mouse press focuses
+ * its grip; at 1440 a partly visible selected card stays in view when the results panel grows.
+ */
+async function flowFixes() {
+  // A. Step shortcuts from the inspector.
+  {
+    const wf = { version: 2, name: 'Phím', steps: [recStep('x0', 'Account'), { id: 'l', type: 'loop', config: { count: 2 }, slots: { body: [] } },
+      recStep('x1', 'Lead', [{ name: 'Company', type: 'template', options: { template: 'a' } }, { name: 'LastName', type: 'template', options: { template: 'b' } }]), recStep('x2', 'Case'), recStep('x3', 'Task')] };
+    const page = await seededPage('fixes-keys', wf);
+    await page.goto(base);
+    await page.waitForSelector('.step-card[data-id="x1"]');
+    const json = () => page.evaluate(() => JSON.stringify(smokeSaved()));
+    const settle = () => frames(page, 3);
+    await page.click('.step-card[data-id="l"] .type');
+    await page.waitForSelector('#inspector .var-btn');
+    let before = await json();
+    await page.focus('#inspector .var-btn');
+    await page.keyboard.press('Alt+ArrowDown');
+    await settle();
+    check(await page.isVisible('.var-picker'), '22A: Alt+↓ on the {x} button did not open the variable picker');
+    check(await json() === before, '22A: Alt+↓ on the {x} button changed the workflow (moved the step)');
+    await page.keyboard.press('Escape');
+    await page.click('.step-card[data-id="x1"] .type');
+    await page.waitForSelector('#inspector button[aria-label="Xuống"]:not([disabled])');
+    before = await json();
+    await page.focus('#inspector button[aria-label="Xuống"]:not([disabled])');
+    await page.keyboard.press('Alt+ArrowDown');
+    await page.keyboard.press('Delete');
+    await settle();
+    check(await json() === before, '22A: Alt+↓ / Delete on the inspector "Xuống" button changed the workflow');
+    await page.click('.step-card[data-id="x2"] .type');
+    await page.waitForSelector('#inspector button[aria-label="Nhân bản"]');
+    before = await json();
+    await page.focus('#inspector button[aria-label="Nhân bản"]');
+    for (const k of ['Delete', 'Backspace', 'Alt+ArrowDown', 'Control+d', 'Control+/']) await page.keyboard.press(k);
+    await settle();
+    check(await json() === before, '22A: step keys on the inspector "Nhân bản" button changed the workflow');
+    // From the card itself they still work.
+    await page.focus('.step-card[data-id="x2"]');
+    await page.keyboard.press('Alt+ArrowDown');
+    check(await until(page, () => smokeSaved().steps.map((x) => x.id).join() === 'x0,l,x1,x3,x2'), `22A: Alt+↓ on the card did not move it (${await json()})`);
+    await page.context().close();
+  }
+  // B. "Dùng bản ở tab kia" while this tab runs: stays on its version, says why.
+  {
+    const page = await seededPage('fixes-tabs', { version: 2, name: 'Chung', steps: [recStep('r0', 'Account')] });
+    await page.goto(base);
+    await page.waitForSelector('.step-card[data-id="r0"]');
+    const other = await page.context().newPage();
+    other.on('pageerror', (e) => errors.push(`[fixes-tabs-2] ${e}`));
+    await other.goto(base);
+    await other.waitForSelector('.step-card[data-id="r0"]');
+    let release;
+    const held = new Promise((r) => { release = r; });
+    await page.route('**/api/run', async (r) => { await held; await r.continue(); });
+    await page.click('#btn-preview');
+    await page.waitForSelector('#btn-stop:not([hidden])');
+    await other.fill('#wf-name', 'Sửa ở tab kia');
+    await other.press('#wf-name', 'Tab');
+    await page.waitForSelector('#toast .toast-action:has-text("Dùng bản ở tab kia")', { timeout: 5000 });
+    await page.click('#toast .toast-action:has-text("Dùng bản ở tab kia")');
+    check(await toastIs(page, /Đang chạy\. Bấm Dừng hoặc chờ chạy xong rồi đổi workflow\./), '22B: no "Đang chạy…" toast for "Dùng bản ở tab kia" during a run');
+    check((await page.inputValue('#wf-name')) === 'Chung' && await page.isVisible('#btn-unsaved'), '22B: the workflow switched (or autosave resumed) during the run');
+    release();
+    await page.waitForSelector('#btn-stop', { state: 'hidden', timeout: 10000 }).catch(() => errors.push('22B: the held run did not end'));
+    await page.context().close();
+  }
+  // C. 390 px: result tabs (focus clear of the fades, no wheel), the tall sheet (inert behind, grip focus).
+  {
+    const page = await seededPage('fixes-390', manyWf(), { viewport: { width: 390, height: 844 } });
+    await page.goto(base);
+    await page.waitForSelector('.step-card[data-id="r0"]');
+    await page.click('#btn-preview');
+    await page.waitForSelector('#results:not(.collapsed) table.data');
+    const tabsOver = await page.$eval('.tabs', (t) => t.scrollWidth > t.clientWidth + 1);
+    check(tabsOver, '22C: the result tabs do not overflow at 390 px (the check needs them to)');
+    await page.focus('.tabs button');
+    for (let i = 0; i < 12; i++) {
+      await page.keyboard.press('Tab');
+      await frames(page, 2);
+      const r = await page.evaluate(() => {
+        const t = document.querySelector('.tabs');
+        const a = document.activeElement;
+        if (!t.contains(a)) return null;
+        const fade = parseFloat(getComputedStyle(t).scrollPaddingLeft) || 0;
+        const tr = t.getBoundingClientRect();
+        const ar = a.getBoundingClientRect();
+        const max = t.scrollWidth - t.clientWidth;
+        const leftOk = t.scrollLeft <= 1 || ar.left >= tr.left + fade - 1;
+        const rightOk = t.scrollLeft >= max - 1 || ar.right <= tr.right - fade + 1;
+        return { tab: a.textContent.trim().slice(0, 16), leftOk, rightOk };
+      });
+      if (!r) break;
+      check(r.leftOk && r.rightOk, `22C: focused tab "${r.tab}" is under a fade`);
+    }
+    const box = await page.$eval('.tabs', (t) => { t.scrollLeft = 0; const r = t.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; });
+    await page.mouse.move(box.x, box.y);
+    await page.mouse.wheel(0, 240);
+    await frames(page, 2);
+    check((await page.$eval('.tabs', (t) => t.scrollLeft)) === 0, '22C: a vertical wheel over the result tabs scrolled them sideways (opted out of 0014 §4)');
+    await page.click('.step-card[data-id="r0"] .type');
+    await page.waitForSelector('#inspector.open');
+    await page.click('#inspector .sheet-grip');
+    await page.waitForSelector('#inspector.full');
+    const behind = () => page.evaluate(() => ['.palette', '.view-wrap', '#results', '#issues'].map((q) => document.querySelector(q)?.inert === true));
+    check((await behind()).every(Boolean), `22C: behind the tall sheet not inert: ${JSON.stringify(await behind())}`);
+    check(await page.evaluate(() => document.activeElement?.matches('.sheet-grip')), '22C: a mouse press on the sheet grip did not focus it');
+    await page.click('#inspector .sheet-grip');
+    await page.waitForSelector('#inspector.open:not(.full)');
+    check((await behind()).every((x) => !x), `22C: inert left at the middle snap: ${JSON.stringify(await behind())}`);
+    await page.context().close();
+  }
+  // D. 1440: a partly visible selected card stays in view when the results panel grows.
+  {
+    const page = await seededPage('fixes-keep', manyWf());
+    await page.goto(base);
+    await page.waitForSelector('.step-card[data-id="r6"]');
+    await page.click('#btn-preview');
+    await page.waitForSelector('#results:not(.collapsed) table.data');
+    await page.waitForSelector('#results-resize:not([hidden])');
+    await page.click('.step-card[data-id="r6"] .type');
+    await page.waitForSelector('.step-card.selected[data-id="r6"]');
+    await page.evaluate(() => {
+      const p = document.getElementById('process');
+      const c = document.querySelector('.step-card[data-id="r6"]');
+      const pr = p.getBoundingClientRect();
+      const cr = c.getBoundingClientRect();
+      p.scrollTop += cr.top - (pr.bottom - cr.height / 3); // a third of the card shows at the bottom
+    });
+    await frames(page, 2);
+    const partly = await page.evaluate(() => {
+      const pr = document.getElementById('process').getBoundingClientRect();
+      const cr = document.querySelector('.step-card[data-id="r6"]').getBoundingClientRect();
+      return cr.top < pr.bottom && cr.bottom > pr.bottom;
+    });
+    check(partly, '22D: could not put the selected card half under the bottom edge');
+    await page.focus('#results-resize');
+    await page.keyboard.press('Shift+ArrowUp');
+    const inView = await until(page, () => {
+      const pr = document.getElementById('process').getBoundingClientRect();
+      const cr = document.querySelector('.step-card[data-id="r6"]').getBoundingClientRect();
+      return cr.top >= pr.top - 1 && cr.bottom <= pr.bottom + 1;
+    });
+    check(inView, '22D: the partly visible selected card was not kept in view when the results panel grew');
+    await page.context().close();
+  }
+}
+
 (async () => {
   // A Playwright error outside a flow's promise (e.g. in an event handler) fails the run.
   process.on('uncaughtException', (e) => { console.error('SMOKE FAILED\n' + e); process.exit(1); });
@@ -2524,10 +2738,14 @@ async function flowSetVar() {
     check(orgs.status === 503 && /smoke:/.test((await orgs.json()).error), 'the smoke server is not using the sf CLI stub');
     // Independent flows, one context each, in parallel. A flow that throws (timed-out wait) is
     // reported and the others still finish.
-    let flows = { flowEditing, flowPicker, flowFiles, flowDark, flowLayoutWide, flowLayoutNarrow, flowEach, flowCanvas, flowProductivity, flowLibrary, flowMinimap, flowVarsLoops, flowHistory, flowHistoryProd, flowSetVar };
+    let flows = { flowEditing, flowPicker, flowFiles, flowDark, flowLayoutWide, flowLayoutNarrow, flowEach, flowCanvas, flowProductivity, flowLibrary, flowMinimap, flowVarsLoops, flowHistory, flowHistoryProd, flowSetVar, flowFixes };
     // SMOKE_ONLY=flowCanvas,flowEach runs only those flows (while working on one area).
     const only = process.env.SMOKE_ONLY?.split(',').filter(Boolean);
-    if (only?.length) flows = Object.fromEntries(Object.entries(flows).filter(([n]) => only.includes(n)));
+    if (only?.length) {
+      const unknown = only.filter((n) => !(n in flows));
+      if (unknown.length) throw new Error(`SMOKE_ONLY: unknown flow ${unknown.join(', ')}; known: ${Object.keys(flows).join(', ')}`);
+      flows = Object.fromEntries(Object.entries(flows).filter(([n]) => only.includes(n)));
+    }
     // Each flow's own duration (they overlap): the longest is the smoke's critical path.
     const took = {};
     const results = await Promise.allSettled(Object.entries(flows).map(async ([name, f]) => {

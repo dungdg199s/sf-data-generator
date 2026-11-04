@@ -21,7 +21,7 @@ export const picklist = {
   options: [
     opt('values', 'Giá trị', 'list', ['Option A', 'Option B', 'Option C'], { help: 'Mỗi dòng một giá trị (API name).' }),
     opt('weights', 'Trọng số', 'numberList', [], {
-      help: 'Không bắt buộc. Cùng thứ tự với giá trị, ví dụ 70, 20, 10.',
+      help: 'Không bắt buộc. Các số cùng thứ tự với giá trị, cách nhau bằng dấu phẩy hoặc mỗi dòng một số, ví dụ 70, 20, 10.',
     }),
   ],
   generate(o, { rng }) {

@@ -905,7 +905,11 @@ export function pasteSteps(wf, target, steps, { catalog, slotKeys } = {}) {
   if (!list) return null;
   // A pasted record must not take the name of a loop variable around the target either.
   const around = loopVarsAround(wf, target, slotKeys);
-  const { steps: copy, renamed } = cloneSteps(steps, { ids: collectIds(wf), aliases: new Set([...collectAliases(wf, catalog), ...around]), catalog, keepFree: true });
+  // Names the copy references but does not define (steps left behind in the source workflow) are
+  // taken too: a pasted step renamed to one of them would silently become their target.
+  const outside = new Set();
+  if (catalog?.nodeTypes) for (const r of analyzeScope({ version: 2, steps }, catalog).refs) if (r.code === 'unknownName' && r.name) outside.add(r.name);
+  const { steps: copy, renamed } = cloneSteps(steps, { ids: collectIds(wf), aliases: new Set([...collectAliases(wf, catalog), ...around, ...outside]), catalog, keepFree: true });
   const changes = [];
   for (const e of renamed) {
     if (e.alias !== undefined && e.alias !== e.newAlias) changes.push({ from: e.alias, to: e.newAlias });
@@ -915,7 +919,7 @@ export function pasteSteps(wf, target, steps, { catalog, slotKeys } = {}) {
   const temp = { version: 2, steps: copy };
   const loops = [];
   walkSteps(copy, (s) => { if (s.type === 'loop') loops.push(s); }, slotKeys);
-  const taken = new Set([...around, ...collectAliases({ steps: [...(wf.steps ?? []), ...copy] }, catalog)]);
+  const taken = new Set([...around, ...outside, ...collectAliases({ steps: [...(wf.steps ?? []), ...copy] }, catalog)]);
   walkSteps([...(wf.steps ?? []), ...copy], (s) => { if (s.type === 'loop') taken.add(s.config?.alias || 'loop'); }, slotKeys);
   const names = collectAliases({ steps: [...(wf.steps ?? []), ...copy] }, catalog);
   for (const loopStep of loops) {

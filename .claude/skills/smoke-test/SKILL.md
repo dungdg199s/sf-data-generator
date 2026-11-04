@@ -21,7 +21,7 @@ flows
 
 **Speed (since design 0009).** The flows are grouped into seven independent functions that run **in parallel**, each in
 its own browser context (so storage, routes and dialogs never leak between them): `flowEditing` (1–5), `flowPicker`
-(5b), `flowFiles` (5c–10), `flowDark` (12), `flowLayoutWide` and `flowLayoutNarrow` (11, 13), `flowEach` (14), `flowCanvas` (15), `flowProductivity` (16), `flowLibrary` (17), `flowMinimap` (18), `flowVarsLoops` (19), `flowHistory` and `flowHistoryProd` (20), `flowSetVar` (21). The browser launches
+(5b), `flowFiles` (5c–10), `flowDark` (12), `flowLayoutWide` and `flowLayoutNarrow` (11, 13), `flowEach` (14), `flowCanvas` (15), `flowProductivity` (16), `flowLibrary` (17), `flowMinimap` (18), `flowVarsLoops` (19), `flowHistory` and `flowHistoryProd` (20), `flowSetVar` (21), `flowFixes` (22). The browser launches
 while the server starts; a fresh context starts with empty storage, so no `localStorage.clear()` + reload; storage a flow
 needs before its first load is written by `addInitScript` (once, guarded by a marker key, so reloads keep it); layout
 checks resize one page (`setViewportSize`) instead of opening a context per width; waits for the sheet or toast
@@ -180,7 +180,7 @@ storage and reloading (one app boot less; flow 5b).
     diagram without overflow, the zoom bar is only ⤢ (32 px); tapping Start opens the sheet with the card above it
     (`smoke-390-canvas.png`). At 844 × 390 with the sheet open, End selects `con`: its top is visible above the sheet,
     not under the zoom bar, its ⋯ is 32 px; ⋯ → "Quy trình" there leaves `sfdg.view` = `canvas` (landscape phone = phone).
-    `SMOKE_ONLY=flowCanvas` (comma list) runs only the named flows.
+    `SMOKE_ONLY=flowCanvas` (comma list) runs only the named flows; an unknown name fails the run (listing the known ones).
 
 18. **Sơ đồ minimap (design 0014 §5), `flowMinimap`, own context (parallel).** A 1 000-step workflow (250 Lặp, each with a
     Record and a Rẽ nhánh holding a Record) and `sfdg.view` = `canvas` are written by `addInitScript` before the first load.
@@ -289,6 +289,18 @@ storage and reloading (one app boot less; flow 5b).
     holds `TEST-<today>`. Renaming `lo` → `ma` (then Tab) turns the template into `{{var.ma}}` and toasts `Đã đổi tên biến lo → ma ở 1
     bước Đặt biến và 1 chỗ dùng.`; with the value `2`, `{{var.ma}}` as the loop's "Số lần lặp" shows the quick fix `Đổi Kiểu thành
     Số`, which sets `valueType: "number"` (`smoke-1440-set-var.png`).
+
+22. **Fixes after the main merge, `flowFixes`, four short contexts in sequence (parallel to the others).** (A) The inspector's
+    {x} on a Lặp + Alt+↓ opens the picker and leaves the stored workflow unchanged; "Xuống" of a field + Alt+↓ / Delete and
+    "Nhân bản" + Delete / Backspace / Alt+↓ / Ctrl+D / Ctrl+/ change nothing; Alt+↓ on the card still moves it. (B) With a held
+    preview, "Dùng bản ở tab kia" (a second tab renamed the workflow) toasts `Đang chạy…` and keeps the name and the paused
+    indicator. (C) 390 px, 14 sObjects: Tab through the result tabs keeps each focused tab clear of the faded edges; a
+    vertical wheel over the tabs leaves them where they are; the tall sheet makes `.palette`, `.view-wrap`, `#results`,
+    `#issues` inert (cleared at the middle snap) and the grip has focus after a mouse press. (D) 1440: a selected card two
+    thirds under the bottom edge is fully in view after Shift+↑ on the results handle. Also: flowLibrary deletes with the
+    trash write failing and "Hoàn tác" brings the entry back; flowDark's error group of a step not in the workflow is no
+    button; flowHistory's delete error row of the open workflow is one; flowHistoryProd's one-sObject delete shows the
+    cascade line.
 
 It also fails on any page error or a run over the **time budget**: `SMOKE_BUDGET_MS` when set, else
 `20 000 × max(1, 4 / os.availableParallelism())` ms (20 s on 4 or more CPUs, 40 s on 2). The flows run in parallel and are

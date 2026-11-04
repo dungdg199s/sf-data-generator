@@ -137,14 +137,14 @@ function updateHandle() {
   handle.setAttribute('aria-valuetext', aria.text);
 }
 
-/** Quy trình: the selected card, if fully visible now, is kept in view after the change (Sơ đồ does it itself). */
+/** Quy trình: the selected card, if at least partly visible now, is kept in view after the change (Sơ đồ does it itself). */
 function keepSelection() {
   const process = document.getElementById('process');
   const card = process.hidden ? null : process.querySelector('.step-card.selected');
   if (!card) return () => {};
   const c = card.getBoundingClientRect();
   const v = process.getBoundingClientRect();
-  if (c.top < v.top || c.bottom > v.bottom) return () => {};
+  if (c.bottom <= v.top || c.top >= v.bottom) return () => {}; // scrolled away: leave it there
   const id = card.dataset.id;
   return () => requestAnimationFrame(() => reveal(id, { block: 'nearest', focus: false }));
 }
@@ -384,7 +384,7 @@ function render() {
     setOpen(true);
     summary.replaceChildren(deleteSummary(del));
     activeTab = DELETE_ERRORS_TAB;
-    body.replaceChildren(...(del.result.failed ? [h('div', { class: 'tabs' }, deleteTab(del)), errorGroupsView(del.result, { kind: 'delete' })] : []));
+    body.replaceChildren(...(del.result.failed ? [h('div', { class: 'tabs' }, deleteTab(del)), errorGroupsView(del.result, { kind: 'delete', source: del.source })] : []));
     return;
   }
   setOpen(true);
@@ -420,7 +420,7 @@ function render() {
   const q = activeQuery();
   let content;
   if (activeTab === ERRORS_TAB) content = errorGroupsView(r.insert);
-  else if (activeTab === DELETE_ERRORS_TAB) content = errorGroupsView(del.result, { kind: 'delete' });
+  else if (activeTab === DELETE_ERRORS_TAB) content = errorGroupsView(del.result, { kind: 'delete', source: del.source });
   else if (q) {
     const when = q.fetchedAt ? new Date(q.fetchedAt).toLocaleTimeString('vi-VN') : '';
     content = h('div', {},
@@ -432,7 +432,9 @@ function render() {
   body.replaceChildren(tabs, content);
   // Hidden tabs fade the row's edge (0014 §4); the open tab is scrolled into the row.
   unwatchTabs?.();
-  unwatchTabs = watchOverflow(tabs);
+  // The tab row keeps the vertical wheel for the page (deviation from 0014 §4: a wheel over the
+  // tabs while reading results should scroll the results, not switch the visible tabs).
+  unwatchTabs = watchOverflow(tabs, { wheel: false });
   if (tabs.scrollWidth > tabs.clientWidth) tabs.querySelector('.active')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 }
 
@@ -489,7 +491,20 @@ export function showDeleteErrors() {
  * Insert (or delete, kind 'delete') failures grouped by (sObject, step, field, message pattern); a
  * row selects the step / field. Delete groups give example Ids instead of refs.
  */
-function errorGroupsView(ins, { kind = 'insert' } = {}) {
+/**
+ * A delete's error rows point at steps of the workflow that made the insert: only when the open
+ * workflow is that one (same name, and every step of the insert there with the same sObject).
+ */
+function sameWorkflow(source) {
+  if (!source) return false;
+  if ((state.workflow?.name ?? '') !== (source.workflowName ?? '')) return false;
+  return (source.steps ?? []).every((st) => {
+    const step = stepById(st.nodeId);
+    return step && (step.config?.sobject ?? '') === st.sobject;
+  });
+}
+
+function errorGroupsView(ins, { kind = 'insert', source = null } = {}) {
   const groups = ins?.errorGroups ?? [];
   const other = ins?.errorGroupsOther;
   const errors = ins?.errors ?? [];
@@ -497,7 +512,11 @@ function errorGroupsView(ins, { kind = 'insert' } = {}) {
     const step = id ? stepById(id) : null;
     return step ? stepAlias(step) || id : id ?? '';
   };
-  const go = (g) => g.nodeId && onGoTo?.({ nodeId: g.nodeId, field: g.field });
+  // A row is a button only when it can go somewhere: its step is in the open workflow (for a
+  // delete: the workflow of that insert).
+  const here = kind !== 'delete' || sameWorkflow(source);
+  const linkable = (g) => Boolean(g.nodeId && here && stepById(g.nodeId));
+  const go = (g) => linkable(g) && onGoTo?.({ nodeId: g.nodeId, field: g.field });
   const shown = errors.slice(0, DETAIL_ROWS);
   const total = ins?.errorsTotal ?? errors.length;
   return h('div', {},
@@ -505,11 +524,11 @@ function errorGroupsView(ins, { kind = 'insert' } = {}) {
       h('thead', {}, h('tr', {}, h('th', {}, 'sObject'), h('th', {}, 'Bước'), h('th', {}, 'Lỗi'), h('th', {}, 'Số bản ghi'), h('th', {}, kind === 'delete' ? 'Ví dụ (Id)' : 'Ví dụ'))),
       h('tbody', {},
         groups.map((g) => h('tr', {
-          class: g.nodeId ? 'clickable' : '',
+          class: linkable(g) ? 'clickable' : '',
           'data-node': g.nodeId,
-          role: g.nodeId ? 'button' : null,
-          tabindex: g.nodeId ? '0' : null,
-          title: g.nodeId ? 'Bấm để chọn bước' : '',
+          role: linkable(g) ? 'button' : null,
+          tabindex: linkable(g) ? '0' : null,
+          title: linkable(g) ? 'Bấm để chọn bước' : g.nodeId ? 'Bước này không có trong workflow đang mở.' : '',
           onclick: () => go(g),
           onkeydown: (e) => {
             if (e.key === 'Enter' || e.key === ' ') {

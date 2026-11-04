@@ -215,6 +215,9 @@ function conflictToast() {
       label: 'Dùng bản ở tab kia',
       onClick: () => {
         if (!stillHere()) return;
+        // A run is going on: the workflow cannot be switched; autosave stays paused and the
+        // "Tab khác đã sửa" button offers the choice again after the run.
+        if (locked) return toast(`${LOCKED_TITLE} Sau đó bấm "Tab khác đã sửa" để chọn lại.`, 6000);
         const r = lib.read(id);
         if (!r.workflow) return brokenToast(lib.item(id), r);
         show(id, r.workflow);
@@ -483,6 +486,8 @@ function rename(id, name) {
 
 function remove(item, render) {
   if (locked && item.id === activeId) return toast(LOCKED_TITLE);
+  // The deleted entry stays in memory for "Hoàn tác", also when the trash copy could not be written.
+  const raw = lib.raw(item.id);
   lib.remove(item.id);
   if (item.id === activeId) {
     const next = lib.items().find((it) => lib.read(it.id).workflow);
@@ -501,11 +506,25 @@ function remove(item, render) {
   if (unsaved) persist();
   const undo = () => {
     if (undoNote === note) undoNote = null;
-    if (lib.restoreTrash(item.id) === null) {
-      // The trash keeps the last delete only (or the undo time is over).
-      toast(lib.raw(item.id) !== null
-        ? `"${item.name}" đã có lại trong thư viện.`
-        : `Không hoàn tác được lần xóa "${item.name}": thùng rác chỉ giữ lần xóa gần nhất, hoặc đã quá 10 giây. Nếu có file JSON của workflow này, bấm Mở file JSON… để thêm lại.`, 8000);
+    let back = null;
+    try {
+      back = lib.restoreTrash(item.id);
+    } catch {
+      back = null; // storage full: try the copy in memory below (it fails the same way, then the download)
+    }
+    if (back === null) {
+      if (lib.raw(item.id) !== null) toast(`"${item.name}" đã có lại trong thư viện.`, 8000);
+      else if (raw === null) toast(`Không hoàn tác được lần xóa "${item.name}". Nếu có file JSON của workflow này, bấm Mở file JSON… để thêm lại.`, 8000);
+      else {
+        try {
+          lib.restore(item, raw);
+        } catch {
+          toast(`Bộ nhớ trình duyệt đã đầy nên chưa đưa lại được "${item.name}". Tải bản đã xóa về máy, xóa bớt workflow rồi mở lại file đó.`, Infinity, {
+            label: 'Tải bản đã xóa',
+            onClick: () => download(`${fileBase(item.name)}.json`, raw),
+          });
+        }
+      }
     }
     if (libraryShown()) render();
   };

@@ -1176,6 +1176,22 @@ test('pick weighted chooses by a numeric field; all-zero weights fall back to un
   refs.forEach((n, i) => assert.ok(n >= 1 && n <= i + 1, `pick ${i} chose acc#${n}`));
 });
 
+test('two weighted picks on one pool keep their own weight fields; an overflowing total is uniform with a warning (fix after merge)', () => {
+  const data = qRows([{ A: 1000, B: 0 }, { A: 0, B: 1000 }]);
+  for (const order of [['pa', 'pb'], ['pb', 'pa']]) {
+    const picks = { pa: pick('pa', 'byA', 'accs', { mode: 'weighted', weightField: 'A' }), pb: pick('pb', 'byB', 'accs', { mode: 'weighted', weightField: 'B' }) };
+    const r = run0013(wf([
+      query('q', 'accs', { fields: ['Id', 'Name', 'A', 'B'] }),
+      loop('l', { count: 50 }, [...order.map((k) => picks[k]), record('c', 'Contact', 'con', [text('X', '{{byA.Name}}'), text('Y', '{{byB.Name}}')])]),
+    ]), { queryResults: { q: data } });
+    assert.deepEqual([...new Set(bySo(r, 'Contact').map((c) => `${c.fields.X}|${c.fields.Y}`))], ['Org 0|Org 1'], order.join(','));
+  }
+  const huge = qRows([{ W: 1e308 }, { W: 1e308 }, { W: 1 }]);
+  const r = run0013(wf([query('q', 'accs', { fields: ['Id', 'Name', 'W'] }), loop('l', { count: 300 }, [pick('p', 'acc', 'accs', { mode: 'weighted', weightField: 'W' }), record('c', 'Contact', 'con', [text('A', '{{acc.Name}}')])])]), { queryResults: { q: huge } });
+  assert.equal(new Set(bySo(r, 'Contact').map((c) => c.fields.A)).size, 3);
+  assert.deepEqual(r.warnings.filter((x) => x.code === 'pickWeightInfinite').map((x) => [x.nodeId, x.field]), [['p', 'weightField']]);
+});
+
 test('samples include the first record of every Record step', () => {
   const w = wf([
     record('a', 'Account', 'acc', [text('Name', 'P{{this.$n}}')], { count: 2 }),
@@ -1482,4 +1498,41 @@ test('set variable after review (N1, N2): an add past the largest number keeps t
   assert.match(add.message, /\(ví dụ trước vòng lặp\)\.$/);
   const set = validateWorkflow(wf([setVar('s', 's', '{{var.s}}-x')])).errors.find((e) => e.code === 'varUnset');
   assert.match(set.message, /hoặc chọn "Cộng thêm" nếu muốn cộng dồn\.$/);
+});
+
+test('a source made after a skipping Chọn bản ghi in a loop body is "maybe" after the loop, with a skip sentence (fix after merge)', () => {
+  const lk = { name: 'WhatId', type: 'lookup', options: { mode: 'current', ref: 'acc' } };
+  const skipPick = (onEmpty = 'skip') => pick('p', 'pp', 'accs', { filter: 'compare', filterField: 'Id', filterOp: 'eq', filterValue: 'zzz', onEmpty });
+  const make = (body) => wf([query('q', 'accs', { fields: ['Id'] }), loop('o', { count: 2 }, body), record('t', 'Task', 'tk', [lk])]);
+  const maybe = (w) => warningsOf(w).filter((i) => i.code === 'maybe').map((i) => [i.nodeId, i.field, i.message]);
+  assert.deepEqual(maybe(make([skipPick(), record('a', 'Account', 'acc', [])])), [['t', 'fields.WhatId',
+    'Field "WhatId": bước "pp" trong vòng lặp "loop" có thể bỏ qua các bước sau nó ở mọi lần lặp, nên "acc" có thể chưa có bản ghi. Đặt "acc" trước bước "pp" hoặc chọn "Báo lỗi và dừng" ở "Khi không còn bản ghi để chọn" nếu cần luôn có giá trị.']]);
+  // Before the pick, with "Báo lỗi và dừng", or with the pick turned off: always there.
+  assert.deepEqual(maybe(make([record('a', 'Account', 'acc', []), skipPick()])), []);
+  assert.deepEqual(maybe(make([skipPick('error'), record('a', 'Account', 'acc', [])])), []);
+  assert.deepEqual(maybe(make([{ ...skipPick(), disabled: true }, record('a', 'Account', 'acc', [])])), []);
+  // Inside a Rẽ nhánh after the pick too.
+  assert.deepEqual(maybe(make([skipPick(), branch('b', { kind: 'chance', probability: 1 }, [record('a', 'Account', 'acc', [])], [record('a2', 'Account', 'acc', [])])])).map((x) => x[0]), ['t']);
+});
+
+test('filterField / weightField a Record pool does not make warn unknownPoolField; a turned-off step does not hide {{run.*}} (fix after merge)', () => {
+  const W = wf([
+    record('a', 'Account', 'acc', [{ name: 'Industry', type: 'text', options: {} }, { name: 'NumberOfEmployees', type: 'number', options: {} }], { count: 3 }),
+    loop('o', { count: 2 }, [pick('p', 'pp', 'acc', { mode: 'weighted', weightField: 'AnnualRevenue' }), record('c', 'Contact', 'con', [{ name: 'AccountId', type: 'lookup', options: { mode: 'current', ref: 'pp' } }])]),
+    loop('e', { mode: 'each', from: 'acc', itemAlias: 'x', filter: 'compare', filterField: 'Industy', filterOp: 'eq', filterValue: 'A' }, [record('d', 'Task', 't', [])]),
+    loop('ok', { mode: 'each', from: 'acc', itemAlias: 'y', filter: 'compare', filterField: 'industry', filterValue: 'A' }, [pick('q', 'qq', 'acc', { mode: 'weighted', weightField: 'NumberOfEmployees' }), record('f', 'Task', 't2', [])]),
+  ]);
+  assert.deepEqual(warningsOf(W).filter((i) => i.code === 'unknownPoolField').map((i) => [i.nodeId, i.field, i.message]), [
+    ['p', 'weightField', 'Field "AnnualRevenue" không có trong bước Record "acc" nên mọi bản ghi có trọng số 0 (sẽ chọn đều). Thêm field "AnnualRevenue" vào bước "acc" hoặc chọn một field của nó.'],
+    ['e', 'filterField', 'Field "Industy" không có trong bước Record "acc" nên giá trị của nó luôn trống khi lọc. Thêm field "Industy" vào bước "acc" hoặc chọn một field của nó.'],
+  ]);
+  // Query pools are not checked (their fields come from the org).
+  const Q = wf([query('qq', 'accs', { fields: ['Id'] }), loop('o', { count: 1 }, [pick('p', 'pp', 'accs', { mode: 'weighted', weightField: 'W' })])]);
+  assert.deepEqual(warningsOf(Q).filter((i) => i.code === 'unknownPoolField'), []);
+  // A turned-off step aliased "run" does not shadow the run variables.
+  const R = wf([record('a', 'Lead', 'ld', [text('D', '{{run.seed}}')]), { ...record('b', 'Account', 'run', []), disabled: true }]);
+  assert.deepEqual(errorsOf(R), []);
+  assert.equal(runWorkflow(R, { seed: 7, now: NOW }).records[0].fields.D, '7');
+  // Turned on, it does (the existing rule).
+  assert.ok(errorsOf(wf([record('a', 'Lead', 'ld', [text('D', '{{run.seed}}')]), record('b', 'Account', 'run', [])])).length > 0);
 });

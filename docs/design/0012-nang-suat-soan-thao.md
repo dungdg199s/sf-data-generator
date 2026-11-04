@@ -1129,3 +1129,24 @@ Kế hoạch thực hiện chỉ có bước F1; F2 đã được duyệt trong 
   chuyển từ `.hint-box` sang `.hint-text`; Thêm n field focus ô tên field mới đầu tiên, Bỏ qua focus tiêu đề "Fields"; hộp Import
   ẩn tiêu đề nhóm khi bộ lọc ẩn hết dòng của nhóm, so tên field bằng `trim().toLowerCase()` như `missingRequired`; toast Thêm n field
   nói `Còn phải chọn bản ghi cha cho …` khi Lookup bắt buộc chưa có cha. Smoke 17 thêm: tiêu đề nhóm bị lọc ẩn, focus sau Thêm.
+
+### Sửa thêm sau khi gộp main (2026-11-04)
+
+Một lần đối chiếu tìm thấy lỗi mà review trước đã thấy ở bản cài đặt cũ (bản bị thay), cũng có trong bản của main. Đã sửa:
+
+- **Xóa khi không ghi được thùng rác** (bộ nhớ đầy): "Hoàn tác" vẫn được đưa ra nhưng không làm gì. Bây giờ bản ghi đã xóa
+  (`item` + nội dung) nằm trong closure của "Hoàn tác" và được đưa lại từ bộ nhớ (`lib.restore`, ghi đủ hoặc không ghi gì);
+  nếu vẫn không vừa, toast có nút **Tải bản đã xóa**.
+- **"Dùng bản ở tab kia" khi đang chạy** không đổi workflow nữa: toast `Đang chạy. Bấm Dừng hoặc chờ chạy xong rồi đổi
+  workflow.`, tự lưu vẫn tạm dừng, nút "Tab khác đã sửa" hỏi lại sau.
+- **Phím tắt của bước** (Alt+↑/↓, Delete/Backspace, Ctrl+D, Ctrl+/, phím menu, `/`, Esc) chỉ tác dụng khi focus ở Quy trình / Sơ đồ
+  hoặc không ở đâu cả, không bao giờ từ nút trong bảng cấu hình, kết quả, bảng chọn biến, đầu sheet, popup hay hộp thoại. Nút
+  {x} mở bảng chọn biến bằng phím của nó (Alt+↓ / Ctrl+Space).
+- **Dán**: tên mà phần copy tham chiếu nhưng không định nghĩa (bước còn ở workflow nguồn) được coi là đã dùng khi đặt tên mới,
+  nên một bước dán không bao giờ âm thầm thành đích của tham chiếu đó.
+- **`addSelectField`** ("Thêm field vào SELECT") trả `null` với query gộp (COUNT, SUM…), GROUP BY và danh sách SELECT kết thúc
+  bằng dấu phẩy, và kiểm tra lại SOQL nó tạo bằng `checkSoql`.
+- **Một quy tắc cho danh sách chữ**: mọi option `list` tách **chỉ theo dòng** ở form và ở `toList` của generator, đúng với câu
+  "Mỗi dòng một …". Danh sách số (`numberList`, ví dụ trọng số picklist) vẫn tách theo dòng, dấu phẩy và dấu chấm phẩy như main
+  (`toNumberList`; một số không chứa các dấu đó), nên workflow đã lưu có `70, 20, 10` trên một dòng vẫn chạy như trước; chỉ một
+  phần tử vẫn không phải số sau khi tách mới là lỗi gắn field. Hash golden và các mẫu không đổi.

@@ -205,7 +205,10 @@ function generate(workflow, { seed, now, maxRecords, queryResults, keptPools, ti
     const eachFilterStats = new Map();
     const weightZero = new Map();
     const eachStates = new Map(); // Lặp `each` step id → { pool, scanned, index, cache } (filter)
-    const weightSums = new WeakMap(); // candidate list → { n, sums } (prefix sums of the weights)
+    // candidate list → weight field → { n, sums } (prefix sums of the weights). Keyed by the field
+    // too: two weighted picks on one pool with different weightFields must not share sums.
+    const weightSums = new WeakMap();
+    const weightInfinite = new Map(); // Chọn bản ghi step id → picks whose weight total overflowed
     const cachedSize = new WeakMap(); // cached list → its length when cached (remaining lists shrink)
     const valueLists = new Map(); // Lặp "Mỗi giá trị" step id → its values (the config does not change)
     let scanned = 0; // pool records scanned by filters since the last scan TICK
@@ -360,8 +363,11 @@ function generate(workflow, { seed, now, maxRecords, queryResults, keptPools, ti
      */
     function pickWeighted(step, c, cands) {
       const r = rng.next();
-      let w = weightSums.get(cands);
-      if (!w) weightSums.set(cands, (w = { n: 0, sums: [] }));
+      let byField = weightSums.get(cands);
+      if (!byField) weightSums.set(cands, (byField = new Map()));
+      const wf = String(c.weightField ?? '');
+      let w = byField.get(wf);
+      if (!w) byField.set(wf, (w = { n: 0, sums: [] }));
       scanned += cands.length - w.n;
       for (let total = w.n ? w.sums[w.n - 1] : 0; w.n < cands.length; w.n++) {
         const x = toNumber(filterLeft(cands[w.n], c.weightField));
@@ -372,6 +378,11 @@ function generate(workflow, { seed, now, maxRecords, queryResults, keptPools, ti
       const total = w.sums[len - 1];
       if (!(total > 0)) {
         weightZero.set(step.id, (weightZero.get(step.id) ?? 0) + 1);
+        return cands[Math.floor(r * len)];
+      }
+      if (!Number.isFinite(total)) {
+        // The weights are finite but their sum overflowed: choose uniformly, with a warning.
+        weightInfinite.set(step.id, (weightInfinite.get(step.id) ?? 0) + 1);
         return cands[Math.floor(r * len)];
       }
       const target = r * total;
@@ -723,6 +734,14 @@ function generate(workflow, { seed, now, maxRecords, queryResults, keptPools, ti
             nodeId: step.id,
             field: 'weightField',
             code: 'pickWeightZero',
+          });
+        }
+        if (weightInfinite.has(step.id)) {
+          runWarnings.push({
+            message: `Bước Chọn bản ghi "${step.config?.alias}": ${vi(weightInfinite.get(step.id))}/${vi(s?.runs ?? 0)} lần tổng trọng số (field "${step.config?.weightField}") quá lớn để tính nên đã chọn đều. Dùng field trọng số có giá trị nhỏ hơn.`,
+            nodeId: step.id,
+            field: 'weightField',
+            code: 'pickWeightInfinite',
           });
         }
         for (const children of Object.values(step.slots ?? {})) visit(children);

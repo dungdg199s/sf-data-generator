@@ -27,7 +27,7 @@ import { openAddMenu, openStepMenu } from './menus.js';
 import { refTargetId } from './ref-target.js';
 import { paintCardRun, resultStale, noteText, stepsById } from './run-cards.js';
 import { isSelected, clickSelect, toggleSelected, extendBy, inSelectMode } from './selection.js';
-import { minimapModel, minimapPaths, mapToWorld, trackToWorld } from './minimap.js';
+import { minimapModel, minimapPaths, mapToWorld, trackToWorld, clearOfOverlays } from './minimap.js';
 
 const SVG = 'http://www.w3.org/2000/svg';
 const ZOOM_MIN = 0.1;
@@ -621,13 +621,11 @@ function showRect(r, { center = false } = {}) {
     next = { x, y };
   }
   if (sh > H) next.y = M - r.y * zoom; // taller than what is visible: show its top
-  // Under the zoom bar or the minimap: move the card left of it, or (no room on the left) below the
-  // bar / above the minimap.
-  for (const o of overlays) {
-    if (!coveredBy(next, o)) continue;
-    if (o.left - M - sw >= M) next.x = o.left - M - sw - r.x * zoom;
-    else if (o.top > H / 2) next.y = o.top - M - sh - r.y * zoom;
-    else next.y = o.bottom + M - r.y * zoom;
+  // Under the zoom bar or the minimap: the nearest place clear of both (minimap.js clearOfOverlays).
+  if (overlays.some((o) => coveredBy(next, o))) {
+    const { sx, sy } = at(next);
+    const to = clearOfOverlays({ box: { x: sx, y: sy, w: sw, h: sh }, overlays, W, H, M });
+    next = { x: to.x - r.x * zoom, y: to.y - r.y * zoom };
   }
   pan = { x: Math.round(next.x), y: Math.round(next.y) };
   applyNow();

@@ -610,9 +610,11 @@ function bulkClient(opts = {}) {
             return err ? { ok: false, cells, err } : { ok: true, cells, id: operation === 'delete' ? fields.Id : id(object) };
           });
           job.state = 'UploadComplete';
+          if (opts.closeError) throw opts.closeError; // reached Salesforce, answer lost
         },
         async abort() {
           job.log.push('abort');
+          if (opts.abortError && job.state !== 'Open') throw opts.abortError;
           job.state = 'Aborted';
         },
         async check() {
@@ -857,6 +859,44 @@ test('Bulk: onInserted failing stops the insert after the call in flight (histor
   assert.deepEqual(res.stopped, { reason: 'history', message: 'ENOSPC: no space left on device' });
   assert.equal(client.calls.filter((c) => c.op === 'create').length, 2, 'nothing sent after the failed write');
   assert.equal(client.jobs.length, 0);
+});
+
+test('Bulk: Ids that could not be appended to the history leave the job collectable (fix after merge)', async () => {
+  const client = bulkClient({ checks: 0 });
+  const recs = accConRecords(300, 40);
+  let calls = 0;
+  const jobs = [];
+  const res = await insertAll(client, recs, {
+    plan: conPlan(recs.length, 12000),
+    onInserted: async (rows) => { if (rows.length > 200 && ++calls) throw new Error('ENOSPC: no space left on device'); },
+    onJob: async (j) => { jobs.push({ ...j }); },
+  });
+  assert.equal(res.stopped?.reason, 'history');
+  assert.equal(client.jobs.length, 1);
+  assert.equal(jobs.at(-1).state, 'JobComplete');
+  assert.equal(jobs.at(-1).idsCollected, false, 'the Ids are not in the history: a later delete must read the job');
+  assert.equal(res.bulkJobs[0].idsCollected, false);
+});
+
+test('Bulk: a close() whose answer is lost and an abort refused ⇒ job Unknown, Ids collectable, bulkUnknown not failed (fix after merge)', async () => {
+  const closeError = Object.assign(new Error('socket hang up'), { status: 502 });
+  const abortError = Object.assign(new Error('InvalidJobState'), { status: 502 });
+  const client = bulkClient({ checks: 0, closeError, abortError });
+  const recs = accConRecords(300, 40);
+  const jobs = [];
+  const res = await insertAll(client, recs, { plan: conPlan(recs.length, 12000), onInserted: async () => {}, onJob: async (j) => { jobs.push({ ...j }); } });
+  assert.equal(client.jobs.length, 1, 'the run stops after the unknown job');
+  assert.deepEqual([jobs.at(-1).state, jobs.at(-1).idsCollected], ['Unknown', false]);
+  assert.equal(res.bulkUnknown, 10000);
+  assert.equal(res.failed, 0);
+  assert.equal(res.stopped?.reason, 'bulkError');
+  assert.equal(res.stopped?.jobId, client.jobs[0].id);
+  // An upload error on a job still Open is aborted and fails its rows, as before.
+  const up = bulkClient({ onUpload: () => { throw Object.assign(new Error('upload refused'), { status: 502 }); } });
+  const r2 = await insertAll(up, recs, { plan: conPlan(recs.length, 12000), onInserted: async () => {} });
+  assert.ok(up.jobs.every((j) => j.state === 'Aborted' && !j.log.includes('close')));
+  assert.equal(r2.bulkUnknown, 0);
+  assert.ok(r2.failed >= 10000);
 });
 
 test('without a plan the inserter never opens a Bulk job (records and calls unchanged)', async () => {

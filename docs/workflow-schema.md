@@ -103,8 +103,11 @@ Danh mục nằm ở `server/workflow/nodes.js` và được `GET /api/meta` tr�
 (Đúng trước Sai). Option có `summary: true` được dùng cho dòng tóm tắt chung trên thẻ của loại bước không có tóm tắt riêng.
 `showIf` **bắc cầu** (0013): option hiện khi điều kiện của nó đúng **và** option nó phụ thuộc cũng đang hiện (ô lọc của Lặp ẩn ở
 `fixed` vì "Lọc" đang ẩn; `optionShown` trong `shared/scope.js`). Option `kind: "list"`/`"text"` có thể có `placeholder`.
-Option `kind: "list"` có thể có `split: "lines"`: form tách giá trị **chỉ theo dòng** (giữ dấu phẩy trong một giá trị, như
-`values` của Lặp, 0013); không có thì tách theo dòng và dấu phẩy như trước.
+Mọi option `kind: "list"` tách giá trị **chỉ theo dòng** (giữ dấu phẩy, dấu chấm phẩy trong một giá trị), ở form cũng như ở
+server (`toList` của generator) khi giá trị là chuỗi; mảng giữ nguyên. `"numberList"` tách theo dòng, dấu phẩy và dấu chấm
+phẩy như trước (`toNumberList`; `70, 20, 10` là ba số). `split: "lines"` (như `values` của Lặp,
+0013) vẫn được chấp nhận nhưng không còn khác gì. Trước đây form tách cả theo dấu phẩy; workflow đã lưu là mảng nên dữ liệu
+không đổi.
 `default` của option là giá trị bước dùng khi **thiếu** khóa đó (executor, inspector và thẻ đều theo nó); `initial`, nếu có,
 là giá trị của bước mới thêm từ UI (Lặp mới chạy 3 lần, `count` mặc định 0). `needsOrg: true` (Query): thẻ hiện "chưa chọn org"
 khi chưa chọn org. `/api/meta` còn có `queryPresets` (giá trị builder theo sObject: `User`, `Product2`, `Pricebook2`,
@@ -127,7 +130,7 @@ phạm vi (`analyzeScope` trong `shared/scope.js`) chỉ đọc hai khóa này, 
 
 | Khóa | Giá trị | Ý nghĩa |
 | --- | --- | --- |
-| `flow.kind` | `sequence`; `loop` (`body`: khóa slot lặp lại); `branch` (`alternatives`: các slot loại trừ nhau) | Cách các slot chạy. Loop có thêm hàm `minIterations(config, ctx)` (không gửi qua meta; trình duyệt dùng bản trong `shared/scope.js`); `ctx.poolNonEmpty(name)` (0013): pool đó luôn có bản ghi tại bước Lặp. Chọn bản ghi có hàm `maySkip(config, ctx)` (`pickMaySkip`, sau review 0013): bước có thể bỏ qua phần còn lại của lượt (`onEmpty: "skip"`, trừ khi không lọc, không `unique` và pool `from` luôn có bản ghi) |
+| `flow.kind` | `sequence`; `loop` (`body`: khóa slot lặp lại); `branch` (`alternatives`: các slot loại trừ nhau) | Cách các slot chạy. Loop có thêm hàm `minIterations(config, ctx)` (không gửi qua meta; trình duyệt dùng bản trong `shared/scope.js`); `ctx.poolNonEmpty(name)` (0013): pool đó luôn có bản ghi tại bước Lặp. Chọn bản ghi có hàm `maySkip(config, ctx)` (`pickMaySkip`, sau review 0013): bước có thể bỏ qua phần còn lại của lượt (`onEmpty: "skip"`, trừ khi không lọc, không `unique` và pool `from` luôn có bản ghi). `skipFix: { key, value }` (Chọn bản ghi: `onEmpty` = `error`, gửi qua meta): lựa chọn làm bước dừng thay vì bỏ qua, được nêu trong cảnh báo `maybe` sau vòng lặp |
 | `exposes` | một object như các dòng dưới, hoặc **mảng** các object (0010) | Mỗi phần tử là một nguồn. Phần tử có `when` (`{ key, in }`, như `showIf`) chỉ có hiệu lực khi config khớp. Phần tử đầu có id nguồn = id bước; phần tử sau có id `<id bước>#<key>` (Lặp `each`: `<id>#item`) |
 | `exposes.kind` | `record`: `<tên>.<field>` là field của bản ghi hiện tại; `vars`: `<tên>.<key>` là biến rời; `value` (0015): một giá trị có tên trong nhóm `exposes.namespace` (`{{var.<name>}}`, `meta.syntax.varNamespace`), kiểu từ `exposes.valueType` (`{ key, map, whenMode }`: `valueType` của config qua `map`, trừ khi `mode` có trong `whenMode`), không thuộc không gian tên alias | Loại nguồn biến |
 | `exposes.name` | `{ key, default?, fallback? }` | Tên trong đường dẫn: `config[key]`, rỗng thì `default`, rồi `id` nếu `fallback: "id"` (Record: `alias` hoặc `id`) |
@@ -209,7 +212,9 @@ chỉ thấy các field ở phía trên.
   `{{…}}` như template; so sánh như Rẽ nhánh. `random` = `rng.pick`; `unique` = không lặp lại trong lần chạy; `sequential`
   = lần lượt, quay vòng, không dùng `rng` (con trỏ riêng theo giá trị lọc); `weighted` (0013 E) = có hoàn lại, **luôn rút
   đúng một số**, xác suất tỉ lệ với giá trị số của `weightField` (trống, âm, chữ → 0; mọi trọng số 0 → chọn đều và một cảnh
-  báo `pickWeightZero` gắn `weightField` cuối lần chạy). Bản ghi được chọn (chính object trong pool) thành
+  báo `pickWeightZero` gắn `weightField` cuối lần chạy; tổng trọng số tràn số (vô hạn) → cũng chọn đều, cảnh báo
+  `pickWeightInfinite`). Mỗi bước có tổng cộng dồn riêng theo `weightField`, nên hai bước theo trọng số khác nhau trên
+  cùng một pool không ảnh hưởng nhau. Bản ghi được chọn (chính object trong pool) thành
   bản ghi hiện tại của `alias` và được thêm vào pool `alias`. Không có gì để chọn: `onEmpty: skip` bỏ qua phần còn lại của
   lượt hiện tại (lên tới thân Lặp gần nhất: sang lần lặp sau; ở gốc: dừng lần chạy) và cuối lần chạy có **một** cảnh báo
   ghi số lần bỏ qua; `error` báo lỗi gắn bước.
@@ -218,6 +223,7 @@ chỉ thấy các field ở phía trên.
 - Biến của lần chạy (0013 G): `run.seed`, `run.now` (`new Date(now).toISOString()`), `run.today` (10 ký tự đầu của `now`,
   UTC). Cùng `seed` + `now` ở xem trước, insert và tải về ⇒ cùng giá trị. Tên người dùng đặt (biến lặp, alias) tên `run` thắng;
   khi đó lỗi của `{{run.seed}}`/`now`/`today` có thêm `Alias "run" che biến Lần chạy; đổi alias để dùng {{run.seed}}.`
+  Bước đang tắt (`disabled`) không che: nó không chạy, nên `{{run.seed}}` vẫn là seed (như executor).
 - `set` ([0015](design/0015-buoc-dat-bien.md)): gán `scope.var[name]` (một object chung cho cả lần chạy, không prototype;
   thân vòng lặp dùng chung nên giá trị gán trong vòng lặp còn sau vòng lặp). `text`: `value` thay `{{…}}` như template (dài hơn
   10 000 ký tự ⇒ lỗi gắn `value`); `number`: đúng một token ⇒ giá trị của biến, không thì chuỗi đã thay, qua `toNumber`; không ra
@@ -294,7 +300,7 @@ Trạng thái của một nguồn tại một bước:
 | --- | --- | --- |
 | `always` | Nguồn chạy trước, trực tiếp trong một dãy đang bao bước này; biến lặp của vòng lặp bao quanh | Hợp lệ |
 | `last` | Nguồn nằm trong thân một Lặp đã chạy xong ở phía trên, và Lặp luôn chạy ≥ 1 lần (`fixed` với `count ≥ 1`, `range` với `min ≥ 1`, `values` có ≥ 1 giá trị, hoặc `each` **không lọc** qua pool Record đang `always`/`last` tại Lặp đó, 0013 C4). Giá trị là bản ghi của lần lặp cuối (Lookup `random`: một bản ghi bất kỳ đã sinh) | Hợp lệ |
-| `maybe` | Nguồn nằm trong một nhánh rẽ, hoặc trong một Lặp có thể chạy 0 lần (số lần là biến; Lặp `each` có lọc, qua Query, Chọn bản ghi hay pool `maybe`), ở phía trên | Cảnh báo |
+| `maybe` | Nguồn nằm trong một nhánh rẽ, hoặc trong một Lặp có thể chạy 0 lần (số lần là biến; Lặp `each` có lọc, qua Query, Chọn bản ghi hay pool `maybe`), hoặc đứng sau một bước có thể bỏ qua phần còn lại của lần lặp (`maySkip` trong danh mục, ví dụ Chọn bản ghi "Bỏ qua các bước phía sau") trong thân Lặp gần nhất, ở phía trên | Cảnh báo |
 | `after` | Nguồn nằm sau bước này, hoặc chính là bước này | Lỗi |
 | `otherBranch` | Nguồn ở nhánh còn lại của một Rẽ nhánh đang bao bước này | Lỗi |
 | `outsideLoop` | Biến lặp, hoặc bản ghi đang lặp (0010), của một vòng lặp không bao bước này | Lỗi |
@@ -323,7 +329,7 @@ Tham chiếu hỏng là **lỗi** (chặn Xem trước và Insert, HTTP 422 khi 
 | `selfAlias` | lỗi | Dùng alias của chính bước trong template của nó (phải dùng `this`) |
 | `noIdYet` | lỗi | `{{acc.Id}}` với bản ghi được sinh ra (chưa có Id trước khi insert) |
 | `noCurrent` | lỗi | Field của nguồn không có bản ghi hiện tại (`current: "none"`, Query của 0006) |
-| `maybe` | cảnh báo | Nguồn `maybe` (câu chữ nêu nguyên nhân: nhánh rẽ, hoặc vòng lặp "x" có thể chạy 0 lần; Master-Detail nói thêm cách sửa) |
+| `maybe` | cảnh báo | Nguồn `maybe` (câu chữ nêu nguyên nhân: nhánh rẽ, vòng lặp "x" có thể chạy 0 lần, hoặc bước "p" có thể bỏ qua nó ở mọi lần lặp — kèm cách sửa từ `skipFix` của loại bước, ví dụ "chọn "Báo lỗi và dừng""; Master-Detail nói thêm cách sửa) |
 | `openMember` | cảnh báo | Field lạ của nguồn có `open: true` |
 | `unclosed` | cảnh báo | Template có `{{` không thành token, sẽ được giữ nguyên là chữ |
 | `wrongSobject` | cảnh báo | Lookup có `referenceTo` (điền khi Import từ org) nhưng bước cha sinh sObject khác |
@@ -338,6 +344,8 @@ Tham chiếu hỏng là **lỗi** (chặn Xem trước và Insert, HTTP 422 khi 
 | `numberVarEmpty`, `numberVarClamped` | cảnh báo (khi chạy) | Biến số trống/âm/không phải số (lặp 0 lần), hoặc lớn hơn 100 000 (dùng 100 000); một cảnh báo mỗi bước + ô, có số lần (0013) |
 | `eachFilterEmpty` | cảnh báo (khi chạy) | Lọc của Lặp `each` không khớp bản ghi nào ở mọi lần chạy qua; gắn `filterValue` (0013) |
 | `pickWeightZero` | cảnh báo (khi chạy) | Chọn bản ghi `weighted`: mọi trọng số 0 ở một số lần chọn nên đã chọn đều; gắn `weightField` (0013) |
+| `unknownPoolField` | cảnh báo | `filterField` / `weightField` của Chọn bản ghi hay Lặp `each` qua pool do bước Record tạo không phải field của bước đó (luôn trống); gắn đúng ô. Pool Query không kiểm tra ở đây |
+| `pickWeightInfinite` | cảnh báo (khi chạy) | Chọn bản ghi `weighted`: tổng trọng số quá lớn (tràn số) nên đã chọn đều; gắn `weightField` |
 | `setVarName`, `setVarNotNumber`, `setVarTooLong` | lỗi | (0015) Tên biến trống/sai; giá trị Số hoặc Cộng thêm không phải số và không có `{{`; giá trị dài quá 10 000 ký tự. Gắn `name` / `value` |
 | `varReserved` | lỗi | (0015) Alias, `itemAlias` hay biến lặp tên `var` khi workflow có bước Đặt biến |
 | `varUnset` | lỗi | (0015) `value` của bước Đặt biến đọc chính biến nó gán (`{{var.s}}-x`) mà không có lần gán nào thấy được phía trên (các bước khác cùng tên, nếu có, đều chạy sau). Gắn `value` |

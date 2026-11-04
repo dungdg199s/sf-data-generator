@@ -126,7 +126,12 @@ export function addSelectField(soql, field) {
   if (!from) return null;
   const before = raw.slice(0, from.index);
   const at = before.length - /\s*$/.exec(before)[0].length;
-  return `${raw.slice(0, at)}, ${name}${raw.slice(at)}`;
+  // Not an edit we can make safely: an aggregate query (a plain field must then be grouped too),
+  // GROUP BY, or a select list that ends in a comma (the field would land after an empty item).
+  const list = blankStrings(raw).slice(head[0].length, at);
+  if (/,\s*$/.test(list) || /\b(?:COUNT|COUNT_DISTINCT|SUM|AVG|MIN|MAX)\s*\(/i.test(list) || /\bGROUP\s+BY\b/i.test(blankStrings(raw))) return null;
+  const out = `${raw.slice(0, at)}, ${name}${raw.slice(at)}`;
+  return checkSoql(out).some((i) => i.level === 'error') ? null : out;
 }
 
 // Checked on text whose string literals are blanked, anywhere (not only at the top level).

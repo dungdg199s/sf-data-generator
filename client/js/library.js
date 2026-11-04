@@ -318,12 +318,27 @@ export function createLibrary({ local, session, now = () => Date.now(), makeId =
       const trash = readJson(local, TRASH_KEY);
       if (!trash?.item?.id || typeof trash.workflow !== 'string') return null;
       if (expectId !== undefined && trash.item.id !== expectId) return null;
-      const id = local.getItem(entryKey(trash.item.id)) === null ? trash.item.id : freshId();
-      local.setItem(entryKey(id), trash.workflow);
-      const index = readIndex();
-      index.items = [...index.items.filter((it) => it.id !== id), { ...trash.item, id }];
-      writeIndex(index);
+      const id = lib.restore(trash.item, trash.workflow);
       local.removeItem(TRASH_KEY);
+      return id;
+    },
+
+    /**
+     * Puts a deleted entry back from a copy held in memory (`item` of the index, `raw` entry text):
+     * the "Hoàn tác" of a delete whose trash could not be written. Under a new id when its key was
+     * taken meanwhile. Nothing is left half-written. Throws when storage is full. → the id
+     */
+    restore(item, raw) {
+      const id = local.getItem(entryKey(item.id)) === null ? item.id : freshId();
+      local.setItem(entryKey(id), raw);
+      try {
+        const index = readIndex();
+        index.items = [...index.items.filter((it) => it.id !== id), { ...item, id }];
+        writeIndex(index);
+      } catch (e) {
+        local.removeItem(entryKey(id));
+        throw e;
+      }
       return id;
     },
 

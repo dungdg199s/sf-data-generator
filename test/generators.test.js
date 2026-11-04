@@ -111,3 +111,20 @@ test('numeric options are clamped to their min / max; optionIssues reports them 
   assert.deepEqual(optionIssues({ name: 'P', type: 'percent', options: { nullRatio: 2 } }).map((i) => i.option), ['nullRatio']);
   assert.equal(typeof generateValue({ name: 'X', type: 'picklist', options: null }, ctxFor()), 'string', 'null options = defaults');
 });
+
+test('numberList options split on lines, commas and semicolons as before the merge; only a real non-number is an error (fix after merge)', async () => {
+  const { optionIssues } = await import('../server/generators/index.js');
+  const { toNumberList, resolveOptions } = await import('../server/generators/common.js');
+  const { getGenerator } = await import('../server/generators/index.js');
+  const f = (weights) => optionIssues({ name: 'Industry', type: 'picklist', options: { values: ['A', 'B', 'C'], weights } });
+  // "70, 20, 10" on one line: three weights (saved workflows of main keep working).
+  assert.deepEqual(toNumberList('70, 20, 10'), ['70', '20', '10']);
+  assert.deepEqual(resolveOptions(getGenerator('picklist'), { values: ['A', 'B', 'C'], weights: '70, 20, 10' }).weights, [70, 20, 10]);
+  assert.deepEqual(resolveOptions(getGenerator('picklist'), { values: ['A', 'B', 'C'], weights: ['70, 20', 10] }).weights, [70, 20, 10]);
+  for (const w of ['70, 20, 10', '70\n20\n10', '70;20;10', [70, 20, 10], ['70, 20, 10']]) assert.deepEqual(f(w), [], JSON.stringify(w));
+  assert.equal(gen('picklist', { values: ['A', 'B', 'C'], weights: '0, 0, 1' }), 'C');
+  assert.deepEqual(f('70, abc, 10').map((i) => [i.option, i.message]), [['weights', 'Field "Industry": "Trọng số" phải là các số, cách nhau bằng dấu phẩy hoặc xuống dòng (đang có "abc"). Sửa trong tùy chọn của field.']]);
+  assert.equal(f([null]).length, 1);
+  // Text lists stay lines only.
+  assert.deepEqual(resolveOptions(getGenerator('picklist'), { values: 'A, B\nC' }).values, ['A, B', 'C']);
+});

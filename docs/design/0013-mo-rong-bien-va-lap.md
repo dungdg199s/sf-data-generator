@@ -900,3 +900,16 @@ Khác với thiết kế (đợt C), và vì sao:
   của một Lặp — kể cả bỏ qua từ trong Rẽ nhánh — thì sau Lặp đó pool không còn tính là chắc có bản ghi (Lặp `each` qua nó có thể
   chạy 0 lần, `maybe`). Trong cùng lượt, sau bước Record, pool vẫn chắc có; bỏ qua trong thân một Lặp con chỉ dừng lượt của Lặp con.
 - Bỏ dòng JSDoc mồ côi trong `shared/scope.js`.
+
+### Sửa thêm sau khi gộp main (2026-11-04)
+
+Một lần đối chiếu tìm thấy lỗi mà review trước đã thấy ở bản cài đặt cũ (bản bị thay), cũng có trong bản của main. Đã sửa:
+
+- **Hai Chọn bản ghi theo trọng số trên cùng một pool** với `weightField` khác nhau dùng chung tổng cộng dồn (dữ liệu sai, không
+  báo gì). Bộ nhớ đệm giờ theo danh sách ứng viên **và** field trọng số. Thêm ca golden `two weighted picks on one pool…`; mọi
+  hash cũ giữ nguyên. Tổng trọng số tràn số (vô hạn) ⇒ chọn đều, cảnh báo `pickWeightInfinite`.
+- **Nguồn đứng sau một bước có thể bỏ qua** (`maySkip`, ví dụ Chọn bản ghi "Bỏ qua các bước phía sau") trong thân Lặp gần nhất
+  là `maybe` sau vòng lặp, cả với tham chiếu trực tiếp; câu cảnh báo nói bước nào và cách sửa lấy từ danh mục (`skipFix` của
+  loại bước): `Đặt "acc" trước bước "pp" hoặc chọn "Báo lỗi và dừng" ở "Khi không còn bản ghi để chọn" nếu cần luôn có giá trị.`
+- **`unknownPoolField`** (cảnh báo): `filterField` / `weightField` không phải field của bước Record tạo ra pool (luôn trống ở đó).
+- **Bước đang tắt không che `{{run.*}}`** (nó không chạy, executor vẫn đọc biến Lần chạy).

@@ -60,7 +60,7 @@ export const toRatio = (height, total) => (total > 0 ? Math.round((height / tota
 /** ARIA values of the handle: percentages of `total`, rounded, and the spoken text. */
 export function resultsAria({ height, min, max, total }) {
   const pct = (v) => Math.round((v / total) * 100);
-  return { min: pct(min), max: pct(max), now: pct(height), text: `Cao ${Math.round(height)} px (${pct(height)} % màn hình)` };
+  return { min: pct(min), max: pct(max), now: pct(height), text: `Cao ${Math.round(height)} px (${pct(height)} % của vùng dưới thanh trên)` };
 }
 
 /** A drag on the sheet's head becomes a drag past this many px (under it: a tap). */
@@ -71,13 +71,17 @@ export const FLICK_SPEED = 0.5;
 /**
  * Where the bottom sheet goes when a drag of its head is released (design 0014 §3).
  * height: its height at release (px); velocity: px/ms, > 0 growing (finger going up); mid / full:
- * the two snaps (px). A flick goes to the next snap that way from `height` (below the middle snap
- * that is closing); a slow release goes to the nearest of { closed (only under half the middle snap),
- * mid, full }. → 'closed' | 'mid' | 'full'.
+ * the two snaps (px); from: the snap the drag started at ('mid' | 'full'). A flick goes to the next
+ * snap that way from `height` (below the middle snap that is closing); a flick down from the tall
+ * snap stops at the middle one unless released under half of it. A slow release goes to the
+ * nearest of { closed (only under half the middle snap), mid, full }. → 'closed' | 'mid' | 'full'.
  */
-export function snapSheet({ height, velocity = 0, mid, full }) {
+export function snapSheet({ height, velocity = 0, mid, full, from = 'mid' }) {
   if (velocity > FLICK_SPEED) return height < mid ? 'mid' : 'full';
-  if (velocity < -FLICK_SPEED) return height > mid ? 'mid' : 'closed';
+  if (velocity < -FLICK_SPEED) {
+    if (from === 'full') return height < mid / 2 ? 'closed' : 'mid';
+    return height > mid ? 'mid' : 'closed';
+  }
   if (height < mid / 2) return 'closed';
   return Math.abs(height - mid) <= Math.abs(full - height) ? 'mid' : 'full';
 }

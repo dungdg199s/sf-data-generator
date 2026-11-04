@@ -372,7 +372,14 @@ export function jsLiterals(src) {
 }
 
 // Glyphs that used to be icons; they must not come back as text (mũi tên trong câu, tên phím, `＋` in <option> stay).
-const ICON_GLYPHS = /[⋯▸▾▴⠿↶↷⟳⤓⤒⤢▶📌⚙✕⊘◉⧉ⓘ‹✓✗]/u;
+// Widened after the merge to whole Unicode symbol blocks (arrows, math and technical symbols,
+// enclosed alphanumerics, box drawing and geometric shapes, miscellaneous symbols, dingbats,
+// supplemental arrows, braille, emoji), minus an allowlist of characters that are text: arrows and
+// relations inside sentences, key names (⌥ ⌘ for macOS shortcuts), the minus sign, the › separator.
+const SYMBOL_BLOCKS = /[\u2190-\u21FF\u2200-\u22FF\u2300-\u23FF\u2460-\u24FF\u2500-\u27BF\u27F0-\u2BFF\u2039\u203A\u{1F000}-\u{1FAFF}]/u;
+const TEXT_SYMBOLS = new Set([...'→←↑↓↔⇒⇔≤≥≈≠−⌥⌘⇧›']); // › separates "con › Title" in toasts
+const ICON_GLYPHS = { test: (s) => [...String(s)].some((ch) => SYMBOL_BLOCKS.test(ch) && !TEXT_SYMBOLS.has(ch)) };
+ICON_GLYPHS.first = (s) => [...String(s)].find((ch) => SYMBOL_BLOCKS.test(ch) && !TEXT_SYMBOLS.has(ch));
 const ICO_TOKENS = Object.fromEntries(declarations(TOKENS).filter((d) => d.prop.startsWith('--ico-')).map((d) => [d.prop.slice(6), d.value]));
 const clientJs = () => {
   const dir = new URL('../client/js/', import.meta.url);
@@ -417,13 +424,18 @@ test('(b) every --ico-* token has a row in the icon table of docs/ui-design-syst
   assert.deepEqual(missing, [], 'icons without a row in §5');
 });
 
+test('the glyph check covers whole symbol blocks and allows text arrows, relations and key names (fix after merge)', () => {
+  for (const ch of ['⋯', '▾', '⤓', '✓', '✗', '⚙', '★', '☰', '⏵', '⓪', '■', '❯', '⮕', '🔍', '⠿', '‹']) assert.ok(ICON_GLYPHS.test(`a ${ch}`), ch);
+  for (const t of ['acc → acc2', 'Alt+↓', '⌥↓', '⌘S', 'x ≥ 1', '−5', 'A ⇒ B', '≈ 12', '＋ Workflow mới', 'Tải…']) assert.ok(!ICON_GLYPHS.test(t), t);
+});
+
 test('(c) no glyph is used as an icon in client/ (JS strings, index.html, CSS content)', () => {
   for (const [file, src] of clientJs()) {
     const bad = jsLiterals(src).filter((s) => ICON_GLYPHS.test(s));
     assert.deepEqual(bad, [], `${file}: glyph icons in strings (use ico('<name>'))`);
   }
   const html = read('client/index.html').replace(/<!--[\s\S]*?-->/g, '');
-  assert.ok(!ICON_GLYPHS.test(html), `client/index.html: glyph icon ${html.match(ICON_GLYPHS)?.[0]}`);
+  assert.ok(!ICON_GLYPHS.test(html), `client/index.html: glyph icon ${ICON_GLYPHS.first(html)}`);
   for (const { prop, value } of declarations(COMPONENTS)) {
     if (prop === 'content') assert.ok(!ICON_GLYPHS.test(value), `app.css content: ${value}`);
   }

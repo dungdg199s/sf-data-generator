@@ -145,9 +145,11 @@ function renderControl(def, value, set, id, ctx, current) {
         placeholder: def.placeholder,
         value: Array.isArray(v) ? v.join('\n') : v ?? '',
         oninput: (e) => {
-          // `split: 'lines'`: one value per line, commas kept (Lặp "Mỗi giá trị trong danh sách", 0013).
-          const items = e.target.value.split(def.split === 'lines' ? /\r?\n/ : /\n|,/).map((s) => s.trim()).filter(Boolean);
-          set(def.kind === 'numberList' ? items.map(Number) : items);
+          // Text lists: one value per line, commas kept. Number lists: lines, commas or semicolons (a
+          // number holds none of them), as before the merge. The server's toList / toNumberList agree.
+          const items = e.target.value.split(def.kind === 'numberList' ? /[\r\n,;]/ : /\r?\n/).map((s) => s.trim()).filter(Boolean);
+          // A line that is not a number stays as typed, so validation can quote it.
+          set(def.kind === 'numberList' ? items.map((x) => (Number.isFinite(Number(x)) ? Number(x) : x)) : items);
         },
       });
     case 'text':
