@@ -1,7 +1,7 @@
 // Field-type generator registry. To add a Salesforce type: write a generator object
 // (see docs/field-types.md for the contract) and add it to GENERATORS below.
 
-import { resolveOptions, allOptions, plainOptions, optionShown } from './common.js';
+import { resolveOptions, allOptions, plainOptions, optionShown, toNumberList } from './common.js';
 import * as text from './text.js';
 import * as num from './number.js';
 import * as choice from './choice.js';
@@ -89,11 +89,11 @@ export function optionIssues(field) {
   const out = [];
   for (const def of allOptions(gen)) {
     if (def.kind === 'numberList' && optionShown(def, values)) {
-      // One number per line (the one list rule): "70, 20, 10" on one line is not three numbers.
+      // Split on lines, commas and semicolons (toNumberList); only a token that is still not a number is an error.
       const raw = given[def.key];
-      const items = raw === undefined || raw === null || raw === '' ? [] : Array.isArray(raw) ? raw : String(raw).split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
-      const bad = items.find((x) => x === null || (typeof x === 'string' && !x.trim()) || !Number.isFinite(Number(x)));
-      if (bad !== undefined) out.push({ option: def.key, message: `Field "${field.name}": "${def.label}" phải là các số, mỗi dòng một số (đang có "${bad === null ? 'trống' : String(bad).slice(0, 40)}"). Sửa trong tùy chọn của field.` });
+      const items = raw === undefined || raw === null || raw === '' ? [] : toNumberList(raw);
+      const bad = items.find((x) => x === null || !Number.isFinite(Number(x)));
+      if (bad !== undefined) out.push({ option: def.key, message: `Field "${field.name}": "${def.label}" phải là các số, cách nhau bằng dấu phẩy hoặc xuống dòng (đang có "${bad === null ? 'trống' : String(bad).slice(0, 40)}"). Sửa trong tùy chọn của field.` });
       continue;
     }
     if ((def.kind !== 'integer' && def.kind !== 'number') || !optionShown(def, values)) continue;

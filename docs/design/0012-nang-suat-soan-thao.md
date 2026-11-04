@@ -1146,6 +1146,7 @@ Một lần đối chiếu tìm thấy lỗi mà review trước đã thấy ở
   nên một bước dán không bao giờ âm thầm thành đích của tham chiếu đó.
 - **`addSelectField`** ("Thêm field vào SELECT") trả `null` với query gộp (COUNT, SUM…), GROUP BY và danh sách SELECT kết thúc
   bằng dấu phẩy, và kiểm tra lại SOQL nó tạo bằng `checkSoql`.
-- **Một quy tắc cho danh sách**: mọi option `list` / `numberList` tách **chỉ theo dòng** ở form và ở `toList` của generator, đúng
-  với câu "Mỗi dòng một …" (trọng số picklist cũng vậy). Workflow đã lưu là mảng nên hash golden và các mẫu không đổi. Một
-  dòng của `numberList` không phải số (ví dụ `70, 20, 10` gõ trên một dòng) là lỗi gắn field, nói "mỗi dòng một số".
+- **Một quy tắc cho danh sách chữ**: mọi option `list` tách **chỉ theo dòng** ở form và ở `toList` của generator, đúng với câu
+  "Mỗi dòng một …". Danh sách số (`numberList`, ví dụ trọng số picklist) vẫn tách theo dòng, dấu phẩy và dấu chấm phẩy như main
+  (`toNumberList`; một số không chứa các dấu đó), nên workflow đã lưu có `70, 20, 10` trên một dòng vẫn chạy như trước; chỉ một
+  phần tử vẫn không phải số sau khi tách mới là lỗi gắn field. Hash golden và các mẫu không đổi.

@@ -1506,10 +1506,21 @@ async function productivityRest(page) {
   check(/^Ví dụ: "[^"]+" · "[^"]+" · "[^"]+"$/.test(await samplesText(ind)) && /seed 1/.test(await page.getAttribute(`${ind} .field-samples`, 'title')), `Industry examples: ${await samplesText(ind)}`);
   await Promise.all([
     page.waitForResponse((res) => res.url().endsWith('/api/field-samples'), { timeout: 3000 }).catch(() => null),
-    page.fill(`${ind} textarea[data-key="weights"]`, '0\n0\n0\n1'), // one number per line (one list rule)
+    page.fill(`${ind} textarea[data-key="weights"]`, '0, 0, 0, 1'), // number lists split on commas too (as main did)
   ]);
   await page.waitForFunction((sel) => document.querySelector(`${sel} .field-samples`)?.textContent === 'Ví dụ: "Healthcare" · "Healthcare" · "Healthcare"', ind, { timeout: 3000 }).catch(() => {});
   check(await samplesText(ind) === 'Ví dụ: "Healthcare" · "Healthcare" · "Healthcare"', `Industry examples after new weights: ${await samplesText(ind)}`);
+  check(JSON.stringify((await savedWorkflow(page)).steps.flatMap(function all(x) { return [x, ...Object.values(x.slots ?? {}).flat().flatMap(all)]; }).find((x) => x.id === 'acc').config.fields.find((f) => f.name === 'Industry').options.weights) === '[0,0,0,1]',
+    'comma-separated weights were not saved as four numbers');
+  // One per line gives the same weights.
+  await Promise.all([
+    page.waitForResponse((res) => res.url().endsWith('/api/field-samples'), { timeout: 3000 }).catch(() => null),
+    page.fill(`${ind} textarea[data-key="weights"]`, '1\n0\n0\n0'),
+  ]);
+  await page.waitForFunction((sel) => !/Healthcare/.test(document.querySelector(`${sel} .field-samples`)?.textContent ?? 'Healthcare'), ind, { timeout: 3000 }).catch(() => {});
+  check(!/Healthcare/.test(await samplesText(ind) ?? 'Healthcare'), `Industry examples after one-per-line weights: ${await samplesText(ind)}`);
+  check(await until(page, () => JSON.stringify(smokeSaved().steps.flatMap(function all(x) { return [x, ...Object.values(x.slots ?? {}).flat().flatMap(all)]; }).find((x) => x.id === 'acc').config.fields.find((f) => f.name === 'Industry').options.weights) === '[1,0,0,0]'),
+    'one-per-line weights were not saved as four numbers');
   await page.click('.step-card[data-id="con"] .type');
   const conTitle = '#inspector .field-card[data-field="fields.Title"]';
   if (await page.$(`${conTitle} .actions button[title="Tùy chọn"]`)) await page.click(`${conTitle} .actions button[title="Tùy chọn"]`); // still open since F1

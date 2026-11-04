@@ -685,5 +685,6 @@ Một lần đối chiếu tìm thấy lỗi mà review trước đã thấy ở
 - **§1 icon**: test cấm glyph làm icon mở rộng ra cả các khối ký hiệu Unicode (mũi tên, ký hiệu kỹ thuật, hình học, dingbat,
   emoji…), có danh sách ký tự được phép dùng như chữ (→ ← ↑ ↓ ⇒ ≤ ≥ ≈ − ⌥ ⌘ ›).
 - Smoke: luồng mới `flowFixes` (22) và kiểm tra thêm ở `flowLibrary`, `flowDark`, `flowHistory`, `flowHistoryProd`;
-  `SMOKE_ONLY` báo lỗi khi gặp tên luồng không có. Test tiến độ xem trước (`test/run.test.js`) dùng đồng hồ đứng yên nên chỉ
+  `SMOKE_ONLY` báo lỗi khi gặp tên luồng không có. `flowProductivity` gõ trọng số cả cách nhau bằng dấu phẩy lẫn mỗi dòng một
+  số, và cả hai đều lưu thành bốn số. Test tiến độ xem trước (`test/run.test.js`) dùng đồng hồ đứng yên nên chỉ
   phụ thuộc số bản ghi (trước đôi khi hỏng khi chạy song song).

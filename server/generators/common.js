@@ -77,13 +77,26 @@ function coerce(def, raw) {
     case 'list':
       return toList(raw);
     case 'numberList':
-      return toList(raw).map(Number);
+      return toNumberList(raw).map(Number);
     default:
       return raw;
   }
 }
 
-/** A list option: an array, or a text with one value per line (commas and semicolons stay in the value). */
+/**
+ * Items of a number list option: an array as is, or a text split on lines, commas and semicolons
+ * (a number holds none of them: "70, 20, 10" is three weights, as before the merge).
+ */
+export function toNumberList(raw) {
+  // A string item is split too ("70, 20" in an array is still two numbers).
+  if (Array.isArray(raw)) return raw.flatMap((v) => (typeof v === 'string' ? v.split(/[\n,;]/).map((x) => x.trim()).filter(Boolean) : [v]));
+  return String(raw)
+    .split(/[\n,;]/)
+    .map((v) => v.trim())
+    .filter(Boolean);
+}
+
+/** A text list option: an array, or a text with one value per line (commas and semicolons stay in the value). */
 export function toList(raw) {
   if (Array.isArray(raw)) return raw.map((v) => String(v).trim()).filter(Boolean);
   return String(raw)
