@@ -40,7 +40,7 @@
 //  15. Sơ đồ view (0003 đợt B): M switches with the selection kept, focused and inside the viewport; "+" on a
 //      connector adds a Record there; Delete removes it; ↑ walks the tree; M back; dark screenshot; at 390 px
 //      the saved Sơ đồ is not applied, the ⋯ menu switches (not saved) and a tap opens the sheet above the card
-// 15b. minimap (0014, 1 000 steps): shown, ≤ 16 paths, track / map clicks move the viewport, the wheel does not,
+// 15b. minimap (0014, 480 steps): shown, ≤ 16 paths, track / map clicks move the viewport,
 //      ensureVisible keeps a card clear of it, the button hides it (kept after reload), hidden under the sheet / small
 //  16. insert history and delete (0011, every org call mocked in the page): Bulk checkbox and limit warning in the
 //      Insert confirmation, Tải Id / Lịch sử links, "Xóa dữ liệu này…" opens the delete confirmation (Hủy focused),
@@ -404,6 +404,21 @@ async function flowPicker() {
   check(await page.evaluate(() => document.activeElement?.classList.contains('var-search')), 'Alt+↓ did not focus the picker search');
   await page.keyboard.press('Escape');
   await page.waitForSelector('.var-picker', { state: 'detached' });
+  // Review 0014 B1: Alt+↓ on the {x} button opens the picker (it moved the step before); on the field's
+  // "Xuống" button it does nothing to the tree.
+  const storedBefore = await page.evaluate(() => JSON.stringify(smokeStored()));
+  await page.focus(`${title} .var-btn`);
+  await page.keyboard.press('Alt+ArrowDown');
+  const onBtn = await page.waitForSelector('.var-picker .vp-item', { timeout: 2000 }).then(() => true, () => false);
+  check(onBtn && await page.evaluate(() => document.activeElement?.classList.contains('var-search')), 'Alt+↓ on {x} did not open the picker on its search box');
+  await page.keyboard.press('Escape');
+  await page.waitForSelector('.var-picker', { state: 'detached' });
+  // (Before the fix the step had moved and the inspector was rebuilt: a short timeout, then the check.)
+  if (await page.focus('#inspector .field-card .actions button[aria-label="Xuống"]', { timeout: 2000 }).then(() => true, () => false)) {
+    await page.keyboard.press('Alt+ArrowDown');
+    await page.keyboard.press('Alt+ArrowUp');
+  }
+  check((await page.evaluate(() => JSON.stringify(smokeStored()))) === storedBefore, 'Alt+↓ / Alt+↑ on {x} or an inspector button changed the workflow (moved the step)');
   await page.click(`${title} .var-btn`);
   await page.waitForSelector('.var-picker .vp-item');
   check(await page.evaluate(() => document.activeElement?.classList.contains('var-search')), '{x} did not focus the picker search');
@@ -894,6 +909,32 @@ async function flowLayoutWide() {
   });
   check(h3 === h0 + 48 && hMin === 160, `handle keys: ${h0} → ↑×3 ${h3} (+48 expected), Home ${hMin} (160 expected)`);
   check(Math.abs(top.main - 240) <= 1 && top.bar <= 0.25 * top.col + 0.5 && top.card && top.now === '72', `End: main area ${JSON.stringify(top)} (240 px, issues bar ≤ 25 %, con in view)`);
+  // Review S4: a selected card only partly visible (half under the bottom edge of the short canvas) is revealed
+  // whole when the panel grows.
+  for (let i = 0; i < 4; i++) await page.keyboard.press('ArrowDown');
+  await page.evaluate(() => {
+    const view = document.getElementById('process');
+    const c = document.querySelector('.step-card[data-id="con"]').getBoundingClientRect();
+    view.scrollTop += c.top - (view.getBoundingClientRect().bottom - c.height / 2);
+  });
+  const half = await page.evaluate(() => {
+    const c = document.querySelector('.step-card[data-id="con"]').getBoundingClientRect();
+    const v = document.getElementById('process').getBoundingClientRect();
+    return c.top < v.bottom && c.bottom > v.bottom;
+  });
+  for (let i = 0; i < 2; i++) await page.keyboard.press('ArrowUp');
+  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))); // the reveal runs in the next frame
+  const whole = await page.evaluate(() => {
+    const c = document.querySelector('.step-card[data-id="con"]').getBoundingClientRect();
+    const v = document.getElementById('process').getBoundingClientRect();
+    return c.top >= v.top - 0.5 && c.bottom <= v.bottom + 0.5;
+  });
+  check(half && whole, `growing the panel left the partly visible selected card cut off (set up half visible: ${half})`);
+  await page.keyboard.press('Home');
+  // Review N1: with Alt / Ctrl the handle's keys are not the handle's (Alt+↑ / Ctrl+↑ change nothing).
+  await page.keyboard.press('Alt+ArrowUp');
+  await page.keyboard.press('Control+ArrowUp');
+  check((await panelH()) === hMin, `Alt+↑ / Ctrl+↑ on the handle resized the panel (${await panelH()} vs ${hMin})`);
   await page.keyboard.press('Home');
   const grip = await page.$eval('#results-resize', (e) => { const r = e.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; });
   await page.mouse.move(grip.x, grip.y);
@@ -951,6 +992,9 @@ async function flowLayoutWide() {
 /** 11 (narrow sheet), 13b (top bar at 390/360), 13c (⋯ menu, Seed chip), 13d (sheet), 13e (results header). */
 async function flowLayoutNarrow() {
   const m = await newPage('390', { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+  // Reduced motion for the whole flow (no sheet / toast transitions to wait out; the 0 ms path of the
+  // sheet notches is covered too); one notch toggle below runs with motion (review 0014 N9).
+  await m.emulateMedia({ reducedMotion: 'reduce' });
   await mockOrgs(m, LONG_ORGS);
   await seedStorage(m, { org: LONG_ORGS[0].alias });
   await m.goto(base);
@@ -1064,6 +1108,33 @@ async function flowLayoutNarrow() {
   check(wheeled.left > 0 && wheeled.prevented, `a vertical wheel on the summary did not scroll it sideways (${JSON.stringify(wheeled)})`);
   await m.evaluate(() => { const el = document.getElementById('results-summary'); el.scrollLeft = el.scrollWidth; });
   check(await fade('#results-summary', 'start'), 'scrolled to its end, the summary does not fade only its start');
+  // Review 0014 S1 / S5 on the tab row (narrowed to 170 px, with three extra tabs, so it overflows on both
+  // sides): a vertical wheel is left to the table (not turned sideways), and Tab onto a partly hidden tab
+  // brings it fully out of the 24 px fades.
+  const tabsWheel = await m.evaluate(async () => {
+    const t = document.querySelector('#results-body .tabs');
+    for (const x of ['Lead (1)', 'Case (2)', 'Task (3)']) t.append(Object.assign(document.createElement('button'), { textContent: x, className: 'smoke-tab' }));
+    t.style.maxWidth = '170px';
+    t.scrollLeft = 0;
+    await new Promise((r) => requestAnimationFrame(r));
+    const ev = new WheelEvent('wheel', { deltaY: 60, bubbles: true, cancelable: true });
+    t.dispatchEvent(ev);
+    return { over: t.scrollWidth > t.clientWidth + 1, prevented: ev.defaultPrevented, left: t.scrollLeft };
+  });
+  check(tabsWheel.over && !tabsWheel.prevented && tabsWheel.left === 0, `a vertical wheel over the tab row scrolled it sideways (${JSON.stringify(tabsWheel)})`);
+  await m.focus('#results-body .tabs button');
+  await m.keyboard.press('Tab');
+  await m.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+  const tabFocus = await m.evaluate(() => {
+    const t = document.querySelector('#results-body .tabs').getBoundingClientRect();
+    const a = document.activeElement.getBoundingClientRect();
+    const row = document.querySelector('#results-body .tabs');
+    const res = { tab: document.activeElement.textContent, left: Math.round(a.left - t.left), right: Math.round(t.right - a.right), overflow: row.dataset.overflow };
+    row.style.maxWidth = '';
+    for (const b of row.querySelectorAll('.smoke-tab')) b.remove();
+    return res;
+  });
+  check(tabFocus.tab.startsWith('Contact') && tabFocus.overflow === 'both' && tabFocus.left >= 23.5 && tabFocus.right >= 23.5, `Tab onto a partly hidden tab left it in a fade (${JSON.stringify(tabFocus)}: ≥ 24 px from both faded edges)`);
   await m.tap('#btn-dl-menu');
   const dl = await m.$$eval('.popup .popup-item', (n) => n.map((x) => x.textContent));
   check(dl.join('|') === 'Tải JSON|Tải CSV (tab hiện tại)', `⤓ Tải menu: ${dl.join('|')}`);
@@ -1081,31 +1152,50 @@ async function flowLayoutNarrow() {
   });
   check(stuck, '"‹ Xong" scrolls away with the sheet');
   // Design 0014 §3: two notches. Enter on the grip: full (top at the top bar's bottom), the toast above it; again: mid.
+  // This toggle runs with motion (the transitionend path); the rest of the flow with reduced motion.
   const notch = () => m.evaluate(() => {
     const i = document.getElementById('inspector');
     return { top: i.getBoundingClientRect().top, h: i.getBoundingClientRect().height, bar: document.querySelector('.topbar').getBoundingClientRect().bottom, expanded: i.querySelector('.sheet-grip').getAttribute('aria-expanded'), open: i.classList.contains('open'), inert: i.inert, focus: document.activeElement?.dataset.id ?? document.activeElement?.className };
   });
+  const covered = () => m.evaluate(() => ['.palette', '.view-wrap', '#results', '.topbar'].map((q) => document.querySelector(q).inert).join());
+  await m.emulateMedia({ reducedMotion: 'no-preference' });
   await m.focus('#inspector .sheet-grip');
   await m.keyboard.press('Enter');
   await settle(m);
   let n = await notch();
   check(Math.abs(n.top - n.bar) <= 1 && n.expanded === 'true', `390px: full sheet notch ${JSON.stringify(n)} (top = top bar bottom, aria-expanded)`);
+  // Review S2: at the full notch the palette, the views and the results are inert (Tab cannot reach what the sheet covers); the top bar is not.
+  check((await covered()) === 'true,true,true,false', `full notch: inert of palette, views, results, top bar = ${await covered()} (true,true,true,false)`);
   await m.keyboard.press('F8'); // nothing to go to: a toast, above the full sheet
   await m.waitForSelector('#toast.show');
   await settle(m);
   const toastFull = await m.evaluate(() => document.getElementById('toast').getBoundingClientRect().bottom);
   check(toastFull <= n.top + 0.5, `toast under the full sheet (${toastFull} > ${n.top})`);
   await m.keyboard.press('Enter');
+  // Review N4: a transitionend bubbling from a child (a button's hover transition) must not end the notch change early.
+  await m.evaluate(() => document.querySelector('#inspector .sheet-close').dispatchEvent(new TransitionEvent('transitionend', { propertyName: 'height', bubbles: true })));
   await settle(m);
+  await m.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+  const overlap = await m.evaluate(() => {
+    const view = document.querySelector('.view-wrap > .view:not([hidden])').getBoundingClientRect();
+    const want = Math.max(0, Math.round(view.bottom - (innerHeight - document.getElementById('inspector').offsetHeight)));
+    return { want, got: parseFloat(document.body.style.getPropertyValue('--sheet-overlap')) };
+  });
+  check(Math.abs(overlap.want - overlap.got) <= 1, `back at mid, --sheet-overlap was measured mid-transition (${JSON.stringify(overlap)})`);
   s = await sheet();
   check(s.open && s.card <= s.sheet + 0.5 && (await notch()).expanded === 'false', `back to the mid notch, con not above the sheet (${JSON.stringify(s)})`);
-  // From here on with reduced motion: no transitions to wait out (the smoke's time budget), and the 0 ms
-  // path of the notches (no transitionend) is covered too.
+  check((await covered()) === 'false,false,false,false', `mid notch: the covered areas stay inert (${await covered()})`);
   await m.emulateMedia({ reducedMotion: 'reduce' });
-  // Dragging the sheet head with a pointer: up 200 px → full; then down 600 px (under half of mid, so at any
-  // speed) → closed like Xong (inert, focus on the card).
+  // Review N3: a mouse press on the grip focuses it (and toggles).
+  await m.focus('#inspector .sheet-close');
+  await m.click('#inspector .sheet-grip');
+  n = await notch();
+  check(n.focus === 'sheet-grip' && n.expanded === 'true', `a mouse press on the grip (${JSON.stringify(n)}: focused, full)`);
+  await m.click('#inspector .sheet-grip');
+  // Dragging the sheet head with a pointer: up 200 px → full; down 400 px from full → mid at any speed (review
+  // S3: a flick down from full stops at mid); down 400 px from mid → closed like Xong (inert, focus on the card).
   const headAt = () => m.$eval('#inspector .sheet-head', (e) => { const r = e.getBoundingClientRect(); return { x: r.x + r.width * 0.8, y: r.y + r.height / 2 }; });
-  for (const dy of [-200, 600]) {
+  for (const [dy, want] of [[-200, 'full'], [400, 'mid'], [400, 'closed']]) {
     const at = await headAt();
     await m.mouse.move(at.x, at.y);
     await m.mouse.down();
@@ -1113,8 +1203,8 @@ async function flowLayoutNarrow() {
     await m.mouse.up();
     await settle(m);
     n = await notch();
-    if (dy < 0) check(n.open && Math.abs(n.top - n.bar) <= 1, `dragging the sheet head up 200 px (${JSON.stringify(n)}: full notch expected)`);
-    else check(!n.open && n.inert && n.focus === 'con', `dragging the sheet head down 600 px (${JSON.stringify(n)}: closed, inert, focus on con)`);
+    const got = !n.open ? 'closed' : n.expanded === 'true' ? 'full' : 'mid';
+    check(got === want && (want !== 'full' || Math.abs(n.top - n.bar) <= 1) && (want !== 'closed' || (n.inert && n.focus === 'con')), `dragging the sheet head ${dy} px: ${got} (${JSON.stringify(n)}), ${want} expected`);
   }
   await m.tap('.step-card[data-id="con"] .type');
   await m.waitForSelector('#inspector.open');
@@ -1130,7 +1220,7 @@ async function flowLayoutNarrow() {
   await settle(m);
   s = await sheet();
   check(s.sheet >= s.palette + 60 - 0.5 && s.sheet - s.canvas >= 60 - 0.5, `844×390: less than 60 px of canvas above the sheet (${JSON.stringify(s)})`);
-  check(await m.evaluate(() => document.getElementById('results-resize').hidden), '844×390: the results height handle shows although there is no room to resize');
+  check(await m.waitForFunction(() => document.getElementById('results-resize').hidden, null, { timeout: 2000 }).then(() => true, () => false), '844×390: the results height handle shows although there is no room to resize');
   await m.focus('#inspector .sheet-grip');
   await m.keyboard.press('Enter');
   await settle(m);
@@ -1409,8 +1499,8 @@ async function flowCanvas() {
 }
 
 /** Flow 15, phone part (own context, so it runs alongside the wide part). */
-/** 1 000 steps: 250 × (Lặp → Record, Rẽ nhánh → Record), one Record turned off now and then, a few without sObject (errors). */
-function bigWorkflow(groups = 250) {
+/** 4 steps per group: Lặp → Record, Rẽ nhánh → Record; a Record turned off now and then, a few without sObject (errors). */
+function bigWorkflow(groups) {
   const rec = (id, sobject, extra = {}) => ({ id, type: 'record', config: { sobject, alias: id, count: 1, fields: [] }, ...extra });
   const steps = [];
   for (let i = 0; i < groups; i++) {
@@ -1422,7 +1512,11 @@ function bigWorkflow(groups = 250) {
   return { version: 2, name: 'Sơ đồ lớn', steps };
 }
 
-/** 15b. Minimap of the Sơ đồ view (design 0014 §5), own context. */
+/**
+ * 15b. Minimap of the Sơ đồ view (design 0014 §5), own context. 480 steps: far wider than the viewport
+ * (the window and the track are used); 1 000+ step sizes and path counts are unit tests
+ * (test/minimap.test.js), so the smoke stays light (review 0014 N9).
+ */
 async function flowMinimap() {
   const page = await newPage('minimap');
   await page.addInitScript((wf) => {
@@ -1430,7 +1524,7 @@ async function flowMinimap() {
     localStorage.setItem('sfdg.workflow.v2', JSON.stringify(wf));
     localStorage.setItem('sfdg.view', 'canvas');
     localStorage.setItem('smoke.mm', '1');
-  }, bigWorkflow());
+  }, bigWorkflow(120));
   await page.goto(base);
   await page.waitForSelector('#canvas .step-card[data-id="a0"]');
   await page.waitForSelector('#dg-minimap.shown path');
@@ -1438,7 +1532,7 @@ async function flowMinimap() {
     paths: document.querySelectorAll('#dg-minimap path').length, track: !document.querySelector('#dg-minimap .mm-track').hidden,
     hidden: document.getElementById('dg-minimap').getAttribute('aria-hidden'), pressed: document.getElementById('btn-minimap').getAttribute('aria-pressed'),
   }));
-  check(mm.paths > 0 && mm.paths <= 16 && mm.track && mm.hidden === 'true' && mm.pressed === 'true', `1 000 steps: minimap ${JSON.stringify(mm)} (shown, ≤ 16 paths, track, aria-hidden)`);
+  check(mm.paths > 0 && mm.paths <= 16 && mm.track && mm.hidden === 'true' && mm.pressed === 'true', `480 steps: minimap ${JSON.stringify(mm)} (shown, ≤ 16 paths, track, aria-hidden)`);
   // A card pushed under the minimap comes out from under it when ensureVisible shows it (↑ then ↓ back to it).
   await page.click('#canvas .step-card[data-id="a0"] .type');
   const box = (sel) => page.$eval(sel, (e) => { const r = e.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; });
@@ -1470,23 +1564,20 @@ async function flowMinimap() {
   const track = await page.$eval('#dg-minimap .mm-track', (e) => { const r = e.getBoundingClientRect(); return { x: r.x + r.width * 0.75, y: r.y + r.height / 2 }; });
   await page.mouse.click(track.x, track.y);
   const near = await page.$$eval('#canvas .step-card[data-id^="l"]', (n) => n.map((c) => Number(c.dataset.id.slice(1))).filter((i) => i > 0));
-  check(near.some((i) => Math.abs(i - 0.75 * 250) <= 15), `75 % of the track: loops drawn ${near.join(',')} (around 187 expected)`);
+  check(near.some((i) => Math.abs(i - 0.75 * 120) <= 8), `75 % of the track: loops drawn ${near.join(',')} (around 90 expected)`);
   // A press on the map centres the viewport there (the cards under that point are drawn).
   const mapAt = await page.$eval('#dg-minimap .mm-map', (e) => { const r = e.getBoundingClientRect(); return { x: r.x + 4, y: r.y + r.height / 2 }; });
   const before = near.join();
   await page.mouse.click(mapAt.x, mapAt.y);
   const moved = await page.$$eval('#canvas .step-card[data-id^="l"]', (n) => n.map((c) => c.dataset.id.slice(1)).join(','));
   check(moved !== before, 'a press on the minimap did not move the viewport');
-  // The wheel over the minimap does nothing.
-  const pan0 = await page.$eval('.dg-world', (w) => w.style.transform);
-  await page.mouse.move(mapAt.x + 20, mapAt.y);
-  await page.mouse.wheel(0, 400);
-  check((await page.$eval('.dg-world', (w) => w.style.transform)) === pan0, 'the wheel over the minimap moved the diagram');
   // The toggle: off hides it, a reload keeps it off; on again.
   await page.click('#btn-minimap');
   check(!(await page.$('#dg-minimap.shown')) && (await page.getAttribute('#btn-minimap', 'aria-pressed')) === 'false', 'the minimap button did not hide it');
   await page.reload();
   await page.waitForSelector('#canvas .step-card[data-id="__start"]');
+  // One frame for the minimap to be shown if it were on (review N10: a check right after load proves nothing).
+  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
   check(!(await page.$('#dg-minimap.shown')) && (await page.evaluate(() => localStorage.getItem('sfdg.minimap'))) === '0', 'the minimap came back after a reload while turned off');
   await page.click('#btn-minimap');
   await page.waitForSelector('#dg-minimap.shown');
@@ -2061,6 +2152,9 @@ async function flowProductivityRun() {
     let flows = { flowLayoutNarrow, flowHistoryWide, flowPicker, flowFiles, flowCanvas, flowVarsLoops, flowEditing, flowProductivityRun, flowEach, flowLibrary, flowDark, flowMinimap, flowProductivity, flowCanvasPhone };
     // SMOKE_ONLY=flowCanvas,flowEach runs only those flows (while working on one area).
     const only = process.env.SMOKE_ONLY?.split(',').filter(Boolean);
+    // An unknown name (a typo) must not run nothing and report OK (review 0014 N9).
+    const unknown = (only ?? []).filter((n) => !(n in flows));
+    if (unknown.length) throw new Error(`SMOKE_ONLY: unknown flow ${unknown.join(', ')} (known: ${Object.keys(flows).join(', ')})`);
     if (only?.length) flows = Object.fromEntries(Object.entries(flows).filter(([n]) => only.includes(n)));
     // A flow that throws leaves a full-page screenshot and the selector it waited for (in the
     // smoke temp dir, kept when the run fails) so a timeout can be read after the fact.

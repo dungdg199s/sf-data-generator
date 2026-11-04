@@ -60,7 +60,8 @@ the others; never add a fixed `waitForTimeout`.
    (Ctrl+D) happens, so it can only undo the delete.
 5b. **Variable picker (design doc 0005).** On `con`, the Title card's options open; the template is
    cleared; the field has `aria-keyshortcuts="Alt+ArrowDown Control+Space"`, the {x} `title` names Alt+↓, and Alt+↓ opens the
-   picker on its search box (design 0014 §6; Esc closes it); {x} opens the picker with the search focused, `indu` highlights `acc.Industry` and Enter
+   picker on its search box (design 0014 §6; Esc closes it); Alt+↓ on the {x} button opens it too, and Alt+↓ / Alt+↑ on {x} or
+   the field's "Xuống" button leave the stored workflow unchanged (review 0014 B1: they moved the step); {x} opens the picker with the search focused, `indu` highlights `acc.Industry` and Enter
    inserts `{{acc.Industry}}` (focus back in the field, a record-coloured chip under it). Typing ` #{{`
    opens the list as autocomplete, `in` puts `loop.index` first, Enter inserts it (loop-coloured chip).
    Typing `{{acc.Nmae}}` turns that chip red after validation, the `con` card gets the error badge and the
@@ -142,21 +143,27 @@ the others; never add a fixed `waitForTimeout`.
       nothing to go to) ends above the sheet; at 844 × 390 there are ≥ 60 px of canvas above the sheet and "Thu gọn tất
       cả" is in the ⋯ menu. With the issues workflow, tapping an issue row (390 × 844: `task`; 844 × 390: `opp`) leaves the
       card fully between the palette and the sheet. Design 0014 §3: Enter on `.sheet-grip` puts the sheet's top at the top
-      bar's bottom (`aria-expanded="true"`), a toast sits above the full sheet, Enter again is back at mid with `con` above
-      the sheet; a pointer drag on `.sheet-head` up 200 px goes full, down 600 px (under half of mid, so at any speed) closes
-      it like Xong (inert, focus on `con`); a tap reopens it at mid; at 844 × 390 the full notch is 390 − top bar; with the
-      issues workflow, F8 from the full notch goes back to mid with the issue's card above the sheet. From the mid-notch check
-      on, the flow runs with `prefers-reduced-motion: reduce` (no transitions to wait out; covers the 0 ms path).
+      bar's bottom (`aria-expanded="true"`), the palette, the views and `#results` are `inert` and the top bar is not (review
+      S2), a toast sits above the full sheet; Enter again is back at mid with `con` above the sheet and nothing inert, and a
+      `transitionend` dispatched from a child right after it does not end the change early (`--sheet-overlap` measured at
+      mid, review N4); a mouse press on the grip focuses it (N3); pointer drags on `.sheet-head`: up 200 px → full, down
+      400 px from full → mid at any speed (S3), down 400 px from mid → closed like Xong (inert, focus on `con`); a tap reopens
+      it at mid; at 844 × 390 the full notch is 390 − top bar; with the issues workflow, F8 from the full notch goes back to mid
+      with the issue's card above the sheet. The whole flow runs with `prefers-reduced-motion: reduce` (no transitions to wait
+      out; covers the 0 ms path) except that one grip toggle, which runs with motion (the `transitionend` path).
     - **13e results header**: ≤ 50 px after Xem trước at 390 px with `aria-expanded="true"`; "Tải" opens "Tải JSON" and
       "Tải CSV (tab hiện tại)"; at 1440 px the two buttons show and "Tải" does not. At 390 px no card row is wider than its card;
       the height handle shows (a 24 px row when `pointer: coarse`), and is hidden at 844 × 390; `#results-summary` and `.palette`
       get `data-overflow="end"`, a vertical `WheelEvent` on the summary scrolls it sideways (`defaultPrevented`), scrolled to its
-      end it is `"start"`; at 1440 px neither the palette nor the summary is marked (design 0014 §4).
+      end it is `"start"`; at 1440 px neither the palette nor the summary is marked (design 0014 §4). The tab row, narrowed to
+      170 px with three extra tabs: a vertical `WheelEvent` is not turned sideways (review S5) and Tab onto `Contact` leaves it
+      ≥ 24 px from both faded edges (review S1).
     - **13f results height (design 0014 §2, `flowLayoutWide`, 1440 × 900, issues workflow, `con` selected, panel opened with
       `Kết quả`)**: Shift+Tab from `Kết quả` reaches the handle; ↑ × 3 adds 48 px, Home gives 160 px, End leaves the main area
       240 px with the issues bar ≤ 25 % of the middle column and `con` in view (`aria-valuenow` 72); from Home a mouse drag up
       100 px gives 260 px; after the flow's existing reload the panel opens at that height; Enter on the handle collapses it
-      and focuses `Kết quả`.
+      and focuses `Kết quả`. Review: with `con` scrolled half under the bottom of the short canvas, ↑ × 2 reveals it whole
+      (S4); Alt+↑ / Ctrl+↑ on the handle do not resize (N1).
 
 14. **Lặp "Mỗi bản ghi trong pool" (design 0010), `flowEach`, own context.** The "Contact cho mỗi Account có sẵn"
     sample: the loop card shows `acc` and "Mỗi bản ghi trong accs → acc · {{loop.index}}"; Ctrl+Enter (no org, 5 sample
@@ -184,16 +191,17 @@ the others; never add a fixed `waitForTimeout`.
     diagram without overflow, the zoom bar is only ⤢ (32 px); tapping Start opens the sheet with the card above it
     (`smoke-390-canvas.png`). At 844 × 390 with the sheet open, End selects `con`: its top is visible above the sheet,
     not under the zoom bar, its ⋯ is 32 px; ⋯ → "Quy trình" there leaves `sfdg.view` = `canvas` (landscape phone = phone).
-    `SMOKE_ONLY=flowCanvas` (comma list) runs only the named flows. At 390 px the zoom bar has no minimap button and
+    `SMOKE_ONLY=flowCanvas` (comma list) runs only the named flows; an unknown name fails the run (review 0014 N9). At 390 px the zoom bar has no minimap button and
     `#dg-minimap` is `display: none` (design 0014).
 
-15b. **Minimap (design 0014 §5), `flowMinimap`, own context.** A 1 000-step workflow (250 × Lặp → Record, Rẽ nhánh → Record;
-    some Records turned off, some without sObject) is written by `addInitScript` with `sfdg.view` = `canvas`. The minimap is
+15b. **Minimap (design 0014 §5), `flowMinimap`, own context.** A 480-step workflow (120 × Lặp → Record, Rẽ nhánh → Record;
+    some Records turned off, some without sObject) is written by `addInitScript` with `sfdg.view` = `canvas` (1 000+ step
+    sizes and path counts are unit tests, review N9). The minimap is
     `.shown` with ≤ 16 `path`, a track, `aria-hidden`, `#btn-minimap` `aria-pressed="true"`. `a0`, selected, is wheeled under the
     minimap (checked, so the next check cannot pass by accident); ↑ then ↓ back to it leaves it clear of the minimap
     (`showRect` / `overlayRects`). `smoke-1440-minimap.png` and `smoke-1440-minimap-dark.png`. A click at 75 % of the track draws
-    loops around `l187`; a click on the map moves the viewport; the wheel over the minimap leaves the transform alone. The button
-    hides it, a reload keeps it off (`sfdg.minimap` = `0`), on again; at 800 px an open sheet hides it, Xong shows it; a one-step
+    loops around `l90`; a click on the map moves the viewport. The button hides it, a reload keeps it off (`sfdg.minimap` = `0`,
+    checked one frame after load, N10), on again; at 800 px an open sheet hides it, Xong shows it; a one-step
     workflow (`smokeOpen`) hides it.
 
 16. **Insert history and delete (design 0011), `flowHistory`, own context.** Every org-facing call is answered by one

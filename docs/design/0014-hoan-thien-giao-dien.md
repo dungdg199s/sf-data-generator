@@ -637,3 +637,35 @@ làn kết thúc trong 2 s cuối), nên phần tăng là việc thêm vào, ch�
 
 **Còn lại.** Hai mục "Câu hỏi mở" (minimap / rãnh tổng quan trên điện thoại; nhớ nấc sheet) chuyển sang **Hoãn** trong
 [README](README.md#việc-còn-lại). Kéo thẻ / nhớ pan-zoom trên Sơ đồ vẫn ngoài phạm vi (0003).
+
+### Sửa sau review
+
+Review 0014 (2026-11-04): 1 lỗi chặn, 5 nên sửa, 10 nit; sửa hết. Mỗi mục có test hoặc kiểm tra smoke **đỏ khi bỏ phần
+sửa** (đã thử bằng cách tạm bỏ phần sửa): B1, S1–S5, N1, N3, N4 ở smoke; S3, N6, N8 ở unit test.
+
+| # | Lỗi | Sửa | Kiểm |
+| --- | --- | --- | --- |
+| B1 | Alt+↓ trên nút `{x}` hay một nút của inspector ("Xuống", "Nhân bản") di chuyển bước đang chọn | `main.js`: Alt+↑/↓ chỉ di chuyển bước khi focus ở `#process` / `#canvas` hoặc không ở đâu (`movesSteps`), không bao giờ trong `#inspector`, `#results`, `.var-picker`, `.sheet-head`, popup, hộp thoại; nút `{x}` nhận `isPickerKey` và mở bảng chọn ở ô tìm | Smoke 5b: Alt+↓ trên `{x}` mở bảng chọn; Alt+↓ / Alt+↑ trên `{x}` và "Xuống" không đổi workflow đã lưu |
+| S1 | Focus dừng trong vùng mờ (cuộn của trình duyệt khi focus không theo `scroll-padding`) | `watchOverflow`: `focusin` gọi `revealInRow` (ngay và sau một khung hình) | Smoke 13e: Tab lên tab bị che một phần ⇒ cách cả hai mép mờ ≥ 24 px |
+| S2 | Ở nấc cao, Tab tới control nằm dưới sheet | Nấc cao: `.palette`, `.view-wrap`, `#results` là `inert` (thanh trên không); bỏ ở nấc vừa / đóng (đóng: bỏ trước khi trả focus về thẻ) | Smoke 13d |
+| S3 | Vuốt nhanh xuống từ nấc cao là đóng sheet | `snapSheet({ from })`: từ nấc cao về nấc vừa, chỉ đóng khi thả dưới ½ nấc vừa | `test/sizing.test.js` (thêm 4 ca, sửa ca `height 700`); smoke 13d: xuống 400 px từ nấc cao ⇒ nấc vừa, 400 px nữa ⇒ đóng |
+| S4 | Đổi cao panel làm thẻ đang chọn thấy một phần bị che hẳn | Thẻ thấy dù một phần trước khi đổi thì được hiện trọn (`selectedVisible`) | Smoke 13f |
+| S5 | Lăn dọc trên hàng tab (dính trên bảng) cuộn ngang hàng tab | `watchOverflow(tabs, { wheel: false })`; tới tab bằng Shift + lăn, vuốt, Tab. **Khác thiết kế §4** (ở đó hàng tab cũng đổi lăn dọc thành ngang) | Smoke 13e |
+| N1 | Phím của tay nắm không xét phím bổ trợ | Có Alt / Ctrl / ⌘ thì bỏ qua | Smoke 13f: Alt+↑ / Ctrl+↑ không đổi cao |
+| N2 | `aria-valuetext` "… % màn hình" sai: phần trăm là của vùng dưới thanh trên | "Cao 312 px (37 % của vùng dưới thanh trên)" (thiết kế §2 ghi "màn hình") | `test/sizing.test.js` |
+| N3 | Bấm chuột vào tay nắm sheet không focus nó (`preventDefault`) | Focus tay nắm trong `pointerdown` | Smoke 13d |
+| N4 | `transitionend` của phần tử con (nút) kết thúc đổi nấc sớm | Chỉ nhận sự kiện của chính sheet với `propertyName === 'height'`, nghe cả `transitioncancel` | Smoke 13d: phát `transitionend` từ nút con ngay sau khi về nấc vừa ⇒ `--sheet-overlap` vẫn đúng |
+| N5 | Không có rãnh tổng quan dọc | **Không thêm** (ghi lý do ở `ui-design-system.md` §6.13): sơ đồ chạy ngang; cửa sổ ở tỉ lệ 0,05 cao 640–2 400 px sơ đồ (≈ 8–30 làn) và đi theo khung nhìn theo chiều dọc, bấm gần mép trên / dưới bản đồ là đi tiếp | — |
+| N6 | Đưa thẻ lên trên minimap có thể vào dưới thanh thu phóng | `clearOfOverlays` (thuần, `minimap.js`): chỗ gần nhất (giữ x / bên trái một lớp nổi × giữ y / dưới thanh / trên minimap) không bị lớp nào che | `test/minimap.test.js` (ca mà luật một lượt cũ để thẻ dưới thanh thu phóng) |
+| N7 | Kiểm "lăn trên minimap không làm gì" vô nghĩa | Bỏ kiểm tra **và** listener `wheel`: minimap là anh em của `#canvas`, không nằm trong nó, nên lăn chuột không tới pan / thu phóng | — |
+| N8 | Test chặn ký tự chỉ có danh sách cố định | Quét các khối ký hiệu Unicode (mũi tên, toán, kỹ thuật, chữ khoanh, hình, ký hiệu, dingbat, Braille, ảnh ký hiệu) trong chuỗi `client/js`, `shared`, `index.html`, `content:`; cho phép `← → ↑ ↓ ⌥ × − ≤ ≈ ≥ ＋ ›` | `test/css-tokens.test.js`: bộ quét bắt `★ ☰ ✎ ⏻ ➜ 📋 ⇅ ⌘` và mọi ký tự của 0014 |
+| N9 | Smoke nặng | `flowMinimap` dùng 480 bước (1 000+ ở unit test); cả `flowLayoutNarrow` chạy với giảm chuyển động, trừ một lần đổi nấc (đường `transitionend`); `SMOKE_ONLY` với tên lạ thì báo lỗi | Chạy `SMOKE_ONLY=flowNope` ⇒ `SMOKE FAILED` |
+| N10 | Kiểm "tải lại vẫn tắt" ngay sau khi tải, chưa chắc đã vẽ | Chờ hai khung hình rồi mới kiểm | — |
+
+Hai kiểm tra smoke sửa kèm vì giảm chuyển động làm `settle` trả về ngay: tay nắm ẩn ở 844 × 390 giờ chờ sự kiện `resize` (đợi tới
+khi ẩn, tối đa 2 s); kiểm S4 đọc sau hai khung hình (không thăm dò).
+
+Test: 441 → 442 (`clearOfOverlays`); thêm ca vào các test có sẵn: `sizing` (S3, N2), `css-tokens` (N8 thay test bộ quét và
+test chặn ký tự). `npm test` 442/442 hai lần liên tiếp và ba lần song song. Smoke 5 lần: 10,7 / 10,5 / 10,7 / 9,9 / 10,2 s,
+`SMOKE OK` cả 5. Máy chạy review nhẹ tải hơn hôm trước: code trước 0014 (baaf36f) chạy trên cùng máy 9,5 / 9,4 s, tức là
+0014 cộng các sửa này tốn thêm khoảng 0,5–1,3 s.
