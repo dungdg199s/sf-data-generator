@@ -88,12 +88,14 @@ function setSheetOpen(open) {
   // "Chọn nhiều bước" mode (design 0012 B): the toolbar takes the sheet's place.
   open = open && narrow() && !inSelectMode();
   const was = root.classList.contains('open');
+  // Opens (and closes) at the mid notch; first, so the views are no longer inert (full notch) when
+  // focus moves back to the card below.
+  if (open !== was) setSheetFull(false, { quiet: true });
   // Closing while focus is in the sheet (Ctrl+Enter in a field, "‹ Xong"): focus goes to the
   // selected card, never left in a hidden form.
   if (!open && was && root.contains(document.activeElement)) {
     (document.querySelector('.view-wrap .step-card.selected') ?? document.getElementById('btn-preview'))?.focus({ preventScroll: true });
   }
-  if (open !== was) setSheetFull(false, { quiet: true }); // opens (and closes) at the mid notch
   root.classList.toggle('open', open);
   root.inert = narrow() && !open;
   document.body.classList.toggle('sheet-open', open);
@@ -157,15 +159,28 @@ function setSheetFull(full, { quiet = false } = {}) {
   root.classList.toggle('full', full);
   root.querySelector('.sheet-grip')?.setAttribute('aria-expanded', String(full));
   document.body.style.setProperty('--sheet-now', full ? 'var(--sheet-h-full)' : 'var(--sheet-h)');
+  // At the full notch the sheet covers the palette, the views and the results: Tab must not reach
+  // controls hidden under it (review 0014 S2). The top bar stays reachable.
+  for (const el of document.querySelectorAll('.palette, .view-wrap, #results')) el.inert = full;
   if (quiet || was === full || full || !root.classList.contains('open')) return;
   // After the height transition (none with reduced motion): measure the overlap, show the card.
   const settle = () => {
+    if (sheetFull) return; // back to full meanwhile
     updateSheetOverlap();
     const sel = state.selection;
     if (sel) reveal(sel.kind === 'step' ? sel.id : START_ID, { focus: false, block: 'nearest' });
   };
-  if (root.getAnimations().some((a) => a.transitionProperty === 'height')) root.addEventListener('transitionend', settle, { once: true });
-  else requestAnimationFrame(settle);
+  if (root.getAnimations().some((a) => a.transitionProperty === 'height')) {
+    // Only the sheet's own height transition (not one of a child), ended or cancelled (review N4).
+    const done = (ev) => {
+      if (ev.target !== root || ev.propertyName !== 'height') return;
+      root.removeEventListener('transitionend', done);
+      root.removeEventListener('transitioncancel', done);
+      settle();
+    };
+    root.addEventListener('transitionend', done);
+    root.addEventListener('transitioncancel', done);
+  } else requestAnimationFrame(settle);
 }
 
 /** px height of a notch token (`--sheet-h`, `--sheet-h-full`), measured with a hidden probe. */
@@ -186,7 +201,10 @@ function onSheetHeadDown(e) {
   if (!narrow() || e.button !== 0 || e.target.closest('.sheet-close')) return;
   // No native drag or text selection from this press (a palette item under the full sheet started one).
   e.preventDefault();
+  // preventDefault also keeps the focus where it was: a press on the grip focuses it (review N3).
+  e.target.closest('.sheet-grip')?.focus({ preventScroll: true });
   const head = e.currentTarget;
+  const from = sheetFull ? 'full' : 'mid';
   const startY = e.clientY;
   const startH = root.getBoundingClientRect().height;
   const full = notchPx('--sheet-h-full');
@@ -219,7 +237,7 @@ function onSheetHeadDown(e) {
     const first = samples[0];
     const dt = first ? ev.timeStamp - first.t : 0;
     const velocity = dt > 0 ? (hgt - first.h) / dt : 0;
-    const to = snapSheet({ height: hgt, velocity, mid: notchPx('--sheet-h'), full });
+    const to = snapSheet({ height: hgt, velocity, mid: notchPx('--sheet-h'), full, from });
     root.classList.remove('dragging');
     root.style.removeProperty('--sheet-drag-h');
     if (to === 'closed') closeSheet();

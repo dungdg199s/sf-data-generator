@@ -83,15 +83,20 @@ test('results panel: dragging more than 48 px under min collapses; ARIA is perce
   assert.equal(shouldCollapse(112), false);
   assert.equal(shouldCollapse(111), true);
   assert.equal(shouldCollapse(0), true);
-  assert.deepEqual(resultsAria(312, 851), { now: 37, min: 19, max: 72, text: 'Cao 312 px (37 % màn hình)' });
+  assert.deepEqual(resultsAria(312, 851), { now: 37, min: 19, max: 72, text: 'Cao 312 px (37 % của vùng dưới thanh trên)' });
 });
 
 test('sheet: flicks go to the next notch, slow releases to the nearest, below half of mid closes', () => {
   const n = { mid: 506, full: 755 };
   assert.equal(snapSheet({ ...n, height: 560, velocity: 0.8 }), 'full');
   assert.equal(snapSheet({ ...n, height: 400, velocity: 0.8 }), 'mid');
-  assert.equal(snapSheet({ ...n, height: 700, velocity: -0.8 }), 'mid');
+  assert.equal(snapSheet({ ...n, height: 700, velocity: -0.8, from: 'full' }), 'mid');
   assert.equal(snapSheet({ ...n, height: 480, velocity: -0.8 }), 'closed'); // down from mid
+  // Review 0014 S3: a flick down from full stops at mid, even released under mid, unless under mid / 2.
+  assert.equal(snapSheet({ ...n, height: 455, velocity: -2, from: 'full' }), 'mid');
+  assert.equal(snapSheet({ ...n, height: 260, velocity: -2, from: 'full' }), 'mid');
+  assert.equal(snapSheet({ ...n, height: 250, velocity: -2, from: 'full' }), 'closed');
+  assert.equal(snapSheet({ ...n, height: 455, velocity: -2, from: 'mid' }), 'closed');
   assert.equal(snapSheet({ ...n, height: 506, velocity: -0.6 }), 'closed');
   assert.equal(snapSheet({ ...n, height: 640, velocity: 0.2 }), 'full');
   assert.equal(snapSheet({ ...n, height: 600, velocity: 0 }), 'mid');

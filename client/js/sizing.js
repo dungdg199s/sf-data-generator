@@ -100,11 +100,11 @@ export function resultsKey(key, shift, height, total) {
 /** Released after dragging below min by more than 48 px: the panel collapses (the stored height stays). */
 export const shouldCollapse = (dragHeight, min = RESULTS.min) => dragHeight < min - RESULTS.collapseBelow;
 
-/** ARIA values of the separator: percent of `total`, and the text read out. */
+/** ARIA values of the separator: percent of `total` (the space under the top bar), and the text read out. */
 export function resultsAria(height, total) {
   const { min, max } = resultsRange(total);
   const pct = (v) => (total > 0 ? Math.round((v / total) * 100) : 0);
-  return { now: pct(height), min: pct(min), max: pct(Math.max(min, max)), text: `Cao ${Math.round(height)} px (${pct(height)} % màn hình)` };
+  return { now: pct(height), min: pct(min), max: pct(Math.max(min, max)), text: `Cao ${Math.round(height)} px (${pct(height)} % của vùng dưới thanh trên)` };
 }
 
 // ---------- bottom sheet notches (§3) ----------
@@ -116,13 +116,15 @@ export const SHEET = {
 
 /**
  * Where a released sheet drag lands: 'closed', 'mid' or 'full'. `height` is the sheet height at
- * release, `velocity` px/ms of height change (positive: dragged up), `mid` / `full` the notches.
- * A flick goes to the next notch in its direction (down from mid: closed); otherwise the nearest
- * of mid and full, or closed below half of mid.
+ * release, `velocity` px/ms of height change (positive: dragged up), `mid` / `full` the notches,
+ * `from` the notch the drag started at. A flick goes to the next notch in its direction from
+ * the release: up → mid if under it, else full; down from full → mid (closed only when released under half of mid,
+ * review 0014 S3), down from mid → closed. Otherwise the nearest of mid and full, or closed below
+ * half of mid.
  */
-export function snapSheet({ height, velocity = 0, mid, full }) {
+export function snapSheet({ height, velocity = 0, mid, full, from = 'mid' }) {
   if (velocity > SHEET.flick) return height < mid ? 'mid' : 'full';
-  if (velocity < -SHEET.flick) return height > mid ? 'mid' : 'closed';
+  if (velocity < -SHEET.flick) return from === 'full' && height >= mid / 2 ? 'mid' : 'closed';
   if (height < mid / 2) return 'closed';
   return Math.abs(height - mid) <= Math.abs(height - full) ? 'mid' : 'full';
 }
