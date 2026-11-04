@@ -820,3 +820,22 @@ Review cuối không thấy lỗi chặn. Ba commit, `npm test` xanh (513 test, 
 | N7, N11 | `c0a371f` | Khóa không có `link()`: `open(…, 'wx')` + pid, câu tiếng Việt khi không tạo được, dọn `.lock.stale-*`; khóa do server khác giữ ⇒ không thêm lời khuyên `SFDG_DATA_DIR` (`locked: true`) |
 | N10 | commit tài liệu | `workflow-schema.md`: `runs[].rejected?`, dạng mục `corrupt`, `locked` |
 
+### Sửa thêm sau khi gộp main (2026-11-04)
+
+Một lần đối chiếu tìm thấy lỗi mà review trước đã thấy ở bản cài đặt cũ (bản bị thay), cũng có trong bản của main. Đã sửa:
+
+- **Id của job Bulk chỉ "đã lấy" khi đã vào Lịch sử** (`server/sf/insert.js`): `saveIds` trả về ghi được hay không;
+  `idsCollected` chỉ thành `true` sau khi ghi xong. Ghi lỗi (đĩa đầy…) ⇒ job giữ `idsCollected: false`, lần xóa sau đọc lại kết
+  quả của nó, lần chạy dừng với `history`. Test `Bulk: Ids that could not be appended…`.
+- **Đóng job lỗi không còn bị coi là "đã hủy, chưa có gì"**: lỗi của `close()` (mất câu trả lời) hoặc hủy job bị từ chối ⇒ hỏi
+  `check()`; job còn `Open`/`Aborted` mới tính là lỗi như trước, trạng thái khác (hoặc không hỏi được) ⇒ `state: "Unknown"`,
+  `idsCollected: false`, các dòng vào `bulkUnknown` (không vào `failed`), dừng với `bulkError` kèm mã job.
+- **Lịch sử**: lần chạy `interrupted` đếm lại số đã insert của *từng bước* từ file Id (không chỉ tổng); thư mục `history` và mọi
+  file trong đó phải của chính người dùng chạy server và không là symlink (`lstat` + uid, file mở với `O_NOFOLLOW`), không thì
+  Lịch sử tắt hoặc lần đọc/ghi đó bị từ chối kèm câu nói cách sửa.
+- **CSV Bulk không ghi số dạng mũ** (`1e+21`, `1e-7`): ô và khóa dòng (để khớp `failedResults`) đều dùng số thập phân thường.
+- **Giao diện**: dòng nhóm lỗi chỉ là nút khi bước của nó có trong workflow đang mở (nhóm lỗi xóa: chỉ khi workflow đang mở là
+  workflow của lần insert đó, cùng tên và cùng các bước); câu "Xóa một bản ghi có thể làm Salesforce tự xóa các bản ghi con…"
+  luôn hiện trong hộp xác nhận xóa (cả khi chỉ một sObject).
+- **`test/safety.test.js`**: mẫu tìm lời gọi ghi khớp cả `?.`, mọi receiver kết thúc bằng `client` và mọi `.bulkJob(`; có test
+  riêng cho chính các mẫu đó.
