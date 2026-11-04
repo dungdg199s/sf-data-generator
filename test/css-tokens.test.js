@@ -363,34 +363,47 @@ test('every --ico-* token has a row in the icon table (§5) of docs/ui-design-sy
   }
 });
 
-// Glyphs that were used as icons (design 0014 §1). Text arrows (↑ ↓ → in sentences, key names) are not in the list.
-const ICON_GLYPHS = [...'⋯▸▾▴⠿↶↷⟳⤓⤒⤢▶📌⚙✕⊘◉⧉ⓘ‹✓✗⚠'];
+// Glyphs used as icons (design 0014 §1; widened after review 0014 N8): any character of the Unicode
+// symbol blocks (arrows, math operators, technical, enclosed alphanumerics, box drawing, shapes,
+// misc symbols, dingbats, Braille, supplemental arrows, misc symbols and arrows) or a pictograph,
+// except the few that are prose: arrows in sentences and key names (← → ↑ ↓ ⌥), "×" / "−" / "≤" /
+// "≈" / "≥" in summaries and key names, "›" in "con › Title", and "＋" inside an <option> (which
+// cannot hold an SVG). The glyphs replaced by design 0014 are all caught (checked below).
+const SYMBOL = /[\u2190-\u21ff\u2200-\u22ff\u2300-\u23ff\u2460-\u24ff\u2500-\u25ff\u2600-\u27bf\u27f0-\u27ff\u2800-\u28ff\u2900-\u2aff\u2b00-\u2bff\uff0b\u00d7\u2039\u203a]|\p{Extended_Pictographic}/gu;
+const PROSE_SYMBOLS = new Set([...'←→↑↓⌥×−≤≈≥＋›']);
+const iconGlyphs = (text) => [...text.matchAll(SYMBOL)].map((m) => m[0]).filter((c) => !PROSE_SYMBOLS.has(c));
 
-/** Glyphs from ICON_GLYPHS inside string / template literals of a JS source (comments ignored). */
+/** Icon glyphs inside string / template literals of a JS source (comments ignored). */
 function glyphsInJsStrings(src) {
   const code = stripJsComments(src);
   const found = [];
   for (const m of code.matchAll(/'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"|`(?:[^`\\]|\\.)*`/g)) {
-    for (const g of ICON_GLYPHS) if (m[0].includes(g)) found.push(`${g} in ${m[0].slice(0, 60)}`);
+    for (const g of iconGlyphs(m[0])) found.push(`${g} in ${m[0].slice(0, 60)}`);
   }
   return found;
 }
 
-test('the glyph scanner finds icon glyphs in strings and ignores comments', () => {
-  assert.notDeepEqual(glyphsInJsStrings("h('button', {}, '⋯')"), []);
-  assert.notDeepEqual(glyphsInJsStrings('const t = `${n} ▾`;'), []);
-  assert.notDeepEqual(glyphsInJsStrings("menuBtn('Bọc ▾', {})"), []);
+test('the glyph scanner finds icon glyphs in strings and ignores comments and prose arrows', () => {
+  for (const src of ["h('button', {}, '⋯')", 'const t = `${n} ▾`;', "menuBtn('Bọc ▾', {})", "'⚠ Lỗi'", "'★'", "'☰ Menu'", "'✎'", "'⏻'", "'➜'", "'📋'", "'⇅'", "'⌘K'"]) {
+    assert.notDeepEqual(glyphsInJsStrings(src), [], `not caught: ${src}`);
+  }
+  for (const g of '⋯▸▾▴⠿↶↷⟳⤓⤒⤢▶📌⚙✕⊘◉⧉ⓘ‹✓✗⚠') assert.notDeepEqual(glyphsInJsStrings(`'${g}'`), [], `0014 glyph ${g} not caught`);
   assert.deepEqual(glyphsInJsStrings('// the ⋯ menu\nconst a = 1; /* ▸ */'), []);
-  assert.deepEqual(glyphsInJsStrings("h('li', {}, 'Alt+↑ / Alt+↓: di chuyển bước')"), []);
+  assert.deepEqual(glyphsInJsStrings("h('li', {}, 'Alt+↑ / Alt+↓: di chuyển bước; ← →; ⌥↓')"), []);
+  assert.deepEqual(glyphsInJsStrings("`${a} × ${b} · ≤ 5 · ≈ 3 · → acc#1 · ＋ ${t} · Thu nhỏ (−)`"), []);
 });
 
-test('no glyph is used as an icon in client/js, index.html or CSS content (design 0014: ico() / data-ico)', () => {
+test('no glyph is used as an icon in client/js, shared, index.html or CSS content (design 0014: ico() / data-ico)', () => {
   for (const { name, src } of CLIENT_JS) assert.deepEqual(glyphsInJsStrings(src), [], name);
+  const sharedDir = new URL('../shared/', import.meta.url);
+  for (const f of fs.readdirSync(sharedDir).filter((n) => n.endsWith('.js'))) {
+    assert.deepEqual(glyphsInJsStrings(fs.readFileSync(new URL(f, sharedDir), 'utf8')), [], `shared/${f}`);
+  }
   const html = INDEX_HTML.replace(/<!--[\s\S]*?-->/g, '');
-  for (const g of ICON_GLYPHS) assert.ok(!html.includes(g), `client/index.html contains ${g}`);
+  assert.deepEqual(iconGlyphs(html), [], 'client/index.html');
   for (const { prop, value } of declarations(COMPONENTS)) {
     if (prop !== 'content') continue;
-    for (const g of ICON_GLYPHS) assert.ok(!value.includes(g), `app.css content: ${value}`);
+    assert.deepEqual(iconGlyphs(value), [], `app.css content: ${value}`);
   }
 });
 
