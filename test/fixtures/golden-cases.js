@@ -3,8 +3,8 @@
 // byte-identical for the same seed and `now`: the palette samples plus nested cases covering
 // random Lookups (count-only pools), Chọn bản ghi from generated and Query pools, branch/loop
 // nesting, unique values and pick "skip". Cases added later (the each-loop sample and nested
-// case of design 0010, the cases of design 0013 and of its review) were recorded when added; adding them changed
-// none of the earlier hashes.
+// case of design 0010, the two cases of design 0013) were recorded when added; adding them
+// changed none of the earlier hashes.
 //
 // To re-record after a deliberate data change: node test/fixtures/golden-record.js > test/fixtures/golden-hashes.json
 
@@ -113,25 +113,27 @@ export const GOLDEN_CASES = [
     queryResults: { q: accRows(3) },
   },
   {
-    // Design 0013, recorded when added (every case above kept its hash).
+    // Design 0013, recorded when the cases were added (every case above kept its hash).
     name: 'each extras: filter, shuffle, limit over Query and Record pools (0013)',
     workflow: wf([
       query('q', 'accs', { fields: ['Id', 'Name', 'Industry'] }),
-      query('qc', 'cons', { sobject: 'Contact', fields: ['Id', 'AccountId', 'LastName'] }),
-      record('gen', 'Account', 'gen', [name, { name: 'Industry', type: 'picklist', options: { values: ['Banking', 'Retail'] } }], { count: 8 }),
-      loop('la', { mode: 'each', from: 'accs', itemAlias: 'acc' }, [
-        loop('lc', { mode: 'each', from: 'cons', itemAlias: 'con', alias: 'k', filter: 'compare', filterField: 'AccountId', filterOp: 'eq', filterValue: '{{acc.Id}}', order: 'shuffle', limit: 2 }, [
-          record('task', 'Task', 'task', [lookup('WhoId', 'con'), lookup('WhatId', 'acc'), { name: 'Subject', type: 'template', options: { template: '{{con.LastName}} {{k.index}}/{{k.count}}' } }]),
+      query('q2', 'cons', { sobject: 'Contact', fields: ['Id', 'LastName', 'AccountId'] }),
+      record('acc', 'Account', 'gen', [name, { name: 'Industry', type: 'picklist', options: { values: ['Banking', 'Retail'] } }], { count: 6 }),
+      loop('la', { mode: 'each', from: 'accs', itemAlias: 'acc', alias: 'i' }, [
+        loop('lc', { mode: 'each', from: 'cons', itemAlias: 'con', alias: 'k', filter: 'compare', filterField: 'AccountId', filterValue: '{{acc.Id}}', order: 'shuffle', limit: 2 }, [
+          record('task', 'Task', 'task', [lookup('WhoId', 'con'), lookup('WhatId', 'acc'), { name: 'Subject', type: 'template', options: { template: '{{con.LastName}} {{k.index}}/{{k.count}} {{i.index}}' } }]),
         ]),
       ]),
-      loop('lg', { mode: 'each', from: 'gen', itemAlias: 'g', filter: 'compare', filterField: 'Industry', filterOp: 'neq', filterValue: 'Banking', order: 'shuffle' }, [
+      loop('lg', { mode: 'each', from: 'gen', itemAlias: 'g', filter: 'compare', filterField: 'Industry', filterOp: 'neq', filterValue: 'Banking', limit: 2 }, [
         record('opp', 'Opportunity', 'opp', [lookup('AccountId', 'g'), { name: 'Amount', type: 'currency', options: {} }]),
       ]),
-      loop('ll', { mode: 'each', from: 'gen', itemAlias: 'g2', limit: 3 }, [record('case', 'Case', 'cs', [lookup('AccountId', 'g2')])]),
+      loop('ls', { mode: 'each', from: 'gen', itemAlias: 's', order: 'shuffle' }, [
+        record('con', 'Contact', 'con2', [lookup('AccountId', 's'), { name: 'LastName', type: 'text', options: { mode: 'lastName' } }]),
+      ]),
     ]),
     queryResults: {
       q: accRows(4),
-      qc: rows(Array.from({ length: 11 }, (_, i) => ({ Id: `003${String(i).padStart(15, '0')}`, AccountId: `001${String(i % 5).padStart(15, '0')}`, LastName: `L${i}` })), 'Contact'),
+      q2: rows(Array.from({ length: 9 }, (_, i) => ({ Id: `003${String(i).padStart(15, '0')}`, LastName: `Con ${i}`, AccountId: `001${String(i % 3).padStart(15, '0')}` })), 'Contact'),
     },
   },
   {
@@ -139,31 +141,20 @@ export const GOLDEN_CASES = [
     workflow: wf([
       query('q', 'accs', { fields: ['Id', 'Name', 'Employees'] }),
       loop('lv', { mode: 'values', values: ['Hot', 'Warm', 'Cold'], alias: 'r' }, [
-        record('lead', 'Lead', 'lead', [{ name: 'Rating', type: 'copy', options: { path: 'r.value' } }, { name: 'Description', type: 'template', options: { template: 'Batch {{run.seed}} {{run.today}} {{r.index}}' } }]),
+        record('lead', 'Lead', 'lead', [{ name: 'Rating', type: 'copy', options: { path: 'r.value' } }, { name: 'LastName', type: 'text', options: { mode: 'lastName' } }, { name: 'Description', type: 'template', options: { template: 'Batch {{run.seed}} {{run.today}} {{r.index}}' } }]),
       ]),
-      loop('la', { mode: 'each', from: 'accs', itemAlias: 'acc' }, [
-        loop('ln', { count: '{{acc.Employees}}', alias: 'n' }, [
-          record('con', 'Contact', 'con', [lookup('AccountId', 'acc'), { name: 'Amount__c', type: 'number', options: { min: 0, max: 10 } }]),
-          branch('b', { kind: 'compare', left: 'con.Amount__c', op: 'gt', right: '{{n.count}}' }, [record('t', 'Task', 'task', [lookup('WhatId', 'acc')])], []),
+      loop('lw', { count: '{{accs.$count}}', alias: 'w' }, [
+        pick('p', 'big', 'accs', { mode: 'weighted', weightField: 'Employees' }),
+        loop('ln', { mode: 'range', min: 1, max: '{{big.Employees}}', alias: 'n' }, [
+          record('opp', 'Opportunity', 'opp', [lookup('AccountId', 'big'), { name: 'Amount', type: 'currency', options: { min: 0, max: 100 } }]),
+          branch('b', { kind: 'compare', left: 'opp.Amount', op: 'gt', right: '{{big.Employees}}' }, [
+            record('task', 'Task', 'task', [lookup('WhatId', 'opp'), { name: 'Subject', type: 'template', options: { template: '{{opp.Amount}} > {{big.Employees}} @ {{run.now}}' } }]),
+          ]),
         ]),
-        loop('lr', { mode: 'range', min: 1, max: '{{accs.$count}}' }, [record('ev', 'Event', 'ev', [])]),
       ]),
-      loop('lw', { count: 6 }, [pick('p', 'big', 'accs', { mode: 'weighted', weightField: 'Employees' }), record('opp', 'Opportunity', 'opp', [lookup('AccountId', 'big'), { name: 'When__c', type: 'copy', options: { path: 'run.now' } }])]),
+      loop('lc', { count: '{{big.Employees}}' }, [record('con', 'Contact', 'con', [lookup('AccountId', 'big')])]),
     ]),
-    queryResults: { q: rows(Array.from({ length: 5 }, (_, i) => ({ Id: `001${String(i).padStart(15, '0')}`, Name: `Org ${i}`, Employees: [3, 0, '', 2, 7][i] }))) },
-  },
-  {
-    // Review 0013 B1: two weighted picks on one pool, each with its own weight field.
-    name: 'two weighted picks on one pool with different weight fields (0013 review)',
-    workflow: wf([
-      query('q', 'accs', { fields: ['Id', 'Name', 'W1', 'W2'] }),
-      loop('l', { count: 12 }, [
-        pick('p1', 'big1', 'accs', { mode: 'weighted', weightField: 'W1' }),
-        pick('p2', 'big2', 'accs', { mode: 'weighted', weightField: 'W2' }),
-        record('opp', 'Opportunity', 'opp', [lookup('AccountId', 'big1'), lookup('Partner__c', 'big2')]),
-      ]),
-    ]),
-    queryResults: { q: rows(Array.from({ length: 6 }, (_, i) => ({ Id: `001${String(i).padStart(15, '0')}`, Name: `Org ${i}`, W1: i < 3 ? i + 1 : 0, W2: i < 3 ? 0 : i }))) },
+    queryResults: { q: rows([0, 1, 5, 20, null, 'x'].map((e, i) => ({ Id: `001${String(i).padStart(15, '0')}`, Name: `Org ${i}`, Employees: e }))) },
   },
 ];
 

@@ -1,8 +1,15 @@
-import './data-dir.js';
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { createApp } from '../server/index.js';
+import { mkdtempSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
+// Insert history (design 0011) of every app in this file goes to a throwaway directory, never ~.
+process.env.SFDG_DATA_DIR = mkdtempSync(path.join(os.tmpdir(), 'sfdg-server-test-'));
+const { createApp } = await import('../server/index.js');
+/** Org identity of the fake clients (client.whoami, review of 0011 S1). */
+const WHOAMI = async () => ({ orgId: '00D000000000001AAA', username: 'a@x.com', instanceUrl: 'https://x' });
 import { wf, record, loop, query, pick } from './helpers.js';
 import { V1_SAMPLES } from './fixtures/v1-samples.js';
 import { W, rec, E } from './fixtures/v1-cases.js';
@@ -10,15 +17,14 @@ import { W, rec, E } from './fixtures/v1-cases.js';
 let server;
 let base;
 const inserted = [];
-// 0011 review B2: an insert needs the org's identity from the sf CLI (orgId and username).
-const ORG = { username: 'a@x.com', orgId: '00D000000000001AAA', instanceUrl: 'https://x.my.salesforce.com' };
 // Fake org data read by Query steps; tests change it to simulate the org changing.
 let orgAccounts = [{ attributes: { type: 'Account' }, Id: '001000000000001AAA', Name: 'Acme' }, { attributes: { type: 'Account' }, Id: '001000000000002AAA', Name: 'Globex' }];
 const queried = [];
 
 before(async () => {
-  const cli = { listOrgs: async () => [{ alias: 'dev', username: 'a@x.com' }], getConnection: async () => ORG };
+  const cli = { listOrgs: async () => [{ alias: 'dev', username: 'a@x.com' }], getConnection: async () => ({}) };
   const client = {
+    whoami: async () => ({ orgId: '00D000000000001AAA', username: 'a@x.com', instanceUrl: 'https://x' }),
     create: async (_t, _sobject, recs) => {
       inserted.push(...recs);
       return recs.map((_, i) => ({ success: true, id: `001${i}` }));
@@ -48,19 +54,27 @@ const post = (path, body) => fetch(base + path, { method: 'POST', headers: { 'Co
 test('GET /api/meta lists field types and step types with slots and categories', async () => {
   const meta = await (await fetch(base + '/api/meta')).json();
   assert.ok(meta.fieldTypes.some((f) => f.type === 'multipicklist'));
-  assert.deepEqual(meta.nodeTypes.map((n) => n.type), ['record', 'query', 'pick', 'loop', 'branch']);
-  assert.deepEqual(meta.nodeTypes.map((n) => n.slots.map((s) => s.key)), [[], [], [], ['body'], ['true', 'false']]);
-  assert.deepEqual(meta.nodeTypes.map((n) => n.category), ['data', 'data', 'data', 'control', 'control']);
+  // 0015: Đặt biến (`set`) joins the control category, after Rẽ nhánh.
+  assert.deepEqual(meta.nodeTypes.map((n) => n.type), ['record', 'query', 'pick', 'loop', 'branch', 'set']);
+  assert.deepEqual(meta.nodeTypes.map((n) => n.slots.map((s) => s.key)), [[], [], [], ['body'], ['true', 'false'], []]);
+  assert.deepEqual(meta.nodeTypes.map((n) => n.category), ['data', 'data', 'data', 'control', 'control', 'control']);
   assert.ok(meta.nodeTypes.every((n) => !('outputs' in n) && !('inputs' in n)));
   assert.deepEqual(meta.stepCategories.map((c) => c.key), ['data', 'control']);
   assert.equal(meta.limits.maxDepth, 32);
   const ref = meta.fieldTypes.find((f) => f.type === 'lookup').options.find((o) => o.key === 'ref');
   assert.equal(ref.label, 'Bản ghi cha / pool (alias)');
   // Variables (0005): every step type says how its slots run; record and loop expose variables.
-  assert.deepEqual(meta.nodeTypes.map((n) => n.flow.kind), ['sequence', 'sequence', 'sequence', 'loop', 'branch']);
+  assert.deepEqual(meta.nodeTypes.map((n) => n.flow.kind), ['sequence', 'sequence', 'sequence', 'loop', 'branch', 'sequence']);
   // `exposes` may be a list (0010: the loop's variables, then the record of an each-loop).
-  assert.deepEqual(meta.nodeTypes.map((n) => [n.exposes ?? []].flat().map((x) => x.kind).join('+') || null), ['record', 'record', 'record', 'vars+record', null]);
+  assert.deepEqual(meta.nodeTypes.map((n) => [n.exposes ?? []].flat().map((x) => x.kind).join('+') || null), ['record', 'record', 'record', 'vars+record', null, 'value']);
   assert.ok(meta.nodeTypes.every((n) => Object.values(n).every((v) => typeof v !== 'function')));
+  // 0015: the variables of Đặt biến live in their own namespace, {{var.<name>}}.
+  const setType = meta.nodeTypes.find((n) => n.type === 'set');
+  assert.equal(meta.syntax.varNamespace, 'var');
+  assert.deepEqual([setType.label, setType.exposes.namespace, setType.exposes.name.key], ['Đặt biến', 'var', 'name']);
+  assert.deepEqual(setType.options.map((o) => [o.key, o.kind, o.default]), [['name', 'string', ''], ['mode', 'select', 'set'], ['valueType', 'select', 'text'], ['value', 'string', '']]);
+  assert.deepEqual([setType.options[2].showIf, setType.options[3].vars], [{ key: 'mode', in: ['set'] }, 'template']);
+  assert.equal(meta.limits.maxVarLength, 10000);
   const loopType = meta.nodeTypes.find((n) => n.type === 'loop');
   assert.ok(!('minIterations' in loopType), 'function keys are not served');
   const re = new RegExp(meta.syntax.templateToken, 'g');
@@ -73,38 +87,13 @@ test('GET /api/meta lists field types and step types with slots and categories',
   assert.deepEqual(meta.fieldTypes.find((f) => f.type === 'geolocation').members.map((m) => m.key), ['latitude', 'longitude']);
 });
 
-test('GET /api/meta has recordPresets; Task has Subject and noName (design 0012 G)', async () => {
-  const meta = await (await fetch(`${base}/api/meta`)).json();
-  const p = meta.recordPresets;
-  assert.deepEqual(p.Task.fields.map((f) => f.name), ['Subject']);
-  assert.equal(p.Task.noName, true);
-  assert.equal(p.Task.nameField, 'Subject');
-  assert.deepEqual(p.Task.fields[0].options.values, ['Call', 'Send Letter', 'Send Quote', 'Other']);
-  assert.deepEqual(p.Contact.fields.map((f) => f.name), ['FirstName', 'LastName']);
-  assert.equal(p.Contact.nameField, 'LastName');
-  assert.deepEqual(p.Lead.fields.map((f) => f.name), ['FirstName', 'LastName', 'Company']);
-  assert.deepEqual(p.Event.fields.map((f) => [f.name, f.type]), [['Subject', 'text'], ['ActivityDateTime', 'datetime'], ['DurationInMinutes', 'number']]);
-  assert.deepEqual(p.Opportunity.fields.map((f) => f.name), ['Name', 'StageName', 'CloseDate']);
-  assert.ok(!p.Opportunity.noName && !p.Account.noName);
-  assert.deepEqual(p.Account.fields, [{ name: 'Name', type: 'text', options: { mode: 'company' } }], 'a new Account Record is unchanged (samples, golden hashes)');
-  // Every preset field is a known field type, so a new step validates.
-  const types = new Set(meta.fieldTypes.map((t) => t.type));
-  for (const [so, preset] of Object.entries(p)) for (const f of preset.fields) assert.ok(types.has(f.type), `${so}.${f.name}`);
-  for (const [so, preset] of Object.entries(p)) {
-    const res = await (await post('/api/validate', { workflow: wf([record('r', so, 'r', preset.fields)]) })).json();
-    assert.deepEqual(res.errors, [], so);
-    assert.ok(!res.warnings.some((w) => w.code === 'noNameField'), so);
-  }
-});
-
 test('GET /api/meta: loop has mode each with from and itemAlias shown only for each', async () => {
   const meta = await (await fetch(base + '/api/meta')).json();
   const loopType = meta.nodeTypes.find((n) => n.type === 'loop');
   const opt = (k) => loopType.options.find((o) => o.key === k);
-  // 0013 added values, the each filter, order and limit (checked in their own test below).
-  assert.deepEqual(loopType.options.map((o) => o.key).filter((k) => ['mode', 'count', 'min', 'max', 'from', 'itemAlias', 'alias'].includes(k)), ['mode', 'count', 'min', 'max', 'from', 'itemAlias', 'alias']);
+  assert.deepEqual(loopType.options.map((o) => o.key), ['mode', 'count', 'min', 'max', 'values', 'from', 'itemAlias', 'filter', 'filterField', 'filterOp', 'filterValue', 'order', 'limit', 'alias']);
   assert.equal(opt('mode').label, 'Lặp theo');
-  assert.deepEqual(opt('mode').choices.slice(0, 3).map((c) => `${c.value}:${c.label}`), ['fixed:Số lần cố định', 'range:Số lần ngẫu nhiên trong khoảng', 'each:Mỗi bản ghi trong pool']);
+  assert.deepEqual(opt('mode').choices.map((c) => `${c.value}:${c.label}`), ['fixed:Số lần cố định', 'range:Số lần ngẫu nhiên trong khoảng', 'each:Mỗi bản ghi trong pool', 'values:Mỗi giá trị trong danh sách']);
   assert.deepEqual([opt('from').kind, opt('from').accepts, opt('from').showIf, opt('itemAlias').showIf], ['ref', { pool: true }, { key: 'mode', in: ['each'] }, { key: 'mode', in: ['each'] }]);
   assert.deepEqual([opt('count').showIf.in, opt('min').showIf.in], [['fixed'], ['range']]);
   const [vars, item] = loopType.exposes;
@@ -116,25 +105,28 @@ test('GET /api/meta: loop has values, filter, order and limit with chained showI
   const meta = await (await fetch(base + '/api/meta')).json();
   const type = (t) => meta.nodeTypes.find((n) => n.type === t);
   const opt = (t, k) => type(t).options.find((o) => o.key === k);
-  assert.deepEqual(type('loop').options.map((o) => o.key), ['mode', 'count', 'min', 'max', 'values', 'from', 'itemAlias', 'filter', 'filterField', 'filterOp', 'filterValue', 'order', 'limit', 'alias']);
-  assert.deepEqual(opt('loop', 'mode').choices.map((c) => c.value), ['fixed', 'range', 'each', 'values']);
-  assert.equal(opt('loop', 'mode').choices[3].label, 'Mỗi giá trị trong danh sách');
+  // Values loop (0013 D): a list with a placeholder; `value` member only in values mode.
   assert.deepEqual([opt('loop', 'values').kind, opt('loop', 'values').showIf, opt('loop', 'values').placeholder], ['list', { key: 'mode', in: ['values'] }, 'Hot\nWarm\nCold']);
-  // Chained showIf: the filter fields depend on `filter`, which depends on `mode`.
-  assert.deepEqual(opt('loop', 'filter').showIf, { key: 'mode', in: ['each'] });
-  assert.deepEqual(opt('loop', 'filterField').showIf, { key: 'filter', in: ['compare'] });
-  assert.equal(opt('loop', 'filterValue').vars, 'template');
-  assert.deepEqual([opt('loop', 'order').default, opt('loop', 'order').choices.map((c) => c.value)], ['pool', ['pool', 'shuffle']]);
-  assert.deepEqual([opt('loop', 'limit').default, opt('loop', 'limit').showIf], [0, { key: 'mode', in: ['each'] }]);
-  assert.deepEqual(['count', 'min', 'max'].map((k) => opt('loop', k).vars), ['number', 'number', 'number']);
-  assert.equal(opt('loop', 'limit').vars, undefined, 'limit takes no variable');
+  // One value per line in the form (a value may hold a comma), like valueList on the server.
+  assert.equal(opt('loop', 'values').split, 'lines');
   assert.deepEqual(type('loop').exposes[0].members.find((m) => m.key === 'value').when, { key: 'mode', in: ['values'] });
-  assert.equal(type('record').exposes.nonEmpty, true);
+  // Each filter (0013 C): `filter` shows in each mode, its fields when it is `compare` (transitive).
+  assert.deepEqual(opt('loop', 'filter').showIf, { key: 'mode', in: ['each'] });
+  for (const k of ['filterField', 'filterOp', 'filterValue']) assert.deepEqual(opt('loop', k).showIf, { key: 'filter', in: ['compare'] }, k);
+  assert.equal(opt('loop', 'filterValue').vars, 'template');
+  assert.deepEqual(opt('loop', 'order').choices.map((c) => c.value), ['pool', 'shuffle']);
+  assert.deepEqual([opt('loop', 'order').showIf, opt('loop', 'limit').showIf, opt('loop', 'limit').default, opt('loop', 'limit').vars], [{ key: 'mode', in: ['each'] }, { key: 'mode', in: ['each'] }, 0, undefined]);
+  // Number variables (0013 B).
+  for (const k of ['count', 'min', 'max']) assert.deepEqual([opt('loop', k).kind, opt('loop', k).vars], ['integer', 'number'], k);
   assert.equal(opt('branch', 'right').vars, 'template');
+  assert.match(opt('branch', 'right').help, /\{\{opp\.Amount\}\}/);
+  // Weighted pick (0013 E); pick's filter has no showIf (as before).
   assert.ok(opt('pick', 'mode').choices.some((c) => c.value === 'weighted'));
   assert.deepEqual([opt('pick', 'weightField').showIf, opt('pick', 'weightField').suggest], [{ key: 'mode', in: ['weighted'] }, { kind: 'poolFields', poolKey: 'from' }]);
-  assert.equal(opt('pick', 'filter').showIf, undefined, 'the pick filter is always shown, as before');
-  assert.deepEqual(meta.globals.map((g) => `${g.name}:${g.members.map((m) => `${m.key}/${m.valueType}`).join(',')}`), ['run:seed/number,now/datetime,today/date']);
+  assert.equal(opt('pick', 'filter').showIf, undefined);
+  // Record pools are never empty after the step (C4); run variables (G).
+  assert.equal(type('record').exposes.nonEmpty, true);
+  assert.deepEqual(meta.globals.map((g) => [g.name, g.members.map((m) => `${m.key}:${m.valueType}`)]), [['run', ['seed:number', 'now:datetime', 'today:date']]]);
 });
 
 test('GET /api/meta (0006): Query / Chọn bản ghi options, suggest hints, presets and query limits', async () => {
@@ -224,6 +216,15 @@ test('static files are served and traversal is blocked', async () => {
   assert.equal(index.status, 200);
   const evil = await fetch(base + '/..%2fpackage.json');
   assert.ok([403, 404].includes(evil.status));
+  // Revalidation (design 0014 review): no-cache + ETag; an unchanged file answers 304 without a body.
+  const js = await fetch(base + '/js/dom.js');
+  const etag = js.headers.get('etag');
+  assert.equal(js.headers.get('cache-control'), 'no-cache');
+  assert.match(etag, /^W\/"[0-9a-f]+-[0-9a-f]+"$/);
+  const again = await fetch(base + '/js/dom.js', { headers: { 'If-None-Match': etag } });
+  assert.equal(again.status, 304);
+  assert.equal(await again.text(), '');
+  assert.equal((await fetch(base + '/js/dom.js', { headers: { 'If-None-Match': 'W/"0-0"' } })).status, 200);
 });
 
 test('shared modules are served from /shared/ and traversal out of it is blocked', async () => {
@@ -370,13 +371,14 @@ test('POST /api/runs/:id/cancel stops an insert after the call in flight', async
   let calls = 0;
   const held = new Promise((r) => { release = r; });
   const client = {
+    whoami: WHOAMI,
     identity: async (org) => org,
     create: async (_t, _s, recs) => {
       if (++calls === 2) await held;
       return recs.map((_, i) => ({ success: true, id: `001${calls}${i}` }));
     },
   };
-  const app = http.createServer(createApp({ cli: { listOrgs: async () => [], getConnection: async () => ORG }, client }));
+  const app = http.createServer(createApp({ cli: { listOrgs: async () => [] }, client }));
   await new Promise((r) => app.listen(0, '127.0.0.1', r));
   try {
     const url = `http://127.0.0.1:${app.address().port}`;
@@ -434,6 +436,31 @@ test('export of a workflow with a Query reads through the cache; changed org dat
   assert.equal((await stale.json()).error, 'Dữ liệu đọc từ org đã đổi so với lần chạy này. Bấm Xem trước lại rồi tải.');
 });
 
+test('GET /api/meta has recordPresets; Task has Subject and noName (0012 G)', async () => {
+  const meta = await (await fetch(base + '/api/meta')).json();
+  const p = meta.recordPresets;
+  assert.deepEqual(p.Task.fields.map((f) => f.name), ['Subject']);
+  assert.equal(p.Task.noName, true);
+  assert.equal(p.Task.nameField, 'Subject');
+  assert.deepEqual(p.Task.fields[0].options.values, ['Call', 'Send Letter', 'Send Quote', 'Other']);
+  assert.deepEqual(p.Contact.fields.map((f) => f.name), ['FirstName', 'LastName']);
+  assert.deepEqual(p.Lead.fields.map((f) => f.name), ['FirstName', 'LastName', 'Company']);
+  assert.deepEqual(p.Event.fields.map((f) => [f.name, f.type]), [['Subject', 'text'], ['ActivityDateTime', 'datetime'], ['DurationInMinutes', 'number']]);
+  assert.deepEqual(p.Opportunity.fields.map((f) => f.name), ['Name', 'StageName', 'CloseDate']);
+  assert.equal(p.Opportunity.noName, undefined);
+  // Account keeps today's default (company name), so the samples and golden hashes do not move.
+  assert.deepEqual(p.Account, { fields: [{ name: 'Name', type: 'text', options: { mode: 'company' } }] });
+  // Any other sObject (custom ones included) starts with the served default list.
+  assert.deepEqual(meta.recordDefaultFields, [{ name: 'Name', type: 'text', options: { mode: 'name' } }]);
+  // Every preset field is a known field type, and each preset alone validates without errors.
+  const types = new Set(meta.fieldTypes.map((t) => t.type));
+  for (const [sobject, preset] of Object.entries(p)) {
+    for (const f of preset.fields) assert.ok(types.has(f.type), `${sobject}.${f.name}: ${f.type}`);
+    const res = await (await fetch(base + '/api/validate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ workflow: { version: 2, steps: [{ id: 'r', type: 'record', config: { sobject, alias: 'r1', fields: preset.fields } }] } }) })).json();
+    assert.deepEqual([res.errors, res.warnings], [[], []], sobject);
+  }
+});
+
 test('GET /api/meta serves limits.previewRows', async () => {
   const meta = await (await fetch(base + '/api/meta')).json();
   assert.equal(meta.limits.previewRows, 200);
@@ -443,6 +470,7 @@ test('a client that leaves while Query steps are read gets no run (nothing inser
   let created = 0;
   let queried2 = 0;
   const client = {
+    whoami: WHOAMI,
     identity: async (org) => org,
     query: async () => {
       queried2++;
@@ -451,7 +479,7 @@ test('a client that leaves while Query steps are read gets no run (nothing inser
     },
     create: async (_t, _s, recs) => { created += recs.length; return recs.map(() => ({ success: true, id: '001x' })); },
   };
-  const app = http.createServer(createApp({ cli: { listOrgs: async () => [], getConnection: async () => ORG }, client }));
+  const app = http.createServer(createApp({ cli: { listOrgs: async () => [] }, client }));
   await new Promise((r) => app.listen(0, '127.0.0.1', r));
   try {
     const controller = new AbortController();
@@ -475,7 +503,7 @@ import { requestGuard } from '../server/index.js';
 
 /** A throwaway app on its own port with a given client; → { url, close }. */
 async function appWith(client, opts = {}) {
-  const app = http.createServer(createApp({ cli: { listOrgs: async () => [{ alias: 'dev', username: 'a@x.com' }], getConnection: async () => ORG }, client, ...opts }));
+  const app = http.createServer(createApp({ cli: { listOrgs: async () => [{ alias: 'dev', username: 'a@x.com' }], getConnection: async () => ({}) }, client: { whoami: WHOAMI, ...client }, ...opts }));
   await new Promise((r) => app.listen(0, '127.0.0.1', r));
   return { url: `http://127.0.0.1:${app.address().port}`, close: () => app.close() };
 }
@@ -497,7 +525,7 @@ test('cross-site requests are refused: foreign Origin / Sec-Fetch-Site / Host (4
     assert.equal(site.status, 403);
     const read = await fetch(`${url}/api/orgs`, { headers: { Origin: 'http://evil.example' } });
     assert.equal(read.status, 403, 'org data is not readable cross-site');
-    for (const path of ['/api/validate', '/api/runs/rabc/cancel', '/api/field-samples']) {
+    for (const path of ['/api/validate', '/api/runs/rabc/cancel']) {
       assert.equal((await fetch(url + path, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: 'null' }, body: '{}' })).status, 403, path);
     }
     assert.equal(created, 0, 'nothing was inserted');
@@ -530,7 +558,6 @@ test('JSON mode stops when the client disconnects', async () => {
   }
 });
 
-// 0011: 40 000 leaf Contacts would go Bulk; this test is about the Collections error groups, so Bulk is off.
 test('error groups are bounded: Ids in messages are masked, at most 100 groups, the done line stays small', async () => {
   let n = 0;
   const { url, close } = await appWith({ create: async (_t, _s, recs) => recs.map((_, i) => (i === 0 ? { success: true, id: `003${++n}` }
@@ -598,97 +625,160 @@ test('a malformed cancel id is a 404; the response ends before the query cache i
   }
 });
 
+// ---------- design 0012 E: POST /api/field-samples ----------
+
+const NOW0 = Date.parse('2026-10-28T00:00:00Z');
+const industry = { name: 'Industry', type: 'picklist', options: { values: ['Banking', 'Retail', 'Tech'], weights: [3, 1, 1] } };
+
+test('POST /api/field-samples returns 3 deterministic values (same seed ⇒ same values)', async () => {
+  const body = { sobject: 'Account', fields: [{ name: 'Name', type: 'text', options: { mode: 'company' } }, industry], index: 1, seed: 1, now: NOW0 };
+  const a = await post('/api/field-samples', body);
+  assert.equal(a.status, 200);
+  const { values } = await a.json();
+  assert.equal(values.length, 3);
+  assert.ok(values.every((v) => industry.options.values.includes(v)), values.join());
+  const b = await (await post('/api/field-samples', body)).json();
+  assert.deepEqual(b.values, values);
+  // Another seed (very likely) changes them; an empty seed is seed 1.
+  const c = await (await post('/api/field-samples', { ...body, seed: 999 })).json();
+  assert.equal(c.values.length, 3);
+  assert.deepEqual((await (await post('/api/field-samples', { ...body, seed: undefined })).json()).values, values);
+});
+
+test('POST /api/field-samples: {{this.FirstName}} uses the field above; a reference to another step is empty', async () => {
+  const fields = [
+    { name: 'FirstName', type: 'text', options: { mode: 'firstName' } },
+    { name: 'AccountId', type: 'lookup', options: { mode: 'current', ref: 'acc' } }, // cannot be made here: left out
+    { name: 'Title', type: 'template', options: { template: 'Chào {{this.FirstName}}{{acc.Name}}' } },
+  ];
+  const first = (await (await post('/api/field-samples', { fields, index: 0, seed: 3, now: NOW0 })).json()).values;
+  const res = await post('/api/field-samples', { fields, index: 2, seed: 3, now: NOW0 });
+  assert.equal(res.status, 200);
+  const { values } = await res.json();
+  assert.equal(values.length, 3);
+  for (const v of values) assert.match(v, /^Chào \S+$/);
+  assert.equal(values[0], `Chào ${first[0]}`);
+});
+
+test('POST /api/field-samples: unknown type ⇒ 422 with the field; count is clamped to 5; exhausted unique values ⇒ 422', async () => {
+  const unknown = await post('/api/field-samples', { fields: [{ name: 'X__c', type: 'nope', options: {} }], index: 0, now: NOW0 });
+  assert.equal(unknown.status, 422);
+  const u = await unknown.json();
+  assert.equal(u.issues[0].field, 'fields.X__c');
+  assert.match(u.issues[0].message, /kiểu "nope" không được hỗ trợ/);
+
+  const many = await (await post('/api/field-samples', { fields: [industry], index: 0, count: 50, now: NOW0 })).json();
+  assert.equal(many.values.length, 5);
+
+  const unique = await post('/api/field-samples', { fields: [{ name: 'N__c', type: 'number', options: { min: 1, max: 2, unique: true } }], index: 0, count: 3, now: NOW0 });
+  assert.equal(unique.status, 422);
+  assert.match((await unique.json()).error, /không tạo được giá trị duy nhất/);
+
+  // Malformed requests: 400.
+  assert.equal((await post('/api/field-samples', { fields: [], index: 0, now: NOW0 })).status, 400);
+  assert.equal((await post('/api/field-samples', { fields: [industry], index: 1, now: NOW0 })).status, 400);
+  assert.equal((await post('/api/field-samples', { fields: [industry], index: 0 })).status, 400);
+  assert.equal((await post('/api/field-samples', { fields: Array.from({ length: 501 }, () => industry), index: 0, now: NOW0 })).status, 400);
+});
+
+test('POST /api/field-samples and /api/run refuse out-of-range options (no long loop); options: null is no options', async () => {
+  const huge = { name: 'Description', type: 'textarea', options: { maxSentences: 1e9 } };
+  const res = await post('/api/field-samples', { fields: [huge], index: 0, now: NOW0 });
+  assert.equal(res.status, 422);
+  const body = await res.json();
+  assert.deepEqual(body.issues.map((i) => [i.field, i.option]), [['fields.Description', 'maxSentences']]);
+  assert.match(body.issues[0].message, /"Số câu tối đa" phải từ 1 đến 200 \(đang là 1000000000\)/);
+  // A field above with a huge option is clamped, not refused (only the asked field is checked).
+  const above = await post('/api/field-samples', { fields: [{ name: 'A', type: 'text', options: { maxWords: 1e9 } }, industry], index: 1, now: NOW0 });
+  assert.equal(above.status, 200);
+  const nul = await post('/api/field-samples', { fields: [{ name: 'Industry', type: 'picklist', options: null }], index: 0, now: NOW0 });
+  assert.equal(nul.status, 200);
+  assert.equal((await nul.json()).values.length, 3);
+  // Generator errors carry the field too.
+  const unique = await (await post('/api/field-samples', { fields: [{ name: 'N__c', type: 'number', options: { min: 1, max: 2, unique: true } }], index: 0, count: 3, now: NOW0 })).json();
+  assert.equal(unique.issues[0].field, 'fields.N__c');
+  const run = await post('/api/run', { seed: 1, workflow: wf([record('a', 'Account', 'acc', [{ name: 'Name', type: 'text', options: { maxWords: 1e9 } }])]) });
+  assert.equal(run.status, 422);
+  const issue = (await run.json()).issues[0];
+  assert.deepEqual([issue.nodeId, issue.field, issue.option, issue.code], ['a', 'fields.Name', 'maxWords', 'optionRange']);
+});
+
+test('a now outside what a Date holds is a 400 for /api/run, /api/export and /api/field-samples (review of 0013)', async () => {
+  for (const now of [1e20, 8.64e15 + 1]) {
+    const run = await post('/api/run', { workflow: big(), seed: 1, now });
+    assert.equal(run.status, 400);
+    assert.equal((await run.json()).error, 'Tham số now không hợp lệ.');
+    const exp = await post('/api/export', { workflow: big(), seed: 1, now, format: 'json' });
+    assert.equal(exp.status, 400);
+    assert.equal((await exp.json()).error, 'Tham số now không hợp lệ.');
+    const fs = await post('/api/field-samples', { fields: [{ name: 'D', type: 'date', options: {} }], index: 0, seed: 1, now });
+    assert.equal(fs.status, 400);
+    assert.equal((await fs.json()).error, 'Tham số now không hợp lệ.');
+  }
+});
+
 // ---------- design 0011 ----------
 
-test('GET /api/meta serves the Bulk and history limits; target.bulk must be auto or off', async () => {
+test('GET /api/meta serves the Bulk and history limits; target.bulk other than auto/off is a 400 before anything runs', async () => {
   const meta = await (await fetch(base + '/api/meta')).json();
-  assert.deepEqual([meta.limits.bulkMinRecords, meta.limits.bulkJobRecords, meta.limits.bulkJobTimeoutMs, meta.limits.historyMaxRuns, meta.limits.historyMaxBytes], [10000, 10000, 1800000, 100, 268435456]);
+  assert.deepEqual(
+    [meta.limits.bulkMinRecords, meta.limits.bulkJobRecords, meta.limits.bulkJobTimeoutMs, meta.limits.historyMaxRuns, meta.limits.historyMaxBytes],
+    [10000, 10000, 1800000, 100, 268435456],
+  );
   const before = inserted.length;
-  const res = await post('/api/run', { workflow: wf([record('a', 'Account', 'acc', [], { count: 2 })]), target: { kind: 'org', org: 'dev', bulk: 'x' } });
+  const res = await post('/api/run', { workflow: wf([record('a', 'Account', 'acc', [{ name: 'Name', type: 'text' }])]), target: { kind: 'org', org: 'dev', bulk: 'x' } });
   assert.equal(res.status, 400);
   assert.equal((await res.json()).error, 'target.bulk phải là "auto" hoặc "off".');
   assert.equal(inserted.length, before);
+  const ok = await post('/api/run', { workflow: wf([record('a', 'Account', 'acc', [{ name: 'Name', type: 'text' }])]), target: { kind: 'org', org: 'dev', bulk: 'off' } });
+  assert.equal(ok.status, 200);
+  assert.match((await ok.json()).insert.historyId, /^h\d{8}T\d{6}Z-[0-9a-f]{6}$/, 'JSON mode records history too');
 });
 
-test('cancel with force: true is accepted like a cancel (404 for an unknown run); history ids are checked (404)', async () => {
-  assert.equal((await post('/api/runs/rdeadbeef/cancel', { force: true })).status, 404);
-  const bad = await fetch(`${base}/api/history/..%2F..%2Fetc`);
-  assert.equal(bad.status, 404);
-  assert.equal((await bad.json()).error, 'Không tìm thấy lần insert này trong Lịch sử (có thể đã bị dọn vì vượt giới hạn lưu trữ).');
-  assert.equal((await fetch(`${base}/api/history/h20261028T103200Z-a1b2c3/ids.csv`)).status, 404);
-  assert.equal((await post('/api/history/h20261028T103200Z-a1b2c3/forget', {})).status, 404);
-  assert.equal((await fetch(`${base}/api/history/h20261028T103200Z-a1b2c3/forget`, { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: '{}' })).status, 415);
+test('POST /api/runs/:id/cancel accepts { force: true } (Dừng ngay); unknown runs are still a 404', async () => {
+  const res = await post('/api/runs/rnope/cancel', { force: true });
+  assert.equal(res.status, 404);
 });
 
-test('JSON-mode insert is recorded too: historyId, status done, the Ids in the history', async () => {
-  const r = await (await post('/api/run', { workflow: wf([record('a', 'Account', 'acc', [], { count: 3 })]), seed: 2, target: { kind: 'org', org: 'dev' } })).json();
-  assert.match(r.insert.historyId, /^h\d{8}T\d{6}Z-[0-9a-f]{6}$/);
-  const run = await (await fetch(`${base}/api/history/${r.insert.historyId}`)).json();
-  assert.deepEqual([run.status, run.inserted, run.remaining.total, run.org.alias, run.org.username, run.workflowName], ['done', 3, 3, 'dev', 'a@x.com', 'test']);
-  assert.ok(!('workflow' in run));
-});
-
-test('0013 review N1: a now outside what a Date holds is a 400 with the range, on /api/run and /api/export', async () => {
-  for (const now of [1e20, -8.64e15 - 1]) {
-    const res = await post('/api/run', { workflow: big(), now });
-    assert.equal(res.status, 400);
-    assert.match((await res.json()).error, /^Tham số now không hợp lệ: phải là số mili giây từ -8640000000000000 đến 8640000000000000/);
+test('S6: on a wildcard bind, org writes need an IP, localhost or this machine\'s name as Host; previews do not', async () => {
+  const os = await import('node:os');
+  const { url, close } = await appWith({ create: async (_t, _s, recs) => recs.map(() => ({ success: true, id: '001x' })) }, { allowedHosts: null });
+  const send = (path, body, host) => new Promise((resolve, reject) => {
+    const req = http.request(url + path, { method: 'POST', headers: { Host: host, 'Content-Type': 'application/json' } }, (res) => {
+      let text = '';
+      res.on('data', (c) => (text += c));
+      res.on('end', () => resolve({ status: res.statusCode, text }));
+    });
+    req.on('error', reject);
+    req.end(JSON.stringify(body));
+  });
+  const w = wf([record('a', 'Account', 'acc', [{ name: 'Name', type: 'text' }])]);
+  try {
+    for (const [path, body] of [
+      ['/api/run', { workflow: w, target: { kind: 'org', org: 'dev' } }],
+      ['/api/history/h20261028T103200Z-a1b2c3/delete', { confirm: { username: 'a@x.com', count: 1 } }],
+      ['/api/history/h20261028T103200Z-a1b2c3/forget', {}],
+      ['/api/runs/rnope/cancel', { force: true }],
+    ]) {
+      const r = await send(path, body, 'evil.example:3000');
+      assert.equal(r.status, 403, path);
+      assert.match(JSON.parse(r.text).error, /^Từ chối ghi hoặc xóa dữ liệu org qua địa chỉ "evil\.example:3000"\./);
+    }
+    assert.equal((await send('/api/run', { workflow: w }, 'evil.example')).status, 200, 'a preview is not an org write');
+    assert.equal((await send('/api/runs/rnope/cancel', {}, 'evil.example')).status, 404, 'a plain Dừng is not refused');
+    for (const host of ['127.0.0.1:3000', 'localhost', '[::1]:3000', '192.168.1.20:3000', os.hostname()]) {
+      assert.notEqual((await send('/api/runs/rnope/cancel', { force: true }, host)).status, 403, host);
+    }
+    assert.equal((await send('/api/run', { workflow: w, target: { kind: 'org', org: 'dev', bulk: 'off' } }, '127.0.0.1')).status, 200);
+  } finally {
+    close();
   }
-  assert.equal((await post('/api/run', { workflow: big(), now: 8.64e15 })).status, 200);
-  const exp = await post('/api/export', { workflow: big(), seed: 1, now: 1e20, format: 'json' });
-  assert.equal(exp.status, 400);
 });
 
-test('POST /api/field-samples returns 3 deterministic values; {{this.X}} sees the fields above; errors are 422 (design 0012 E)', async () => {
-  const pick = { name: 'Industry', type: 'picklist', options: { values: ['Banking', 'Retail'], weights: [3, 1] } };
-  const call = async (body) => { const res = await post('/api/field-samples', body); return { status: res.status, body: await res.json() }; };
-  const now = Date.UTC(2026, 9, 28);
-  const a = await call({ sobject: 'Account', fields: [pick], index: 0, seed: 1, now });
-  assert.equal(a.status, 200);
-  assert.equal(a.body.values.length, 3);
-  assert.ok(a.body.values.every((v) => ['Banking', 'Retail'].includes(v)));
-  assert.deepEqual((await call({ sobject: 'Account', fields: [pick], index: 0, seed: 1, now })).body, a.body, 'same seed, same values');
-  const tpl = await call({ fields: [{ name: 'FirstName', type: 'text', options: { mode: 'list', values: ['An'] } }, { name: 'Title', type: 'template', options: { template: 'Hi {{this.FirstName}} #{{this.$n}}' } }], index: 1, seed: 2, now });
-  assert.deepEqual(tpl.body.values, ['Hi An #1', 'Hi An #2', 'Hi An #3']);
-  // count is clamped to 5; the fields after `index` are not generated.
-  const five = await call({ fields: [pick, { name: 'X', type: 'nope' }], index: 0, seed: 1, now, count: 50 });
-  assert.equal(five.body.values.length, 5);
-  const bad = await call({ fields: [{ name: 'A', type: 'nope', options: {} }], index: 0, now });
-  assert.equal(bad.status, 422);
-  assert.deepEqual(bad.body.issues.map((i) => i.field), ['fields.A']);
-  const unique = await call({ fields: [{ name: 'N', type: 'number', options: { min: 1, max: 2, unique: true } }], index: 0, seed: 1, now });
-  assert.equal(unique.status, 422);
-  assert.match(unique.body.error, /không tạo được giá trị duy nhất/);
-  assert.equal((await call({ fields: [pick], index: 3, now })).status, 422);
-  assert.equal((await call({ fields: Array.from({ length: 501 }, () => pick), index: 0, now })).status, 422);
-  // Dates follow the `now` sent (no clock on the server).
-  const d = await call({ fields: [{ name: 'D', type: 'date', options: { from: 'today', to: 'today' } }], index: 0, now });
-  assert.deepEqual(d.body.values, ['2026-10-28', '2026-10-28', '2026-10-28']);
-});
-
-test('review 0012 S3 / S4: /api/field-samples refuses word counts over the cap and a now a Date cannot hold (422, not 500); a run refuses the cap too', async () => {
-  const call = async (body) => { const res = await post('/api/field-samples', body); return { status: res.status, body: await res.json() }; };
-  const huge = await call({ fields: [{ name: 'X', type: 'text', options: { mode: 'words', minWords: 1e7, maxWords: 1e7 } }], index: 0, now: 0 });
-  assert.equal(huge.status, 422);
-  assert.ok(huge.body.issues.length && huge.body.issues.every((i) => i.field === 'fields.X'));
-  assert.match(huge.body.error, /"Số từ tối thiểu" phải từ 1 đến 1000/);
-  const far = await call({ fields: [{ name: 'X', type: 'text', options: {} }], index: 0, now: 9e15 });
-  assert.equal(far.status, 422);
-  assert.match(far.body.error, /^Tham số now không hợp lệ: phải là số mili giây/);
-  const v = await (await post('/api/validate', { workflow: wf([record('a', 'Account', 'acc', [{ name: 'D', type: 'textarea', options: { maxSentences: 5000 } }])]) })).json();
-  assert.ok(v.errors.some((e) => e.nodeId === 'a' && e.field === 'fields.D' && /tối đa|đến 1000/.test(e.message)));
-});
-
-test('review 0012: static files have a weak ETag and no-cache; an unchanged file is a 304 without body', async () => {
-  const first = await fetch(`${base}/js/main.js`);
-  assert.equal(first.status, 200);
-  const etag = first.headers.get('etag');
-  assert.match(etag, /^W\/"[0-9a-f]+-[0-9a-f]+"$/);
-  assert.equal(first.headers.get('cache-control'), 'no-cache');
-  await first.text();
-  const again = await fetch(`${base}/js/main.js`, { headers: { 'If-None-Match': etag } });
-  assert.equal(again.status, 304);
-  assert.equal(await again.text(), '');
-  const other = await fetch(`${base}/js/main.js`, { headers: { 'If-None-Match': 'W/"0-0"' } });
-  assert.equal(other.status, 200);
+test('N9: a malformed org in the URL is a 400, not a crash', async () => {
+  for (const p of ['/api/orgs/%E0%A4%A/limits', '/api/orgs/%E0%A4%A/sobjects', '/api/orgs/%/sobjects/Account']) {
+    const r = await fetch(base + p);
+    assert.equal(r.status, 400, p);
+    assert.equal((await r.json()).error, 'Tên org trong đường dẫn không hợp lệ.');
+  }
 });

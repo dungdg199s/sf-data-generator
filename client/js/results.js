@@ -8,29 +8,30 @@
 // their place to "Dừng" and a thin <progress> sits on the bottom edge of the header (0009 §4).
 // Insert failures are grouped (sObject, step, message); a group selects its step and field.
 // The header is one row at every width (0009 §4): on phones the summary scrolls sideways and the
-// two download buttons become one "⤓ Tải" menu that calls them.
+// two download buttons become one "Tải" menu that calls them.
+// Its height is the user's (design 0014 §2): a role=separator handle on its top edge (pointer,
+// keys, double click), remembered as a ratio in sfdg.resultsH, clamped so the main area keeps
+// min(240 px, 50 %) of the height below the top bar.
 
-import { h, ico, download, toast, watchOverflow, revealInRow } from './dom.js';
+import { h, ico, download, toast, watchOverflow } from './dom.js';
 import { state, subscribe, stepById } from './store.js';
 import { stepAlias } from './summary.js';
 import { api } from './api.js';
 import { openPopup, closePopup, popupAnchor } from './popup.js';
-import { groupTarget } from './history-text.js';
 import { reveal } from './ops.js';
-import { resultsRange, clampResults, resultsFromRatio, resultsRatio, resultsKey, shouldCollapse, resultsAria, RESULTS } from './sizing.js';
+import { clampResults, resultsKeyStep, shouldCollapse, parseRatio, toRatio, resultsAria, RESULTS_MIN } from './sizing.js';
+import { downloadIds, historyStatus, openHistory } from './history.js';
 
 const QUERY_TAB = 'q:'; // activeTab of a Query tab: `q:<stepId>`
 const ERRORS_TAB = '__errors';
-const DELETE_ERRORS_TAB = '__deleteErrors';
-const STOP_TITLE = 'Dừng sau lô đang gửi. Bản ghi đã insert vẫn ở lại trong org.';
+const DELETE_ERRORS_TAB = '__delete-errors'; // design 0011 §6: "Lỗi xóa (n)"
 let activeTab = null;
-let panel, body, summary, progressBar, stopBtn, dlJson, dlCsv, dlMenu, toggle, historyBtn;
+let unwatchTabs = null; // watchOverflow of the current tab row
+let panel, body, summary, progressBar, stopBtn, dlJson, dlCsv, dlMenu, toggle, histBtn;
+let stopTitle = ''; // the tooltip of Dừng in index.html (Dừng ngay has its own)
 let onRefresh = null;
 let onGoTo = null;
-let onHistory = null; // (hid?) → opens the history dialog (design 0011)
-let onIds = null; // (hid) → downloads the Ids of a run
 let busyDownload = false;
-let unwatchTabs = null; // the tab row is rebuilt on each render (design 0014 §4)
 
 /** Thousands with a space, as in the design docs: 200 000. */
 export const fmt = (n) => String(n ?? 0).replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
@@ -40,22 +41,20 @@ const previewRows = () => state.meta?.limits?.previewRows ?? 200;
  * opts.onRefresh: "⟳ Đọc lại" (preview again, reading the org instead of the query cache).
  * opts.onGoTo(issue): select the step (and field) of an insert error group.
  */
-export function initResults({ onRefresh: refresh, onGoTo: goTo, onHistory: history, onIds: ids } = {}) {
+export function initResults({ onRefresh: refresh, onGoTo: goTo } = {}) {
   onRefresh = refresh ?? null;
   onGoTo = goTo ?? null;
-  onHistory = history ?? null;
-  onIds = ids ?? null;
-  historyBtn = document.getElementById('btn-history');
-  historyBtn.onclick = () => onHistory?.();
   panel = document.getElementById('results');
   body = document.getElementById('results-body');
   summary = document.getElementById('results-summary');
-  watchOverflow(summary); // one line that scrolls sideways on phones
   progressBar = document.getElementById('run-progress');
   stopBtn = document.getElementById('btn-stop');
+  stopTitle = stopBtn.title;
   dlJson = document.getElementById('btn-dl-json');
   dlCsv = document.getElementById('btn-dl-csv');
   dlMenu = document.getElementById('btn-dl-menu');
+  histBtn = document.getElementById('btn-history');
+  histBtn.onclick = () => openHistory();
   toggle = document.getElementById('btn-results-toggle');
   toggle.onclick = () => setOpen(panel.classList.contains('collapsed'));
   dlMenu.onclick = () => (popupAnchor() === dlMenu ? closePopup() : openDownloadMenu());
@@ -66,158 +65,159 @@ export function initResults({ onRefresh: refresh, onGoTo: goTo, onHistory: histo
     if (q) download(`${fileBase()}-${q.alias}.csv`, toCsv(queryRecords(q)), 'text/csv');
     else if (activeTab && activeTab !== ERRORS_TAB) exportFile('csv', activeTab);
   };
+  wireResize();
+  watchOverflow(summary); // ≤ 720 px the summary is one line that scrolls sideways (0014 §4)
   subscribe(({ kind }) => kind === 'result' && render());
-  initResize();
-}
-
-// ---------- panel height (design 0014 §2) ----------
-
-const HEIGHT_KEY = 'sfdg.resultsH';
-let handle = null;
-let storedRatio = null; // share of the space under the top bar, as stored (string) or null: 38 %
-let dragging = null; // { startY, startH, want, frame, selVisible }
-
-const readRatio = () => { try { return localStorage.getItem(HEIGHT_KEY); } catch { return null; } };
-function writeRatio(v) {
-  storedRatio = v;
-  try {
-    if (v === null) localStorage.removeItem(HEIGHT_KEY);
-    else localStorage.setItem(HEIGHT_KEY, v);
-  } catch { /* private mode: remembered until reload */ }
-}
-/** Height under the top bar: the space the panel and the main area share. */
-const space = () => window.innerHeight - (document.querySelector('.topbar')?.offsetHeight ?? 0);
-
-function initResize() {
-  handle = document.getElementById('results-resize');
-  storedRatio = readRatio();
-  handle.addEventListener('pointerdown', onResizeDown);
-  handle.addEventListener('keydown', onResizeKey);
-  handle.addEventListener('dblclick', () => {
-    writeRatio(null);
-    layoutResults();
-    keepSelected(selectedVisible());
-  });
-  window.addEventListener('resize', () => layoutResults());
-  layoutResults();
-}
-
-/**
- * Applies the remembered height to the open panel (clamped for this window) and shows the handle
- * only when it is open and there are at least 24 px to change (main.js calls this when the top bar
- * changes height). While dragging, `override` is the height under the pointer.
- */
-export function layoutResults(override = null) {
-  if (!handle) return;
-  const total = space();
-  const range = resultsRange(total);
-  const open = !panel.classList.contains('collapsed');
-  handle.hidden = !open || !range.usable;
-  if (!range.usable) {
-    panel.style.removeProperty('--results-h'); // landscape phone: the 38vh of before
-    return;
-  }
-  const height = override ?? resultsFromRatio(storedRatio, total, window.innerHeight);
-  panel.style.setProperty('--results-h', `${height}px`);
-  const aria = resultsAria(height, total);
-  handle.setAttribute('aria-valuemin', String(aria.min));
-  handle.setAttribute('aria-valuemax', String(aria.max));
-  handle.setAttribute('aria-valuenow', String(aria.now));
-  handle.setAttribute('aria-valuetext', aria.text);
-}
-
-/**
- * The selected card of Quy trình is at least partly in view (Sơ đồ keeps it with its own
- * ResizeObserver): after the resize it is revealed whole, never pushed out (review 0014 S4).
- */
-function selectedVisible() {
-  const view = document.getElementById('process');
-  const card = view && !view.hidden ? view.querySelector('.step-card.selected') : null;
-  if (!card) return false;
-  const v = view.getBoundingClientRect();
-  const c = card.getBoundingClientRect();
-  return c.bottom > v.top + 0.5 && c.top < v.bottom - 0.5;
-}
-function keepSelected(was) {
-  const sel = state.selection;
-  if (was && sel?.kind === 'step') requestAnimationFrame(() => reveal(sel.id, { block: 'nearest', focus: false }));
-}
-
-function onResizeDown(e) {
-  if (e.button !== 0 || handle.hidden) return;
-  e.preventDefault();
-  handle.setPointerCapture(e.pointerId);
-  dragging = { startY: e.clientY, startH: panel.getBoundingClientRect().height, want: null, frame: 0, selVisible: selectedVisible() };
-  document.body.classList.add('resizing');
-  handle.classList.add('dragging');
-  handle.addEventListener('pointermove', onResizeMove);
-  handle.addEventListener('pointerup', onResizeUp);
-  handle.addEventListener('pointercancel', onResizeUp);
-}
-
-function onResizeMove(e) {
-  if (!dragging) return;
-  dragging.want = dragging.startH + (dragging.startY - e.clientY);
-  if (!dragging.frame) {
-    dragging.frame = requestAnimationFrame(() => {
-      dragging.frame = 0;
-      if (dragging.want !== null) layoutResults(clampResults(dragging.want, space()));
-    });
-  }
-}
-
-function onResizeUp(e) {
-  const d = dragging;
-  dragging = null;
-  if (!d) return;
-  cancelAnimationFrame(d.frame);
-  handle.removeEventListener('pointermove', onResizeMove);
-  handle.removeEventListener('pointerup', onResizeUp);
-  handle.removeEventListener('pointercancel', onResizeUp);
-  if (handle.hasPointerCapture(e.pointerId)) handle.releasePointerCapture(e.pointerId);
-  document.body.classList.remove('resizing');
-  handle.classList.remove('dragging');
-  if (d.want === null) return; // a click, no move
-  const total = space();
-  if (shouldCollapse(d.want, RESULTS.min)) {
-    // Dragged well under the minimum: collapse, keep the remembered height for the next opening.
-    setOpen(false);
-    toggle.focus({ preventScroll: true });
-  } else {
-    writeRatio(resultsRatio(clampResults(d.want, total), total));
-    layoutResults();
-  }
-  keepSelected(d.selVisible);
-}
-
-function onResizeKey(e) {
-  if (e.altKey || e.ctrlKey || e.metaKey) return; // Ctrl+Z, Alt+↓ … are not the handle's (review N1)
-  const total = space();
-  const res = resultsKey(e.key, e.shiftKey, panel.getBoundingClientRect().height, total);
-  if (!res) return;
-  e.preventDefault();
-  if (res.toggle) {
-    setOpen(false); // the handle hides with the panel: focus goes to "Kết quả"
-    toggle.focus();
-    return;
-  }
-  const was = selectedVisible();
-  writeRatio(resultsRatio(res.height, total));
-  layoutResults();
-  keepSelected(was);
 }
 
 const fileBase = () => (state.workflow.name || 'workflow').replace(/[^\w.-]+/g, '_');
 
 /** Opens or collapses the panel; the toggle says which (aria-expanded, chevron down open / up collapsed). */
 function setOpen(open) {
+  if (open === !panel.classList.contains('collapsed')) return;
   panel.classList.toggle('collapsed', !open);
   toggle.setAttribute('aria-expanded', String(open));
   toggle.querySelector('.caret').dataset.ico = open ? 'chevron-down' : 'chevron-up';
-  layoutResults();
+  syncSize();
 }
 
-/** "Tải" (phones): the two download buttons as a menu; each row calls its button. */
+// ---------- height of the panel (design 0014 §2) ----------
+
+const RATIO_KEY = 'sfdg.resultsH';
+let handle;
+let ratio = null; // saved height / height below the top bar, null: the CSS default (38vh)
+
+function readRatio() {
+  try { return parseRatio(localStorage.getItem(RATIO_KEY)); } catch { return null; }
+}
+function writeRatio(v) {
+  try {
+    if (v === null) localStorage.removeItem(RATIO_KEY);
+    else localStorage.setItem(RATIO_KEY, String(v));
+  } catch { /* storage full or blocked: the height is not remembered, nothing else breaks */ }
+}
+
+/** Height below the top bar: the main area plus this panel. */
+const totalHeight = () => document.body.clientHeight - document.querySelector('.topbar').offsetHeight;
+const limits = (want) => clampResults({ want, total: totalHeight(), min: RESULTS_MIN });
+
+/** Applies `px` (clamped) as the panel height; save: remember it (sfdg.resultsH). */
+function setHeight(px, { save = false } = {}) {
+  const lim = limits(px);
+  if (!lim.resizable) return;
+  panel.style.setProperty('--results-h', `${lim.height}px`);
+  if (save) {
+    ratio = toRatio(lim.height, totalHeight());
+    writeRatio(ratio);
+  }
+  updateHandle();
+}
+
+/** After a resize of the window or the top bar, or opening / collapsing: px from the saved ratio, clamped. */
+function syncSize() {
+  if (!handle) return;
+  const total = totalHeight();
+  const lim = limits(ratio === null ? panel.offsetHeight : ratio * total);
+  if (ratio !== null && lim.resizable) panel.style.setProperty('--results-h', `${lim.height}px`);
+  else panel.style.removeProperty('--results-h');
+  updateHandle();
+}
+
+function updateHandle() {
+  const collapsed = panel.classList.contains('collapsed');
+  const total = totalHeight();
+  const lim = limits(panel.offsetHeight);
+  handle.hidden = collapsed || !lim.resizable;
+  panel.classList.toggle('resizable', !handle.hidden);
+  if (handle.hidden) return;
+  const aria = resultsAria({ height: panel.offsetHeight, min: lim.min, max: lim.max, total });
+  handle.setAttribute('aria-valuemin', String(aria.min));
+  handle.setAttribute('aria-valuemax', String(aria.max));
+  handle.setAttribute('aria-valuenow', String(aria.now));
+  handle.setAttribute('aria-valuetext', aria.text);
+}
+
+/** Quy trình: the selected card, if fully visible now, is kept in view after the change (Sơ đồ does it itself). */
+function keepSelection() {
+  const process = document.getElementById('process');
+  const card = process.hidden ? null : process.querySelector('.step-card.selected');
+  if (!card) return () => {};
+  const c = card.getBoundingClientRect();
+  const v = process.getBoundingClientRect();
+  if (c.top < v.top || c.bottom > v.bottom) return () => {};
+  const id = card.dataset.id;
+  return () => requestAnimationFrame(() => reveal(id, { block: 'nearest', focus: false }));
+}
+
+function wireResize() {
+  handle = document.getElementById('results-resize');
+  ratio = readRatio();
+  let drag = null;
+  handle.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    handle.setPointerCapture(e.pointerId);
+    drag = { y: e.clientY, h: panel.offsetHeight, want: panel.offsetHeight, frame: 0, after: keepSelection() };
+    handle.classList.add('dragging');
+    document.body.classList.add('resizing');
+  });
+  handle.addEventListener('pointermove', (e) => {
+    if (!drag) return;
+    drag.want = drag.h + (drag.y - e.clientY);
+    if (!drag.frame) {
+      drag.frame = requestAnimationFrame(() => {
+        drag.frame = 0;
+        setHeight(drag.want);
+      });
+    }
+  });
+  const end = () => {
+    if (!drag) return;
+    const { want, h: start, frame, after } = drag;
+    cancelAnimationFrame(frame);
+    drag = null;
+    handle.classList.remove('dragging');
+    document.body.classList.remove('resizing');
+    if (shouldCollapse(want, limits(want).min)) {
+      // Dragged well under the minimum: collapse, keep the remembered height for the next opening.
+      setOpen(false);
+      toggle.focus({ preventScroll: true });
+      return;
+    }
+    if (want === start) return; // a click (or a double click's first half): nothing to remember
+    setHeight(want, { save: true });
+    after();
+  };
+  handle.addEventListener('pointerup', end);
+  handle.addEventListener('pointercancel', end);
+  handle.addEventListener('lostpointercapture', end);
+  handle.addEventListener('dblclick', () => {
+    ratio = null;
+    writeRatio(null);
+    panel.style.removeProperty('--results-h');
+    updateHandle();
+  });
+  handle.addEventListener('keydown', (e) => {
+    const step = resultsKeyStep(e.key, e.shiftKey);
+    if (!step || e.ctrlKey || e.metaKey || e.altKey) return;
+    e.preventDefault();
+    if (step.toggle) {
+      setOpen(false); // the handle hides with the panel: focus goes to "Kết quả"
+      toggle.focus();
+      return;
+    }
+    const after = keepSelection();
+    const lim = limits(panel.offsetHeight);
+    const want = step.to === 'min' ? lim.min : step.to === 'max' ? lim.max : panel.offsetHeight + step.delta;
+    setHeight(want, { save: true });
+    after();
+  });
+  new ResizeObserver(syncSize).observe(document.querySelector('.topbar'));
+  window.addEventListener('resize', syncSize);
+  syncSize();
+}
+
+/** "⤓ Tải" (phones): the two download buttons as a menu; each row calls its button. */
 function openDownloadMenu() {
   const row = (btn) => ({ label: btn.textContent, disabled: btn.disabled, title: btn.title, onSelect: () => btn.click() });
   dlMenu.setAttribute('aria-expanded', 'true');
@@ -251,9 +251,9 @@ async function exportFile(format, sobject) {
 
 /**
  * Header while a run goes on: summary nodes, progress (value/max, or indeterminate), Dừng.
- * stopLabel / stopTitle: "Dừng ngay" while a Bulk job is waited for (design 0011).
+ * stopLabel / stopTitle: "Dừng ngay" while a stop waits for a Bulk job (design 0011 §2).
  */
-export function showProgress({ parts, value, max, onStop, stopping = false, stopLabel = 'Dừng', stopTitle = STOP_TITLE }) {
+export function showProgress({ parts, value, max, onStop, stopping = false, stopLabel = 'Dừng', stopTitle: title = stopTitle }) {
   setOpen(true);
   summary.replaceChildren(...parts);
   progressBar.hidden = false;
@@ -261,13 +261,13 @@ export function showProgress({ parts, value, max, onStop, stopping = false, stop
     progressBar.max = max;
     progressBar.value = Math.min(value ?? 0, max);
   } else progressBar.removeAttribute('value');
-  dlJson.hidden = dlCsv.hidden = dlMenu.hidden = historyBtn.hidden = true;
+  dlJson.hidden = dlCsv.hidden = dlMenu.hidden = histBtn.hidden = true;
   if (popupAnchor() === dlMenu) closePopup();
   stopBtn.hidden = false;
-  stopBtn.textContent = stopLabel;
-  stopBtn.title = stopTitle;
   stopBtn.disabled = stopping || !onStop;
   stopBtn.onclick = onStop ?? null;
+  if (stopBtn.textContent !== stopLabel) stopBtn.textContent = stopLabel;
+  stopBtn.title = title;
 }
 
 /** Back to the idle header (download buttons instead of Dừng). */
@@ -278,16 +278,36 @@ export function endProgress() {
   stopBtn.hidden = true;
   stopBtn.onclick = null;
   stopBtn.textContent = 'Dừng';
-  stopBtn.title = STOP_TITLE;
-  dlJson.hidden = dlCsv.hidden = dlMenu.hidden = historyBtn.hidden = false;
+  stopBtn.title = stopTitle;
+  dlJson.hidden = dlCsv.hidden = dlMenu.hidden = histBtn.hidden = false;
   updateButtons();
   if (hadFocus) document.getElementById('btn-preview').focus();
 }
 
-/** One-off status text in the header (errors, lost connection). */
-export function showRunning(text) {
+/** One-off status text in the header (errors, lost connection); `extra`: nodes after it (the links of an insert). */
+export function showRunning(text, ...extra) {
   setOpen(true);
-  summary.textContent = text;
+  summary.replaceChildren(text, ...extra.flat().filter(Boolean));
+}
+
+/** "⤓ Id" (and "Lịch sử") of an insert that has a history entry; [] without one (design 0011 §3). */
+export function insertLinks(ins) {
+  const hid = ins?.historyId && historyStatus()?.enabled !== false ? ins.historyId : null;
+  if (!hid) return [];
+  return [
+    ' · ', h('button', { class: 'link ids-link', title: 'Tải mọi Id đã insert của lần chạy này (CSV)', onclick: () => downloadIds(hid) }, ico('download'), 'Id'),
+    ' ', h('button', { class: 'link hist-link', title: 'Mở Lịch sử insert ở chi tiết lần này (tải Id, xóa dữ liệu)', onclick: () => openHistory({ hid }) }, 'Lịch sử'),
+  ];
+}
+
+/** Summary of the last delete (design 0011 §6): counts, then "Lịch sử". */
+function deleteSummary(d) {
+  if (!d) return ''; // replaceChildren would print "null"
+  const r = d.result;
+  return h('span', { class: 'delete-summary' }, ' · xóa khỏi ', d.org, ': ', h('span', { class: 'ok' }, `đã xóa ${fmt(r.deleted)}`),
+    r.gone ? ` · đã không còn ${fmt(r.gone)}` : '', r.failed ? h('span', { class: 'err' }, ` · lỗi ${fmt(r.failed)}`) : '',
+    r.remaining ? ` · còn ${fmt(r.remaining)}` : '',
+    ' · ', h('button', { class: 'link hist-link', title: 'Mở Lịch sử insert ở chi tiết lần này', onclick: () => openHistory({ hid: d.hid }) }, 'Lịch sử'));
 }
 
 /** Chips `<sObject> n` (or `n/total` when totals are given). */
@@ -342,33 +362,29 @@ function updateButtons() {
 
 function insertSummary(ins) {
   if (!ins) return '';
-  const note = ins.stopped?.reason === 'allFailing' || ins.stopped?.reason === 'bulkFailing' ? ' · đã dừng vì lỗi hàng loạt' : ins.stopped ? ' · đã dừng' : ins.cancelled ? ' · đã dừng' : '';
-  // Design 0011: the Ids of this insert and the history (only when it was recorded).
-  const links = ins.historyId
-    ? [
-      ' · ',
-      h('button', { class: 'link', 'data-action': 'ids', title: 'Tải mọi Id đã insert của lần chạy này (CSV)', onclick: () => onIds?.(ins.historyId) }, 'Tải Id'),
-      ' · ',
-      h('button', { class: 'link', 'data-action': 'history', title: 'Mở Lịch sử insert ở lần chạy này', onclick: () => onHistory?.(ins.historyId) }, 'Lịch sử'),
-    ]
-    : [];
-  return h('span', {}, ' · ', h('span', { class: 'ok' }, `insert ${fmt(ins.inserted)}`), ins.failed ? h('span', { class: 'err' }, ` · lỗi ${fmt(ins.failed)}`) : '', note, ...links);
+  const reason = ins.stopped?.reason;
+  const note = reason === 'allFailing' || reason === 'bulkFailing' ? ' · đã dừng vì lỗi hàng loạt' : ins.stopped || ins.cancelled ? ' · đã dừng' : '';
+  // Design 0011 §3: the Ids of this insert, from history (no history ⇒ no link).
+  return h('span', {}, ' · ', h('span', { class: 'ok' }, `insert ${fmt(ins.inserted)}`), ins.failed ? h('span', { class: 'err' }, ` · lỗi ${fmt(ins.failed)}`) : '', note, insertLinks(ins));
 }
 
 function render() {
   const r = state.result;
+  const del = state.deleteResult;
   updateButtons();
   if (!r) {
-    summary.textContent = 'Chưa chạy.';
-    const del = state.deleteResult;
-    // A delete from the history with nothing run yet in this tab: only its error tab (design 0011).
-    if (del?.failed) {
-      setOpen(true);
-      body.replaceChildren(
-        h('div', { class: 'tabs' }, h('button', { class: 'tab-issues tab-delete-errors active' }, `Lỗi xóa (${fmt(del.failed)})`)),
-        errorGroupsView({ errorGroups: del.errorGroups, errorGroupsOther: del.errorGroupsOther, errors: [], errorsTotal: del.failed }, { exampleLabel: 'Id ví dụ' }),
-      );
-    } else body.replaceChildren();
+    unwatchTabs?.();
+    unwatchTabs = null;
+    if (!del) {
+      summary.textContent = 'Chưa chạy.';
+      body.replaceChildren();
+      return;
+    }
+    // A delete from history without a run in this session: its summary and its error groups only.
+    setOpen(true);
+    summary.replaceChildren(deleteSummary(del));
+    activeTab = DELETE_ERRORS_TAB;
+    body.replaceChildren(...(del.result.failed ? [h('div', { class: 'tabs' }, deleteTab(del)), errorGroupsView(del.result, { kind: 'delete' })] : []));
     return;
   }
   setOpen(true);
@@ -382,29 +398,29 @@ function render() {
     r.cancelled && !r.insert ? ' · đã dừng' : '',
     ...querySummary(r.queries),
     insertSummary(r.insert),
+    deleteSummary(del),
   );
 
   const sobjects = Object.keys(r.stats.bySobject);
   const queryTabs = (r.queries ?? []).map((q) => `${QUERY_TAB}${q.nodeId}`);
   const errorsTotal = r.insert?.errorsTotal ?? r.insert?.errors?.length ?? 0;
-  const del = state.deleteResult; // last delete of the history (design 0011), shown with this run
-  const deleteErrors = del?.failed ?? 0;
-  if (!sobjects.includes(activeTab) && !queryTabs.includes(activeTab) && !(activeTab === ERRORS_TAB && errorsTotal) && !(activeTab === DELETE_ERRORS_TAB && deleteErrors)) activeTab = sobjects[0] ?? queryTabs[0] ?? null;
+  const deleteFailed = del?.result?.failed ?? 0;
+  if (!sobjects.includes(activeTab) && !queryTabs.includes(activeTab) && !(activeTab === ERRORS_TAB && errorsTotal) && !(activeTab === DELETE_ERRORS_TAB && deleteFailed)) activeTab = sobjects[0] ?? queryTabs[0] ?? null;
   const tabs = h(
     'div',
     { class: 'tabs' },
     sobjects.map((s) => h('button', { class: s === activeTab ? 'active' : '', onclick: () => { activeTab = s; render(); } }, `${s} (${fmt(r.stats.bySobject[s])})`)),
     (r.queries ?? []).map((q) => {
       const key = `${QUERY_TAB}${q.nodeId}`;
-      return h('button', { class: `tab-query${key === activeTab ? ' active' : ''}`, 'data-query': q.nodeId, 'data-type': 'query', title: 'Bản ghi đọc từ org (chỉ để xem, không insert)', onclick: () => { activeTab = key; render(); } }, `↓ ${q.alias} · ${q.sobject} (${q.count})`);
+      return h('button', { class: `tab-query${key === activeTab ? ' active' : ''}`, 'data-query': q.nodeId, 'data-type': 'query', title: 'Bản ghi đọc từ org (chỉ để xem, không insert)', onclick: () => { activeTab = key; render(); } }, `${q.alias} · ${q.sobject} (${q.count})`); // the Query icon is drawn by ::before
     }),
     errorsTotal ? h('button', { class: `tab-issues${activeTab === ERRORS_TAB ? ' active' : ''}`, onclick: () => { activeTab = ERRORS_TAB; render(); } }, `Lỗi insert (${fmt(errorsTotal)})`) : null,
-    deleteErrors ? h('button', { class: `tab-issues tab-delete-errors${activeTab === DELETE_ERRORS_TAB ? ' active' : ''}`, onclick: () => { activeTab = DELETE_ERRORS_TAB; render(); } }, `Lỗi xóa (${fmt(deleteErrors)})`) : null,
+    deleteFailed ? deleteTab(del) : null,
   );
   const q = activeQuery();
   let content;
   if (activeTab === ERRORS_TAB) content = errorGroupsView(r.insert);
-  else if (activeTab === DELETE_ERRORS_TAB) content = errorGroupsView({ errorGroups: del.errorGroups, errorGroupsOther: del.errorGroupsOther, errors: [], errorsTotal: del.failed }, { exampleLabel: 'Id ví dụ' });
+  else if (activeTab === DELETE_ERRORS_TAB) content = errorGroupsView(del.result, { kind: 'delete' });
   else if (q) {
     const when = q.fetchedAt ? new Date(q.fetchedAt).toLocaleTimeString('vi-VN') : '';
     content = h('div', {},
@@ -412,18 +428,28 @@ function render() {
         ? 'Bản ghi mẫu (Id giả) vì chưa chọn org. Chọn org để đọc dữ liệu thật.'
         : `Đọc từ org "${q.org}" lúc ${when}, chỉ để xem, không insert. SOQL: ${q.soql}`),
       dataTable(queryRecords(q), null, q.records.length));
-  } else {
-    // Records of a Bulk step (design 0011) have no ref → Id mapping: their Ids are in "Tải Id".
-    const viaBulk = (r.insert?.bulk ?? []).some((b) => b.sobject === activeTab);
-    content = dataTable(r.records.filter((x) => x.sobject === activeTab), r.insert?.ids, r.stats.bySobject[activeTab] ?? 0, { viaBulk, failedRefs: new Set((r.insert?.errors ?? []).map((e) => e.ref)) });
-  }
-  const prevLeft = body.querySelector('.tabs')?.scrollLeft ?? 0;
+  } else content = dataTable(r.records.filter((x) => x.sobject === activeTab), r.insert?.ids, r.stats.bySobject[activeTab] ?? 0);
   body.replaceChildren(tabs, content);
+  // Hidden tabs fade the row's edge (0014 §4); the open tab is scrolled into the row.
   unwatchTabs?.();
-  unwatchTabs = watchOverflow(tabs, { wheel: false }); // vertical wheel over the sticky tabs scrolls the table (review 0014 S5)
-  tabs.scrollLeft = prevLeft;
-  const active = tabs.querySelector('.active');
-  if (active) revealInRow(tabs, active);
+  unwatchTabs = watchOverflow(tabs);
+  if (tabs.scrollWidth > tabs.clientWidth) tabs.querySelector('.active')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+}
+
+/**
+ * Insert-error tag of a card (design 0012 D): the "Lỗi insert" tab, its first group of step
+ * `nodeId` highlighted (`.current`) and focused. A step whose groups are past MAX_ERROR_GROUPS
+ * only opens the tab.
+ */
+export function showInsertErrorsFor(nodeId) {
+  if (!(state.result?.insert?.errorsTotal ?? state.result?.insert?.errors?.length)) return;
+  activeTab = ERRORS_TAB;
+  render();
+  const row = body.querySelector(`.error-groups tr[data-node="${CSS.escape(nodeId)}"]`);
+  if (!row) return;
+  row.classList.add('current');
+  row.focus({ preventScroll: true });
+  row.scrollIntoView({ block: 'nearest' });
 }
 
 /** "📌 giữ seed": fills the Seed field; the input event updates the phone's "Seed n" chip. */
@@ -433,56 +459,37 @@ function keepSeed(seed) {
   input.dispatchEvent(new Event('input', { bubbles: true }));
 }
 
-/** Re-renders the panel (a delete finished: its error tab). */
-export function renderResults() {
-  render();
-}
-
-/**
- * The insert-error tag of a card (design 0012 D): the "Lỗi insert" tab with the first error group
- * of that step highlighted (.current) and focused; past the 100 groups, the tab only.
- */
-export function showInsertErrorsFor(nodeId) {
-  const ins = state.result?.insert;
-  if (!ins) {
-    toast('Đang insert: nhóm lỗi hiện ở tab "Lỗi insert" khi insert xong.', 4000);
-    return;
-  }
-  if (!(ins.errorsTotal ?? ins.errors?.length)) return;
-  activeTab = ERRORS_TAB;
-  render();
-  const row = body.querySelector(`table.error-groups tr[data-node="${CSS.escape(nodeId)}"]`);
-  if (!row) return;
-  row.classList.add('current');
-  row.scrollIntoView({ block: 'nearest' });
-  row.focus({ preventScroll: true });
-}
-
-/** Opens the "Lỗi xóa" tab (design 0011). */
-export function showDeleteErrors() {
-  activeTab = DELETE_ERRORS_TAB;
-  render();
-}
-
-function dataTable(records, ids, total, { viaBulk = false, failedRefs = new Set() } = {}) {
-  const idCell = (x) => ids[x.ref] ?? (viaBulk && !failedRefs.has(x.ref)
-    ? h('span', { class: 'null', title: 'Gửi bằng Bulk API 2.0: Id có trong "Tải Id" (Bulk không trả Id theo từng dòng).' }, 'Bulk')
-    : h('span', { class: 'err', title: 'Insert lỗi: xem tab "Lỗi insert"' }, ico('error'), h('span', { class: 'sr-only' }, 'lỗi')));
+function dataTable(records, ids, total) {
   const cols = [...new Set(records.flatMap((x) => Object.keys(x.fields)))];
   const rows = records.slice(0, previewRows());
   const table = h(
     'table',
     { class: 'data' },
     h('thead', {}, h('tr', {}, h('th', {}, 'ref'), ids ? h('th', {}, 'Id') : null, cols.map((c) => h('th', {}, c)))),
-    h('tbody', {}, rows.map((x) => h('tr', {}, h('td', {}, h('span', { class: 'ref' }, x.ref)), ids ? h('td', {}, idCell(x)) : null, cols.map((c) => h('td', { title: display(x.fields[c]) }, cell(x.fields[c], ids)))))),
+    h('tbody', {}, rows.map((x) => h('tr', {}, h('td', {}, h('span', { class: 'ref' }, x.ref)), ids ? h('td', {}, ids[x.ref] ?? h('span', { class: 'err' }, ico('error'), h('span', { class: 'sr-only' }, 'lỗi'))) : null, cols.map((c) => h('td', { title: display(x.fields[c]) }, cell(x.fields[c], ids)))))),
   );
   return h('div', {}, table, total > rows.length ? h('p', { class: 'hint table-more' }, `Hiển thị ${fmt(rows.length)}/${fmt(total)} dòng đầu. Tải CSV/JSON để lấy đủ.`) : null);
 }
 
 const DETAIL_ROWS = 200; // rows of "Chi tiết từng bản ghi" drawn (the server sends at most 1 000)
 
-/** Insert failures grouped by (sObject, step, field, message pattern); a row selects the step / field. */
-function errorGroupsView(ins, { exampleLabel = 'Ví dụ' } = {}) {
+/** Tab "Lỗi xóa (n)" of the last delete (same look as "Lỗi insert"). */
+function deleteTab(del) {
+  return h('button', { class: `tab-issues tab-delete-errors${activeTab === DELETE_ERRORS_TAB ? ' active' : ''}`, onclick: () => { activeTab = DELETE_ERRORS_TAB; render(); } }, `Lỗi xóa (${fmt(del.result.failed)})`);
+}
+
+/** After a delete with failures: its tab opens. */
+export function showDeleteErrors() {
+  if (!state.deleteResult?.result?.failed) return;
+  activeTab = DELETE_ERRORS_TAB;
+  render();
+}
+
+/**
+ * Insert (or delete, kind 'delete') failures grouped by (sObject, step, field, message pattern); a
+ * row selects the step / field. Delete groups give example Ids instead of refs.
+ */
+function errorGroupsView(ins, { kind = 'insert' } = {}) {
   const groups = ins?.errorGroups ?? [];
   const other = ins?.errorGroupsOther;
   const errors = ins?.errors ?? [];
@@ -490,21 +497,19 @@ function errorGroupsView(ins, { exampleLabel = 'Ví dụ' } = {}) {
     const step = id ? stepById(id) : null;
     return step ? stepAlias(step) || id : id ?? '';
   };
-  // Review nit: a group of a step no longer in the workflow (deleted since the run) is not a button.
-  const target = (g) => groupTarget(g, (id) => Boolean(stepById(id)));
-  const go = (g) => target(g) && onGoTo?.({ nodeId: g.nodeId, field: g.field });
+  const go = (g) => g.nodeId && onGoTo?.({ nodeId: g.nodeId, field: g.field });
   const shown = errors.slice(0, DETAIL_ROWS);
   const total = ins?.errorsTotal ?? errors.length;
   return h('div', {},
     h('table', { class: 'data error-groups' },
-      h('thead', {}, h('tr', {}, h('th', {}, 'sObject'), h('th', {}, 'Bước'), h('th', {}, 'Lỗi'), h('th', {}, 'Số bản ghi'), h('th', {}, exampleLabel))),
+      h('thead', {}, h('tr', {}, h('th', {}, 'sObject'), h('th', {}, 'Bước'), h('th', {}, 'Lỗi'), h('th', {}, 'Số bản ghi'), h('th', {}, kind === 'delete' ? 'Ví dụ (Id)' : 'Ví dụ'))),
       h('tbody', {},
         groups.map((g) => h('tr', {
-          class: target(g) ? 'clickable' : '',
+          class: g.nodeId ? 'clickable' : '',
           'data-node': g.nodeId,
-          role: target(g) ? 'button' : null,
-          tabindex: target(g) ? '0' : null,
-          title: target(g) ? 'Bấm để chọn bước' : g.nodeId ? 'Bước này không còn trong workflow.' : '',
+          role: g.nodeId ? 'button' : null,
+          tabindex: g.nodeId ? '0' : null,
+          title: g.nodeId ? 'Bấm để chọn bước' : '',
           onclick: () => go(g),
           onkeydown: (e) => {
             if (e.key === 'Enter' || e.key === ' ') {
@@ -517,7 +522,7 @@ function errorGroupsView(ins, { exampleLabel = 'Ví dụ' } = {}) {
         h('td', {}, stepName(g.nodeId)),
         h('td', { class: 'err wrap' }, g.message),
         h('td', { class: 'num' }, fmt(g.count)),
-        h('td', {}, g.refs.join(', ')))),
+        h('td', {}, (g.refs ?? g.ids ?? []).join(', ')))),
         other ? h('tr', { class: 'other-groups' }, h('td', { colspan: '3', class: 'wrap' }, `… và ${fmt(other.groups)} nhóm lỗi khác`), h('td', { class: 'num' }, fmt(other.count)), h('td', {})) : null)),
     shown.length
       ? h('details', { class: 'error-details' },

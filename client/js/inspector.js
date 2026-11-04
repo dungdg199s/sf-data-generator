@@ -10,37 +10,48 @@ import { renderOptions } from './forms.js';
 import { api } from './api.js';
 import {
   state, subscribe, select, updateWorkflow, stepById, nodeType, fieldType, suggestAlias, currentScope, slotKeys,
-  suggestPoolAlias, suggestPickAlias, queryResultOf, recordDefaultFields, locate,
+  suggestPoolAlias, suggestPickAlias, queryResultOf,
 } from './store.js';
-import { setStepAlias, renameField, insertStep } from '/shared/workflow-tree.js';
+import { setStepAlias, renameField, insertStep, setVariableName, collectVariables, variableSteps, isVarName } from '/shared/workflow-tree.js';
 import { refChoices, refsToRecords, referenceOptions, exposesList } from '/shared/scope.js';
 import { buildSoql, QUERY_DEFAULTS, SAMPLE_ROWS, addSelectField } from '/shared/soql.js';
-import { deleteStep, duplicateStep, toggleDisabled, newStep, fillEach, fillParentFilter, reveal } from './ops.js';
-import * as ops from './ops.js';
-import { selectedIds, selectionInfo, inSelectMode } from './selection.js';
-import { wrapItems } from './menus.js';
-import { stepLabel } from './summary.js';
+import { deleteStep, duplicateStep, toggleDisabled, newStep, fillEach, fillParentFilter, reveal, recordPresetFields, recordPreset, toastWithUndo } from './ops.js';
 import { START_ID } from './layout.js';
-import { placesText, formatSample } from './variables.js';
+import { placesText } from './variables.js';
 import { applySuggestion, closePicker } from './var-picker.js';
+import { samplesRow } from './field-samples.js';
+import { selectedIds, selectionInfo, inSelectMode } from './selection.js';
+import { wrapItems, editItems, offDeleteItems } from './menus.js';
+import { stepLabel, varPath } from './summary.js';
+import { missingRequired, requiredHintText } from './required-fields.js';
 import { isMac, pickerKeys } from './keys.js';
-import { snapSheet, SHEET } from './sizing.js';
+import { snapSheet, sheetSnaps, dragVelocity, SHEET_DRAG_START } from './sizing.js';
 
 let root;
 const expanded = new Set(); // `${stepId}:${fieldIndex}` with options panel open
 let sheetClosed = false; // narrow screens: "Xong" hides the sheet but keeps the selection
-let sheetFull = false; // design 0014 §3: the sheet is at its full notch (always opens at mid)
+let sheetFull = false; // narrow screens: the sheet is at its tall snap (design 0014 §3); it always opens at the middle one
 let lastSelectionKey = null;
 // Last good alias per step: references wait there while the alias field is empty or clashing.
 const aliasMemo = new Map();
+// Đặt biến (design 0015): last good variable name per step (setVariableName), and the rename
+// being typed, announced once the typing stops.
+const varMemo = new Map();
+let varToast = null;
 
 export function initInspector() {
   root = document.getElementById('inspector');
   wireSheet();
   subscribe(({ source, kind }) => {
     if (kind === 'issues') return markIssues();
-    if (kind === 'view' || kind === 'result' || kind === 'live') return undefined;
-    if (source === 'inspector') return undefined;
+    if (kind === 'view' || kind === 'result') return undefined;
+    // Another workflow (library, file, sample): the remembered names belong to the old one.
+    if (source === 'replace') {
+      aliasMemo.clear();
+      varMemo.clear();
+    }
+    // Typing a field name can complete the required fields (0012 F2): the hint follows in place.
+    if (source === 'inspector') return refreshRequiredHint();
     render();
   });
   // The first render is done by main.js (emit 'all'), which can recover from a broken autosave.
@@ -56,21 +67,44 @@ export function openField(stepId, index) {
 function render() {
   const s = state.selection;
   const step = s?.kind === 'step' ? stepById(s.id) : null;
-  const many = step ? selectedIds() : [];
-  const key = many.length > 1 ? `multi:${many.join(',')}` : step ? `step:${step.id}` : s?.kind ?? 'none';
-  if (key !== lastSelectionKey && !key.startsWith('multi:')) sheetClosed = false;
+  const multi = step ? selectedIds() : [];
+  const key = multi.length > 1 ? `steps:${multi.join(',')}` : step ? `step:${step.id}` : s?.kind ?? 'none';
+  if (key !== lastSelectionKey) sheetClosed = false;
   lastSelectionKey = key;
-  // The "‹ Xong" row sticks to the top of the sheet, so it closes without scrolling back up.
-  const head = h('div', { class: 'sheet-head', onpointerdown: onSheetHeadDown },
+  // The "Xong" row sticks to the top of the sheet, so it closes without scrolling back up.
+  const head = h('div', { class: 'sheet-head' },
     h('button', { class: 'sheet-close', title: 'Đóng bảng cấu hình (vẫn giữ bước đang chọn)', onclick: closeSheet }, ico('chevron-left'), 'Xong'),
+    // Design 0014 §3: tap / Enter / Space switches the middle and tall snaps; dragging anywhere on this row moves the sheet.
     h('button', {
-      class: 'sheet-grip', 'aria-label': 'Mở rộng bảng cấu hình', 'aria-expanded': String(sheetFull), 'aria-controls': 'inspector',
+      class: 'sheet-grip',
+      'aria-label': 'Mở rộng bảng cấu hình',
+      'aria-expanded': String(sheetFull),
+      'aria-controls': 'inspector',
       title: 'Kéo hoặc chạm để đổi chiều cao',
-      onclick: () => { if (!sheetDragged) setSheetFull(!sheetFull); },
+      onmousedown: (e) => e.preventDefault(), // a tap keeps focus where it was (the field being edited)
+      onclick: () => setSheetFull(!sheetFull),
     }));
-  root.replaceChildren(head, many.length > 1 ? renderMulti(many) : step ? renderStep(step) : renderWorkflow());
-  setSheetOpen(Boolean(s) && !sheetClosed);
+  root.replaceChildren(head, multi.length > 1 ? renderMulti() : step ? renderStep(step) : renderWorkflow());
+  // The narrow select mode has its own bar instead of the sheet (design 0012 B).
+  setSheetOpen(Boolean(s) && !sheetClosed && !inSelectMode());
   markIssues();
+}
+
+/** Several steps selected (design 0012 B): what they are and what can be done with all of them. */
+function renderMulti() {
+  const ids = selectionInfo().ids;
+  const n = ids.length;
+  const button = (it) => h('button', { class: it.danger ? 'danger' : undefined, disabled: it.disabled, title: it.title, onclick: it.onSelect }, it.label);
+  const [copy, cut, , dup] = editItems();
+  return h(
+    'div',
+    { class: 'multi-panel' },
+    h('div', { class: 'node-head' }, h('h2', {}, `${n} bước đã chọn`)),
+    h('p', { class: 'desc multi-list' }, ids.map((id) => stepLabel(stepById(id))).join(' · ')),
+    h('div', { class: 'multi-actions', role: 'group', 'aria-label': 'Bọc' }, wrapItems().map(button)),
+    h('div', { class: 'multi-actions', role: 'group', 'aria-label': 'Thao tác' }, [copy, cut, dup, ...offDeleteItems()].map(button)),
+    h('p', { class: 'hint' }, 'Mẹo: Shift+bấm để chọn dải, Ctrl+bấm để chọn rời, Esc để bỏ.'),
+  );
 }
 
 const NARROW = window.matchMedia('(max-width: 900px)');
@@ -85,12 +119,8 @@ const narrow = () => NARROW.matches;
  * issues bar), so the selected card is scrolled to just above the sheet's edge.
  */
 function setSheetOpen(open) {
-  // "Chọn nhiều bước" mode (design 0012 B): the toolbar takes the sheet's place.
-  open = open && narrow() && !inSelectMode();
+  open = open && narrow();
   const was = root.classList.contains('open');
-  // Opens (and closes) at the mid notch; first, so the views are no longer inert (full notch) when
-  // focus moves back to the card below.
-  if (open !== was) setSheetFull(false, { quiet: true });
   // Closing while focus is in the sheet (Ctrl+Enter in a field, "‹ Xong"): focus goes to the
   // selected card, never left in a hidden form.
   if (!open && was && root.contains(document.activeElement)) {
@@ -99,6 +129,7 @@ function setSheetOpen(open) {
   root.classList.toggle('open', open);
   root.inert = narrow() && !open;
   document.body.classList.toggle('sheet-open', open);
+  if (!open || !was) setSheetFull(false, { reveal: false }); // it always opens at the middle snap
   if (open) updateSheetOverlap();
   if (open && !was) {
     // The selected card just above the sheet's edge, in either view (Sơ đồ pans, Quy trình scrolls).
@@ -109,13 +140,106 @@ function setSheetOpen(open) {
   }
 }
 
-/** --sheet-overlap: how much of the canvas the open sheet covers (scroll padding, end spacer). */
+const snaps = () => sheetSnaps({ viewport: window.innerHeight, topbar: document.querySelector('.topbar').offsetHeight });
+
+/**
+ * The sheet's snap (design 0014 §3): middle (--sheet-h, the selected card stays above it) or tall
+ * (--sheet-h-full, only the top bar left). Back at the middle snap the selected card returns to the
+ * sheet's edge. --sheet-now: the height the toast sits on.
+ */
+let sheetNow = '';
+function setSheetFull(full, { reveal: show = true } = {}) {
+  full = full && root.classList.contains('open');
+  const was = sheetFull;
+  sheetFull = full;
+  root.classList.toggle('full', full);
+  root.querySelector('.sheet-grip')?.setAttribute('aria-expanded', String(full));
+  if (!narrow()) return;
+  // Written only when it changes: a custom property on <body> restyles the whole page (every inspector render comes here).
+  const sn = snaps();
+  const now = `${Math.round(full ? sn.full : sn.mid)}px`;
+  if (now !== sheetNow) document.body.style.setProperty('--sheet-now', (sheetNow = now));
+  if (was && !full && show) {
+    updateSheetOverlap();
+    requestAnimationFrame(() => {
+      const sel = state.selection;
+      if (sel) reveal(sel.kind === 'step' ? sel.id : START_ID, { focus: false, block: 'nearest' });
+    });
+  }
+}
+
+/**
+ * Dragging the sheet's head row (design 0014 §3), not its "Xong": over 8 px it is a drag, the sheet
+ * follows the pointer; the release snaps (sizing.js snapSheet: a flick goes on to the next snap, a slow
+ * release to the nearest; under half the middle snap the sheet closes like "Xong").
+ */
+function wireSheetDrag() {
+  let drag = null;
+  // The click that ends a drag (started on the grip) must not switch the snap again. It comes in the same
+  // task as the pointerup, so the flag only lives until the next task (a touch drag, or a mouse released
+  // outside the sheet, fires no click: the next keyboard click must not be eaten).
+  let swallowClick = false;
+  const stop = () => {
+    window.removeEventListener('pointermove', move);
+    window.removeEventListener('pointerup', up);
+    window.removeEventListener('pointercancel', up);
+    window.removeEventListener('blur', cancel);
+  };
+  const move = (e) => {
+    if (!drag || e.pointerId !== drag.id) return;
+    if (e.pointerType === 'mouse' && e.buttons === 0) return void up(e, true); // released outside the window
+    const dy = e.clientY - drag.y;
+    if (!drag.moving && Math.abs(dy) <= SHEET_DRAG_START) return;
+    drag.moving = true;
+    drag.samples.push({ t: e.timeStamp, y: e.clientY });
+    if (drag.samples.length > 20) drag.samples.shift();
+    root.classList.add('dragging');
+    drag.height = Math.max(0, Math.min(drag.max, drag.h - dy));
+    root.style.height = `${drag.height}px`;
+  };
+  /** cancelled: back to the snap it started from (pointercancel, window blur, button released outside). */
+  const up = (e, cancelled = e?.type === 'pointercancel') => {
+    if (!drag || (e && e.pointerId !== undefined && e.pointerId !== drag.id)) return;
+    const d = drag;
+    drag = null;
+    stop();
+    if (!d.moving) return; // a tap: the grip's click does the rest
+    swallowClick = true;
+    setTimeout(() => { swallowClick = false; }, 0);
+    root.classList.remove('dragging');
+    root.style.removeProperty('height');
+    const sn = snaps();
+    const to = cancelled ? (sheetFull ? 'full' : 'mid') : snapSheet({ height: d.height, velocity: dragVelocity(d.samples), mid: sn.mid, full: sn.full });
+    if (to === 'closed') {
+      closeSheet();
+      document.querySelector('.view-wrap .step-card.selected')?.focus({ preventScroll: true });
+    } else setSheetFull(to === 'full');
+  };
+  const cancel = () => up(null, true);
+  root.addEventListener('pointerdown', (e) => {
+    if (!narrow() || !root.classList.contains('open') || e.button !== 0) return;
+    if (!e.target.closest('.sheet-head') || e.target.closest('.sheet-close')) return;
+    e.preventDefault(); // no text selection, native drag or focus change on the way
+    drag = { id: e.pointerId, y: e.clientY, h: root.offsetHeight, height: root.offsetHeight, max: snaps().full, moving: false, samples: [{ t: e.timeStamp, y: e.clientY }] };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+    window.addEventListener('pointercancel', up);
+    window.addEventListener('blur', cancel);
+  });
+  root.addEventListener('click', (e) => {
+    if (!swallowClick || e.detail === 0) return; // detail 0: a keyboard click (Enter / Space), never part of a drag
+    swallowClick = false;
+    e.stopPropagation();
+    e.preventDefault();
+  }, true);
+}
+
+/** --sheet-overlap: how much of the canvas the open sheet covers at its middle snap (scroll padding, end spacer). */
 function updateSheetOverlap() {
-  // Measured at the mid notch only: at the full notch the card is covered on purpose (0014 §3).
-  if (!document.body.classList.contains('sheet-open') || sheetFull || root.classList.contains('dragging')) return;
+  if (!document.body.classList.contains('sheet-open') || sheetFull) return;
   const canvas = document.querySelector('.view-wrap > .view:not([hidden])').getBoundingClientRect();
-  // offsetHeight ignores the slide-in transform, so this is the sheet's final position.
-  const sheetTop = window.innerHeight - root.offsetHeight;
+  // The middle snap as computed by the CSS (not offsetHeight: it is animated while the snap changes).
+  const sheetTop = window.innerHeight - snaps().mid;
   document.body.style.setProperty('--sheet-overlap', `${Math.max(0, Math.round(canvas.bottom - sheetTop))}px`);
 }
 
@@ -126,10 +250,12 @@ function wireSheet() {
     setSheetOpen(false);
   });
   window.addEventListener('resize', updateSheetOverlap);
+  window.addEventListener('resize', () => setSheetFull(sheetFull, { reveal: false })); // --sheet-now of the new size
   // The canvas changes height when the issues bar appears or grows.
   const views = new ResizeObserver(updateSheetOverlap);
   for (const v of document.querySelectorAll('.view-wrap > .view')) views.observe(v);
   root.inert = narrow();
+  wireSheetDrag();
 }
 
 /** "‹ Xong", or a run started on a narrow screen: hide the sheet, keep the selection. */
@@ -139,138 +265,13 @@ export function closeSheet() {
 }
 
 /**
- * Show the sheet again for the current selection. `mid`: back to the mid notch, so the card of an
- * issue (F8, a row of the issues bar, a run that failed validation: goToIssue) shows above it.
+ * Show the sheet again for the current selection (a tap on the selected card; F8, an issue row or a
+ * run failed on validation: goToIssue), at the middle snap so the card shows above it (0014 §3).
  */
-export function openSheet({ mid = false } = {}) {
+export function openSheet() {
   sheetClosed = false;
-  if (mid) setSheetFull(false);
   setSheetOpen(Boolean(state.selection));
-}
-
-// ---------- two notches (design 0014 §3) ----------
-
-let sheetDragged = false; // the press that ends now was a drag: its click does not toggle
-
-/** Mid ↔ full. Back at mid, the selected card goes back to just above the sheet's edge. */
-function setSheetFull(full, { quiet = false } = {}) {
-  const was = sheetFull;
-  sheetFull = full;
-  root.classList.toggle('full', full);
-  root.querySelector('.sheet-grip')?.setAttribute('aria-expanded', String(full));
-  document.body.style.setProperty('--sheet-now', full ? 'var(--sheet-h-full)' : 'var(--sheet-h)');
-  // At the full notch the sheet covers the palette, the views and the results: Tab must not reach
-  // controls hidden under it (review 0014 S2). The top bar stays reachable.
-  for (const el of document.querySelectorAll('.palette, .view-wrap, #results')) el.inert = full;
-  if (quiet || was === full || full || !root.classList.contains('open')) return;
-  // After the height transition (none with reduced motion): measure the overlap, show the card.
-  const settle = () => {
-    if (sheetFull) return; // back to full meanwhile
-    updateSheetOverlap();
-    const sel = state.selection;
-    if (sel) reveal(sel.kind === 'step' ? sel.id : START_ID, { focus: false, block: 'nearest' });
-  };
-  if (root.getAnimations().some((a) => a.transitionProperty === 'height')) {
-    // Only the sheet's own height transition (not one of a child), ended or cancelled (review N4).
-    const done = (ev) => {
-      if (ev.target !== root || ev.propertyName !== 'height') return;
-      root.removeEventListener('transitionend', done);
-      root.removeEventListener('transitioncancel', done);
-      settle();
-    };
-    root.addEventListener('transitionend', done);
-    root.addEventListener('transitioncancel', done);
-  } else requestAnimationFrame(settle);
-}
-
-/** px height of a notch token (`--sheet-h`, `--sheet-h-full`), measured with a hidden probe. */
-function notchPx(token) {
-  const probe = h('div', { 'aria-hidden': 'true', style: { position: 'fixed', visibility: 'hidden', height: `var(${token})` } });
-  document.body.append(probe);
-  const px = probe.getBoundingClientRect().height;
-  probe.remove();
-  return px;
-}
-
-/**
- * Dragging anywhere on the sheet head but "Xong" (never in the form, so scrolling the form is not a
- * drag): the sheet follows the finger; released, a flick goes to the next notch and a slow release
- * to the nearest one; below half of mid it closes like "Xong".
- */
-function onSheetHeadDown(e) {
-  if (!narrow() || e.button !== 0 || e.target.closest('.sheet-close')) return;
-  // No native drag or text selection from this press (a palette item under the full sheet started one).
-  e.preventDefault();
-  // preventDefault also keeps the focus where it was: a press on the grip focuses it (review N3).
-  e.target.closest('.sheet-grip')?.focus({ preventScroll: true });
-  const head = e.currentTarget;
-  const from = sheetFull ? 'full' : 'mid';
-  const startY = e.clientY;
-  const startH = root.getBoundingClientRect().height;
-  const full = notchPx('--sheet-h-full');
-  let moving = false;
-  let samples = [];
-  sheetDragged = false;
-  const heightAt = (y) => Math.min(full, Math.max(0, startH + (startY - y)));
-  const move = (ev) => {
-    if (ev.pointerId !== e.pointerId) return;
-    if (!moving && Math.abs(ev.clientY - startY) <= SHEET.dragStart) return;
-    if (!moving) {
-      moving = true;
-      sheetDragged = true;
-      head.setPointerCapture(ev.pointerId);
-      root.classList.add('dragging');
-    }
-    const hgt = heightAt(ev.clientY);
-    root.style.setProperty('--sheet-drag-h', `${hgt}px`);
-    const t = ev.timeStamp;
-    samples.push({ t, h: hgt });
-    samples = samples.filter((p) => t - p.t <= 100);
-  };
-  const up = (ev) => {
-    if (ev.pointerId !== e.pointerId) return;
-    document.removeEventListener('pointermove', move);
-    document.removeEventListener('pointerup', up);
-    document.removeEventListener('pointercancel', up);
-    if (!moving) return;
-    const hgt = heightAt(ev.clientY);
-    const first = samples[0];
-    const dt = first ? ev.timeStamp - first.t : 0;
-    const velocity = dt > 0 ? (hgt - first.h) / dt : 0;
-    const to = snapSheet({ height: hgt, velocity, mid: notchPx('--sheet-h'), full, from });
-    root.classList.remove('dragging');
-    root.style.removeProperty('--sheet-drag-h');
-    if (to === 'closed') closeSheet();
-    else setSheetFull(to === 'full');
-    // The click that follows this press (on the grip) must not toggle again.
-    setTimeout(() => { sheetDragged = false; }, 0);
-  };
-  // On the document: the first moves may already leave the head (no capture before it is a drag,
-  // so a tap still clicks the grip).
-  document.addEventListener('pointermove', move);
-  document.addEventListener('pointerup', up);
-  document.addEventListener('pointercancel', up);
-}
-
-/** Several steps selected (design 0012 B): what they are and what can be done with them; no shared form. */
-function renderMulti(ids) {
-  const info = selectionInfo();
-  const n = ids.length;
-  const allOff = ids.every((id) => stepById(id)?.disabled);
-  const btn = (label, onclick, attrs = {}) => h('button', { onclick, ...attrs }, label);
-  const fromItem = (it) => h('button', { disabled: it.disabled, title: it.title, onclick: it.onSelect }, it.label);
-  return h('div', { class: 'multi-panel' },
-    h('div', { class: 'node-head', 'data-type': 'start' }, h('h2', {}, `${n} bước đã chọn`)),
-    h('p', { class: 'multi-list' }, ids.map((id) => stepLabel(stepById(id))).join(' · ')),
-    h('div', { class: 'btn-row' }, wrapItems(info).map(fromItem)),
-    h('div', { class: 'btn-row' },
-      btn('Sao chép', () => ops.copyFromMenu(false), { title: 'Sao chép (Ctrl+C)' }),
-      btn('Cắt', () => ops.copyFromMenu(true), { title: 'Cắt (Ctrl+X)' }),
-      btn('Nhân bản', () => ops.duplicateSelection(), { title: 'Nhân bản (Ctrl+D)' }),
-      btn(allOff ? `Bật ${n} bước` : `Tắt ${n} bước`, () => ops.toggleSelection(), { title: 'Tắt / bật (Ctrl+/)' }),
-      btn(`Xóa ${n} bước`, () => ops.deleteSelection(), { class: 'danger', title: 'Xóa (Delete)' })),
-    h('p', { class: 'hint' }, 'Mẹo: Shift+bấm để chọn dải, Ctrl+bấm để chọn rời, Esc để bỏ.'),
-  );
+  setSheetFull(false);
 }
 
 function renderWorkflow() {
@@ -282,7 +283,7 @@ function renderWorkflow() {
     h(
       'ol',
       { class: 'hint' },
-      h('li', {}, 'Bấm "+ Thêm bước đầu tiên" hoặc Record ở cột trái.'),
+      h('li', {}, 'Bấm "Thêm bước đầu tiên" hoặc Record ở cột trái.'),
       h('li', {}, 'Chọn org ở thanh trên rồi "Import từ org…" để lấy field có sẵn.'),
       h('li', {}, 'Bấm Xem trước (Ctrl+Enter) để kiểm tra dữ liệu trước khi insert.'),
     ),
@@ -292,18 +293,18 @@ function renderWorkflow() {
       { class: 'hint shortcuts' },
       h('li', {}, '↑ / ↓: chọn bước trước / sau; ← / →: thu gọn / mở khung'),
       h('li', {}, '/: thêm bước ở vị trí mặc định'),
+      h('li', {}, 'Shift+bấm / Shift+↑ / Shift+↓: chọn dải bước liền nhau; Ctrl+bấm: chọn rời; Ctrl+A: cả dãy; Esc: bỏ chọn'),
+      h('li', {}, 'Ctrl+C / Ctrl+X / Ctrl+V: sao chép / cắt / dán bước (cả sang workflow khác)'),
       h('li', {}, 'Alt+↑ / Alt+↓: di chuyển bước'),
       h('li', {}, 'Ctrl+D: nhân bản; Ctrl+/: tắt / bật bước'),
-      h('li', {}, 'Shift+bấm / Shift+↑ ↓: chọn một dải bước; Ctrl+bấm: chọn rời; Ctrl+A: chọn cả dãy'),
-      h('li', {}, 'Ctrl+C / Ctrl+X / Ctrl+V: sao chép / cắt / dán bước (cả sang workflow khác)'),
-      h('li', {}, 'Ctrl+O: thư viện workflow'),
       h('li', {}, 'Delete: xóa bước (khung có bước con thì hỏi)'),
       h('li', {}, 'Enter: sửa bước đang chọn; Esc: quay lại danh sách'),
+      h('li', {}, pickerKeys(isMac()).shortcut),
       h('li', {}, 'Ctrl+Z / Ctrl+Shift+Z: hoàn tác / làm lại'),
+      h('li', {}, 'Ctrl+O: thư viện workflow (đổi, tạo, mở file)'),
       h('li', {}, 'Ctrl+S: tải workflow JSON; Ctrl+Enter: xem trước'),
       h('li', {}, 'Ctrl+Shift+Enter: đọc lại org cho các bước Query rồi xem trước'),
       h('li', {}, 'F8 / Shift+F8: tới lỗi hoặc cảnh báo tiếp theo / trước đó'),
-      h('li', {}, pickerKeys(isMac(navigator)).shortcut),
       h('li', {}, 'M: đổi chế độ xem Quy trình / Sơ đồ. Trong Sơ đồ: kéo nền hoặc cuộn để di chuyển, Ctrl + cuộn hoặc + / − để thu phóng, 0: vừa khung'),
     ),
     h('h3', {}, 'Workflow'),
@@ -329,7 +330,7 @@ function renderStep(step) {
       h('h2', {}, type?.label ?? step.type),
       step.disabled ? h('span', { class: 'tag-off', title: 'Bước này đang tắt: không chạy và không được kiểm tra.' }, 'Đã tắt') : null,
       h('div', { class: 'spacer' }),
-      h('button', { class: 'icon', title: step.disabled ? 'Bật bước (Ctrl+/)' : 'Tắt bước (Ctrl+/)', 'aria-label': step.disabled ? 'Bật bước' : 'Tắt bước', 'aria-pressed': String(Boolean(step.disabled)), onclick: () => toggleDisabled(step.id) }, ico('off')),
+      h('button', { class: 'icon', title: step.disabled ? 'Bật bước (Ctrl+/)' : 'Tắt bước (Ctrl+/)', 'aria-label': step.disabled ? 'Bật bước' : 'Tắt bước', onclick: () => toggleDisabled(step.id) }, ico('off')),
       h('button', { class: 'icon', title: 'Nhân bản (Ctrl+D)', 'aria-label': 'Nhân bản', onclick: () => duplicateStep(step.id) }, ico('duplicate')),
       h('button', { class: 'icon danger', title: 'Xóa (Delete)', 'aria-label': 'Xóa bước', onclick: () => deleteStep(step.id) }, ico('trash')),
     ),
@@ -347,11 +348,11 @@ function renderStep(step) {
     suggest: suggestContext(step),
   });
   wrap.append(form);
-  if (step.type === 'record') {
-    const box = renderFields(step);
-    fieldsBox = { stepId: step.id, el: box };
-    wrap.append(box);
+  if (isValueStep(step)) {
+    refreshVarNameHelp(step, form);
+    form.querySelector('.options [data-key="name"]')?.addEventListener('change', flushVarRename);
   }
+  if (step.type === 'record') wrap.append(renderFields(step));
   if (step.type === 'query') wrap.append(renderSoqlBox(step));
   return wrap;
 }
@@ -402,6 +403,15 @@ function suggestContext(step) {
       return sobjectLists.get(key);
     },
     pickFields: (def, values, apply) => openFieldPicker(values[def.suggest.sobjectKey], values[def.key], apply),
+    // Đặt biến (design 0015): the variables of the workflow, to set an existing one again in one pick.
+    varNames: () => {
+      const out = [];
+      for (const [name, v] of collectVariables(state.workflow, slotKeys)) {
+        const others = v.steps.filter((x) => x.id !== step.id);
+        if (others.length) out.push({ value: name, label: `${varTypeText(varType(others))} · ${others.length} bước` });
+      }
+      return out;
+    },
     poolFields: (alias) => {
       const scope = currentScope();
       const src = Object.values(scope.sources).find((x) => x.pool && x.name === alias);
@@ -474,96 +484,6 @@ function refreshSoqlBox(step) {
   if (soqlBox?.stepId === step.id && soqlBox.code.isConnected) soqlBox.code.textContent = buildSoql(step.config ?? {});
 }
 
-// ---------- Record: default fields per sObject (design 0012 G) ----------
-
-let fieldsBox = null; // { stepId, el } of the "Fields" block on screen
-const autoRecordFields = new Map(); // Record step id → JSON of the field list filled in automatically
-
-/** The field list is still a default one: the old sObject's preset, or what was filled for this step. */
-const untouchedFields = (step, sobject) => {
-  const cur = JSON.stringify(step.config?.fields ?? []);
-  return cur === JSON.stringify(recordDefaultFields(sobject)) || autoRecordFields.get(step.id) === cur;
-};
-
-/**
- * The sObject of a Record changed (inside the edit's updateWorkflow, so one Ctrl+Z restores both):
- * a field list nobody edited takes the new sObject's preset (meta.recordPresets). → true if replaced.
- */
-function applyRecordPreset(step, from, to) {
-  if (!untouchedFields(step, from)) return false;
-  const next = recordDefaultFields(to);
-  autoRecordFields.set(step.id, JSON.stringify(next));
-  if (JSON.stringify(step.config.fields ?? []) === JSON.stringify(next)) return false;
-  step.config.fields = next;
-  return true;
-}
-
-function refreshFields(step) {
-  if (fieldsBox?.stepId !== step.id || !fieldsBox.el.isConnected) return;
-  const next = renderFields(step);
-  fieldsBox.el.replaceWith(next);
-  fieldsBox = { stepId: step.id, el: next };
-  markIssues();
-}
-
-let describedTimer = 0;
-const describeCache = new Map(); // `${org}|${sobject}` → Promise<mapDescribe result> (this session)
-
-/** api.describe with a per-session cache (cleared by ⟳ of the org list: clearDescribeCache). */
-export function describeCached(org, sobject) {
-  const key = `${org}|${sobject}`;
-  if (!describeCache.has(key)) {
-    const p = api.describe(org, sobject);
-    p.catch(() => describeCache.delete(key));
-    describeCache.set(key, p);
-  }
-  return describeCache.get(key);
-}
-export function clearDescribeCache() {
-  describeCache.clear();
-  sobjectLists.clear();
-  hintDescribe.clear();
-}
-
-/**
- * 500 ms after the sObject of a Record changed, with an org whose sObject list has it: a field list
- * still filled automatically becomes every required createable field (Import's rule, parents
- * chosen like Import), else the name field from describe; no undo step of its own.
- */
-function scheduleDescribedDefaults(step) {
-  clearTimeout(describedTimer);
-  const org = state.org;
-  const to = step.config?.sobject;
-  if (!org || !/^[A-Za-z][A-Za-z0-9_]*$/.test(to ?? '')) return;
-  describedTimer = setTimeout(async () => {
-    let described;
-    try {
-      const known = await suggestContext(step).sobjects('create');
-      if (!known.some((x) => x.name === to)) return;
-      described = await describeCached(org, to);
-    } catch {
-      return;
-    }
-    const live = stepById(step.id);
-    if (!live || live.config?.sobject !== to || state.org !== org) return;
-    const fieldsNow = JSON.stringify(live.config.fields ?? []);
-    if (autoRecordFields.get(live.id) !== fieldsNow) return;
-    let picked = described.fields.filter((f) => f.required);
-    if (!picked.length && described.nameField) picked = described.fields.filter((f) => f.name === described.nameField);
-    if (!picked.length) return;
-    let added = [];
-    updateWorkflow((wf) => {
-      live.config.fields = [];
-      added = addDescribedFields(wf, live, picked.map((f) => ({ f, choice: defaultParent(f, parentChoices(live)) })), { sobject: described.sobject });
-    }, { source: 'inspector', history: false });
-    autoRecordFields.set(live.id, JSON.stringify(live.config.fields));
-    if (JSON.stringify(live.config.fields) === fieldsNow && !added.length) return;
-    refreshFields(live);
-    const qs = added.length ? ` Đã thêm bước Query ${added.map((q) => `"${q.alias}"`).join(', ')} cho bản ghi cha.` : '';
-    toast(`Đã đặt field mặc định cho ${to} theo ${org}: ${picked.map((f) => f.name).join(', ')}.${qs}`, qs ? 6000 : 4000);
-  }, 500);
-}
-
 let fieldPickerSeq = 0;
 
 /** "Chọn field…": the sObject's fields from describe; Id always on; Lookups can add `<relationship>.Name`. */
@@ -633,8 +553,9 @@ function onStepOption(step, key, v, form, meta) {
     if (input) input.value = next;
   };
   let filled = null;
-  let parent = null;
-  let presetChanged = false;
+  let parentFilter = null;
+  let fieldsChanged = false;
+  let varRename = null;
   updateWorkflow((wf) => {
     const c = (step.config ??= {});
     const follow = (next, nameKey = 'alias') => {
@@ -644,10 +565,10 @@ function onStepOption(step, key, v, form, meta) {
     if (key === 'sobject' && step.type === 'record') {
       // Keep the alias in sync while it is still the auto-suggested one.
       const auto = !c.alias || c.alias === suggestAlias(c.sobject, step.id);
-      const old = c.sobject ?? 'Account';
+      const old = c.sobject ?? nodeType('record')?.options.find((o) => o.key === 'sobject')?.default;
       c.sobject = v;
       if (auto) follow(suggestAlias(v, step.id));
-      presetChanged = applyRecordPreset(step, old, v);
+      fieldsChanged = applyRecordPreset(step, old, v);
     } else if (key === 'sobject' && step.type === 'query') {
       const old = c.sobject ?? QUERY_DEFAULTS.sobject;
       const auto = !c.alias || c.alias === suggestPoolAlias(old, step.id);
@@ -663,15 +584,20 @@ function onStepOption(step, key, v, form, meta) {
       // the other modes stay (hidden), so switching back loses nothing.
       c.mode = v;
       if (v === 'each') filled = fillEach(wf, step);
-    } else if (key === 'filter' && v === 'compare' && ['filterField', 'filterValue'].every((k) => nodeType(step.type)?.options.some((o) => o.key === k))) {
-      // Design 0013: "parent–child" condition filled in, in the same undo step.
+    } else if (key === 'filter' && (step.type === 'loop' || step.type === 'pick')) {
+      // "Chỉ bản ghi thỏa điều kiện" (design 0013): fill the parent–child condition
+      // (AccountId = {{acc.Id}}) in the same undo step when the field and value are empty.
       c.filter = v;
-      parent = fillParentFilter(wf, step);
+      if (v === 'compare') parentFilter = fillParentFilter(wf, step);
     } else if (key === 'from' && step.type === 'loop') {
       // The record name follows the pool while it is still the suggested one (accs → acc).
       const auto = !c.itemAlias || c.itemAlias === suggestPickAlias(c.from, step.id, 'itemAlias');
       c.from = v;
       if (auto && v) follow(suggestPickAlias(v, step.id, 'itemAlias'), 'itemAlias');
+    } else if (exposesList(nodeType(step.type)).some((ex) => ex.kind === 'value' && ex.name?.key === key)) {
+      // Đặt biến (design 0015): renaming renames the whole variable (every step setting it, every
+      // use), only to a valid name that is not another variable's.
+      varRename = setVariableName(wf, step.id, v, { memo: varMemo, catalog: state.meta, slotKeys });
     } else if (exposesList(nodeType(step.type)).some((ex) => ex.name?.key === key)) {
       // References follow only to a valid, free name (a loop variable or the record looped over:
       // inside its body only); while the field is empty or matches another alias mid-typing,
@@ -681,20 +607,79 @@ function onStepOption(step, key, v, form, meta) {
   }, { source: 'inspector', coalesceKey: meta?.coalesceKey ?? `${step.id}:${key}` });
   // Card summary/alias changed; the process view re-renders, the inspector keeps focus.
   fillPathDefaults(step, key, form);
-  // The field list took the new sObject's defaults: redraw it in place (focus stays in the sObject box).
-  if (presetChanged) refreshFields(step);
-  if (key === 'sobject' && step.type === 'record') scheduleDescribedDefaults(step);
+  if (isValueStep(step) && key === 'name') {
+    refreshVarNameHelp(step, form);
+    if (varRename?.renamed) noteVarRename(step.id, varRename);
+  }
+  // Only the field list is redrawn, so the sObject input keeps focus while typing.
+  if (fieldsChanged) refreshFieldsSection(step);
   // Pool / record names filled in: show them (the mode select loses nothing by a re-render).
   if (filled && Object.keys(filled).length) updateWorkflow(() => {}, { source: 'inspector-structure', history: false });
-  if (parent) {
-    updateWorkflow(() => {}, { source: 'inspector-structure', history: false });
-    toast(`Đã điền điều kiện ${parent.field} = {{${parent.name}.Id}} (bản ghi con của "${parent.name}"). Sửa nếu cần.`, 6000);
+  if (parentFilter) {
+    // Filled in place, no re-render: focus stays on "Lọc" (Chrome fires change on each arrow key).
+    const box = (k) => form.querySelector(`.options [data-key="${k}"]`) ?? form.querySelector(`[data-key="${k}"]`);
+    for (const [k, v2] of [['filterField', parentFilter.field], ['filterOp', parentFilter.op], ['filterValue', parentFilter.value]]) {
+      const el = box(k);
+      if (!el) continue;
+      el.value = v2;
+      if (el._varPicker) el._varPicker.unsaved = false;
+    }
+    const opText = nodeType(step.type)?.options.find((o) => o.key === 'filterOp')?.choices?.find((x) => x.value === parentFilter.op)?.label ?? parentFilter.op;
+    toast(`Đã điền điều kiện ${parentFilter.field} ${opText} ${parentFilter.value} (bản ghi con của "${parentFilter.parent}"). Sửa nếu cần.`, 5000);
   }
   if (step.type === 'query') {
     refreshSoqlBox(step);
     // Switching between builder and SOQL shows / hides the "SOQL sẽ chạy" line.
     if (key === 'mode') updateWorkflow(() => {}, { source: 'inspector-structure', history: false });
   }
+}
+
+// ---------- Đặt biến (design 0015) ----------
+
+const isValueStep = (step) => exposesList(nodeType(step?.type)).some((ex) => ex.kind === 'value');
+/** Label of a variable type (the catalogue's "Kiểu" choices: Chữ / Số), `mixed` → "nhiều kiểu". */
+function varTypeText(type) {
+  if (type === 'mixed') return 'nhiều kiểu';
+  return nodeType('set')?.options.find((o) => o.key === 'valueType')?.choices?.find((c) => c.value === type)?.label ?? type;
+}
+/** Type of the variable set by `steps` (one name): text, number or mixed (Cộng thêm is Số). */
+const varType = (steps) => [...collectVariables({ steps }, slotKeys).values()][0]?.type ?? 'text';
+
+/**
+ * Help line of "Tên biến": the catalogue's help, or — when other steps already set that name —
+ * what setting it here does. Changed in place (typing keeps focus).
+ */
+function refreshVarNameHelp(step, form) {
+  const help = form.querySelector('.options [data-key="name"]')?.closest('.form-row')?.querySelector('.help');
+  if (!help) return;
+  const def = nodeType(step.type)?.options.find((o) => o.key === 'name');
+  const name = String(step.config?.name ?? '');
+  const others = isVarName(name) ? variableSteps(state.workflow, name, slotKeys).filter((s) => s.id !== step.id) : [];
+  help.textContent = others.length
+    ? `Đặt lại biến có sẵn "${name}" (${varTypeText(varType(others))}, ${others.length} bước). Giá trị mới thay giá trị cũ từ bước này trở xuống.`
+    : def?.help ?? '';
+}
+
+/**
+ * A whole-variable rename while typing: one toast (with Hoàn tác) when the name box is left
+ * (`change`), or after a pause in the typing.
+ */
+function noteVarRename(stepId, res) {
+  if (varToast?.stepId !== stepId) {
+    flushVarRename();
+    varToast = { stepId, from: res.from };
+  }
+  Object.assign(varToast, { to: res.to, steps: res.steps, refs: res.refs });
+  clearTimeout(varToast.timer);
+  varToast.timer = setTimeout(flushVarRename, 1500);
+}
+function flushVarRename() {
+  const t = varToast;
+  varToast = null;
+  if (!t) return;
+  clearTimeout(t.timer);
+  if (t.from === t.to || (t.steps < 2 && !t.refs)) return;
+  toastWithUndo(`Đã đổi tên biến ${t.from} → ${t.to} ở ${t.steps} bước Đặt biến và ${t.refs} chỗ dùng.`);
 }
 
 /**
@@ -771,6 +756,132 @@ function parentChoices(step, accepts, referenceTo, mode) {
   return [...list.filter((c) => c.usable), ...list.filter((c) => !c.usable)];
 }
 
+// ---------- Record default fields (design 0012 G) ----------
+
+const autoRecordFields = new Map(); // Record step id → JSON of the field list filled automatically
+const recordDescribeTimers = new Map(); // Record step id → pending describe timer
+const API_NAME = /^[A-Za-z][A-Za-z0-9_]*$/;
+
+/**
+ * The sObject of a Record changed (inside the sObject edit's update, so one Ctrl+Z restores
+ * both): a field list still at the old sObject's preset (meta.recordPresets) or at the list
+ * filled earlier for this step takes the new one's (Task → Subject). With an org, 500 ms later
+ * the list follows the describe: a preset gets the required fields it lacks appended; another
+ * sObject gets every required createable field, else its name field (an auto-number name
+ * field: no field at all).
+ * → true when the field list changed.
+ */
+function applyRecordPreset(step, from, to) {
+  const c = step.config;
+  const cur = JSON.stringify(c.fields ?? []);
+  clearTimeout(recordDescribeTimers.get(step.id));
+  recordDescribeTimers.delete(step.id);
+  const untouched = cur === JSON.stringify(recordPresetFields(from)) || autoRecordFields.get(step.id) === cur;
+  if (!untouched) {
+    autoRecordFields.delete(step.id);
+    return false;
+  }
+  const next = recordPresetFields(to);
+  autoRecordFields.set(step.id, JSON.stringify(next));
+  scheduleRecordDescribe(step.id, to);
+  if (JSON.stringify(next) === cur) return false;
+  c.fields = next;
+  for (const k of [...expanded]) if (k.startsWith(`${step.id}:`)) expanded.delete(k);
+  return true;
+}
+
+function scheduleRecordDescribe(stepId, sobject) {
+  const org = state.org;
+  if (!org || !API_NAME.test(String(sobject ?? ''))) return;
+  recordDescribeTimers.set(stepId, setTimeout(async () => {
+    recordDescribeTimers.delete(stepId);
+    let described;
+    try {
+      const known = await suggestContext(stepById(stepId)).sobjects('create');
+      if (!known.some((x) => x.name === sobject)) return;
+      described = await api.describe(org, sobject);
+    } catch {
+      return; // the sObject input reports describe problems
+    }
+    const live = stepById(stepId);
+    if (!live || state.org !== org || live.config?.sobject !== sobject || autoRecordFields.get(stepId) !== JSON.stringify(live.config.fields ?? [])) return;
+    const fields = described?.fields ?? [];
+    const required = fields.filter((f) => f.required);
+    const cur = live.config.fields ?? [];
+    const aliases = parentChoices(live);
+    let next;
+    let message;
+    if (recordPreset(sobject)) {
+      // Real describes of Task / Event mark nothing required: the preset (Event's
+      // ActivityDateTime, Contact's FirstName) stays, only missing required fields are added.
+      const have = new Set(cur.map((f) => String(f?.name ?? '').toLowerCase()));
+      const missing = required.filter((f) => !have.has(f.name.toLowerCase()));
+      if (!missing.length) return;
+      next = [...structuredClone(cur), ...missing.map((f) => describedFieldSpec(f, aliases))];
+      message = `Đã thêm field bắt buộc của ${sobject} theo ${org}: ${missing.map((f) => f.name).join(', ')}.`;
+    } else if (required.length) {
+      next = required.map((f) => describedFieldSpec(f, aliases));
+    } else if (described?.nameField) {
+      const name = fields.find((f) => f.name === described.nameField);
+      if (name) next = [describedFieldSpec(name, aliases)];
+      else if (cur.length === 1 && String(cur[0]?.name ?? '').toLowerCase() === described.nameField.toLowerCase()) {
+        // An auto-number Name: Salesforce fills it, so writing it would fail every insert.
+        next = [];
+        message = `Field tên ${described.nameField} của ${sobject} là auto-number (Salesforce tự đánh số) nên đã bỏ khỏi danh sách field. Thêm field cần sinh, hoặc bấm "Import từ org…".`;
+      }
+    }
+    if (!next || same(next, cur)) return;
+    message ??= `Đã đặt field mặc định cho ${sobject} theo ${org}: ${next.map((f) => f.name).join(', ')}.`;
+    // No undo step of its own: undoing the sObject edit also restores the field list.
+    updateWorkflow(() => { live.config.fields = next; }, { source: 'inspector', history: false });
+    autoRecordFields.set(stepId, JSON.stringify(next));
+    refreshFieldsSection(live);
+    toast(message, 5000);
+  }, 500));
+}
+
+/** A field spec from describe (mapDescribe), its Lookup parent chosen like "Import từ org…". */
+function describedFieldSpec(f, aliases) {
+  const options = { ...(f.options ?? {}) };
+  if (f.type === 'lookup' || f.type === 'masterdetail') {
+    const pre = preselectParent(f, aliases);
+    // "＋ … có sẵn trong org" (a new Query step) is only offered in the Import dialog.
+    if (pre && !pre.startsWith(NEW_QUERY)) {
+      options.ref = pre;
+      if (aliases.find((a) => a.alias === pre)?.nodeType === 'query') options.mode = 'random';
+    }
+  }
+  return { name: f.name, type: f.type, options };
+}
+
+/**
+ * Redraw the field list of `step` if the inspector shows it (the rest of the form keeps focus).
+ * Focus inside the list (describe landing while a field is being edited) moves to the control
+ * at the same place in the new list, with its caret.
+ */
+function refreshFieldsSection(step) {
+  if (lastSelectionKey !== `step:${step.id}`) return;
+  const box = root.querySelector('.fields-section');
+  if (!box) return;
+  const active = document.activeElement;
+  const path = [];
+  if (active && active !== box && box.contains(active)) {
+    for (let el = active; el !== box; el = el.parentElement) path.unshift([...el.parentElement.children].indexOf(el));
+  }
+  const caret = path.length && typeof active.selectionStart === 'number' ? [active.selectionStart, active.selectionEnd] : null;
+  const next = renderFields(step);
+  box.replaceWith(next);
+  markIssues();
+  if (!path.length) return;
+  let el = next;
+  for (const i of path) el = el?.children[i];
+  if (!el || el.tagName !== active.tagName) return;
+  el.focus({ preventScroll: true });
+  if (caret && typeof el.setSelectionRange === 'function') {
+    try { el.setSelectionRange(...caret); } catch { /* not a text control */ }
+  }
+}
+
 // ---------- fields editor ----------
 
 function groupedTypeSelect(value, onchange) {
@@ -839,22 +950,18 @@ function renderFields(node) {
             'div',
             { class: 'opts' },
             renderOptions(ft.options, f.options ?? {}, (k, v, meta) =>
-              {
-                updateWorkflow(() => {
-                  f.options = { ...(f.options ?? {}), [k]: v };
-                }, { source: 'inspector', coalesceKey: meta?.coalesceKey ?? `${key}:${k}` });
-                samples.schedule();
-              },
+              updateWorkflow(() => {
+                f.options = { ...(f.options ?? {}), [k]: v };
+              }, { source: 'inspector', coalesceKey: meta?.coalesceKey ?? `${key}:${k}` }),
               {
                 refChoices: (def, values) => parentChoices(node, def.accepts, values?.referenceTo, values?.mode ?? 'current'),
-                vars: { stepId: node.id, fieldIndex: i, samplesRow: true, get fieldName() { return f.name; }, get field() { return `fields.${f.name}`; } },
+                vars: { stepId: node.id, fieldIndex: i, get fieldName() { return f.name; }, get field() { return `fields.${f.name}`; } },
               },
             ),
+            // Design 0012 E: three example values (or the last preview's, for a field that depends on another step).
+            samplesRow(node, i),
           ),
         );
-        const samples = sampleRow(node, f);
-        card.querySelector('.opts').append(samples.el);
-        samples.schedule(0);
       }
       card.append(h('div', { class: 'error-text', hidden: true }));
       return card;
@@ -863,9 +970,9 @@ function renderFields(node) {
 
   return h(
     'div',
-    { class: 'fields-block' },
+    { class: 'fields-section' },
     requiredHint(node),
-    h('h3', {}, `Fields (${fields.length})`),
+    h('h3', { class: 'fields-heading', tabindex: '-1' }, `Fields (${fields.length})`),
     h('p', { class: 'hint' }, 'Thứ tự field là thứ tự sinh: {{this.Field}} và Email "theo tên" chỉ thấy field phía trên.'),
     list,
     h(
@@ -876,7 +983,7 @@ function renderFields(node) {
           fields.push({ name: '', type: 'text', options: {} });
           expanded.add(`${node.id}:${fields.length - 1}`);
         }),
-      }, '+ Thêm field'),
+      }, ico('plus'), 'Thêm field'),
       h('button', {
         disabled: !state.org,
         title: state.org ? `Lấy field từ ${state.org}` : 'Chọn org ở thanh trên trước',
@@ -886,186 +993,30 @@ function renderFields(node) {
   );
 }
 
-// ---------- example values of the open field (design 0012 E) ----------
-
-const samplesCache = new Map(); // JSON of a /api/field-samples request → Promise of its answer
-
-/** Local midnight today: the examples stand still while typing and change only with the options. */
-const todayMidnight = () => { const d = new Date(); d.setHours(0, 0, 0, 0); return d.getTime(); };
-
-/**
- * Fields of `step` whose value depends on another step or a loop variable (Lookup, Master-Detail,
- * a template / "Lấy từ biến" naming another step), or on such a field through {{this.X}}
- * (transitively), from currentScope().refs. → Set of field names.
- */
-function dependentFields(step) {
-  const refs = currentScope().refs.filter((r) => r.nodeId === step.id && r.field?.startsWith('fields.') && !r.hidden);
-  const out = new Set();
-  const fields = step.config?.fields ?? [];
-  for (const f of fields) if (['lookup', 'masterdetail'].includes(f?.type)) out.add(f.name);
-  const scope = currentScope();
-  for (const r of refs) {
-    const src = r.source !== undefined ? scope.sources[r.source] : null;
-    if (!r.viaThis && !src?.global) out.add(r.field.slice('fields.'.length));
-  }
-  for (let changed = true; changed;) {
-    changed = false;
-    for (const r of refs) {
-      const name = r.field.slice('fields.'.length);
-      const x = String(r.member ?? '').split('.')[0];
-      if (r.viaThis && out.has(x) && !out.has(name)) {
-        out.add(name);
-        changed = true;
-      }
-    }
-  }
-  return out;
-}
-
-/**
- * The "Ví dụ: …" row at the end of an open field's options: 3 values from POST /api/field-samples
- * for an independent field (debounced 300 ms, older answers dropped), else the first 3 records of
- * the step in the last preview. → { el, schedule(ms?) }
- */
-function sampleRow(step, f) {
-  const el = h('div', { class: 'samples-row', 'aria-live': 'polite' });
-  let timer = 0;
-  let samplesSeq = 0; // per row: an older answer is dropped
-  let samplesAbort = null;
-  const fill = () => {
-    if (!el.isConnected) return;
-    const live = stepById(step.id);
-    const field = (live?.config?.fields ?? []).find((x) => x === f);
-    if (!live || !field) return;
-    const dependent = dependentFields(live);
-    if (dependent.has(field.name)) {
-      el.title = '';
-      const recs = (state.result?.records ?? []).filter((r) => r.nodeId === live.id).slice(0, 3);
-      if (!recs.length || !recs.some((r) => field.name in (r.fields ?? {}))) {
-        el.className = 'samples-row hint';
-        el.textContent = 'Bấm Xem trước (Ctrl+Enter) để thấy giá trị: field này lấy dữ liệu từ bước khác.';
-        return;
-      }
-      const stale = state.lastRunSteps !== JSON.stringify(state.workflow.steps);
-      el.className = `samples-row${stale ? ' stale' : ''}`;
-      el.title = stale ? 'Từ lần xem trước; workflow đã thay đổi sau đó.' : 'Ba bản ghi đầu của bước này trong lần xem trước.';
-      el.textContent = `Lần xem trước: ${recs.map((r) => formatSample(r.fields?.[field.name])).join(' · ')}`;
-      return;
-    }
-    const fields = (live.config.fields ?? []).filter((x) => x && !dependent.has(x.name));
-    const index = fields.indexOf(field);
-    const raw = document.getElementById('seed')?.value.trim() ?? '';
-    const seed = /^\d+$/.test(raw) ? Number(raw) : 1;
-    const seq = ++samplesSeq;
-    const body = { sobject: live.config.sobject, fields: fields.slice(0, index + 1), index, seed, now: todayMidnight(), count: 3 };
-    // The same request again (a re-render of the inspector): its answer, without a call.
-    const key = JSON.stringify(body);
-    let p = samplesCache.get(key);
-    if (!p) {
-      samplesAbort?.abort();
-      samplesAbort = new AbortController();
-      p = api.fieldSamples(body, { signal: samplesAbort.signal });
-      samplesCache.set(key, p);
-      p.catch(() => samplesCache.delete(key));
-      if (samplesCache.size > 50) samplesCache.delete(samplesCache.keys().next().value);
-    }
-    p.then(({ values }) => {
-        if (seq !== samplesSeq || !el.isConnected) return;
-        el.className = 'samples-row';
-        el.title = `Ba giá trị sinh riêng cho field này (seed ${seed}) để thấy ngay tác dụng của tùy chọn. Xem trước có thể ra giá trị khác.`;
-        el.textContent = `Ví dụ: ${values.map(formatSample).join(' · ')}`;
-      }, (e) => {
-        if (e.name === 'AbortError' || seq !== samplesSeq || !el.isConnected) return;
-        el.className = 'samples-row err';
-        el.title = '';
-        el.textContent = `Không tạo được ví dụ: ${e.message}`;
-      });
-  };
-  return {
-    el,
-    schedule(ms = 300) {
-      clearTimeout(timer);
-      timer = setTimeout(fill, ms);
-    },
-  };
-}
-
-// ---------- required fields still missing (design 0012 F2) ----------
-
-const hintDismissed = new Set(); // Record step ids whose "Thiếu field bắt buộc" box was dismissed (session)
-const hintDescribe = new Map(); // `${org}|${sobject}` → Promise<describe | null> for the box
-
-/**
- * "Thiếu 2 field bắt buộc của Opportunity trong dev-sb: StageName, CloseDate." above the field
- * list of a Record, from the org's describe (cached per session). Filled asynchronously; empty
- * when nothing is missing, without an org, or when describe fails (the sObject box says why).
- */
-function requiredHint(node) {
-  const box = h('div', { class: 'hint-box required-hint', hidden: true, 'aria-live': 'polite' });
-  const org = state.org;
-  const sobject = node.config?.sobject;
-  if (!org || !/^[A-Za-z][A-Za-z0-9_]*$/.test(sobject ?? '') || hintDismissed.has(node.id)) return box;
-  (async () => {
-    const key = `${org}|${sobject}`;
-    if (!hintDescribe.has(key)) {
-      // Once per org and sObject in the session (a failure is not asked again until ⟳).
-      hintDescribe.set(key, (async () => {
-        const known = await suggestContext(node).sobjects('create');
-        return known.some((x) => x.name === sobject) ? describeCached(org, sobject) : null;
-      })().catch(() => null));
-    }
-    const described = await hintDescribe.get(key);
-    if (!described) return;
-    const live = stepById(node.id);
-    if (!box.isConnected || !live || live.config?.sobject !== sobject || state.org !== org) return;
-    const have = new Set((live.config.fields ?? []).map((f) => String(f?.name ?? '').toLowerCase()));
-    const missing = described.fields.filter((f) => f.required && !have.has(f.name.toLowerCase()));
-    if (!missing.length) return;
-    const names = missing.map((f) => f.name).join(', ');
-    box.hidden = false;
-    box.replaceChildren(
-      h('span', { class: 'hint-text' }, `Thiếu ${missing.length} field bắt buộc của ${described.sobject} trong ${org}: ${names}.`),
-      h('span', { class: 'hint-actions' },
-        h('button', {
-          class: 'primary',
-          onclick: () => {
-            let added = [];
-            updateWorkflow((wf) => {
-              added = addDescribedFields(wf, live, missing.map((f) => ({ f, choice: defaultParent(f, parentChoices(live)) })), { sobject: described.sobject });
-            }, { source: 'inspector-structure' });
-            const qs = added.length ? ` và bước Query ${added.map((q) => `"${q.alias}" (${q.sobject} có sẵn trong org)`).join(', ')}` : '';
-            toast(`Đã thêm ${missing.length} field: ${names}${qs}.`, qs ? 5000 : 3000);
-          },
-        }, `Thêm ${missing.length} field`),
-        h('button', { onclick: () => openImport(live, { missing: missing.map((f) => f.name) }) }, 'Chọn…'),
-        h('button', { class: 'ghost', title: 'Ẩn gợi ý này cho bước này tới khi tải lại trang', onclick: () => { hintDismissed.add(node.id); box.hidden = true; } }, 'Bỏ qua')),
-    );
-  })();
-  return box;
-}
-
 function markIssues() {
   const s = state.selection;
   if (s?.kind !== 'step') return;
-  // Errors, and warnings that come with a one-click fix (noNameField, design 0012 G).
-  const issues = [...state.issues.errors, ...state.issues.warnings.filter((i) => i.fix)].filter((i) => i.nodeId === s.id);
+  // Warnings show here only when they come with a quick fix (design 0012: "Đổi thành Subject").
+  const issues = [...state.issues.errors, ...state.issues.warnings.filter((w) => w.fix)].filter((i) => i.nodeId === s.id);
+  const isError = (i) => state.issues.errors.includes(i);
   for (const card of root.querySelectorAll('.field-card')) {
     const mine = issues.filter((i) => i.field === card.dataset.field);
-    card.classList.toggle('has-error', mine.some((i) => !i.fix || state.issues.errors.includes(i)));
+    card.classList.toggle('has-error', mine.some(isError));
+    card.classList.toggle('has-warning', mine.length > 0 && !mine.some(isError));
     fillErrors(card.querySelector('.error-text'), mine);
   }
   for (const input of root.querySelectorAll('.options [data-key]')) {
     if (input.closest('.field-card')) continue;
     const mine = issues.filter((i) => i.field === input.dataset.key);
-    input.classList.toggle('invalid', mine.some((i) => state.issues.errors.includes(i)));
+    input.classList.toggle('invalid', mine.some(isError));
     const box = input.closest('.form-row')?.querySelector('.opt-error');
     if (box) fillErrors(box, mine);
   }
 }
 
 /**
- * Error lines with a one-click "Sửa thành …" button when the issue has a suggestion, and a button
- * for its `fix` (design 0012: "Thêm Industry vào SELECT của "accs"", "Đổi thành Subject").
+ * Error lines with a one-click "Sửa thành …" button when the issue has a suggestion, and a
+ * quick-fix button when the server attached a `fix` (design 0012 F/G).
  */
 function fillErrors(box, issues) {
   if (!box) return;
@@ -1075,55 +1026,73 @@ function fillErrors(box, issues) {
     { class: `error-line${state.issues.errors.includes(i) ? '' : ' warn-line'}` },
     i.message,
     i.suggestion ? h('button', { class: 'link fix-btn', onclick: () => applyFix(i) }, `Sửa thành ${suggestionText(i)}`) : null,
-    fixLabel(i.fix) ? h('button', { class: 'link fix-btn', 'data-fix': i.fix.kind, onclick: () => applyIssueFix(i.fix) }, fixLabel(i.fix)) : null,
+    i.fix && fixText(i.fix) ? h('button', { class: 'link fix-btn quick-fix', 'data-fix': i.fix.kind, onclick: () => applyQuickFix(i.fix) }, fixText(i.fix)) : null,
   )));
 }
 
-/** Text of the button of an issue's `fix`, or null when it cannot be applied here. */
-function fixLabel(fix) {
-  if (!fix || !stepById(fix.stepId)) return null;
+/** Button text of an issue's `fix`, or null for a kind this client does not know. */
+function fixText(fix) {
   if (fix.kind === 'renameField') return `Đổi thành ${fix.to}`;
-  if (fix.kind === 'addSelectField') {
-    const q = stepById(fix.stepId);
-    return `Thêm ${fix.field} vào SELECT của "${q.config?.alias || q.id}"`;
-  }
+  if (fix.kind === 'addSelectField') return `Thêm ${fix.field} vào SELECT của "${stepById(fix.stepId)?.config?.alias || fix.stepId}"`;
+  if (fix.kind === 'setVarType') return `Đổi Kiểu thành ${varTypeText(fix.to)}`;
   return null;
 }
 
-/** Applies an issue's `fix` (one undo step, source 'inspector-structure'). */
-function applyIssueFix(fix) {
-  const step = stepById(fix?.stepId);
-  if (!step) return;
+/** Apply an issue's `fix` (one undo step). */
+function applyQuickFix(fix) {
   closePicker();
   if (fix.kind === 'renameField') {
-    const f = (step.config?.fields ?? []).find((x) => x?.name === fix.from);
-    if (!f) return;
-    let res = null;
-    updateWorkflow((wf) => {
+    // The issue may be stale (the field was renamed or the target added since): change nothing.
+    const fields = stepById(fix.stepId)?.config?.fields ?? [];
+    if (!fields.some((x) => x?.name === fix.from) || fields.some((x) => String(x?.name ?? '').toLowerCase() === String(fix.to).toLowerCase())) return;
+    // References ({{task.Name}}) move first, while the field still has its old name.
+    const res = updateWorkflow((wf) => {
+      const out = renameField(wf, fix.stepId, fix.from, fix.to, { catalog: state.meta });
+      const live = stepById(fix.stepId);
+      const f = live?.config?.fields?.find((x) => x?.name === fix.from);
+      if (!f) return out;
       f.name = fix.to;
-      res = renameField(wf, step.id, fix.from, fix.to, { catalog: state.meta });
+      // A Name still at the old defaults takes the preset's options for the new field (Subject:
+      // the Call / Send Letter list), so the generated values fit the field.
+      const spec = recordPresetFields(live.config.sobject).find((x) => x.name === fix.to);
+      const plain = !f.options || !Object.keys(f.options).length || ['name', 'company'].includes(f.options.mode) && Object.keys(f.options).length === 1;
+      if (spec && f.type === 'text' && plain) Object.assign(f, structuredClone({ type: spec.type, options: spec.options }));
+      return out;
     }, { source: 'inspector-structure' });
-    toast(`Đã đổi field ${fix.from} thành ${fix.to}${res?.count ? ` và ${res.count} tham chiếu` : ''}. Ctrl+Z để hoàn tác.`, 5000);
+    toast(`Đã đổi field ${fix.from} thành ${fix.to}${res?.count ? ` và cập nhật ${res.count} tham chiếu` : ''}. Ctrl+Z để hoàn tác.`);
+  } else if (fix.kind === 'setVarType') {
+    // Đặt biến (design 0015): every step that assigns (Gán) this variable takes the type.
+    let n = 0;
+    updateWorkflow((wf) => {
+      for (const s of variableSteps(wf, fix.name, slotKeys)) {
+        if ((s.config?.mode ?? 'set') === 'add' || (s.config.valueType ?? 'text') === fix.to) continue;
+        s.config.valueType = fix.to;
+        n++;
+      }
+      return n > 0;
+    }, { source: 'inspector-structure' });
+    if (n) toast(`Đã đổi Kiểu của biến ${varPath(fix.name)} thành ${varTypeText(fix.to)} ở ${n} bước Đặt biến. Ctrl+Z để hoàn tác.`);
   } else if (fix.kind === 'addSelectField') {
-    const c = (step.config ??= {});
-    const name = c.alias || step.id;
-    let ok = false;
-    updateWorkflow(() => {
+    // The Query is another step: its builder list or its hand-written SOQL gets the field.
+    const q = stepById(fix.stepId);
+    if (q?.type !== 'query') return;
+    const name = q.config?.alias || q.id;
+    const done = updateWorkflow(() => {
+      const c = (q.config ??= {});
       if ((c.mode ?? 'builder') === 'soql') {
-        const next = addSelectField(c.soql ?? '', fix.field);
-        if (next === null) return;
+        const next = addSelectField(c.soql, fix.field);
+        if (next === null) return false;
         c.soql = next;
-        ok = true;
-        return;
+        return true;
       }
       const raw = c.fields ?? QUERY_DEFAULTS.fields;
-      const list = (Array.isArray(raw) ? raw : [raw]).flatMap((x) => String(x ?? '').split(/[\n,;]/)).map((x) => x.trim()).filter(Boolean);
+      const list = (Array.isArray(raw) ? raw : String(raw).split(/[\n,;]/)).map((x) => String(x ?? '').trim()).filter(Boolean);
       if (!list.some((x) => x.toLowerCase() === fix.field.toLowerCase())) list.push(fix.field);
       c.fields = list;
-      ok = true;
+      return true;
     }, { source: 'inspector-structure' });
-    if (ok) toast(`Đã thêm ${fix.field} vào Query "${name}". Bấm Xem trước để đọc lại.`, 5000);
-    else toast(`Không thêm được ${fix.field} vào SOQL của "${name}". Sửa câu SOQL bằng tay.`, 5000);
+    if (done) toast(`Đã thêm ${fix.field} vào Query "${name}". Bấm Xem trước để đọc lại.`);
+    else toast(`Không sửa được SOQL của Query "${name}". Thêm ${fix.field} vào SELECT bằng tay.`);
   }
 }
 
@@ -1132,6 +1101,7 @@ function issueOption(issue) {
   return step ? referenceOptions(step, state.meta, { includeHidden: true }).find((x) => x.field === issue.field && x.option === issue.suggestion?.option) : null;
 }
 
+// Template and number options (design 0013 B) write the variable inside {{ }}.
 const suggestionText = (issue) => (['template', 'number'].includes(issueOption(issue)?.mode) ? `{{${issue.suggestion.to}}}` : issue.suggestion.to);
 
 /** Apply an issue's suggestion to the first matching reference (one undo step). */
@@ -1160,8 +1130,7 @@ function followFieldRename(step, from, to) {
   // history: false — the references move in the same undo step as the name (one Ctrl+Z undoes both).
   const res = updateWorkflow((wf) => renameField(wf, step.id, from, to, { catalog: state.meta }), { source: 'inspector-structure', history: false });
   if (!res?.count) return;
-  // Only filter / weight fields of a pool changed (review 0013 N3): name the field itself.
-  const pairs = res.names.length ? res.names.map((n) => `${n}.${from} → ${n}.${to}`).join(', ') : `${from} → ${to}`;
+  const pairs = res.names.map((n) => `${n}.${from} → ${n}.${to}`).join(', ');
   toast(`Đã cập nhật ${res.count} tham chiếu: ${pairs}. Ctrl+Z để hoàn tác.`, 5000);
 }
 
@@ -1179,7 +1148,7 @@ function removeField(step, index) {
 
 let sobjectCache = { org: null, list: [] };
 
-async function openImport(node, { missing = [] } = {}) {
+async function openImport(node) {
   const modal = document.getElementById('modal');
   const org = state.org;
   const body = h('div', {}, h('p', { class: 'hint' }, 'Đang tải danh sách sObject…'));
@@ -1197,8 +1166,7 @@ async function openImport(node, { missing = [] } = {}) {
   const load = async () => {
     listBox.replaceChildren(h('p', { class: 'hint' }, 'Đang đọc describe…'));
     try {
-      const name = input.value.trim();
-      renderImportList(node, await describeCached(org, name), listBox, modal, { missing: name === node.config.sobject ? missing : [] });
+      renderImportList(node, await api.describe(org, input.value.trim()), listBox, modal);
     } catch (e) {
       listBox.replaceChildren(h('p', { class: 'err' }, e.message));
     }
@@ -1211,13 +1179,12 @@ async function openImport(node, { missing = [] } = {}) {
 const NEW_QUERY = '+query:';
 
 /**
- * Parent Import pre-selects for a Lookup / Master-Detail field `f` (mapDescribe) among `aliases`
- * (parentChoices): only parents usable at this position (above, not in the other branch, on):
- * one Record / Chọn bản ghi of that sObject (current), else one Query (random), else
- * "＋ … có sẵn trong org" when nothing matches (design 0006). '' for other fields.
+ * The parent a Lookup from describe starts with (Import, Record defaults): only among parents
+ * usable at this position (above, not in the other branch, on): one Record / Chọn bản ghi of that
+ * sObject (current), else one Query (random), else "＋ … có sẵn trong org" (NEW_QUERY + sObject)
+ * when nothing matches (design 0006); '' when it is ambiguous.
  */
-function defaultParent(f, aliases) {
-  if (f.type !== 'lookup' && f.type !== 'masterdetail') return '';
+function preselectParent(f, aliases) {
   const fits = (a) => a.usable && f.referenceTo?.includes(a.sobject);
   const records = aliases.filter((a) => fits(a) && a.nodeType !== 'query');
   const pools = aliases.filter((a) => fits(a) && a.nodeType === 'query');
@@ -1230,53 +1197,172 @@ function defaultParent(f, aliases) {
   return '';
 }
 
+const queriesText = (added) => added.map((q) => `"${q.alias}" (${q.sobject} có sẵn trong org)`).join(', ');
+
 /**
- * Inside updateWorkflow: append the described fields `specs` ([{ f, choice }], choice = the parent
- * alias or "＋ <sObject>") to Record `node`, as Import does: a Lookup to a Query pool picks at
- * random, "＋ …" adds one Query per sObject first in the workflow. → the Query steps added
- * [{ alias, sobject }]. Shared by Import, the default fields (G) and "Thêm n field" (F2).
+ * Add fields from describe to Record `node`, as "Import từ org…" does (one undo step): `picks` =
+ * [{ f, choice, lookup }] — `choice` the parent of a Lookup (an alias, '' or NEW_QUERY + sObject:
+ * a Query step of that sObject's existing records is added first in the workflow, one per sObject).
+ * → the Query steps added, [{ alias, sobject }].
  */
-function addDescribedFields(wf, node, specs, { sobject } = {}) {
-  const aliases = parentChoices(node);
+function addDescribedFields(node, described, picks, aliases) {
   const added = [];
-  const newQueries = new Map(); // sObject → alias (one Query per sObject)
-  node.config.fields ??= [];
-  for (const { f, choice = '' } of specs) {
-    const options = { ...f.options };
-    if (choice.startsWith(NEW_QUERY)) {
-      const so = choice.slice(NEW_QUERY.length);
-      if (!newQueries.has(so)) {
-        // Same undo step as the fields; first in the workflow so it runs before every step.
-        const q = newStep('query', { parentId: null, slot: null, index: 0 });
-        q.config.sobject = so;
-        Object.assign(q.config, structuredClone(state.meta?.queryPresets?.[so] ?? {}));
-        delete q.config.alias;
-        q.config.alias = suggestPoolAlias(so);
-        if (so === 'RecordType') q.config.where = `${q.config.where ? `${q.config.where} AND ` : ''}SobjectType = '${sobject ?? node.config.sobject}'`;
-        insertStep(wf, { parentId: null, slot: null, index: newQueries.size }, q);
-        newQueries.set(so, q.config.alias);
-        added.push({ alias: q.config.alias, sobject: so });
+  updateWorkflow((wf) => {
+    node.config.sobject = described.sobject;
+    if (!node.config.alias) node.config.alias = suggestAlias(described.sobject, node.id);
+    node.config.fields ??= [];
+    const newQueries = new Map(); // sObject → alias (one Query per sObject)
+    for (const { f, choice, lookup } of picks) {
+      const options = { ...f.options };
+      if (choice.startsWith(NEW_QUERY)) {
+        const sobject = choice.slice(NEW_QUERY.length);
+        if (!newQueries.has(sobject)) {
+          // Same undo step as the fields; first in the workflow so it runs before every step.
+          const q = newStep('query', { parentId: null, slot: null, index: 0 });
+          q.config.sobject = sobject;
+          Object.assign(q.config, structuredClone(state.meta?.queryPresets?.[sobject] ?? {}));
+          delete q.config.alias;
+          q.config.alias = suggestPoolAlias(sobject);
+          if (sobject === 'RecordType') q.config.where = `${q.config.where ? `${q.config.where} AND ` : ''}SobjectType = '${described.sobject}'`;
+          insertStep(wf, { parentId: null, slot: null, index: newQueries.size }, q);
+          newQueries.set(sobject, q.config.alias);
+          added.push({ alias: q.config.alias, sobject });
+        }
+        options.ref = newQueries.get(sobject);
+        options.mode = 'random';
+      } else if (lookup) {
+        options.ref = choice;
+        if (aliases.find((a) => a.alias === choice)?.nodeType === 'query') options.mode = 'random';
       }
-      options.ref = newQueries.get(so);
-      options.mode = 'random';
-    } else if (f.type === 'lookup' || f.type === 'masterdetail') {
-      options.ref = choice;
-      if (aliases.find((a) => a.alias === choice)?.nodeType === 'query') options.mode = 'random';
+      node.config.fields.push({ name: f.name, type: f.type, options });
     }
-    node.config.fields.push({ name: f.name, type: f.type, options });
-  }
+  }, { source: 'inspector-structure' });
   return added;
 }
 
-function renderImportList(node, described, box, modal, { missing = [] } = {}) {
-  const existing = new Set((node.config.fields ?? []).map((f) => f.name.toLowerCase()));
+// ---------- required fields still missing (design 0012 F2) ----------
+
+const describeCache = new Map(); // `${org}|${sobject}` → Promise<describe | null>, for this session
+const requiredDismissed = new Set(); // Record step ids whose hint was closed with "Bỏ qua" (not saved)
+
+/** ⟳ (reload the org list): describes and sObject lists (suggestions, Import) are read again. */
+export function clearDescribeCache() {
+  describeCache.clear();
+  sobjectLists.clear();
+  sobjectCache = { org: null, list: [] };
+}
+
+/** The describe of `step`'s sObject in the selected org (cached), or null: no org, unknown sObject, error. */
+function describeOf(step) {
+  const org = state.org;
+  const sobject = String(step?.config?.sobject ?? '');
+  if (!org || !API_NAME.test(sobject)) return null;
+  const key = `${org}|${sobject}`;
+  if (!describeCache.has(key)) {
+    const p = (async () => {
+      const known = await suggestContext(step).sobjects('create');
+      if (!known.some((x) => x.name === sobject)) return null;
+      return api.describe(org, sobject);
+    })().catch(() => {
+      // Describe problems are reported at the sObject field, not here; a failure is not kept, so
+      // the next look (or ⟳) asks again.
+      if (describeCache.get(key) === p) describeCache.delete(key);
+      return null;
+    });
+    describeCache.set(key, p);
+  }
+  return describeCache.get(key);
+}
+
+/** The hint box above "Fields" of a Record step, filled once the describe is there. */
+function requiredHint(node) {
+  const box = h('div', { class: 'hint-box required-hint', hidden: true });
+  box.dataset.step = node.id;
+  fillRequiredHint(box);
+  return box;
+}
+
+function refreshRequiredHint() {
+  const box = root?.querySelector('.required-hint');
+  if (box) fillRequiredHint(box);
+}
+
+let hintSeq = 0; // only the latest describe of a hint box writes into it
+
+async function fillRequiredHint(box) {
+  const id = box.dataset.step;
+  const org = state.org;
+  const seq = ++hintSeq;
+  box.dataset.seq = String(seq);
+  const described = requiredDismissed.has(id) ? null : await describeOf(stepById(id));
+  if (!box.isConnected) return; // the inspector moved on meanwhile
+  if (box.dataset.seq !== String(seq)) return; // a later fill (another sObject, org, field) owns the box
+  const step = stepById(id);
+  const missing = described && step && state.org === org && step.config?.sobject === described.sobject && !requiredDismissed.has(id)
+    ? missingRequired(step.config.fields, described)
+    : [];
+  if (!missing.length) {
+    box.hidden = true;
+    box.replaceChildren();
+    delete box.dataset.text;
+    return;
+  }
+  const text = requiredHintText(missing, described.sobject, org);
+  if (!box.hidden && box.dataset.text === text) return; // unchanged: its buttons keep focus
+  box.dataset.text = text;
+  box.hidden = false;
+  const lookup = (f) => f.type === 'lookup' || f.type === 'masterdetail';
+  const add = () => {
+    const live = stepById(id);
+    const still = live ? missingRequired(live.config.fields, described) : [];
+    if (!still.length) return;
+    const aliases = parentChoices(live);
+    const first = live.config.fields?.length ?? 0;
+    // Like Import: a required Lookup gets its parent by Import's rule (a Query of existing records when nothing fits).
+    const picks = still.map((f) => ({ f, choice: lookup(f) ? preselectParent(f, aliases) : '', lookup: lookup(f) }));
+    const added = addDescribedFields(live, described, picks, aliases);
+    // Several parents fit (or none could be guessed): the Lookup is added without one.
+    const noParent = picks.filter((p) => p.lookup && !p.choice).map((p) => p.f.name);
+    toast(
+      `Đã thêm ${still.length} field: ${still.map((f) => f.name).join(', ')}.${added.length ? ` Thêm cả bước Query ${queriesText(added)}.` : ''}${noParent.length ? ` Còn phải chọn bản ghi cha cho ${noParent.join(', ')} (mở field đó, mục "Bản ghi cha / pool").` : ''}`,
+      added.length || noParent.length ? 8000 : 4000,
+    );
+    // The inspector was drawn again (synchronously): continue at the first new field.
+    root?.querySelectorAll('.field-card')[first]?.querySelector('input')?.focus();
+  };
+  box.replaceChildren(
+    h('span', { class: 'hint-text', role: 'status' }, text),
+    h('span', { class: 'hint-actions' },
+      h('button', { class: 'primary', onclick: add }, `Thêm ${missing.length} field`),
+      h('button', { title: 'Mở hộp Import: các field bắt buộc còn thiếu đứng đầu và đã được tích', onclick: () => openImport(stepById(id)) }, 'Chọn…'),
+      h('button', {
+        title: 'Ẩn gợi ý này cho bước này tới khi tải lại trang',
+        onclick: () => {
+          requiredDismissed.add(id);
+          // The button goes away with the hint: focus the Fields heading right below it.
+          const heading = box.parentElement?.querySelector('.fields-heading');
+          box.hidden = true;
+          box.replaceChildren();
+          delete box.dataset.text;
+          heading?.focus();
+        },
+      }, 'Bỏ qua')),
+  );
+}
+
+function renderImportList(node, described, box, modal) {
+  // Same comparison as missingRequired (client/js/required-fields.js).
+  const existing = new Set((node.config.fields ?? []).map((f) => String(f?.name ?? '').trim().toLowerCase()).filter(Boolean));
   const aliases = parentChoices(node);
   const rows = described.fields.map((f) => {
     const has = existing.has(f.name.toLowerCase());
     const cb = h('input', { type: 'checkbox', checked: f.required && !has, disabled: has });
     let parentSel = null;
     if (f.type === 'lookup' || f.type === 'masterdetail') {
-      const pre = defaultParent(f, aliases);
+      // Auto-pick only among parents usable at this position (above, not in the other branch, on):
+      // one Record / Chọn bản ghi of that sObject (current), else one Query (random), else
+      // "＋ … có sẵn trong org" when nothing matches (design 0006).
+      const pre = preselectParent(f, aliases);
       const usable = aliases.filter((a) => a.usable);
       const other = aliases.filter((a) => !a.usable);
       parentSel = h(
@@ -1309,19 +1395,25 @@ function renderImportList(node, described, box, modal, { missing = [] } = {}) {
     class: 'dialog-filter',
     oninput: (e) => {
       const q = e.target.value.toLowerCase();
-      for (const r of rows) r.el.hidden = q && !`${r.f.name} ${r.f.label}`.toLowerCase().includes(q);
+      for (const r of rows) r.el.hidden = Boolean(q) && !`${r.f.name} ${r.f.label}`.toLowerCase().includes(q);
+      // A heading whose rows are all filtered out goes too.
+      for (const g of groups) g.head.hidden = g.rows.every((r) => r.el.hidden);
     },
   });
-  // "Chọn…" of the missing-required box (design 0012 F2): those fields first, under a group title.
-  const want = new Set(missing.map((n) => n.toLowerCase()));
-  const first = rows.filter((r) => want.has(r.f.name.toLowerCase()) && !r.cb.disabled);
-  const ordered = first.length
-    ? [h('div', { class: 'import-group' }, `Bắt buộc, chưa có (${first.length})`), ...first.map((r) => r.el), h('div', { class: 'import-group' }, 'Các field khác'), ...rows.filter((r) => !first.includes(r)).map((r) => r.el)]
-    : rows.map((r) => r.el);
+  // Required fields the step lacks come first, under their own heading (0012 F2), checked.
+  const missing = rows.filter((r) => r.f.required && !r.cb.disabled);
+  const others = rows.filter((r) => !missing.includes(r));
+  const groups = missing.length
+    ? [
+      { head: h('div', { class: 'list-group' }, `Bắt buộc, chưa có (${missing.length})`), rows: missing },
+      { head: h('div', { class: 'list-group' }, 'Các field khác'), rows: others },
+    ]
+    : [];
+  const listItems = groups.length ? groups.flatMap((g) => [g.head, ...g.rows.map((r) => r.el)]) : rows.map((r) => r.el);
   box.replaceChildren(
     h('p', { class: 'hint' }, 'Field bắt buộc đã được chọn sẵn. Field Lookup tự chọn bản ghi cha nếu chỉ có một bước khớp sObject; chọn "＋ … có sẵn trong org" để dùng bản ghi có sẵn.'),
     filter,
-    h('div', { class: 'list' }, ordered),
+    h('div', { class: 'list' }, listItems),
     h(
       'div',
       { class: 'actions' },
@@ -1330,15 +1422,9 @@ function renderImportList(node, described, box, modal, { missing = [] } = {}) {
         class: 'primary',
         onclick: () => {
           const picked = rows.filter((r) => r.cb.checked && !r.cb.disabled);
-          let added = []; // Query steps added for "＋ … có sẵn"
-          updateWorkflow((wf) => {
-            node.config.sobject = described.sobject;
-            if (!node.config.alias) node.config.alias = suggestAlias(described.sobject, node.id);
-            added = addDescribedFields(wf, node, picked.map((r) => ({ f: r.f, choice: r.parentSel?.value ?? '' })), { sobject: described.sobject });
-          }, { source: 'inspector-structure' });
+          const added = addDescribedFields(node, described, picked.map((r) => ({ f: r.f, choice: r.parentSel?.value ?? '', lookup: Boolean(r.parentSel) })), aliases);
           modal.close();
-          const qs = added.map((q) => `"${q.alias}" (${q.sobject} có sẵn trong org)`).join(', ');
-          toast(added.length ? `Đã thêm ${picked.length} field và bước Query ${qs}.` : `Đã thêm ${picked.length} field.`, added.length ? 5000 : undefined);
+          toast(added.length ? `Đã thêm ${picked.length} field và bước Query ${queriesText(added)}.` : `Đã thêm ${picked.length} field.`, added.length ? 5000 : undefined);
         },
       }, 'Thêm field đã chọn'),
     ),

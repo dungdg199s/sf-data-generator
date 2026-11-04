@@ -474,7 +474,7 @@ Bước Record mới từ palette (`newStep`): field mặc định = preset củ
 mẫu và hash vàng).
 
 **Workflow cũ đã lỡ có `Name` trên sObject `noName`.** Validate thêm **cảnh báo** gắn `fields.Name`:
-`Task không có field Name nên insert sẽ lỗi. Đổi thành Subject hoặc xóa field này.` (Contact/Lead: `… Đổi thành LastName …`), kèm
+`Task không ghi được field Name nên insert sẽ lỗi. Đổi thành Subject hoặc xóa field này.` (Contact/Lead: `… Đổi thành LastName …`), kèm
 `suggestion`-kiểu sửa nhanh `fix: { kind: 'renameField', stepId, from: 'Name', to: 'Subject' }` ⇒ nút `Đổi thành Subject` (dùng
 `renameField`, tham chiếu `{{task.Name}}` đi theo, một bước undo). Cảnh báo không chặn xem trước (xem trước không cần org).
 
@@ -719,7 +719,7 @@ Mỗi bước một commit, có test hoặc bước smoke. Bảng đồng bộ h
 11. **Tài liệu:** các file ở [Tài liệu tham chiếu](#tài-liệu-tham-chiếu-cần-cập-nhật-khi-làm-implementer-làm-cùng-code-doc-này-không-sửa),
     "Đã làm" của doc này, chỉ mục `docs/design/README.md` (thêm dòng 0012, trạng thái theo lúc đó), skill `smoke-test`.
 
-**Smoke** (`.claude/skills/smoke-test/smoke.cjs`, trần 12 s, hiện ~8 s). Một hàm mới `flowProductivity` chạy song song (context
+**Smoke** (`.claude/skills/smoke-test/smoke.cjs`, ngân sách thời gian: `SMOKE_BUDGET_MS` hoặc 20 s × max(1, 4 / số CPU), xem skill `smoke-test`; lúc viết doc trần là 12 s, hiện ~8 s). Một hàm mới `flowProductivity` chạy song song (context
 riêng, không chờ cố định), các bước:
 
 - G: thêm Record, đổi sObject `Task` ⇒ một field `Subject`; mở mẫu có Record Task-với-Name dựng bằng `addInitScript` ⇒ cảnh báo
@@ -741,7 +741,7 @@ riêng, không chờ cố định), các bước:
 Sửa có chủ đích: **luồng 6** (autosave v1) kiểm mục thư viện được tạo và `sfdg.workflow.v1` không đổi (thay vì kiểm
 `sfdg.workflow.v2` được ghi); thêm kiểm: `sfdg.workflow.v2` có sẵn ⇒ thành mục thư viện, khóa v2 không đổi từng byte. **Luồng 7**
 (autosave hỏng) giữ nguyên ý: `.broken` còn bản sao. Luồng 8/9 (mở file) đi qua `#file-input` như cũ. Ước tính thêm ~1,5 s cho
-luồng mới, chạy song song nên tổng ~9 s, dưới 12 s.
+luồng mới, chạy song song nên tổng ~9 s, trong ngân sách.
 
 ## Đã chốt
 
@@ -797,115 +797,335 @@ Không có câu hỏi chặn việc làm. Để sau:
 
 ## Đã làm
 
-Làm đủ chín phần theo thứ tự của kế hoạch (G, F1 cùng F2, C, I, H, D, E, B1, B2, A, rồi tài liệu), mỗi phần một commit trên nhánh
-`claude/salesforce-data-generator-xt3u27`. Workflow JSON không đổi; seed và hash vàng (`test/stream.test.js`) không đổi.
+Làm từng phần theo [Kế hoạch](#kế-hoạch-thực-hiện); phần chưa có ở đây là chưa làm.
 
-### Kiểm lại giả định (doc viết trước 0011 và 0013)
+### G — Field tên mặc định theo sObject (bước 1)
 
-| Giả định | Thực tế sau 0011 / 0013 | Đã làm |
-| --- | --- | --- |
-| `insert.byStep` phải thêm | 0011 đã có `byStep` trong tóm tắt của inserter và trong `result.insert` (cho Lịch sử); chỉ `progress` insert chưa có | Thêm `byStep` vào `progress` insert (và số tạm của job Bulk đang xử lý, như `inserted`); `insert.byStep` giữ nguyên dạng 0011 |
-| Tiến độ insert chỉ có `bySobject` | 0011 thêm `bulk`, `phase: "stopping"`, `waitingBulk` | Chip trực tiếp đọc `byStep` của `progress` insert; sự kiện `stopping` không đổi chip |
-| Tab "Lỗi insert" | 0011 thêm tab "Lỗi xóa" và `groupTarget` cho hàng nhóm lỗi | Tag lỗi mở đúng tab "Lỗi insert" (`showInsertErrorsFor`), hàng có `data-node`; tab "Lỗi xóa" không đổi |
-| Thư viện và Lịch sử | 0011 lưu ảnh chụp workflow của mỗi lần insert ở server | Thư viện chỉ ở `localStorage`, không đọc / ghi Lịch sử; đổi workflow không đụng Lịch sử. Cảnh báo "cùng seed đã insert" thành danh sách ≤ 20 `{ key, org }` (`state.lastInserts`) qua mọi workflow |
-| Ước tính chỉ có Lặp fixed / range / each | 0013 thêm số lần lặp từ biến, `values`, lọc / xáo trộn / tối đa của `each`, `flow.canSkip` | `shared/estimate.js`: `values` chính xác; biến ⇒ chưa biết (chip `? bản ghi`), trừ `{{pool.$count}}` (số dòng / bản ghi của pool, không chính xác); lọc ⇒ kỳ vọng chưa biết, tối đa = pool (`≤ n`); `limit` kẹp; `canSkip` (Chọn bản ghi "Bỏ qua") ⇒ phần còn lại của thân vòng lặp có thể không chạy (tối thiểu 0); thêm: pool lớn dần trong cùng vòng lặp ngoài ⇒ trung bình (tổng + một lượt) / 2 |
-| Dán đổi tên theo `cloneSteps` | 0013 thêm option nhận biến (`count`/`min`/`max` `vars: 'number'`, `right`, `filterValue`) và option tên field của pool (`filterField`, `weightField`, `poolFieldOptions`) | `pasteSteps` đổi alias qua `renameAlias` với danh mục, nên mọi option `vars` / `kind: 'ref'` đi theo (test riêng); `filterField` / `weightField` là tên field nên không đổi khi đổi alias (đúng), vẫn đi theo khi đổi tên field (0013) |
-| Chọn nhiều và `run.*` | 0013 thêm biến toàn cục `run` | `run.*` không phải bước: không tô thẻ nguồn (I), field dùng `{{run.seed}}` vẫn là "độc lập" (E) |
-| Icon (0014) | `ico()` của 0014 **chưa có** (chỉ `icoTile()`) | Không thêm glyph mới: tag lỗi là chữ `lỗi 3` (không ⊗), nút `Chưa lưu` không ▲, mục popup `+ Workflow mới`, `Mở file JSON…` không ⇪. `▾` và `⋯` là ký tự đã có. Mục "(0014, dự kiến)" của `ui-design-system.md` không sửa |
+- `server/workflow/nodes.js`: `RECORD_PRESETS` (bảng ở phần G) và `recordPreset(sobject)` (không phân biệt hoa thường);
+  `GET /api/meta` trả `recordPresets`. `server/sf/describe-map.js`: `mapDescribe` trả thêm `nameField`.
+- `server/workflow/schema.js`: cảnh báo `code: "noNameField"` gắn `fields.Name` của Record trên sObject `noName`, kèm
+  `fix: { kind: "renameField", stepId, from, to }`. Bước đã có field `to` thì không có `fix`, câu nói "Xóa field này (bước đã có
+  field LastName)." (đổi tên sẽ thành trùng field). Bước tắt không bị kiểm tra.
+- `client/js/ops.js`: `recordPresetFields(sobject)`; `newStep('record')` dùng preset (Account vẫn `Name` tên công ty: mẫu và hash
+  vàng không đổi). `client/js/inspector.js`: `applyRecordPreset` (trong cùng lần sửa sObject, nên một Ctrl+Z trả cả hai), describe
+  sau 500 ms (`scheduleRecordDescribe`, field bắt buộc rồi `nameField`, toast), chỉ vẽ lại khối Fields (`.fields-section`) nên ô
+  sObject giữ focus khi gõ. `preselectParent` tách từ hộp Import để dùng chung. Nút sửa nhanh `Đổi thành Subject` (`.quick-fix`):
+  dời tham chiếu (`renameField`) rồi đổi tên field; field còn ở option mặc định cũ (`mode: name/company` hoặc rỗng) nhận option của
+  preset (Subject: danh sách Call…). Inspector giờ hiện cả **cảnh báo có `fix`** dưới field (`.warn-line`, viền vàng), cảnh báo
+  khác vẫn chỉ ở thẻ và thanh lỗi.
+- Test: `test/server.test.js` (`GET /api/meta has recordPresets; Task has Subject and noName`, mỗi preset validate sạch),
+  `test/sf.test.js` (`mapDescribe returns nameField`), `test/workflow.test.js` (`a Task record with a Name field warns with a
+  renameField fix`, `no noNameField warning for Account, Opportunity or a custom sObject`); mẫu và hash vàng không đổi.
+  Smoke: luồng mới `flowProductivity` (16), bước G.
+- Khác thiết kế: preset có thêm khóa `nameField` (field thay cho `Name`, để server tạo `fix.to` và câu cảnh báo mà không đoán từ
+  danh sách field; Contact có `FirstName` đứng trước `LastName`). Field mặc định theo describe không tự thêm bước Query cho Lookup
+  bắt buộc chưa có bản ghi cha ("＋ … có sẵn trong org" chỉ có ở hộp Import): `ref` để trống, lỗi "chưa chọn bản ghi cha" chỉ đúng
+  field — tự thêm bước sau một độ trễ 0,5 s thì bất ngờ hơn.
+- Khác thiết kế (G.2, sau review): sObject có preset **giữ preset** và chỉ thêm field bắt buộc còn thiếu theo describe (không phân
+  biệt hoa thường); "mọi field bắt buộc, rồi `nameField`" chỉ áp cho sObject không có preset. Lý do: describe thật của Task/Event
+  không đánh dấu field nào bắt buộc, nên Event mất `ActivityDateTime`/`DurationInMinutes` (insert lỗi), Contact/Lead mất `FirstName`.
+  Thêm: name field auto-number (không tạo được) của sObject không preset và danh sách đang là `[Name]` ⇒ danh sách rỗng + toast
+  (cảnh báo "Bước chưa có field nào…" hướng dẫn tiếp). Hẹn giờ describe theo từng bước; focus trong danh sách field được giữ.
+- Khác thiết kế (câu chữ): cảnh báo `noNameField` viết `Task không ghi được field Name nên insert sẽ lỗi. …` (đã sửa ở phần G phía
+  trên). Field mặc định của sObject không preset (`Name`, Họ tên) cũng do server phục vụ (`meta.recordDefaultFields`), client không
+  giữ bản riêng. Nút `Đổi thành …` không làm gì khi issue đã cũ (field `from` không còn, hoặc đã có field `to`).
 
-### Đã làm theo phần
+### F1 — "Thêm <Field> vào SELECT" (bước 2)
 
-- **G** — `RECORD_PRESETS` / `recordPreset` (`server/workflow/nodes.js`), `meta.recordPresets` (thêm `nameField` cho preset
-  `noName`), `nameField` trong `mapDescribe`, cảnh báo `noNameField` + `fix: renameField` (không có `fix` khi bước đã có field
-  đích). Client: `recordDefaultFields` (store), `newStep` dùng preset (Account không đổi ⇒ mẫu và hash vàng không đổi),
-  `applyRecordPreset` khi đổi sObject (danh sách vẽ lại tại chỗ, focus ở ô sObject), describe sau 500 ms (field bắt buộc theo
-  hàm chung `addDescribedFields` của Import, rồi `nameField`), nút "Đổi thành …" (cảnh báo có `fix` hiện trong thẻ field).
-- **F1** — `addSelectField` (`shared/soql.js`), `fix: addSelectField` trên `unknownMember` của nguồn org (cả qua Chọn bản ghi và
-  bản ghi đang lặp, `stepId` = Query gốc; SOQL không sửa an toàn được ⇒ không có `fix`), nút ở `fillErrors`, toast.
-- **F2** — khung `.hint-box` "Thiếu n field bắt buộc …" (describe cache theo phiên, một lần mỗi org + sObject, xóa khi ⟳),
-  [Thêm n field] (cùng hàm Import, một bước undo), [Chọn…] (Import với nhóm `Bắt buộc, chưa có (n)` đứng đầu), [Bỏ qua].
-- **C** — `eachWrapPlan` / `wrapInEach` (`client/js/ops.js`): pool được tham chiếu nhiều nhất (Chọn bản ghi tính cho pool nó
-  chọn), rồi gần nhất; mục khóa kèm `title` khi không có pool; toast 8 s [Đổi] nối Lookup (bước undo riêng).
-- **I** — `client/js/ref-target.js`: chip biến (dải chip 0005) và chip Lookup trên thẻ Quy trình tô `.is-ref-target`; `title`
-  có `Nguồn: …`. Sơ đồ: thẻ trong khung nhìn được tô như Quy trình (thẻ Sơ đồ không có chip field).
-- **H** — `shared/estimate.js`, `currentEstimate()` (cache theo phiên bản + kết quả), chip `.stat.est` trên Record khi chưa chạy
-  / kết quả cũ (thay chip `.stale` của Record; khung giữ chip cũ), tổng và tag `.tag-over` trên thẻ Bắt đầu của hai view.
-- **D** — `client/js/run-info.js`: `chipFor` / `insertErrorTag` dùng khi dựng thẻ, `paintRunInfo` vá chip và tag theo `data-id`
-  (sự kiện `kind: 'live'`, inspector bỏ qua); `insert n/tổng` (tổng từ `byStep` của bản xem trước được xác nhận), tag `lỗi n`
-  (cả `stale`), ghi chú khung thu gọn `· lỗi insert n`. Bấm tag khi chưa xong: toast nói nhóm lỗi hiện khi insert xong.
-- **E** — `POST /api/field-samples` (`server/workflow/samples.js`), `api.fieldSamples`, hàng `Ví dụ:` cuối option của field đang
-  mở (debounce 300 ms, số thứ tự + `AbortController` theo từng hàng, câu trả lời của request giống hệt được dùng lại), field phụ
-  thuộc (Lookup, tham chiếu bước khác / biến lặp, bắc cầu qua `{{this.X}}`) đọc 3 bản ghi đầu của lần xem trước. Dòng "Lần xem
-  trước" một giá trị dưới ô field không hiện nữa (hàng mới thay); bảng chọn biến giữ dòng của nó.
-- **B1** — `normalizeSelection`, `rangeBetween`, `wrapSteps`, `removeSteps`, `moveBlock`, `neighbourTargetBlock`, `pasteSteps`,
-  `cloneSteps({ keepFree })` (`shared/workflow-tree.js`); `client/js/clipboard.js`. Sửa kèm: nhiều lần đổi tên trong một bản sao
-  áp cùng lúc (qua tên tạm), nên `acc → acc2` rồi `acc2 → acc3` không nối nhau (lỗi tiềm ẩn của `cloneSteps`, Ctrl+D cũng hưởng).
-- **B2** — `client/js/selection.js` (bước chính + `ids` + `anchor`), chuột / phím ở hai view, `aria-multiselectable`, `#sel-live`,
-  thao tác nhóm trong `ops.js` (một bước undo; di chuyển / bọc chỉ với dải, khóa kèm `title`), menu ⋯ theo nhóm (nhóm cuối tên
-  `Tắt / xóa`), panel "n bước đã chọn", copy / cut / paste qua sự kiện của trang (bỏ qua khi focus ở ô nhập, popup, hộp thoại,
-  hoặc đang bôi đen chữ), "Dán sau bước này" (`readText`, rồi bản sao trong tab), chế độ "Chọn nhiều bước" + `.select-bar`
-  (`client/js/select-bar.js`; sheet giữ đóng, toast nằm trên thanh). Undo / redo giữ bước chính.
-- **A** — `client/js/library.js` (thuần) và `client/js/library-ui.js`; store: `setPersistHook`, `loadWorkflow`, `rememberInsert`.
-  `#btn-library` (▾) và `#btn-unsaved` cạnh ô tên, `#btn-open` rời thanh trên (`#file-input` giữ), menu ⋯ ở ≤ 720 px có `Thư viện…`
-  và `Mở file JSON…`; `Lưu` giữ Ctrl+S với `title` mới. Ctrl+O ở mọi chỗ. Mới / Mở file / Mẫu không còn hỏi `Thay workflow hiện
-  tại?`. Toast có nút hiện trên hộp thoại modal thì nằm trong hộp (để bấm được Hoàn tác trong "Quản lý thư viện"); toast nhận
-  nhiều nút (hai tab).
+- `shared/soql.js`: `addSelectField(soql, field)` → câu mới (chèn `, Field` sau mục cuối của SELECT ngoài, giữ khoảng trắng trước
+  `FROM`), câu cũ nếu đã có field (không phân biệt hoa thường), `null` khi SOQL có lỗi mức error của `checkSoql`, subquery hay
+  `FIELDS(…)`/`TYPEOF` trong SELECT, hoặc `field` không phải đường dẫn field.
+- `server/workflow/schema.js`: `referenceIssue(ref, scope, step, stepOf)` gắn `fix: { kind: "addSelectField", stepId, field }` lên
+  `unknownMember` của nguồn org; `stepId` là Query gốc (`source.root`, nên qua Chọn bản ghi, Chọn bản ghi của Chọn bản ghi và bản
+  ghi đang lặp của Lặp `each`). Field qua quan hệ được thêm bằng **cả đường dẫn** của tham chiếu (`Owner.Email`,
+  `Owner.Manager.Email`, kể cả khi Query chưa lấy `Owner` nào); `{{acc.Name.Foo}}` trên field thường thì không có `fix`.
+- `client/js/inspector.js`: nút `Thêm Industry vào SELECT của "accs"` (`.quick-fix`) dưới câu lỗi, cạnh "Sửa thành …"; bấm sửa bước
+  Query (builder: thêm vào cuối `fields`; SOQL: `addSelectField`), một bước hoàn tác (`inspector-structure`), toast
+  `Đã thêm Industry vào Query "accs". Bấm Xem trước để đọc lại.` Thanh lỗi không thêm nút (như thiết kế).
+- Test: `test/soql.test.js` (`addSelectField` với SOQL thường, có WHERE/ORDER BY/LIMIT và chuỗi chứa `FROM`, semi-join trong WHERE,
+  `toLabel`, đã có field, subquery / `FIELDS(ALL)` / `TYPEOF` / SOQL lỗi ⇒ `null`), `test/workflow.test.js` (`unknownMember of a
+  Query source carries an addSelectField fix`: qua Chọn bản ghi, bản ghi đang lặp, Chọn bản ghi lồng, `left` của Rẽ nhánh,
+  `Owner.Email`, `Owner.Manager.Email`, `Name.Foo` không có `fix`, SOQL sửa được / có subquery, pool Record sinh ra thì không có
+  `fix`). Smoke `flowProductivity` bước F1.
+- Khác thiết kế: câu lỗi `unknownMember` của nguồn org nay gọi cả đường dẫn field thiếu (`… không lấy field Owner.Email. Thêm
+  Owner.Email vào …`) thay vì chỉ cấp đầu bị thiếu (`Owner` hay `Email`), để câu và nút sửa nói cùng một field.
 
-### Quyết định khi làm
+### C — Bọc trong Lặp qua từng bản ghi (bước 3)
 
-- Chip ước tính: `exp: null` ⇒ `≤ n bản ghi` (biết tối đa) hoặc `? bản ghi`; `vi-VN` của trình duyệt viết `50.000` (như thẻ Bắt
-  đầu trước đây), không phải `50 000`.
-- "Nhân bản" trong Quản lý thư viện: bản sao lấy cùng giờ sửa với bản gốc nên đứng ngay dưới nó (danh sách theo giờ sửa).
-- Mục hỏng khi khởi động: tab mở mục đọc được gần nhất (hoặc tạo mục mẫu), không bao giờ ghi đè mục hỏng; workflow đang hiện
-  không vẽ được ⇒ mẫu vào một **mục mới**, mục cũ còn nguyên (chế độ cũ: bản sao `.broken` như trước).
-- Ô tên trong "Quản lý thư viện" đổi tên mục đang mở bằng `updateWorkflow` (một bước undo như gõ ở thanh trên).
-- Bước smoke G dựng Task-có-`Name` bằng UI (đổi tên `Subject` thành `Name`) thay cho `addInitScript`: cùng cảnh báo, ít tải lại.
+- `client/js/ops.js`: `eachWrapPlan(id)` chọn pool và danh sách Lookup nên nối lại; `wrapInEach(id)` tạo Lặp `each`
+  (`newStep('loop', …, [bước])`, nên biến lặp không che vòng ngoài) thay chỗ bước, `from` theo kế hoạch, `itemAlias` =
+  `suggestPickAlias(from)`; một bước hoàn tác, Lặp mới được chọn và nháy. Toast 8 s `Đổi Lookup AccountId (con) sang bản ghi đang
+  lặp "acc2"?` / `Đổi 2 Lookup …` [Đổi] (bước hoàn tác riêng; Lookup đã bị sửa sau khi bọc thì không đổi).
+- `client/js/menus.js`: mục `Bọc trong Lặp qua từng bản ghi` ngay sau `Bọc trong Lặp` (menu chưa chia nhóm: việc của B), `title`
+  nói pool sẽ dùng; không có pool dùng được ⇒ mục khóa với `title` của thiết kế.
+- Test: theo kế hoạch không có test Node (dùng `wrapStep`); smoke `flowProductivity` bước C (mẫu "Contact cho Account có sẵn":
+  `con` được bọc trong Lặp `each` qua `accs`, bản ghi `acc2`, [Đổi] đặt `AccountId` = `acc2`, chế độ "Bản ghi hiện tại").
+- Khác thiết kế (làm rõ): tham chiếu tới một Chọn bản ghi được tính cho pool mà nó chọn từ đó (đi ngược chuỗi Chọn bản ghi tới pool
+  xa nhất còn dùng được), vì lặp qua một bản ghi đã chọn chỉ chạy một lần — đúng ví dụ smoke của thiết kế (`con` trỏ `acc` ⇒
+  `from` = `accs`). "Hòa" chọn pool gần nhất **trong các pool hòa**. Bấm [Đổi] có toast xác nhận `Đã đổi 1 Lookup sang bản ghi
+  đang lặp "acc2".` Chưa có ở inspector chọn nhiều và popup `Bọc ▾` (thuộc B).
 
-### Kiểm thử
+### I — Tô thẻ nguồn khi rê / focus chip (bước 4)
 
-- `npm test`: **409 / 409** (376 cũ + 33 mới), chạy 3 lần song song đều qua. Không test cũ nào bị sửa ý; thêm khẳng định vào hai test
-  có sẵn: `test/sf.test.js` "failure cascades across windows…" (`byStep` đếm bản ghi con bị bỏ vào bước con), `test/server.test.js`
-  "cross-site requests are refused…" (thêm `/api/field-samples` vào danh sách endpoint bị chặn).
-- Mới: `test/estimate.test.js` (9, gồm pool lớn dần trong vòng lặp ngoài), `test/clipboard.test.js` (3), `test/library.test.js` (7), và trong `server.test.js`
-  (`recordPresets`, `/api/field-samples`), `sf.test.js` (`nameField`), `workflow.test.js` (`noNameField`, `addSelectField` fix),
-  `soql.test.js` (`addSelectField`), `run.test.js` (`byStep` của `progress` insert), `workflow-tree.test.js` (dải, chọn, bọc, di
-  chuyển khối, dán, dán với option 0013), `safety.test.js` (`samples.js` không import gì ngoài generator và rng).
-- Smoke: `flowProductivity` (H, I, E, B, A, G) và `flowProductivityRun` (D qua luồng NDJSON giả trong trang, F1, C, chế độ chọn ở
-  390 px), chạy song song, chỉ chờ response / trạng thái cụ thể. Sửa có chủ đích: luồng 6 (v1 ⇒ mục thư viện, v2 không ghi; thêm v2
-  ⇒ mục đầu, khóa v2 không đổi từng byte), luồng 13c (menu ⋯ có `Thư viện…`, `Mở file JSON…`), các chỗ đọc autosave đọc mục đang
-  mở (`smokeStored()`), các chỗ ghi autosave rồi tải lại dùng `smokeSetAutosave()`, chờ chip thật `.stat:not(.est)`, và mục ⋯
-  "Lặp qua từng bản ghi" khớp đúng nhãn. 5 lần liền: OK, 10,5–11,1 s (trần 12 s); cùng máy, bản 0013 chạy 9,5–10 s.
+- `client/js/ref-target.js` (mới): `refSourceStep(ref)` (bước nguồn của một tham chiếu `analyzeScope` qua `sourceStep`: alias ⇒
+  Record / Query / Chọn bản ghi, biến lặp và bản ghi đang lặp ⇒ Lặp; `null` với chip đỏ `unknownName` và `this.*`),
+  `bindRefTarget(chip, id)` (`pointerenter`/`focus` thêm, `pointerleave`/`blur` bỏ), `paintRefTarget()` chỉ vá class trên thẻ của
+  hai view, `refTargetId()` (bỏ khi chip đã rời trang do vẽ lại).
+- `client/js/var-picker.js`: chip biến gắn `bindRefTarget`; `title` thêm dòng `Nguồn: Chọn bản ghi "acc"`. `client/js/process.js`:
+  chip field Lookup / Master-Detail (`→ acc`) cũng vậy, `decorate` giữ class khi vẽ lại. `client/js/canvas.js`: `decorateCard` đặt
+  class cho thẻ được tạo lại sau cull (Sơ đồ không có chip field nên chỉ là nơi hiện thẻ nguồn của chip ở inspector).
+- `client/css/app.css`: `.step-card.is-ref-target` (outline 2 px nét đứt `accent`, hở 2 px); `docs/ui-design-system.md` §6.4.
+- Smoke `flowProductivity` bước I: rê chip `[acc · Industry]` ⇒ thẻ `acc` được tô, rời chuột ⇒ hết; focus chip `AccountId · Lookup →
+  acc` trên thẻ `con` ⇒ tô `acc`, `title` có `Nguồn: Chọn bản ghi "acc"`, blur ⇒ hết.
+- Khác thiết kế: dòng `Nguồn: …` có trong `title` của mọi chip có nguồn (không chỉ khi thẻ ngoài khung nhìn), vì `title` không
+  biết thẻ có đang hiện hay không lúc rê.
 
-### Còn lại
+### H — Ước tính số bản ghi (bước 5)
 
-- Smoke gần trần 12 s trên máy 4 CPU (khoảng 1 s dư): luồng mới nhỏ (≈ 3,8 s riêng) nhưng thêm tải CPU cho các luồng song song.
-- Câu hỏi mở / việc tiếp theo ở trên giữ nguyên (thư viện ra đĩa, sửa hàng loạt option, kéo thẻ trên Sơ đồ, khai báo ý nghĩa ước
-  tính trong danh mục, gợi ý field bắt buộc từ `REQUIRED_FIELD_MISSING`, mũi tên cho thẻ nguồn ngoài khung nhìn).
+- `shared/estimate.js` (mới): `estimateSteps(wf, catalog, { queryCounts })` → `{ byStep, total }`, mỗi bước `{ records, min, max,
+  exact }` (khung: tổng bên trong; Lặp thêm `iterations`). Đúng bảng của phần H; option thiếu lấy `default` của danh mục; Query
+  SOQL tự viết lấy `LIMIT` cuối câu (không có ⇒ `maxQueryRows`). Pool theo alias: Record và Chọn bản ghi cộng dồn, Query thay.
+- `client/js/store.js`: `currentEstimate()` (cache theo phiên bản workflow và kết quả chạy; `queryCounts` từ `result.queries`).
+  `client/js/summary.js`: `estimateChip(step)`, `startEstimate()`, `formatEstimate` (`vi-VN`, một chữ số lẻ dưới 100, `> 200.000`).
+  Hai view: thẻ Record có `.stat.est` khi chưa có kết quả hoặc kết quả đã cũ (thay chip `.stale` của Record), thẻ Bắt đầu
+  `≈ 17,5 bản ghi · ≤ 50.000` và tag `.tag-est-over` khi vượt `maxRecords`. `app.css`, `docs/ui-design-system.md` §6.4.
+- Test: `test/estimate.test.js` (Lặp cố định lồng 3 × 4 = 12 chính xác và khớp lần chạy, `range`, Rẽ nhánh `chance` 0,3 và
+  `compare`, `each` qua pool Record / Query (dòng đã đọc, `LIMIT` builder và SOQL) / Chọn bản ghi, pool lớn lên trong vòng lặp bao
+  ngoài ⇒ không chính xác, bước tắt bị bỏ, vượt `maxRecordsHard`, mẫu "Account + Contact" 5 Account ≈ 12,5 Contact, mặc định
+  danh mục). Smoke `flowProductivity` bước H; luồng 15 chờ `.stat:not(.est)` (chip ước tính có sẵn trước khi chạy).
+- Khác thiết kế: số dùng định dạng `vi-VN` như phần còn lại của app (`≈ 2.000`, `12,5`), không phải `1 250`. Lặp `each` qua pool
+  được sinh trong một vòng lặp cũng bao ngoài Lặp đó dùng cỡ pool tới lúc đó (cận trên, mỗi lần vào thấy một ảnh chụp khác) và
+  luôn "không chính xác". Thẻ Bắt đầu luôn hiện ước tính (kể cả khi có kết quả mới), vì đó là số so với giới hạn.
 
-## Sửa sau review
+### D — Số liệu trực tiếp và lỗi insert trên thẻ (bước 6)
 
-| Mục | Sửa | Test |
-| --- | --- | --- |
-| B1 (mất dữ liệu): tạm dừng tự lưu còn sau khi đổi / tạo / xóa workflow | `createLibrary` (`client/js/library.js`) giữ mục đang mở của tab; tạm dừng **theo mục**, hết khi mở / tạo mục khác hay xóa mục đang mở. Nút `#btn-unsaved` thành `Tạm dừng lưu` (bấm mở lại lựa chọn) khi đang tạm dừng; hai nút của toast không làm gì nếu đã mở mục khác | `test/library.test.js` "paused + switch"; smoke `flowLibrary` |
-| B2 (mất dữ liệu): Xóa khi thùng rác không ghi được thì Hoàn tác mất | Bản xóa (`item` + JSON) giữ trong bộ nhớ của nút Hoàn tác; thùng rác chỉ là ghi thêm. Không khôi phục được (đầy) ⇒ toast nói rõ và nút "Tải bản đã xóa" | `test/library.test.js` (Storage giả có hạn mức) |
-| S1: xóa workflow đang mở khi đang chạy; `sfdg.wf.null` | Nút Xóa của mục đang mở khóa khi đang chạy (`title` BUSY); mục thay thế được mở / tạo **trước** khi xóa, không bao giờ đặt `activeId = null` | `test/library.test.js` (không có khóa `sfdg.wf.null`) |
-| S2: "Dùng bản ở tab kia" khi đang chạy | Chờ: toast `Đang chạy…`, giữ tạm dừng, chọn lại bằng `Tạm dừng lưu` | smoke `flowLibrary` (xem trước bị giữ) |
-| S3: `minWords`/`maxWords` không có trần | `MAX_COUNT = 1000` cho số từ / câu / đoạn; `min`/`max` của option số được validate (`optionRangeIssues`) ở lần chạy và ở `/api/field-samples`; `/api/field-samples` dừng sau 1 s. Không mẫu, workflow test hay ca vàng nào vượt (hash vàng không đổi) | `test/server.test.js` S3/S4 |
-| S4: `/api/field-samples` với `\|now\| > 8,64·10^15` ⇒ 500 | 422 với câu `NOW_MESSAGE` của lần chạy | `test/server.test.js` S3/S4 |
-| S5: hai chỗ chờ 3 s trong smoke | Chờ response `/api/validate` của đúng workflow vừa sửa, rồi timeout mặc định | smoke |
-| N1: `addSelectField` với dấu phẩy cuối / không cách trước FROM; truy vấn gộp | Chèn đúng; `COUNT`/`SUM`/… hoặc `GROUP BY` ⇒ `null`; kết quả phải qua `checkSoql` và có field | `test/soql.test.js` N1 |
-| N2: đổi tên khi dán chiếm tên mà bản dán tham chiếu nhưng không định nghĩa | Các tên đó tính là đã dùng | `test/workflow-tree.test.js` N2 |
-| N3: Hoàn tác ghi đè `sfdg.wf.<id>` đã có | Khôi phục dưới id mới | `test/library.test.js` N3 |
-| N4: chip insert cộng cả lỗi | Chip `insert n/tổng` chỉ đếm đã insert; lỗi ở tag `lỗi n` | smoke `flowProductivityRun` (`insert 3/n`) |
-| N5: đếm bước của bộ nhớ tạm đệ quy (RangeError) | Đếm bằng vòng lặp, dừng ở 2 001; lỗi phân tích bất kỳ ⇒ từ chối bằng toast | `test/clipboard.test.js` N5 (20 000 cấp) |
+- `server/sf/insert.js`: `createInserter` đếm `byStep[nodeId] = { inserted, failed }` cạnh `bySobject` (bản ghi con bị bỏ vì cha
+  lỗi tính cho bước của bản ghi con; bản ghi không có `nodeId` không được đếm theo bước), có trong `onBatch` và tóm tắt.
+  `server/run.js`: `progress` `insert` mang `byStep` (bản sao), `insert.byStep` của kết quả (kể cả `{}` khi Dừng trước khi ghi).
+- `client/js/run-cards.js` (mới): `cardChip` (đang chạy: `statChip` của `byStep` lượt sinh; khi insert, Record ghi `insert
+  n/tổng` với tổng = `stats.byStep[id].records` của bản xem trước được xác nhận, khung giữ số của bản đó; không chạy: ước tính H
+  hoặc kết quả cuối), `paintCardRun` vá chip `.stat` và tag `.tag-insert-err` của một thẻ (dùng lại phần tử), `noteText` cho
+  ghi chú khung thu gọn (`· lỗi insert 12`). `client/js/main.js`: `state.runLive` theo `progress`/`plan`, `liveCards()` gọi
+  `paintRunInfo()` (`views.js` → `process.js`/`canvas.js`), xóa khi chạy xong. Hai view vẽ chip qua `paintCardRun` trong
+  `decorate` (Sơ đồ: thẻ tạo lại sau cull cũng đúng). `client/js/results.js`: `showInsertErrorsFor(nodeId)`, hàng nhóm có
+  `data-node`, `.current`. `app.css`; `docs/ui-design-system.md` §6.4; `docs/workflow-schema.md` (`byStep`).
+- Test: `test/run.test.js` (`insert progress events and the result carry byStep counts per record step`: mỗi sự kiện tổng theo
+  bước = theo sObject, kết quả cuối), `test/sf.test.js` (inserter đếm `byStep`, con bị bỏ vì cha lỗi tính cho bước con, bản ghi
+  không có `nodeId`). Hash vàng không đổi. Smoke `flowProductivity` bước D.
+- Khác thiết kế: bấm tag khi insert còn chạy chỉ hiện toast `Nhóm lỗi hiện ở tab "Lỗi insert" khi insert xong.` (nhóm lỗi chỉ có
+  trong kết quả cuối). Tag trên Sơ đồ có `tabindex="-1"` như badge (một điểm Tab cho cây); ở Quy trình là nút Tab tới được.
+  Trên thẻ Record, chip ước tính (H) và chip số liệu là cùng một chỗ (`paintCardRun`), không phải hai phần tử.
 
-Tốc độ smoke: file tĩnh có ETag yếu (mtime + size) và 304 (vẫn `no-cache`; `test/server.test.js`); ba lần tải lại chỉ để đổi
-workflow thành `smokeOpen` (mở như một mục thư viện); `flowHistory` và phần wide của `flowLayoutWide` chung một context
-(`flowHistoryWide`); `flowCanvas` tách phần điện thoại (`flowCanvasPhone`); G và A rời `flowProductivity` sang `flowLibrary`; các
-luồng chạy theo thứ tự dài trước, tối đa 2 × số CPU cùng lúc. Kết quả: xem báo cáo của lần sửa (máy đo lúc đó bị tranh CPU từ host,
-nên trước / sau đo xen kẽ nhau).
+### E — Giá trị mẫu trong inspector (bước 7)
 
-Ngân sách smoke: đo xen kẽ trên cùng máy, bản trước 0012 (`fc216c4`) chạy 11,2 s, bản 0012 (`8bcf2a1`) 14,5 s, bản sau sửa 14,2 s.
-Phần tăng đến từ hai luồng mới (`flowProductivity*`, `flowLibrary`), không phải app chậm đi (mỗi lần tải trang chỉ chậm ~25 ms).
-Smoke bị giới hạn bởi CPU, nên **trần mặc định nâng từ 12 s lên 20 s** (`SMOKE_BUDGET_MS`). Trần vẫn bắt được luồng chờ cố định
-hoặc treo. Giảm thời gian khởi động app (bớt số module tải) để lại cho việc sau.
+- `server/workflow/samples.js` (mới): `fieldSamples(body)` dùng `createRandom` (seed, mặc định 1) và `generateValue`, scope rỗng,
+  `now` truyền vào; field phía trên không sinh được ở đây thì bỏ qua (chỉ lỗi của field được hỏi mới báo). `server/index.js`:
+  `POST /api/field-samples` (400 khi request sai dạng, 422 với `issues` khi kiểu lạ / chưa tên, 422 với câu của generator khi
+  sinh lỗi). `docs/workflow-schema.md`.
+- `client/js/field-samples.js` (mới): hàng `.field-samples` cuối khối option của field đang mở; `fieldDepends` phân loại
+  (kiểu `valueType: 'reference'` của danh mục, tham chiếu tới bước khác / biến lặp trong `currentScope().refs`, bắc cầu qua
+  `{{this.X}}`); field độc lập gọi server (300 ms, số thứ tự + `AbortController`, cache 50 câu trả lời), field phụ thuộc hiện 3
+  bản ghi đầu của bước trong lần xem trước (xám nghiêng khi cũ) hoặc lời nhắc Xem trước. Hàng tự làm mới khi workflow đổi
+  (kể cả gõ trong option, vốn không vẽ lại inspector) và khi có kết quả mới. `client/js/api.js` (`fieldSamples`),
+  `client/js/inspector.js`. Dòng "Lần xem trước" một giá trị của dải chip (`var-picker.js`) bỏ, `previewOf` bỏ; bảng chọn biến
+  giữ dòng của nó.
+- Test: `test/server.test.js` (`POST /api/field-samples returns 3 deterministic values`, `{{this.FirstName}}` dùng field phía
+  trên còn tham chiếu tới bước khác ra rỗng, kiểu lạ ⇒ 422 có `field`, `count` > 5 bị kẹp, hết giá trị duy nhất ⇒ 422 với câu của
+  generator, request sai ⇒ 400). Smoke `flowProductivity` bước E.
+- Khác thiết kế: request không có `now` bị từ chối (400) thay vì lấy giờ server, để ví dụ luôn tái lập được; `sobject` được nhận
+  nhưng chưa dùng. Field phụ thuộc mà lần xem trước không có bản ghi nào của bước hiện `Lần xem trước không sinh bản ghi nào của
+  bước này.`
+
+### Sửa sau review (C, H, D, E)
+
+- **Option số có giới hạn thật (E, `/api/run`).** `maxWords`/`minWords` ≤ 1 000, `maxSentences`/`minSentences` ≤ 200,
+  `maxParagraphs`/`minParagraphs` ≤ 50 (`server/generators/text.js`); `resolveOptions` kẹp mọi option `integer`/`number` vào
+  `min`/`max`, `options: null` coi như `{}`. Hàm chung `optionIssues(field)` (`server/generators/index.js`): validate báo lỗi
+  `optionRange` (`fields.<Name>`, `option`), `/api/field-samples` trả 422 `issues: [{ field, option, message }]` cho field được
+  hỏi (field phía trên chỉ bị kẹp). Lỗi của generator vẫn là 422 (kèm `issues[].field`); lỗi khác là 500 có log. Mẫu và hash vàng
+  không đổi (không mẫu nào dùng giá trị ngoài khoảng). Test: `test/generators.test.js`, `test/server.test.js`;
+  `docs/field-types.md`, `docs/workflow-schema.md`.
+- **[Đổi] của C an toàn với hoàn tác.** `shared/each-wrap.js` (mới, thuần): `eachWrapPlan(wf, catalog, id, { slotKeys, scope })`
+  và `applyEachRewire(wf, rewire, { loopId, itemAlias, slotKeys })`; `client/js/ops.js` chỉ gọi chúng. [Đổi] chỉ đổi khi Lặp mới
+  còn, vẫn là "Mỗi bản ghi trong pool" với cùng tên bản ghi, và bước của Lookup còn nằm trong nó (field và `ref` chưa bị sửa);
+  không thì không đổi gì, toast `Không đổi được: Lặp qua từng bản ghi đã bị hoàn tác hoặc sửa.` Test `test/each-wrap.test.js`.
+- **H dùng đúng luật đọc của server:** `estimate.js` lấy số dòng tối đa bằng `maxFetchFor(config, maxQueryRows)` của
+  `shared/soql.js` (bỏ hàm đọc `LIMIT` riêng), nên `LIMIT 5000` được kẹp còn 2 000 như khi đọc thật (test).
+- **D nhẹ hơn:** hai view tra bước qua `stepsById()` (Map id → bước, dựng một lần mỗi phiên bản workflow) thay vì `stepById`
+  từng thẻ; `resultStale()` chỉ tuần tự hóa workflow một lần mỗi phiên bản / lần chạy (`client/js/run-cards.js`).
+- **E:** `title` của hàng ví dụ nói đúng seed đang dùng; hàng (`aria-live`) chỉ ghi lại chữ khi chữ đổi; cache chỉ giữ câu trả lời
+  thành công và 422 (lỗi 500 / mất kết nối được hỏi lại). Chú thích `vi-VN` trong `summary.js` sửa theo định dạng thật.
+- `docs/ui-design-system.md` §6.4: tag lỗi insert trên Sơ đồ không tới được bằng bàn phím (`tabindex="-1"`); đường bàn phím là
+  tab "Lỗi insert".
+- **Ngân sách smoke (quyết định của điều phối):** `smoke.cjs` đọc `SMOKE_BUDGET_MS`, mặc định 15 000 (sau review 0014 nâng lên 20 000) × max(1, 4 /
+  `os.availableParallelism()`) ms thay cho 12 s cố định; tự kiểm tra tĩnh không có `waitForTimeout(` trong chính file; mọi context
+  `reducedMotion: 'reduce'`; luồng 5b mở workflow thứ hai qua `#file-input` thay vì reload; in thời gian từng luồng. Cập nhật skill
+  `smoke-test` và câu "12 s" ở 0012, 0013, 0014 (các mục "Đã làm" cũ của 0004/0006/0009/0010 giữ nguyên vì là số đo lịch sử).
+
+
+### B1 — Thao tác nhóm ở `shared/` (bước 8)
+
+- `shared/workflow-tree.js`: `normalizeSelection(wf, ids, slotKeys)` (thứ tự đọc, bỏ bước nằm trong khung đã chọn, `contiguous`
+  + `parentId`/`slot`/`start`/`end` của khối), `rangeBetween` (hai đầu nâng lên dãy chung gần nhất; hai cột của một Rẽ nhánh ⇒
+  chính Rẽ nhánh đó), `wrapSteps`, `removeSteps`, `moveBlock` (tọa độ trước khi di chuyển, như `moveStep`),
+  `neighbourTargetBlock` (Alt+↑/↓ cho khối, nhảy qua khung thu gọn), `cloneSteps(…, { keepFree })`, `pasteSteps(wf, target,
+  steps, { catalog, slotKeys })` → `{ ids, renamed: [{ from, to }], missing }` (`missing`: tên bản dán tham chiếu mà đích không
+  có, từ `analyzeScope`, cho câu toast), `countSteps`.
+- `shared/each-wrap.js`: `eachWrapPlan` nhận thêm một danh sách id (khối): pool dùng được ở chỗ bước đầu, tham chiếu của mọi bước
+  trong khối được đếm.
+- `client/js/clipboard.js` (mới, thuần): `toClipboard(steps, name)`, `parseClipboard(text, meta)` → `{ steps, from }` hoặc
+  `{ kind, error }` với câu của bảng "Từ chối dán". Import tương đối `../../shared/…` nên chạy cả trong Node lẫn trình duyệt.
+- Test: `test/workflow-tree.test.js` (dải qua hai dãy, bỏ con của khung đã chọn, bọc giữ thứ tự, khối vào/ra khung và nhảy khung
+  thu gọn, `pasteSteps` giữ alias trống / đổi alias trùng và tham chiếu bên trong theo / đổi biến lặp che vòng ngoài / id luôn
+  mới / `missing`), `test/clipboard.test.js` (mới: khứ hồi, nhận file v2, từ chối v1, loại lạ lồng bên trong, sai dạng, > 2 000
+  bước, > 5 MB, JSON hỏng / không phải của app), `test/each-wrap.test.js` (khối).
+- Làm rõ: biến lặp của bản dán chỉ đổi khi che Lặp bao quanh vị trí dán hoặc trùng alias bản ghi (đúng bảng; trùng biến của một
+  Lặp khác không bao quanh thì giữ); tên mới tránh mọi alias và biến lặp đã có. `pasteSteps` trả thêm `missingRefs` (số tham
+  chiếu hỏng) để toast nói đúng "1 tham chiếu …".
+
+### B2 — Chọn nhiều, thao tác nhóm, copy/paste ở giao diện (bước 9)
+
+- `client/js/selection.js` (mới): `state.selection = { kind: 'step', id, ids?, anchor? }` (`id` = bước chính như cũ), `selectedIds`,
+  `selectionInfo` (= `normalizeSelection`), `clickSelect` (Shift: `rangeBetween`, Ctrl/⌘: bật/tắt; bước trong khung đã chọn đi theo
+  khung), `extendBy` (Shift+↑/↓ trong dãy của anchor), `selectAllInSequence` (Ctrl+A), `collapseToPrimary` (Esc nấc 1), chế độ
+  chọn (`body.select-mode`), vùng `#sel-live` đọc `Đã chọn 3 bước.`. `store.js`: undo/redo chỉ giữ bước chính.
+- `client/js/ops.js`: `deleteSelection` (hộp `Xóa 3 bước và 5 bước bên trong?` khi có khung chứa bước con; không thì xóa ngay +
+  toast [Hoàn tác] và câu "đang được dùng ở N chỗ"), `toggleSelectionDisabled`, `duplicateSelection` (khối: một bản sao cả khối
+  sau khối, tham chiếu giữa các bước trong khối đi theo; rời: mỗi bước sau chính nó), `wrapSelection`, `wrapSelectionEach`
+  (`wrapInEach` nhận khối), `moveSelectionBy` (gộp undo `move:<ids>`), `moveBlockTo` (kéo ⠿ một thẻ của khối đang chọn kéo cả
+  khối), copy/cut/paste (`selectionClipboard`, `removeCut`, `clipboardCommand` = `execCommand`, `pasteCommand` = `readText` rồi
+  bản trong tab, `pasteText` với các câu toast của thiết kế). Mỗi thao tác một bước undo.
+- `client/js/main.js`: phím một-bước áp cho cả lựa chọn, Ctrl+A (focus trong cây), Esc hai nấc; sự kiện `copy`/`cut`/`paste`
+  của `document` (bỏ qua khi focus ở ô nhập, khi có hộp thoại, hoặc khi người dùng đang bôi đen chữ trên trang).
+- `client/js/menus.js`: menu ⋯ chia nhóm Chỉnh sửa / Di chuyển / Bọc / Chọn, rồi Tắt/Bật và Xóa sau một đường kẻ
+  (`popup.js`: mục `{ separator: true }`); trên thẻ thuộc lựa chọn nhiều: tiêu đề `3 bước đã chọn`, mục khóa theo bảng (`title`
+  nói vì sao). `wrapItems`/`editItems`/`moveItems`/`offDeleteItems` dùng chung cho menu, inspector và thanh chọn.
+- `client/js/inspector.js`: panel `3 bước đã chọn` (danh sách, hàng Bọc, hàng Sao chép / Cắt / Nhân bản / Tắt n bước / Xóa n bước,
+  mẹo); tab Phím tắt thêm các phím mới. `client/js/select-bar.js` (mới): `.select-bar` `[n đã chọn] [Bọc ▾] [Xóa] [⋯] [Xong]`
+  (≈ 274 px ở 390 px), `Bọc ▾` mở popup 3 kiểu bọc (phần C hoãn lại ở đây), `⋯` có Sao chép, Cắt, Dán, Nhân bản, Tắt/Bật, Lên,
+  Xuống. Hai view: Shift/Ctrl+bấm, chạm trong chế độ chọn, Shift+↑/↓, mọi thẻ được chọn có `.selected` + `aria-selected`,
+  `aria-multiselectable` trên `role="tree"`. `app.css`: `.select-bar`, `.multi-actions`, `.popup-sep`.
+- Smoke: luồng mới `flowLibrary` (17), phần B (chạy song song với các luồng khác thay vì nối vào `flowProductivity`, vốn đã là
+  luồng dài nhất).
+- Khác thiết kế (làm rõ): dán khi **nhiều** bước được chọn đặt ngay sau bước cuối (không vào slot trống của khung cuối như
+  `defaultInsertTarget`); một bước được chọn thì đúng `defaultInsertTarget`. Trong chế độ chọn, chạm thêm thẻ không đổi bước chính
+  (Xong về lại thẻ bắt đầu); Ctrl+bấm ở màn hình rộng thì thẻ vừa bấm thành bước chính. Bản dán đổi tên cả biến lặp nên toast
+  `Đổi tên alias:` có thể kể cả `loop → loop2`. Menu "Sao chép" khi trình duyệt không cho `execCommand` vẫn giữ bản sao trong tab
+  (toast nói rõ chỉ dán được trong tab này).
+
+### A — Thư viện workflow (bước 10)
+
+- `client/js/library.js` (mới, không DOM, storage truyền vào): khóa `sfdg.library` / `sfdg.wf.<id>` / `sfdg.library.trash` /
+  `sessionStorage['sfdg.activeId']` đúng bảng; `createLibrary` (`create`, `save` — quota ⇒ xóa thùng rác rồi thử lại một lần,
+  trả `readded` khi mục bị tab khác xóa, `rename`, `duplicate` ngay dưới mục gốc, `remove` vào thùng rác, `restoreTrash`, `usage`,
+  `exportAll`), `repairIndex`, `copyName`, `parseLibraryFile`, `migrateToLibrary` (v2 hợp lệ ⇒ mục đầu; không có thì v1 qua
+  `migrateV1`; không có gì ⇒ mẫu đầu; v2 hỏng ⇒ bản sao `.broken` khi chưa có, thư viện bắt đầu bằng mẫu; quota ⇒ chế độ cũ, không
+  để lại chỉ mục dở). Ghi mục trước, chỉ mục sau; v1 và v2 không bao giờ bị ghi hay xóa (v2 chỉ còn được ghi ở chế độ cũ).
+- `client/js/library-ui.js` (mới): popup `▾` (`#btn-library`, Ctrl+O kể cả trong ô nhập; ô tìm khi > 6 mục, 20 mục gần đây, mục
+  cũ hơn chỉ hiện khi tìm — `popup.js` có `searchOnly`, `searchLabel`), `＋ Workflow mới`, `⇪ Mở file JSON…`, `Quản lý thư viện…`
+  (sửa tên tại chỗ — mục đang mở đi qua `updateWorkflow`, một bước undo; Mở / Nhân bản / Tải JSON / Xóa, ≤ 720 px gom vào `⋯`;
+  dòng nơi lưu + dung lượng; Tải tất cả). Mới / Mở file / Mẫu = `openAsNew` (mục mới, dùng lại mục trống tên "Workflow mới"); đổi
+  workflow = `store.openWorkflow` (đặt lại undo, bỏ chọn, xóa kết quả). Khóa khi đang chạy (`setLibraryLocked`, cả nút Mới).
+  Quota: `▲ Chưa lưu` (`#btn-unsaved`), toast 12 s [Mở Thư viện], `beforeunload`, `Đã lưu lại "…"`. Sự kiện `storage` của mục đang
+  mở ⇒ tạm dừng tự lưu, toast không tự tắt [Dùng bản ở tab kia] [Giữ bản của tab này] (`dom.toast` nhận nhiều nút, `ms: Infinity`).
+  Mục hỏng: mô tả `không mở được`, bấm ⇒ toast [Tải bản lưu].
+- `store.js`: `setPersistHandler`, `openWorkflow`; `lastInsert` thành `lastInserts` (≤ 20, giữ qua các workflow). `main.js`: khởi động
+  qua `initLibrary`, `#file-input` nhận cả file thư viện (`Đã thêm N workflow vào thư viện.`), menu ⋯ ở ≤ 720 px: Mới, Thư viện…,
+  Mở file JSON…, Lưu. `index.html`: `▾` dính ô tên, `Mở…` rời thanh trên, `title` mới của Lưu. Tab Phím tắt: Ctrl+O.
+- Test `test/library.test.js` (mới, storage giả có giới hạn): chuyển từ v2 (v2, v1 không đổi từng byte), từ v1, từ không có gì,
+  v2 hỏng (`.broken` không bị ghi đè), quota khi chuyển ⇒ chế độ cũ không để lại khóa nào; `repairIndex`; `copyName`; tạo / lưu /
+  đổi tên / nhân bản / xóa / hoàn tác, mục bị tab khác xóa được thêm lại; quota (xóa thùng rác rồi thử lại, vẫn đầy ⇒ giữ bản tốt
+  cuối); file thư viện khứ hồi.
+- Smoke: `flowLibrary` (17) phần A; mọi luồng đọc workflow tự lưu qua `smokeSaved()` (mục đang mở) thay vì `sfdg.workflow.v2`;
+  luồng 6 kiểm mục thư viện từ v1 (v1 không đổi, v2 không bị ghi) và thêm kiểm v2 ⇒ mục thư viện, khóa v2 không đổi từng byte;
+  luồng 7 giữ nguyên ý; luồng 13 mở workflow lỗi bằng `#file-input` rồi tải lại trang, menu ⋯ có `Thư viện…`, `Mở file JSON…`;
+  luồng 14 mở workflow bằng `#file-input` thay vì ghi `sfdg.workflow.v2` rồi tải lại.
+- Khác thiết kế: `Hoàn tác` của Xóa còn có ở một dòng ngay trong hộp Quản lý thư viện (10 s), vì hộp là modal nên nút của toast
+  phía sau không bấm được. Chế độ cũ (quota khi chuyển) giữ hộp hỏi `Thay workflow hiện tại?` và Ctrl+Z như trước khi có thư viện,
+  vì vẫn chỉ có một autosave. Mục hỏng là mục đang mở lúc khởi động: tab mở mục đọc được kế tiếp (hoặc tạo mục mẫu) và báo toast.
+  Danh sách "Gần đây" có cả mục đang mở (✓).
+
+### Tài liệu (bước 11)
+
+- `docs/workflow-schema.md`: mục mới "Định dạng phụ" (bộ nhớ tạm của bước, file thư viện, khóa của thư viện trong trình duyệt);
+  `byStep`, `fix`, `POST /api/field-samples`, `meta.recordPresets` đã ghi ở các bước trước.
+- `docs/architecture.md`: bảng `shared/` (nhóm bước của `workflow-tree.js`), bảng client (`store.js` mới, `selection.js`,
+  `select-bar.js`, `clipboard.js`, `library.js`, `library-ui.js`, `menus.js`, `ops.js`).
+- `docs/ui-design-system.md`: §6.4 (chọn nhiều), §6.11 (toast hai nút, `.select-bar`, hộp Quản lý thư viện, nút `▾` và `▲ Chưa
+  lưu`), §8.3 (phím chọn nhiều, bộ nhớ tạm, Ctrl+O).
+- `CLAUDE.md` (Client state: thư viện thay một autosave, lựa chọn nhiều, định dạng bộ nhớ tạm), skill `smoke-test` (luồng 6, 13c,
+  13d, 17), chỉ mục `docs/design/README.md`.
+- `docs/org-connection.md` không đổi ở bước này: `nameField` và field mặc định theo describe đã ghi ở G; khung "Thiếu field bắt
+  buộc" được ghi cùng F2 (dưới).
+- Đo smoke cuối (4 CPU, ngân sách 15 s): 3 lần chạy đủ đều `SMOKE OK`, 9,9 s · 9,9 s · 10,2 s (luồng dài nhất `flowProductivity`
+  ≈ 9,4–9,8 s; `flowLibrary` 5,6–7,0 s).
+
+### Sửa sau review (B, A)
+
+- **Popup trong hộp thoại modal:** `openPopup` gắn popup vào `dialog[open]` chứa nút neo (không thì `body`), nên nút `⋯` của mục
+  trong "Quản lý thư viện" ở ≤ 720 px bấm được (trước đó popup nằm dưới top layer của `showModal`). Smoke 17: Xóa qua `⋯` ở 390 px.
+- **Ctrl+O** được xử lý trước lối thoát sớm khi có hộp thoại / popup (mở hoặc đóng popup Thư viện, không bao giờ hộp mở file;
+  khi một hộp thoại đang mở thì không làm gì). Gõ-để-nhảy của popup bỏ qua phím có Ctrl / ⌘ / Alt.
+- **Thanh chọn** dựng một lần, chỉ vá số đếm và cờ `disabled` (focus không mất); `role="toolbar"` có roving tabindex và
+  ← / → / Home / End; chừa `env(safe-area-inset-bottom)` (`test/css-tokens.test.js` cho phép `env(safe-area-inset-*)`).
+- **Đổi tên khi dán / Ctrl+D không nối chuỗi:** tên mới không bao giờ trùng một tên gốc trong bản sao (chép `[acc, acc2, →acc,
+  →acc2]` vào workflow đã có `acc` ⇒ `acc3`, `acc2`, hai Lookup vẫn tách). Record dán vào trong Lặp có biến trùng alias của nó
+  thì đổi tên (`row` ⇒ `row2`). Test cho cả hai.
+- **Hai tab / chưa lưu:** khi tạm dừng tự lưu, nút `▲ Tab khác đã sửa` (dùng lại `#btn-unsaved`) mở lại hai lựa chọn; toast xung
+  đột nhớ mục của nó (đã đổi workflow thì nút không làm gì, nói rõ). Đổi workflow / Mới / Mở file / Mẫu khi chưa lưu hoặc đang tạm
+  dừng thì hỏi `Đổi workflow khi chưa lưu?` [Tải file JSON] [Hủy] [Vẫn đổi]. Mục đang tạm dừng không được dùng lại cho Mới.
+  Mở mục khác xóa chỉ báo. Thông báo của chỉ báo đọc qua vùng `#save-status` (`role="status"`), không phải `aria-live` trên nút.
+- **Hiệu năng:** `store.stepsById()` (Map id → bước mỗi phiên bản workflow, `run-cards.js` dùng lại) cho `selection.js`; tập id đã
+  chọn là `Set` theo đối tượng lựa chọn. `library.js`: `repairIndex` dùng tập khóa của storage và chỉ chạy lúc khởi động, khi tab
+  khác đổi một mục (sự kiện `storage`) và khi mở popup / hộp Thư viện — không chạy trong mỗi lần lưu. Cờ `broken` được nhớ trong chỉ
+  mục (đặt khi đọc mục thất bại, bỏ khi đọc lại được), nên popup không phân tích mọi mục.
+- **Nhỏ:** `restoreTrash` dùng id mới khi khóa cũ đã bị chiếm; `newEntryId` thêm 4 ký tự từ `crypto.getRandomValues`; nhập file thư
+  viện chạy `malformedSteps` và toast nói số mục version 1 / hỏng bị bỏ qua; `rename` trả lại nội dung mục khi không ghi được chỉ mục;
+  câu "có bản sao trong trình duyệt" chỉ khi bản sao là của autosave này (bản `.broken` cũ hơn được giữ thì nói vậy); thùng rác bị
+  xóa khi hết 10 s hoàn tác; dung lượng (`bytes`, dòng "Đã dùng") đếm ký tự, đúng cái quota ~5 triệu ký tự đếm.
+
+### F2 — Field bắt buộc còn thiếu (thêm sau, theo quyết định của điều phối)
+
+Kế hoạch thực hiện chỉ có bước F1; F2 đã được duyệt trong thiết kế nhưng thiếu trong kế hoạch, nên làm riêng sau review.
+
+- `client/js/required-fields.js` (mới, thuần): `missingRequired(fields, described)` (field `required` của describe chưa có trong
+  bước, so không phân biệt hoa thường, theo thứ tự describe), `requiredHintText`.
+- `client/js/inspector.js`: khung `.hint-box` trên tiêu đề "Fields" của bước Record khi đã chọn org và sObject có trong danh sách
+  sObject tạo được (describe cache theo `org|sObject` trong phiên, lỗi ⇒ không hiện gì; ⟳ danh sách org gọi `clearDescribeCache`).
+  [Thêm n field] dùng `addDescribedFields` — tách từ nút "Thêm field đã chọn" của Import, nên kiểu, option và luật chọn bản ghi
+  cha của Lookup bắt buộc (kể cả thêm bước Query "＋ … có sẵn trong org") giống hệt Import; một bước hoàn tác, toast `Đã thêm 2 field:
+  StageName, CloseDate.` [Chọn…] mở hộp Import, hộp nay nhóm field bắt buộc còn thiếu ở đầu dưới `Bắt buộc, chưa có (n)` (đã tích),
+  rồi `Các field khác`. [Bỏ qua] ẩn khung cho bước đó trong phiên. Gõ tên field (sửa trong inspector, không vẽ lại) thì khung tự
+  cập nhật từ describe đã cache; khung không đổi thì không vẽ lại (giữ focus trên nút). Không vào thanh lỗi.
+- `docs/org-connection.md` (mục "Field bắt buộc còn thiếu"), `docs/architecture.md`, `docs/ui-design-system.md` §6.11 (`.hint-box`).
+- Test `test/required-fields.test.js` (thứ tự describe, không phân biệt hoa thường, bỏ field không bắt buộc / mục rỗng, câu gợi
+  ý). Smoke `flowLibrary` (17) phần F2 với org giả `dev` (route `page.route`, không gọi sf CLI): `Thiếu 1 field bắt buộc của Contact
+  trong dev: Region__c.` trên `con`, Chọn… nhóm Region__c đầu hộp Import và đã tích, Thêm 1 field thêm `Region__c` (picklist) và
+  khung biến mất, ↶ trả lại cả hai, Bỏ qua giữ khung ẩn khi chọn lại bước.
+- Khác thiết kế (làm rõ): [Thêm n field] có thể thêm bước Query "＋ … có sẵn trong org" cho Lookup bắt buộc không có bản ghi cha
+  phía trên — đúng "như Import" của thiết kế (là một cú bấm có chủ đích, khác field mặc định tự động của G vốn không thêm bước), và
+  toast nói thêm bước đó.
+
+### Sửa sau review lần 2
+
+- **Hỏi "Đổi workflow khi chưa lưu?" từ "Quản lý thư viện":** bấm Mở đóng hộp rồi `confirmLeave` mở lại ngay; Chromium bắn sự kiện
+  `close` của lần đóng trước muộn hơn, nên câu hỏi tự trả lời "Hủy" và "Vẫn đổi" không làm gì. `onclose` nay bỏ qua sự kiện cũ
+  (`if (!modal.open) resolve(false)`). Smoke 17: tạm dừng tự lưu bằng một sự kiện `storage`, Quản lý → Mở → Vẫn đổi phải đổi workflow.
+- **`switchTo`** đọc mục *sau* câu hỏi (tab khác có thể đã sửa / xóa nó trong lúc hỏi), báo mục hỏng ở đó, và kiểm tra lại đang chạy
+  (`locked`) và `id === activeId`.
+- **Đổi tên khi dán / Ctrl+D không nối chuỗi qua biến lặp:** biến của mọi Lặp trong bản sao (`config.alias || 'loop'`) cũng thuộc
+  các tên gốc, nên dán `[Record item, Lặp(item2){ "{{item.Name}} #{{item2}}" }]` vào workflow có `item` ⇒ `item3`, biến `item2` giữ
+  nguyên, mẫu đúng. Ctrl+D truyền thêm biến của các Lặp bao quanh (`loopVarsAround`, nay export từ `shared/workflow-tree.js`, như
+  dán). Hai test mới trong `test/workflow-tree.test.js`.
+- **Xóa khi bộ nhớ đầy:** xóa một workflow xong thì lưu lại ngay (`if (unsaved) persist()`), vì đã có chỗ.
+- **⟳** xóa cả danh sách sObject (gợi ý và hộp Import), không chỉ describe; describe lỗi không được cache (lần sau hỏi lại).
+- **Hẹn giờ 10 s của thùng rác** (và Hoàn tác) chỉ vẽ lại hộp khi hộp đang hiện Thư viện (`.lib-list`), không vẽ đè câu hỏi khác.
+- **Hoàn tác một lần xóa cũ:** thùng rác giữ một mục; `restoreTrash(id)` chỉ trả lại khi thùng rác còn giữ đúng mục đó, không thì
+  toast nói thùng rác chỉ giữ lần xóa gần nhất (hoặc đã quá 10 s) và gợi ý Mở file JSON… (trước đó trả lại nhầm workflow xóa sau,
+  ví dụ khi tab khác vừa xóa). Test trong `test/library.test.js`.
+- **Nhỏ:** thanh chọn chuyển focus sang Xong khi nút đang focus bị tắt (focus rơi về `<body>`); safe-area của thanh chọn không còn bị
+  `padding` ghi đè (`padding: 0 var(--space-3) env(safe-area-inset-bottom)`, khoảng đệm và toast cộng thêm safe-area,
+  `viewport-fit=cover` trong meta viewport); gợi ý F2 có số thứ tự để chỉ lần describe mới nhất ghi vào khung; `role="status"`
+  chuyển từ `.hint-box` sang `.hint-text`; Thêm n field focus ô tên field mới đầu tiên, Bỏ qua focus tiêu đề "Fields"; hộp Import
+  ẩn tiêu đề nhóm khi bộ lọc ẩn hết dòng của nhóm, so tên field bằng `trim().toLowerCase()` như `missingRequired`; toast Thêm n field
+  nói `Còn phải chọn bản ghi cha cho …` khi Lookup bắt buộc chưa có cha. Smoke 17 thêm: tiêu đề nhóm bị lọc ẩn, focus sau Thêm.

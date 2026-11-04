@@ -2,7 +2,7 @@
 <html lang="vi">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>SF Data Generator</title>
   <link rel="stylesheet" href="/css/app.css">
   <script src="/js/theme.js"></script>
@@ -14,10 +14,10 @@
       <div class="wf-name-group">
         <input id="wf-name" class="wf-name" type="text" aria-label="Tên workflow" placeholder="Tên workflow">
         <button id="btn-library" class="icon lib-btn" title="Thư viện workflow (Ctrl+O)" aria-label="Thư viện workflow" aria-haspopup="menu" aria-expanded="false"><span class="ico" data-ico="chevron-down" aria-hidden="true"></span></button>
-        <button id="btn-unsaved" class="unsaved-btn" hidden aria-live="polite" title="Chưa lưu được thay đổi vào trình duyệt. Bấm để mở Thư viện.">Chưa lưu</button>
+        <button id="btn-unsaved" class="unsaved-btn" hidden title="Bộ nhớ trình duyệt đầy: thay đổi chưa được lưu. Bấm để mở Thư viện và xóa bớt workflow."><span class="ico" data-ico="warning" aria-hidden="true"></span>Chưa lưu</button>
       </div>
       <div class="toolbar">
-        <button id="btn-new" class="tb-wide" title="Workflow mới (thêm vào Thư viện)">Mới</button>
+        <button id="btn-new" class="tb-wide" title="Workflow mới">Mới</button>
         <button id="btn-save" class="tb-wide" title="Tải file workflow JSON (Ctrl+S). Thư viện trong trình duyệt tự lưu mọi thay đổi.">Lưu</button>
         <button id="btn-undo" title="Hoàn tác (Ctrl+Z)" aria-label="Hoàn tác"><span class="ico" data-ico="undo" aria-hidden="true"></span></button>
         <button id="btn-redo" title="Làm lại (Ctrl+Shift+Z)" aria-label="Làm lại"><span class="ico" data-ico="redo" aria-hidden="true"></span></button>
@@ -76,10 +76,7 @@
           <button id="btn-zoom-fit" class="icon" title="Vừa khung: thấy cả sơ đồ (0)" aria-label="Vừa khung"><span class="ico" data-ico="fit" aria-hidden="true"></span></button>
           <button id="btn-minimap" class="icon" aria-pressed="true" aria-controls="dg-minimap" aria-label="Bản đồ thu nhỏ" title="Bản đồ thu nhỏ (hiện khi sơ đồ lớn hơn khung nhìn)"><span class="ico" data-ico="minimap" aria-hidden="true"></span></button>
         </div>
-        <div id="dg-minimap" class="dg-minimap" aria-hidden="true">
-          <svg class="mm-map" xmlns="http://www.w3.org/2000/svg"><g class="mm-paths"></g><rect class="mm-view-halo"></rect><rect class="mm-view"></rect></svg>
-          <div class="mm-track" hidden><div class="mm-thumb"></div></div>
-        </div>
+        <div id="dg-minimap" class="dg-minimap" aria-hidden="true"><div class="mm-track"><div class="mm-rail"></div><div class="mm-thumb"></div></div></div>
         <p id="canvas-help" class="sr-only">↑ ↓: bước trước, bước sau. ← →: khung cha, bước con (thu gọn, mở khung). Enter: sửa trong bảng cấu hình. Kéo nền hoặc cuộn để di chuyển, Ctrl + cuộn để thu phóng. M: về chế độ Quy trình.</p>
       </div>
       <section id="issues" class="issues" role="region" aria-label="Lỗi và cảnh báo" hidden>
@@ -97,11 +94,11 @@
   </main>
 
   <section id="results" class="results collapsed">
-    <div id="results-resize" class="results-resize" role="separator" aria-orientation="horizontal" aria-controls="results-body" aria-label="Chiều cao panel kết quả" tabindex="0" title="Kéo để đổi chiều cao panel kết quả (bàn phím: ↑ ↓, Home, End; nhấp đúp: chiều cao mặc định)" hidden><span class="results-grip" aria-hidden="true"></span></div>
+    <div id="results-resize" class="results-resize" role="separator" aria-orientation="horizontal" aria-controls="results-body" aria-label="Chiều cao panel kết quả" tabindex="0" title="Kéo để đổi chiều cao (↑ ↓, Home, End; nhấp đúp: mặc định)" hidden><span class="resize-grip"></span></div>
     <div class="results-head">
       <button id="btn-results-toggle" class="link" aria-expanded="false" aria-controls="results-body">Kết quả <span class="ico caret" data-ico="chevron-up" aria-hidden="true"></span></button>
       <div id="results-summary" class="summary" aria-live="polite">Chưa chạy.</div>
-      <button id="btn-history" class="ghost" title="Các lần insert vào org: tải Id, xóa dữ liệu đã insert">Lịch sử</button>
+      <button id="btn-history" class="hist-btn" title="Lịch sử insert: tải Id hoặc xóa dữ liệu đã insert" aria-label="Lịch sử insert" aria-haspopup="dialog"><span class="ico" data-ico="history" aria-hidden="true"></span><span class="hist-lbl">Lịch sử</span></button>
       <button id="btn-dl-json" disabled>Tải JSON</button>
       <button id="btn-dl-csv" disabled>Tải CSV (tab hiện tại)</button>
       <button id="btn-dl-menu" class="dl-menu" disabled aria-haspopup="menu" aria-expanded="false" title="Tải JSON hoặc CSV của tab hiện tại"><span class="ico" data-ico="download" aria-hidden="true"></span>Tải</button>
@@ -115,6 +112,7 @@
   <dialog id="history-dialog" class="history" aria-labelledby="history-title"></dialog>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <div id="sel-live" class="sr-only" aria-live="polite"></div>
+  <div id="save-status" class="sr-only" role="status"></div>
 
   <script type="module" src="/js/main.js"></script>
 </body>

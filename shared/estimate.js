@@ -1,188 +1,213 @@
-// Record-count estimate before a run (design 0012 H). Pure: no DOM, no I/O; shared by the
-// browser (chips on Record cards, the total on the Start card) and tests.
+// Design 0012 H: how many records a workflow will generate, before running it. A pure function
+// over the tree (O(number of steps)), used by the browser (chips on the Record cards and the
+// Start card) and tested in Node.
 //
-// One walk of the tree in reading order. Every step is reached a number of times, an `Amount`
-// { exp, min, max, exact }: `exp` the expected value (null: unknown), `min` / `max` bounds (max
-// null: unbounded / unknown), `exact` when the number is certain. A Record makes `count` records
-// each time it runs. What the slots of a container run is read from the catalogue (`flow`:
-// loop body, branch alternatives; `flow.canSkip`); how many times is read from the config
-// (count / min / max / mode / values / from / filter / limit of Lặp, kind / probability of Rẽ
-// nhánh) — the documented exception of design 0012 (Câu hỏi mở: declare it in the catalogue).
+// Every step gets { records, min, max, exact }: `records` is the expected number of records it
+// generates over the whole run (a container: everything inside it), [min, max] the range, and
+// `exact` whether the expectation is certain (fixed counts all the way up). The meaning of the
+// Lặp / Rẽ nhánh / Query options (count, min/max, mode, probability, limit) is read here, like
+// client/js/summary.js does for the card text; slots come from the catalogue.
 //
-//   Lặp fixed          count                          (a variable: unknown, except {{pool.$count}})
-//   Lặp range          (min + max) / 2, [min, max]    (max < min runs min times, like the executor)
-//   Lặp values         number of values               exact
-//   Lặp each           records of the pool `from` when the loop starts: a generated pool the
-//                      records estimated above, a Query the rows of the last read (queryCounts)
-//                      else its LIMIT, a Chọn bản ghi the times it picked; a filter makes the
-//                      expected value unknown (≤ pool), a limit caps it
-//   Rẽ nhánh chance    Đúng × p, Sai × (1 − p); compare: 50 % each
-//   canSkip            what follows a step that may end the loop body (Chọn bản ghi "Bỏ qua…")
-//                      in that body may not run: inexact, min 0
-//   turned off         skipped with everything inside (no estimate)
+// Design 0013: a count read from a number variable is never exact (`{{accs.$count}}` of a pool
+// known here expects its size, any other variable 1, within 0…maxCountPerNode); a Lặp "Mỗi giá
+// trị trong danh sách" runs once per value (exact); a Lặp `each` with a filter is not exact: an
+// `eq` filter is taken to split the pool between the visits (parent–child: every Contact once
+// over all the Accounts), another operator to keep half; "Tối đa số bản ghi" caps every visit.
+// Design 0015: `{{var.n}}` set by exactly one enabled Đặt biến (Gán, Số, a constant value) counts
+// as that number, exact like a number typed in the box — when that step surely ran before (not in a
+// branch, nor in a loop that may run 0 times); otherwise it is at most that number, not exact.
 
-import { valueList, numberVarPath, exposesOf } from './scope.js';
-import { parseSoql, builderLimit } from './soql.js';
-import { stepNames } from './workflow-tree.js';
+import { maxFetchFor } from './soql.js';
+import { numberVarPath, valueList } from './scope.js';
 
-const ONE = Object.freeze({ exp: 1, min: 1, max: 1, exact: true });
-const ZERO = Object.freeze({ exp: 0, min: 0, max: 0, exact: true });
-const UNKNOWN = Object.freeze({ exp: null, min: 0, max: null, exact: false });
-
-const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
-const nmul = (a, b) => (a === 0 || b === 0 ? 0 : a === null || b === null ? null : a * b);
-const nadd = (a, b) => (a === null || b === null ? null : a + b);
-
-/** a × b (times a step is reached × what it does each time). */
-export function mul(a, b) {
-  return { exp: nmul(a.exp, b.exp), min: a.min * b.min, max: nmul(a.max, b.max), exact: (a.exact && b.exact) || a.max === 0 || b.max === 0 };
-}
-
-/** a + b. */
-export function add(a, b) {
-  return { exp: nadd(a.exp, b.exp), min: a.min + b.min, max: nadd(a.max, b.max), exact: a.exact && b.exact };
-}
-
-const fixed = (n) => ({ exp: n, min: n, max: n, exact: true });
-/** "May not happen": same expected value and maximum, minimum 0. */
-const maybe = (a) => ({ ...a, min: 0, exact: a.max === 0 });
-
-const catalogType = (catalog, type) => (catalog?.nodeTypes instanceof Map ? catalog.nodeTypes.get(type) : catalog?.nodeTypes?.find?.((t) => t.type === type));
+const isStep = (s) => s && typeof s === 'object' && !Array.isArray(s) && s.id !== undefined && s.id !== null && s.id !== '';
 
 /**
- * → { byStep: { [recordStepId]: Amount (records) }, total: Amount, unknown: boolean }
- * `queryCounts`: { [queryStepId]: rows read by the last preview }; `limits`: meta.limits
- * (maxQueryRows for a hand-written SOQL without LIMIT).
+ * @param wf workflow v2
+ * @param catalog /api/meta (nodeTypes with options and slots; limits)
+ * @param opts.queryCounts { <Query step id>: rows read by the last preview } (sample rows included)
+ * @returns {{ byStep: Record<id, { records, min, max, exact, iterations? }>, total: { records, min, max, exact } }}
+ *   Turned-off steps (and their children) have no entry. A Lặp also has `iterations` (body runs,
+ *   expected over the run).
  */
-export function estimateSteps(wf, catalog, { queryCounts = {}, limits = {} } = {}) {
+export function estimateSteps(wf, catalog, { queryCounts = {} } = {}) {
+  const types = new Map((catalog?.nodeTypes ?? []).map((t) => [t.type, t]));
+  const maxQueryRows = catalog?.limits?.maxQueryRows ?? 2000;
+  const opt = (step, key) => {
+    const v = step.config?.[key];
+    if (v !== undefined && v !== null && v !== '') return v;
+    return types.get(step.type)?.options?.find((o) => o.key === key)?.default;
+  };
+  const num = (v, fallback = 0) => (Number.isFinite(Number(v)) ? Number(v) : fallback);
+  const cap = catalog?.limits?.maxCountPerNode ?? 100000;
+  // Đặt biến (design 0015): variable name → the steps (turned on) setting it.
+  const varNs = catalog?.syntax?.varNamespace ?? 'var';
+  const setters = new Map();
+  const collectSetters = (list) => {
+    for (const step of Array.isArray(list) ? list : []) {
+      if (!isStep(step) || step.disabled === true) continue;
+      if (step.type === 'set') {
+        const n = String(step.config?.name ?? '');
+        if (!setters.has(n)) setters.set(n, []);
+        setters.get(n).push(step);
+      }
+      for (const k of types.get(step.type)?.slots?.map((x) => x.key) ?? []) collectSetters(step.slots?.[k]);
+    }
+  };
+  collectSetters(wf?.steps);
+  // Đặt biến steps met so far in reading order (= run order): name → true when surely reached.
+  const setReached = new Map();
+  /** The constant of `{{var.<name>}}` when one Đặt biến (Gán, Số, no `{{`) sets it, else null. */
+  const varConstant = (name) => {
+    const list = setters.get(name) ?? [];
+    if (list.length !== 1) return null;
+    const c = list[0].config ?? {};
+    const raw = c.value === undefined || c.value === null ? '' : String(c.value);
+    if ((c.mode ?? 'set') !== 'set' || c.valueType !== 'number' || raw.includes('{{') || raw.trim() === '') return null;
+    const n = Number(raw);
+    // Like the executor's count: not a number → 0, clamped to 0…maxCountPerNode, whole.
+    return Number.isFinite(n) ? Math.min(cap, Math.max(0, Math.trunc(n))) : null;
+  };
+  /** Iterations given by a number variable (never exact, but a constant Đặt biến is). */
+  const varCount = (path) => {
+    const [name, member, ...more] = path.split('.');
+    if (name === varNs && member !== undefined && !more.length && setReached.has(member)) {
+      const k = varConstant(member);
+      if (k !== null) return setReached.get(member) ? { e: k, min: k, max: k, exact: true } : { e: k, min: 0, max: k, exact: false };
+    }
+    const p = member === '$count' && !more.length ? pools.get(name) : null;
+    return p ? { e: p.size, min: p.min, max: p.max, exact: false } : { e: 1, min: 0, max: cap, exact: false };
+  };
+  const slotsOf = (step) => types.get(step.type)?.slots?.map((s) => s.key) ?? [];
+
   const byStep = {};
-  let total = ZERO;
-  const pools = new Map(); // name → Amount: records in the pool so far (generated, read, picked)
-  const growsIn = new Map(); // name → Set of the Lặp ids open when records were added to it
-  const openLoops = []; // ids of the Lặp steps around the step being walked
-  const addTo = (name, amount) => {
-    pools.set(name, add(pools.get(name) ?? ZERO, amount));
-    const set = growsIn.get(name) ?? new Set();
-    for (const id of openLoops) set.add(id);
-    growsIn.set(name, set);
+  // Pool name → records it holds so far: { size, min, max, exact, grownIn: ids of the repeating
+  // loops it grew inside }. Record and Chọn bản ghi append; a Query replaces.
+  const pools = new Map();
+  const grow = (name, add, ctx) => {
+    const p = pools.get(name) ?? { size: 0, min: 0, max: 0, exact: true, grownIn: new Set() };
+    p.size += add.records;
+    p.min += add.min;
+    p.max += add.max;
+    p.exact &&= add.exact;
+    for (const id of ctx.loops) p.grownIn.add(id);
+    pools.set(name, p);
   };
-
-  const optionValue = (type, c, key) => c?.[key] ?? type?.options?.find((o) => o.key === key)?.default;
-
-  /** Times a number option (`vars: 'number'`) holds: a number, {{pool.$count}}, or unknown. */
-  const numberOf = (v, fallback) => {
-    if (v === undefined || v === null || v === '') return fixed(fallback);
-    const path = numberVarPath(v);
-    if (path !== null) {
-      const m = /^([A-Za-z_][\w]*)\.\$count$/.exec(path);
-      const pool = m ? pools.get(m[1]) : null;
-      return pool ? { ...pool, exact: false } : UNKNOWN;
-    }
-    const n = Number(v);
-    return Number.isFinite(n) ? fixed(Math.max(0, Math.trunc(n))) : fixed(fallback);
-  };
-
-  /** Iterations of one run of a Lặp (`visits`: how many times the Lặp is reached). */
-  const loopTimes = (type, c, visits) => {
-    const mode = optionValue(type, c, 'mode') ?? 'fixed';
-    if (mode === 'values') return fixed(valueList(c?.values).length);
-    if (mode === 'range') {
-      const lo = numberOf(c?.min, 1);
-      const hi = numberOf(c?.max, 1);
-      if (lo.exp === null || hi.exp === null) return { exp: null, min: lo.min, max: lo.max === null || hi.max === null ? null : Math.max(lo.max, hi.max), exact: false };
-      const a = lo.exp;
-      const b = Math.max(a, hi.exp);
-      return a === b && lo.exact && hi.exact ? fixed(a) : { exp: (a + b) / 2, min: Math.min(lo.min, a), max: b, exact: false };
-    }
-    if (mode === 'each') {
-      let pool = pools.get(c?.from) ?? UNKNOWN;
-      // A pool that grows inside a Lặp around this one (pools are global to the run): each visit
-      // sees the records made so far, on average (total + one visit's) / 2. Not exact.
-      if (pool.exp !== null && [...(growsIn.get(c?.from) ?? [])].some((id) => openLoops.includes(id)) && visits?.exp) {
-        const avg = (pool.exp + pool.exp / visits.exp) / 2;
-        pool = { exp: avg, min: Math.min(pool.min, avg), max: pool.max, exact: false };
-      }
-      let n = { ...pool };
-      if ((optionValue(type, c, 'filter') ?? 'none') !== 'none') n = { exp: null, min: 0, max: pool.max, exact: false };
-      const limit = Number(c?.limit ?? 0);
-      if (Number.isInteger(limit) && limit > 0) {
-        const cap = (x) => (x === null ? limit : Math.min(x, limit));
-        n = { exp: n.exp === null ? null : cap(n.exp), min: Math.min(n.min, limit), max: cap(n.max), exact: n.exact || (n.min >= limit) };
-        if (n.min >= limit) n = fixed(limit);
-      }
-      return n;
-    }
-    return numberOf(c?.count, 0);
-  };
-
-  /** Rows of a Query step: the last read, else its LIMIT (inexact). */
-  const queryRows = (step) => {
-    if (isNum(queryCounts[step.id])) return fixed(queryCounts[step.id]);
-    const c = step.config ?? {};
-    const limit = (c.mode ?? 'builder') === 'soql' ? parseSoql(c.soql).limit ?? limits.maxQueryRows ?? 2000 : builderLimit(c);
-    const n = Number.isFinite(limit) ? Math.max(0, limit) : 0;
-    return { exp: n, min: 0, max: n, exact: false };
-  };
-
-  const canSkip = (type, c) => {
-    const cs = type?.flow?.canSkip;
-    return Boolean(cs && cs.in.includes(optionValue(type, c, cs.key)));
+  const zero = () => ({ records: 0, min: 0, max: 0, exact: true });
+  const addTo = (sum, e) => {
+    sum.records += e.records;
+    sum.min += e.min;
+    sum.max += e.max;
+    sum.exact &&= e.exact;
+    return sum;
   };
 
   /**
-   * Walk `list`, each step reached `times`. → true when a step of it may end the run of the
-   * innermost loop body (`flow.canSkip`): what follows in that body is then "maybe".
+   * `ctx`: how many times the list is reached over the run — { t (expected), min, max, exact,
+   * loops: enclosing loops that may run their body more than once }. → records of the list.
    */
-  const walk = (list, times) => {
-    let t = times;
-    let skipped = false;
+  function walk(list, ctx) {
+    const sum = zero();
     for (const step of Array.isArray(list) ? list : []) {
-      if (!step || typeof step !== 'object' || step.disabled === true) continue;
-      const type = catalogType(catalog, step.type);
-      const c = step.config ?? {};
-      const flow = type?.flow?.kind ?? 'sequence';
-      const exposes = exposesOf(type, c, step.id);
-      const record = exposes.find(({ ex }) => ex.kind === 'record' && ex.pool);
-      if (record?.ex.origin === 'generated') {
-        const count = Math.max(1, Math.trunc(Number(optionValue(type, c, 'count') ?? 1)) || 1);
-        const made = mul(t, fixed(count));
-        byStep[step.id] = made;
-        total = add(total, made);
-        const names = stepNames(step, catalog);
-        for (const { value } of names.length ? names : [{ value: String(step.id) }]) addTo(value, made);
-      } else if (record?.ex.origin === 'org' && c.alias) {
-        pools.set(c.alias, queryRows(step));
-      } else if (record?.ex.current === 'picked' && c.alias) {
-        addTo(c.alias, maybe(t));
-      }
-      if (flow === 'loop') {
-        // A skip ends one run of the body; what follows the loop is not affected.
-        const n = loopTimes(type, c, t);
-        openLoops.push(step.id);
-        walk(step.slots?.[type.flow.body], mul(t, n));
-        openLoops.pop();
-      } else if (flow === 'branch') {
-        const [yes, no] = type.flow.alternatives ?? [];
-        const kind = optionValue(type, c, 'kind') ?? 'chance';
-        let p = 0.5;
-        if (kind === 'chance') {
-          const raw = Number(optionValue(type, c, 'probability') ?? 0.5);
-          p = Number.isFinite(raw) ? Math.min(1, Math.max(0, raw)) : 0.5;
+      if (!isStep(step) || step.disabled === true || !types.has(step.type)) continue;
+      let e = zero();
+      switch (step.type) {
+        case 'record': {
+          const count = Math.max(1, num(opt(step, 'count'), 1));
+          e = { records: count * ctx.t, min: count * ctx.min, max: count * ctx.max, exact: ctx.exact };
+          grow(step.config?.alias || step.id, e, ctx);
+          break;
         }
-        const share = (q) => (kind === 'chance' && q === 1 ? t : kind === 'chance' && q === 0 ? ZERO
-          : { exp: t.exp === null ? null : t.exp * q, min: 0, max: t.max, exact: false });
-        const a = walk(step.slots?.[yes], share(p));
-        const b = walk(step.slots?.[no], share(1 - p));
-        if (a || b) skipped = true;
-      } else {
-        for (const children of Object.values(step.slots ?? {})) if (walk(children, t)) skipped = true;
+        case 'loop': {
+          const mode = opt(step, 'mode') ?? 'fixed';
+          let it;
+          if (mode === 'each') {
+            const p = pools.get(step.config?.from);
+            // The pool as the loop starts: exact unless it grew in a loop that also repeats this one
+            // (each entry then sees a different snapshot; the size so far is an upper bound).
+            it = p
+              ? { e: p.size, min: p.min, max: p.max, exact: p.exact && ![...p.grownIn].some((id) => ctx.loops.includes(id)) }
+              : { e: 0, min: 0, max: 0, exact: false };
+            if (opt(step, 'filter') === 'compare') {
+              const eq = (opt(step, 'filterOp') ?? 'eq') === 'eq';
+              it = { e: eq ? it.e / Math.max(1, ctx.t) : it.e / 2, min: 0, max: it.max, exact: false };
+            }
+            const limit = Math.max(0, Math.trunc(num(opt(step, 'limit'), 0)));
+            if (limit > 0) it = { e: Math.min(it.e, limit), min: Math.min(it.min, limit), max: Math.min(it.max, limit), exact: it.exact };
+          } else if (mode === 'values') {
+            const n = valueList(opt(step, 'values')).length;
+            it = { e: n, min: n, max: n, exact: true };
+          } else if (mode === 'range' && (numberVarPath(opt(step, 'min')) !== null || numberVarPath(opt(step, 'max')) !== null)) {
+            const bound = (key) => {
+              const path = numberVarPath(opt(step, key));
+              if (path !== null) return varCount(path);
+              const n = Math.max(0, num(opt(step, key), 1));
+              return { e: n, min: n, max: n };
+            };
+            const a = bound('min');
+            const b = bound('max');
+            // While running, max < min uses min.
+            it = { e: (a.e + Math.max(a.e, b.e)) / 2, min: a.min, max: Math.max(a.max, b.max), exact: false };
+          } else if (mode !== 'range' && numberVarPath(opt(step, 'count')) !== null) {
+            it = varCount(numberVarPath(opt(step, 'count')));
+          } else if (mode === 'range') {
+            const a = Math.max(0, num(opt(step, 'min'), 1));
+            const b = Math.max(a, num(opt(step, 'max'), 1));
+            it = { e: (a + b) / 2, min: a, max: b, exact: a === b };
+          } else {
+            const n = Math.max(0, num(opt(step, 'count'), 0));
+            it = { e: n, min: n, max: n, exact: true };
+          }
+          const inner = {
+            t: ctx.t * it.e, min: ctx.min * it.min, max: ctx.max * it.max, exact: ctx.exact && it.exact,
+            loops: it.max > 1 ? [...ctx.loops, step.id] : ctx.loops,
+          };
+          e = walk(step.slots?.[slotsOf(step)[0] ?? 'body'], inner);
+          e.iterations = inner.t;
+          break;
+        }
+        case 'branch': {
+          const chance = (opt(step, 'kind') ?? 'chance') === 'chance';
+          const p = chance ? Math.min(1, Math.max(0, num(opt(step, 'probability'), 0.5))) : 0.5;
+          const [yes, no] = slotsOf(step).length ? slotsOf(step) : ['true', 'false'];
+          for (const [slot, q] of [[yes, p], [no, 1 - p]]) {
+            const sure = chance && (q === 0 || q === 1);
+            addTo(e, walk(step.slots?.[slot], {
+              t: ctx.t * q, min: sure && q === 1 ? ctx.min : 0, max: q === 0 && chance ? 0 : ctx.max, exact: ctx.exact && sure, loops: ctx.loops,
+            }));
+          }
+          break;
+        }
+        case 'query': {
+          const known = Object.hasOwn(queryCounts, step.id);
+          // The rows the server would fetch at most (the same rule as server/sf/query.js).
+          const limit = maxFetchFor(step.config, maxQueryRows);
+          const size = known ? num(queryCounts[step.id]) : limit;
+          if (step.config?.alias) pools.set(step.config.alias, { size, min: known ? size : 0, max: size, exact: known, grownIn: new Set() });
+          e.rows = size;
+          break;
+        }
+        case 'set': {
+          // Surely reached when the list it is in runs at least once on every path (ctx.min ≥ 1).
+          const n = String(step.config?.name ?? '');
+          setReached.set(n, Boolean(setReached.get(n)) || ctx.min >= 1);
+          break;
+        }
+        case 'pick': {
+          if (step.config?.alias) grow(step.config.alias, { records: ctx.t, min: ctx.min, max: ctx.max, exact: ctx.exact }, ctx);
+          break;
+        }
+        default: {
+          // A container type this module does not know: its slots once each.
+          for (const k of slotsOf(step)) addTo(e, walk(step.slots?.[k], ctx));
+        }
       }
-      if (canSkip(type, c)) skipped = true;
-      if (skipped) t = maybe(t);
+      byStep[step.id] = e;
+      addTo(sum, e);
     }
-    return skipped;
-  };
+    return sum;
+  }
 
-  walk(wf?.steps, ONE);
-  return { byStep, total, unknown: total.exp === null };
+  const total = walk(wf?.steps, { t: 1, min: 1, max: 1, exact: true, loops: [] });
+  return { byStep, total };
 }

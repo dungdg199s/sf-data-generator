@@ -1,46 +1,58 @@
-// shared/insert-plan.js (design 0011): which Record steps go through Bulk API 2.0, API call estimates.
+// shared/insert-plan.js (design 0011 §1): which Record steps go Bulk, and the API call estimate.
+
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { planInsert, planDelete } from '../shared/insert-plan.js';
-import { poolUsage } from '../shared/scope.js';
-import { scopeCatalog } from '../server/workflow/schema.js';
-import { wf, record, loop, pick, query } from './helpers.js';
-import { LIMITS } from '../server/workflow/nodes.js';
+import { planInsert, planDelete, BULK_DEFAULTS } from '../shared/insert-plan.js';
+import { createRun } from '../server/workflow/executor.js';
+import { wf, record, loop, pick, NOW } from './helpers.js';
 
-const accCon = [
-  { nodeId: 'acc', alias: 'acc', sobject: 'Account', records: 40000 },
-  { nodeId: 'con', alias: 'con', sobject: 'Contact', records: 160000 },
-];
+const accCon = wf([loop('l', { count: 2 }, [
+  record('a', 'Account', 'acc', [{ name: 'Name', type: 'text', options: { mode: 'company' } }]),
+  loop('m', { count: 4 }, [record('c', 'Contact', 'con', [{ name: 'LastName', type: 'text', options: { mode: 'lastName' } }, { name: 'AccountId', type: 'lookup', options: { ref: 'acc' } }])]),
+])]);
 
-test('Account + Contact 200 000: Contact (leaf) goes Bulk, Account (Lookup target) does not; 393 calls', () => {
-  const p = planInsert({ steps: accCon, referenced: new Set(['acc']), limits: LIMITS });
-  assert.deepEqual(p.steps.map((s) => [s.nodeId, s.mode, s.probe, s.jobs]), [['acc', 'collections', 0, 0], ['con', 'bulk', 200, 16]]);
-  assert.deepEqual(p.apiCalls, { collections: 201, bulk: 192, total: 393 });
+test('200 000 records of the Account + Contact sample: Account by Collections, Contact by Bulk, 393 calls', () => {
+  const { referencedAliases } = createRun(accCon, { seed: 1, now: NOW });
+  assert.deepEqual([...referencedAliases], ['acc']);
+  const plan = planInsert({
+    steps: [{ nodeId: 'a', alias: 'acc', sobject: 'Account', records: 40000 }, { nodeId: 'c', alias: 'con', sobject: 'Contact', records: 160000 }],
+    referenced: referencedAliases,
+  });
+  assert.deepEqual(plan.steps.map((s) => [s.nodeId, s.mode, s.probe, s.jobs, s.apiCalls]), [['a', 'collections', 0, 0, 200], ['c', 'bulk', 200, 16, 193]]);
+  assert.deepEqual(plan.apiCalls, { collections: 201, bulk: 192, total: 393 });
 });
 
-test('below bulkMinRecords, bulk off, and an alias reached through Chọn bản ghi never go Bulk', () => {
-  const small = planInsert({ steps: [{ nodeId: 'a', alias: 'a', sobject: 'Account', records: 9999 }], referenced: [], limits: LIMITS });
-  assert.equal(small.steps[0].mode, 'collections');
-  assert.equal(small.apiCalls.total, 50);
-  assert.equal(planInsert({ steps: [{ nodeId: 'a', alias: 'a', sobject: 'Account', records: 10000 }], referenced: [] }).steps[0].mode, 'bulk');
-  const off = planInsert({ steps: accCon, referenced: ['acc'], bulk: 'off' });
-  assert.ok(off.steps.every((s) => s.mode === 'collections'));
-  assert.equal(off.apiCalls.total, 1000);
-  // A Lookup to a picked record needs the Ids of the pool behind the pick (poolUsage follows it).
+test('an alias a Lookup points at through a Chọn bản ghi is never Bulk', () => {
   const w = wf([
-    record('a', 'Account', 'acc', [], { count: 20000 }),
-    loop('l', { count: 20000 }, [pick('p', 'one', 'acc'), record('c', 'Contact', 'con', [{ name: 'AccountId', type: 'lookup', options: { ref: 'one' } }])]),
-  ], { settings: { maxRecords: 200000 } });
-  const { referenced } = poolUsage(w, scopeCatalog());
-  const p = planInsert({ steps: [{ nodeId: 'a', alias: 'acc', sobject: 'Account', records: 20000 }, { nodeId: 'c', alias: 'con', sobject: 'Contact', records: 20000 }], referenced });
-  assert.deepEqual(p.steps.map((s) => s.mode), ['collections', 'bulk']);
-  // A Query pool is never inserted, so it plays no role here; just make sure referenced handles it.
-  assert.ok(!poolUsage(wf([query('q', 'accs')]), scopeCatalog()).referenced.has('con'));
+    loop('l', { count: 3 }, [record('a', 'Account', 'acc', [{ name: 'Name', type: 'text' }])]),
+    loop('m', { count: 3 }, [
+      pick('p', 'one', 'acc'),
+      record('c', 'Contact', 'con', [{ name: 'LastName', type: 'text' }, { name: 'AccountId', type: 'lookup', options: { ref: 'one' } }]),
+    ]),
+  ]);
+  const { referencedAliases } = createRun(w, { seed: 1, now: NOW });
+  assert.ok(referencedAliases.has('acc'));
+  const plan = planInsert({ steps: [{ nodeId: 'a', alias: 'acc', sobject: 'Account', records: 50000 }, { nodeId: 'c', alias: 'con', sobject: 'Contact', records: 50000 }], referenced: referencedAliases });
+  assert.deepEqual(plan.steps.map((s) => s.mode), ['collections', 'bulk']);
 });
 
-test('delete plan: Bulk for every step with enough Ids; 242 calls for Contact 160 000 + Account 40 000', () => {
-  const p = planDelete({ groups: [{ sobject: 'Contact', count: 160000 }, { sobject: 'Account', count: 40000 }], limits: LIMITS });
-  assert.deepEqual(p.groups.map((g) => [g.mode, g.jobs]), [['bulk', 16], ['bulk', 4]]);
-  assert.deepEqual(p.apiCalls, { collections: 2, bulk: 240, total: 242 });
-  assert.equal(planDelete({ groups: [{ sobject: 'Contact', count: 600 }], bulk: 'off' }).apiCalls.total, 3);
+test('under bulkMinRecords, or bulk: off, every step goes by Collections', () => {
+  const steps = [{ nodeId: 'c', alias: 'con', sobject: 'Contact', records: 9999 }];
+  assert.equal(planInsert({ steps }).steps[0].mode, 'collections');
+  assert.equal(planInsert({ steps }).apiCalls.total, 50);
+  const big = [{ nodeId: 'c', alias: 'con', sobject: 'Contact', records: 10000 }];
+  assert.deepEqual(planInsert({ steps: big }).steps[0], { nodeId: 'c', alias: 'con', sobject: 'Contact', records: 10000, mode: 'bulk', probe: 200, jobs: 1, apiCalls: 13 });
+  const off = planInsert({ steps: big, bulk: 'off' });
+  assert.equal(off.steps[0].mode, 'collections');
+  assert.deepEqual(off.apiCalls, { collections: 50, bulk: 0, total: 50 });
+  // limits from /api/meta override the defaults
+  assert.equal(planInsert({ steps, limits: { bulkMinRecords: 100 } }).steps[0].mode, 'bulk');
+  assert.equal(BULK_DEFAULTS.bulkMinRecords, 10000);
+});
+
+test('planDelete: children first, 242 calls for 160 000 Contact + 40 000 Account', () => {
+  const plan = planDelete({ steps: [{ nodeId: 'a', sobject: 'Account', remaining: 40000 }, { nodeId: 'c', sobject: 'Contact', remaining: 160000 }, { nodeId: 'x', sobject: 'Lead', remaining: 0 }] });
+  assert.deepEqual(plan.steps.map((s) => [s.nodeId, s.mode, s.jobs]), [['c', 'bulk', 16], ['a', 'bulk', 4]]);
+  assert.deepEqual(plan.apiCalls, { collections: 2, bulk: 240, total: 242 });
+  assert.equal(planDelete({ steps: [{ nodeId: 'a', sobject: 'Account', remaining: 40000 }], bulk: 'off' }).apiCalls.total, 200);
 });

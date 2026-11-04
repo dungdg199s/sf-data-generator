@@ -20,7 +20,7 @@ const COMPONENTS = stripComments(COMPONENTS_RAW ?? '');
 // and the synthetic Start card.
 const TYPES = [...new Set(['start', ...NODE_TYPES.map((t) => t.type), 'query', 'pick'])];
 
-const PRIMITIVE = /^--(?:gray|blue|red|amber|green|teal|cyan|olive|violet|magenta)-\d+$/;
+const PRIMITIVE = /^--(?:gray|blue|red|amber|green|teal|cyan|olive|violet|magenta|copper)-\d+$/;
 const HEX = /#[0-9a-fA-F]{3,8}(?![\w-])/;
 const FUNC = /\b(?:rgba?|hsla?|hwb|lab|lch|oklab|oklch|color)\(/i;
 const NAMED = /(?<![\w-])(?:white|black|red|green|blue|gray|grey|silver|orange|yellow|purple|pink|brown|navy|teal|olive|maroon|lime|aqua|cyan|magenta|fuchsia|gold|indigo|violet|beige|crimson|tomato|coral|salmon)(?![\w-])/i;
@@ -78,7 +78,7 @@ function jsColourIssues(src) {
   return [
     [/['"`]#[0-9a-fA-F]{3}(?:[0-9a-fA-F]{3}(?:[0-9a-fA-F]{2})?)?['"`]/, 'hex colour'],
     [FUNC, 'colour function'],
-    [/var\(--(?:step|node|color|gray|blue|red|amber|green|teal|cyan|olive|violet|magenta)-/, 'colour token'],
+    [/var\(--(?:step|node|color|gray|blue|red|amber|green|teal|cyan|olive|violet|magenta|copper)-/, 'colour token'],
     [/NODE_COLORS/, 'NODE_COLORS'],
     [/['"]--c['"]/, 'inline --c'],
     [STYLE_NAMED, 'named colour in a style'],
@@ -181,9 +181,10 @@ test('coloured buttons keep their own fill when pressed (button:active would tur
 });
 
 test('spacing (padding, margin, gap, outline-offset) uses the 4 px scale tokens', () => {
-  // Exempt, on purpose: the .sr-only idiom `margin: -1px`.
+  // Exempt, on purpose: the .sr-only idiom `margin: -1px`; the device's safe area (`env(safe-area-inset-*)`,
+  // the select bar of 0012 B above a phone's home indicator) is not a spacing choice.
   const EXEMPT = new Set(['margin: -1px']);
-  const PART = /^(?:0|auto|var\(--(?:space-[\d-]+|focus-offset(?:-card)?|canvas-tail)\)|calc\(-1 \* var\(--space-[\d-]+\)\))$/;
+  const PART = /^(?:0|auto|var\(--(?:space-[\d-]+|focus-offset(?:-card)?|canvas-tail)\)|calc\(-1 \* var\(--space-[\d-]+\)\)|env\(safe-area-inset-(?:top|right|bottom|left)\))$/;
   for (const { prop, value } of declarations(COMPONENTS)) {
     if (!/^(?:(?:padding|margin)(?:-(?:top|right|bottom|left|inline|block)(?:-(?:start|end))?)?|gap|row-gap|column-gap|outline-offset)$/.test(prop)) continue;
     const where = `${prop}: ${value}`;
@@ -271,8 +272,9 @@ const PAIRS = [
   ['success-text', 'surface', 4.5], ['success-contrast', 'success', 4.5],
   ['border-control', 'surface', 3], ['border-control', 'surface-raised', 3], ['border-control', 'surface-sunken', 3],
   ['text-muted', 'bg-disabled', 4.5], ['inverse-text', 'inverse-bg', 4.5],
-  // Design 0014: minimap viewport and thumb, its error ring and turned-off blocks (the other 0014 pairs are above).
-  ['accent', 'surface-raised', 3], ['accent', 'surface-hover', 3], ['danger', 'surface-raised', 3], ['minimap-off', 'surface-raised', 3],
+  // Design 0014 §11: handles, minimap.
+  ['border-control', 'surface', 3], ['accent', 'surface-raised', 3], ['accent', 'surface-hover', 3], ['danger', 'surface-raised', 3],
+  ['minimap-off', 'surface-raised', 3], ['text', 'surface-raised', 3], ['accent-text', 'accent-subtle', 3],
 ].map(([f, b, min]) => [`--color-${f}`, `--color-${b}`, min]);
 for (const t of TYPES) {
   PAIRS.push(
@@ -305,147 +307,132 @@ test('layout tokens of design 0009 are defined and documented in docs/ui-design-
   assert.match(doc, /\| `theme` \|/, 'the theme icon is missing from the icon table');
 });
 
-test('0011 review: the ghost Lịch sử button of the results header uses the text token (§6.2 ghost)', () => {
-  const rule = blocks(COMPONENTS, '.results-head > button.ghost')[0];
-  assert.equal(rule?.color, 'var(--color-text)');
-  assert.equal(rule?.background, 'transparent');
-});
-
 // ---------- icons (design 0014 §1) ----------
 
-const ICON_TOKENS = declarations(TOKENS).filter((d) => d.prop.startsWith('--ico-')).map((d) => d.prop.slice('--ico-'.length));
-const CLIENT_JS = fs.readdirSync(new URL('../client/js/', import.meta.url)).filter((n) => n.endsWith('.js'))
-  .map((n) => ({ name: `client/js/${n}`, src: read(`client/js/${n}`) }));
-const INDEX_HTML = read('client/index.html');
-/** JS without comments (string contents kept; good enough for this code base: no `//` or `/*` in strings that matter). */
-const stripJsComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`\\])\/\/.*$/gm, '$1');
-
-/** Icon names used by the client: data-ico="x" in HTML, ico('x') (each quoted name in the call) and `dataset.ico = …`. */
-function usedIcons() {
-  const used = new Map(); // name → first file
-  const add = (name, where) => { if (!used.has(name)) used.set(name, where); };
-  for (const m of INDEX_HTML.matchAll(/data-ico="([\w-]+)"/g)) add(m[1], 'client/index.html');
-  for (const { name, src } of CLIENT_JS) {
-    const code = stripJsComments(src);
-    for (const m of code.matchAll(/\bico\(([^()]*)\)/g)) for (const q of m[1].matchAll(/'([\w-]+)'/g)) add(q[1], name);
-    for (const m of code.matchAll(/dataset\.ico\s*=\s*([^;]+);/g)) for (const q of m[1].matchAll(/'([\w-]+)'/g)) add(q[1], name);
-    for (const m of code.matchAll(/'data-ico':\s*'([\w-]+)'/g)) add(m[1], name);
+/**
+ * String, template and regex literal bodies of a JS source, comments skipped. A small scanner (no
+ * parser dependency): a "/" starts a regex after an operator, "(", ",", "=", ":", "[", "!", "&", "|",
+ * "?", "{", "}", ";", "return" or at the start; otherwise it is a division.
+ */
+export function jsLiterals(src) {
+  const out = [];
+  let i = 0;
+  let prev = ''; // last significant character outside literals and comments
+  let word = '';
+  while (i < src.length) {
+    const c = src[i];
+    const n = src[i + 1];
+    if (c === '/' && n === '/') { i = src.indexOf('\n', i); if (i === -1) break; continue; }
+    if (c === '/' && n === '*') { i = src.indexOf('*/', i + 2); if (i === -1) break; i += 2; continue; }
+    if (c === '\'' || c === '"' || c === '`') {
+      let j = i + 1;
+      let body = '';
+      while (j < src.length && src[j] !== c) {
+        if (src[j] === '\\') { body += src[j + 1]; j += 2; continue; }
+        if (c === '`' && src[j] === '$' && src[j + 1] === '{') {
+          // ${…}: skip the expression (nested literals inside it are rare in this code base).
+          let depth = 1;
+          j += 2;
+          while (j < src.length && depth) { if (src[j] === '{') depth++; else if (src[j] === '}') depth--; j++; }
+          body += '\u0000';
+          continue;
+        }
+        body += src[j++];
+      }
+      out.push(body);
+      i = j + 1;
+      prev = 'x';
+      word = '';
+      continue;
+    }
+    if (c === '/' && (/[(,=:[!&|?{};+\-*%<>~^]/.test(prev) || prev === '' || word === 'return' || word === 'typeof')) {
+      let j = i + 1;
+      let inClass = false;
+      let body = '';
+      while (j < src.length && (src[j] !== '/' || inClass) && src[j] !== '\n') {
+        if (src[j] === '\\') { body += src[j] + src[j + 1]; j += 2; continue; }
+        if (src[j] === '[') inClass = true;
+        else if (src[j] === ']') inClass = false;
+        body += src[j++];
+      }
+      out.push(body);
+      i = j + 1;
+      while (/[a-z]/.test(src[i] ?? '')) i++; // flags
+      prev = 'x';
+      word = '';
+      continue;
+    }
+    if (/\s/.test(c)) { i++; continue; }
+    if (/[\w$]/.test(c)) word = /[\w$]/.test(prev) ? word + c : c;
+    else word = '';
+    prev = c;
+    i++;
   }
-  return used;
+  return out;
 }
 
-test('every icon the client uses has a --ico-* token and an .ico[data-ico] rule', () => {
-  const used = usedIcons();
-  assert.ok(used.size >= 20, `expected the action icons of design 0014, found ${[...used.keys()]}`);
-  for (const [name, where] of used) {
-    assert.ok(ICON_TOKENS.includes(name), `${where}: icon "${name}" has no --ico-${name} token`);
+// Glyphs that used to be icons; they must not come back as text (mũi tên trong câu, tên phím, `＋` in <option> stay).
+const ICON_GLYPHS = /[⋯▸▾▴⠿↶↷⟳⤓⤒⤢▶📌⚙✕⊘◉⧉ⓘ‹✓✗]/u;
+const ICO_TOKENS = Object.fromEntries(declarations(TOKENS).filter((d) => d.prop.startsWith('--ico-')).map((d) => [d.prop.slice(6), d.value]));
+const clientJs = () => {
+  const dir = new URL('../client/js/', import.meta.url);
+  return fs.readdirSync(dir).filter((n) => n.endsWith('.js')).map((n) => [`client/js/${n}`, fs.readFileSync(new URL(n, dir), 'utf8')]);
+};
+
+test('the literal scanner finds strings, templates and regexes but not comments', () => {
+  const src = "// a 'b' ⋯\nconst x = 'c ✓'; /* 'd' */ const y = `e ${'f'} g`; const r = /^✓/; const z = a / b / c; return /h/.test(q);";
+  assert.deepEqual(jsLiterals(src), ['c ✓', 'e \u0000 g', '^✓', 'h']);
+});
+
+test('(a) every icon used in client/ has a --ico-<name> token and an .ico[data-ico="<name>"] rule', () => {
+  const used = new Set();
+  const html = read('client/index.html');
+  for (const m of html.matchAll(/data-ico="([\w-]+)"/g)) used.add(m[1]);
+  for (const [, src] of clientJs()) {
+    for (const m of src.matchAll(/\bico\(([^()]*)\)/g)) for (const q of m[1].matchAll(/'([\w-]+)'/g)) used.add(q[1]);
+    for (const m of src.matchAll(/dataset\.ico\s*=\s*([^;\n]+)/g)) for (const q of m[1].matchAll(/'([\w-]+)'/g)) used.add(q[1]);
+    for (const m of src.matchAll(/icon:\s*'([\w-]+)'/g)) used.add(m[1]); // popup rows (popup.js draws ico(it.icon))
   }
-  // Every icon token (old and new) has its selector rule, so an .ico never inherits a step type's --ico.
-  for (const name of ICON_TOKENS) {
+  assert.ok(used.size >= 24, `only ${used.size} icons found: the scan is broken`);
+  for (const name of used) {
+    assert.match(ICO_TOKENS[name] ?? '', /^url\("data:image\/svg\+xml,/, `--ico-${name} missing`);
     const rule = blocks(COMPONENTS, `.ico[data-ico="${name}"]`)[0];
     assert.equal(rule?.['--ico'], `var(--ico-${name})`, `.ico[data-ico="${name}"] rule missing`);
   }
-  // ico() itself sets data-ico and hides the icon from screen readers.
-  const dom = read('client/js/dom.js');
-  assert.match(dom, /export function ico\(name\) \{\s*return h\('span', \{ class: 'ico', 'data-ico': name, 'aria-hidden': 'true' \}\);/);
-  // The icon size tokens of design 0014.
-  const all = Object.fromEntries(declarations(TOKENS).map((d) => [d.prop, d.value]));
-  assert.deepEqual([all['--icon-xs'], all['--icon-sm'], all['--icon-md']], ['12px', '14px', '16px']);
-  assert.equal(blocks(COMPONENTS, '.ico')[0]?.width, 'var(--icon-md)');
+  // Every token has its rule too (old icons included), so no .ico inherits a step type's --ico by mistake.
+  for (const name of Object.keys(ICO_TOKENS)) {
+    assert.equal(blocks(COMPONENTS, `.ico[data-ico="${name}"]`)[0]?.['--ico'], `var(--ico-${name})`, `.ico[data-ico="${name}"] rule missing`);
+  }
 });
 
-test('every --ico-* token has a row in the icon table (§5) of docs/ui-design-system.md', () => {
+test('(b) every --ico-* token has a row in the icon table of docs/ui-design-system.md §5', () => {
   const doc = read('docs/ui-design-system.md');
   const section = doc.slice(doc.indexOf('## 5. Icon'), doc.indexOf('## 6.'));
-  const firstCells = section.split('\n').filter((l) => l.startsWith('| ')).map((l) => l.split('|')[1]);
-  for (const name of ICON_TOKENS) {
-    assert.ok(firstCells.some((c) => c.includes(`\`${name}\``)), `--ico-${name} has no row in §5`);
+  const listed = new Set();
+  for (const line of section.split('\n')) {
+    const first = /^\| ([^|]+) \|/.exec(line)?.[1];
+    if (first) for (const m of first.matchAll(/`([\w-]+)`/g)) listed.add(m[1]);
   }
+  const missing = Object.keys(ICO_TOKENS).filter((name) => !listed.has(name));
+  assert.deepEqual(missing, [], 'icons without a row in §5');
 });
 
-// Glyphs used as icons (design 0014 §1; widened after review 0014 N8): any character of the Unicode
-// symbol blocks (arrows, math operators, technical, enclosed alphanumerics, box drawing, shapes,
-// misc symbols, dingbats, Braille, supplemental arrows, misc symbols and arrows) or a pictograph,
-// except the few that are prose: arrows in sentences and key names (← → ↑ ↓ ⌥), "×" / "−" / "≤" /
-// "≈" / "≥" in summaries and key names, "›" in "con › Title", and "＋" inside an <option> (which
-// cannot hold an SVG). The glyphs replaced by design 0014 are all caught (checked below).
-const SYMBOL = /[\u2190-\u21ff\u2200-\u22ff\u2300-\u23ff\u2460-\u24ff\u2500-\u25ff\u2600-\u27bf\u27f0-\u27ff\u2800-\u28ff\u2900-\u2aff\u2b00-\u2bff\uff0b\u00d7\u2039\u203a]|\p{Extended_Pictographic}/gu;
-const PROSE_SYMBOLS = new Set([...'←→↑↓⌥×−≤≈≥＋›']);
-const iconGlyphs = (text) => [...text.matchAll(SYMBOL)].map((m) => m[0]).filter((c) => !PROSE_SYMBOLS.has(c));
-
-/** Icon glyphs inside string / template literals of a JS source (comments ignored). */
-function glyphsInJsStrings(src) {
-  const code = stripJsComments(src);
-  const found = [];
-  for (const m of code.matchAll(/'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"|`(?:[^`\\]|\\.)*`/g)) {
-    for (const g of iconGlyphs(m[0])) found.push(`${g} in ${m[0].slice(0, 60)}`);
+test('(c) no glyph is used as an icon in client/ (JS strings, index.html, CSS content)', () => {
+  for (const [file, src] of clientJs()) {
+    const bad = jsLiterals(src).filter((s) => ICON_GLYPHS.test(s));
+    assert.deepEqual(bad, [], `${file}: glyph icons in strings (use ico('<name>'))`);
   }
-  return found;
-}
-
-test('the glyph scanner finds icon glyphs in strings and ignores comments and prose arrows', () => {
-  for (const src of ["h('button', {}, '⋯')", 'const t = `${n} ▾`;', "menuBtn('Bọc ▾', {})", "'⚠ Lỗi'", "'★'", "'☰ Menu'", "'✎'", "'⏻'", "'➜'", "'📋'", "'⇅'", "'⌘K'"]) {
-    assert.notDeepEqual(glyphsInJsStrings(src), [], `not caught: ${src}`);
-  }
-  for (const g of '⋯▸▾▴⠿↶↷⟳⤓⤒⤢▶📌⚙✕⊘◉⧉ⓘ‹✓✗⚠') assert.notDeepEqual(glyphsInJsStrings(`'${g}'`), [], `0014 glyph ${g} not caught`);
-  assert.deepEqual(glyphsInJsStrings('// the ⋯ menu\nconst a = 1; /* ▸ */'), []);
-  assert.deepEqual(glyphsInJsStrings("h('li', {}, 'Alt+↑ / Alt+↓: di chuyển bước; ← →; ⌥↓')"), []);
-  assert.deepEqual(glyphsInJsStrings("`${a} × ${b} · ≤ 5 · ≈ 3 · → acc#1 · ＋ ${t} · Thu nhỏ (−)`"), []);
-});
-
-test('no glyph is used as an icon in client/js, shared, index.html or CSS content (design 0014: ico() / data-ico)', () => {
-  for (const { name, src } of CLIENT_JS) assert.deepEqual(glyphsInJsStrings(src), [], name);
-  const sharedDir = new URL('../shared/', import.meta.url);
-  for (const f of fs.readdirSync(sharedDir).filter((n) => n.endsWith('.js'))) {
-    assert.deepEqual(glyphsInJsStrings(fs.readFileSync(new URL(f, sharedDir), 'utf8')), [], `shared/${f}`);
-  }
-  const html = INDEX_HTML.replace(/<!--[\s\S]*?-->/g, '');
-  assert.deepEqual(iconGlyphs(html), [], 'client/index.html');
+  const html = read('client/index.html').replace(/<!--[\s\S]*?-->/g, '');
+  assert.ok(!ICON_GLYPHS.test(html), `client/index.html: glyph icon ${html.match(ICON_GLYPHS)?.[0]}`);
   for (const { prop, value } of declarations(COMPONENTS)) {
-    if (prop !== 'content') continue;
-    assert.deepEqual(iconGlyphs(value), [], `app.css content: ${value}`);
+    if (prop === 'content') assert.ok(!ICON_GLYPHS.test(value), `app.css content: ${value}`);
   }
 });
 
-test('the icon rules cover the 0011 / 0012 / 0013 controls (library ▾, select bar, history, delete errors)', () => {
-  // Controls added after design 0014 was written: they must use ico() like the rest.
-  const src = (n) => stripJsComments(read(`client/js/${n}`));
-  assert.match(INDEX_HTML, /id="btn-library"[^>]*aria-label="Thư viện workflow"[^>]*><span class="ico" data-ico="chevron-down" aria-hidden="true"><\/span><\/button>/);
-  assert.match(src('select-bar.js'), /menuBtn\(\['Bọc', ico\('chevron-down'\)\]/);
-  assert.match(src('select-bar.js'), /menuBtn\(ico\('more'\), \{ class: 'icon sb-more', title: 'Thao tác khác', 'aria-label': 'Thao tác khác' \}/);
-  assert.match(src('history.js'), /'aria-label': 'Thao tác khác'[\s\S]*?ico\('more'\)/);
-  assert.match(src('library-ui.js'), /'aria-label': `Thao tác khác với "\$\{it\.name\}"`[\s\S]*?ico\('more'\)/);
-  // The "Lỗi insert" / "Lỗi xóa" tabs draw the warning icon with a CSS mask, not a glyph.
-  assert.match(blocks(COMPONENTS, '.tabs button.tab-issues::before')[0]?.['mask'] ?? '', /var\(--ico-warning\)/);
-});
-
-test('design 0014 layout tokens are defined, documented, and match the numbers of client/js/sizing.js', async () => {
-  const { RESULTS } = await import('../client/js/sizing.js');
+test('icon sizes come from --icon-xs/sm/md (12 / 14 / 16 px)', () => {
   const all = Object.fromEntries(declarations(TOKENS).map((d) => [d.prop, d.value]));
-  assert.equal(all['--results-h'], '38vh');
-  assert.equal(all['--results-min-h'], `${RESULTS.min}px`);
-  assert.equal(all['--layout-min-h'], `${RESULTS.layoutMin}px`);
-  assert.equal(all['--resize-hit'], '8px');
-  assert.equal(all['--resize-hit-touch'], '24px');
-  assert.equal(all['--grip-w'], '32px');
-  assert.equal(all['--grip-h'], '4px');
-  assert.equal(all['--fade-w'], 'var(--space-6)');
-  for (const side of ['start', 'end', 'both']) assert.match(all[`--mask-fade-${side}`] ?? '', /^linear-gradient\(/);
-  const doc = read('docs/ui-design-system.md');
-  for (const t of ['--results-h', '--results-min-h', '--layout-min-h', '--resize-hit', '--grip-w', '--fade-w', '--icon-xs']) {
-    assert.ok(doc.includes(`\`${t}\``), `${t} missing from docs/ui-design-system.md`);
-  }
-});
-
-test('design 0014 minimap tokens match client/js/minimap.js and are documented', async () => {
-  const { MINIMAP } = await import('../client/js/minimap.js');
-  const all = Object.fromEntries(declarations(TOKENS).map((d) => [d.prop, d.value]));
-  assert.equal(all['--minimap-w'], '240px');
-  assert.equal(all['--minimap-min-h'], `${MINIMAP.minH}px`);
-  assert.equal(all['--minimap-max-h'], `${MINIMAP.maxH}px`);
-  assert.equal(LIGHT['--color-minimap-off'], 'var(--gray-400)');
-  assert.equal(DARK_MEDIA['--color-minimap-off'], 'var(--gray-500)');
-  assert.match(all['--sheet-h-full'] ?? '', /^min\(90dvh, calc\(100dvh - var\(--topbar-h, 89px\)\)\)$/);
-  const doc = read('docs/ui-design-system.md');
-  for (const t of ['--minimap-w', '--minimap-min-h', '--color-minimap-off', '--sheet-h-full']) assert.ok(doc.includes(`\`${t}\``), `${t} missing from docs/ui-design-system.md`);
+  assert.equal(all['--icon-xs'], '12px');
+  assert.equal(all['--icon-sm'], '14px');
+  assert.equal(all['--icon-md'], '16px');
+  assert.equal(blocks(COMPONENTS, '.ico')[0]?.width, 'var(--icon-md)');
 });

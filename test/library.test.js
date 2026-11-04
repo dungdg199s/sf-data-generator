@@ -1,190 +1,219 @@
-// Design 0012 A: the workflow library (client/js/library.js, pure functions over a fake Storage).
+// Workflow library (design 0012 A): storage, migration of the old autosave, quota, library file
+// (client/js/library.js, pure, with fake storages).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  KEYS, itemKey, readIndex, repairIndex, copyName, migrateToLibrary, saveItem, readItem, exportLibrary, libraryWorkflows, trySet,
-  createLibrary,
+  createLibrary, migrateToLibrary, repairIndex, copyName, parseLibraryFile, libraryFile, isQuotaError,
+  LIBRARY_KEY, TRASH_KEY, V1_KEY, V2_KEY, BROKEN_KEY,
 } from '../client/js/library.js';
-import { migrateV1 } from '../shared/migrate-v1.js';
 import { SAMPLES } from '../client/js/samples.js';
+import { migrateV1 } from '../shared/migrate-v1.js';
+import { V1_SAMPLES } from './fixtures/v1-samples.js';
 
-/** A Storage with an optional byte quota (setItem throws QuotaExceededError past it). */
-function fakeStorage(init = {}, { quota = Infinity } = {}) {
+/** A Storage-like map; `limit`: total characters it accepts (setItem throws QuotaExceededError past it). */
+function fakeStorage(init = {}, limit = Infinity) {
   const map = new Map(Object.entries(init));
   const size = () => [...map].reduce((n, [k, v]) => n + k.length + v.length, 0);
   return {
     map,
+    limit,
     get length() { return map.size; },
     key: (i) => [...map.keys()][i] ?? null,
     getItem: (k) => (map.has(k) ? map.get(k) : null),
-    removeItem: (k) => { map.delete(k); },
     setItem(k, v) {
       const before = map.get(k);
       map.set(k, String(v));
-      if (size() > quota) {
+      if (size() > this.limit) {
         if (before === undefined) map.delete(k);
         else map.set(k, before);
         throw Object.assign(new Error('full'), { name: 'QuotaExceededError' });
       }
     },
+    removeItem: (k) => { map.delete(k); },
   };
 }
 
-let n = 0;
-const deps = () => ({ sample: SAMPLES[0].workflow, migrateV1: (wf) => migrateV1(wf), now: 1000, newId: () => `w${++n}` });
-const V2 = JSON.stringify({ version: 2, name: 'Của tôi', steps: [{ id: 'a', type: 'record', config: { sobject: 'Account' } }] });
-const V1 = JSON.stringify({ version: 1, name: 'Cũ', nodes: [{ id: 'start', type: 'start', config: {} }, { id: 'a', type: 'record', config: { sobject: 'Account', alias: 'acc', fields: [] } }], edges: [{ from: 'start', to: 'a' }] });
+let clock = 1_000;
+const setup = (init, limit) => {
+  const local = fakeStorage(init, limit);
+  const session = fakeStorage();
+  const lib = createLibrary({ local, session, now: () => ++clock });
+  return { local, session, lib };
+};
+const migrate = (lib, local) => migrateToLibrary(lib, local, { samples: SAMPLES, migrateV1: (v1) => migrateV1(v1) });
 
-test('migrateToLibrary: a v2 autosave becomes the first item; v2 and v1 are not written or removed', () => {
-  const s = fakeStorage({ [KEYS.v2]: V2, [KEYS.v1]: V1 });
-  const res = migrateToLibrary(s, deps());
-  assert.equal(res.mode, 'library');
-  assert.deepEqual(res.announce, { kind: 'v2' });
-  assert.equal(res.workflow.name, 'Của tôi');
-  assert.equal(s.getItem(KEYS.v2), V2, 'v2 byte for byte');
-  assert.equal(s.getItem(KEYS.v1), V1);
-  const index = readIndex(s);
-  assert.deepEqual(index.items.map((it) => [it.name, it.steps]), [['Của tôi', 1]]);
-  assert.equal(index.activeId, res.activeId);
-  assert.equal(s.getItem(itemKey(res.activeId)), V2);
+test('migrateToLibrary: a valid v2 autosave becomes the first entry; v2 and v1 are not written or removed', () => {
+  const v2 = JSON.stringify({ version: 2, name: 'Đang soạn', steps: SAMPLES[1].workflow.steps });
+  const v1 = JSON.stringify(V1_SAMPLES[0].workflow);
+  const { local, lib } = setup({ [V2_KEY]: v2, [V1_KEY]: v1 });
+  const res = migrate(lib, local);
+  assert.equal(res.status, 'migrated');
+  assert.equal(res.from, 'v2');
+  assert.deepEqual(lib.items().map((it) => it.name), ['Đang soạn']);
+  assert.equal(lib.activeId(), res.id);
+  assert.deepEqual(lib.read(res.id).workflow, JSON.parse(v2));
+  assert.equal(local.getItem(V2_KEY), v2, 'v2 byte for byte');
+  assert.equal(local.getItem(V1_KEY), v1);
+  assert.equal(migrate(lib, local).status, 'exists', 'only once');
 });
 
-test('migrateToLibrary: from v1 (migrated, report), from nothing (the sample), from a malformed v2 (backed up, sample)', () => {
-  const v1 = fakeStorage({ [KEYS.v1]: V1 });
-  const a = migrateToLibrary(v1, deps());
-  assert.equal(a.announce.kind, 'v1');
-  assert.equal(a.workflow.version, 2);
-  assert.equal(v1.getItem(KEYS.v1), V1);
-  assert.equal(v1.getItem(KEYS.v2), null, 'v2 is not written either');
-  const none = fakeStorage();
-  const b = migrateToLibrary(none, deps());
-  assert.equal(b.announce, null);
-  assert.equal(b.workflow.name, SAMPLES[0].workflow.name);
-  const broken = JSON.stringify({ version: 2, steps: [{ id: 'x', type: 'loop', slots: { body: 5 } }] });
-  const bad = fakeStorage({ [KEYS.v2]: broken });
-  const c = migrateToLibrary(bad, deps());
-  assert.equal(c.announce.kind, 'broken');
-  assert.equal(c.announce.backup, KEYS.broken);
-  assert.equal(bad.getItem(KEYS.v2), broken);
-  assert.equal(bad.getItem(KEYS.broken), broken);
-  assert.equal(c.workflow.name, SAMPLES[0].workflow.name);
+test('migrateToLibrary: from v1 through migrateV1 (report kept), from nothing: the first sample', () => {
+  const v1 = JSON.stringify(V1_SAMPLES[0].workflow);
+  const a = setup({ [V1_KEY]: v1 });
+  const res = migrate(a.lib, a.local);
+  assert.equal(res.from, 'v1');
+  assert.equal(res.rawV1, v1);
+  assert.ok(res.report);
+  assert.deepEqual(a.lib.read(res.id).workflow, migrateV1(V1_SAMPLES[0].workflow).workflow);
+  assert.equal(a.local.getItem(V1_KEY), v1);
+  assert.equal(a.local.getItem(V2_KEY), null, 'no v2 written');
+  const b = setup();
+  const res2 = migrate(b.lib, b.local);
+  assert.equal(res2.from, 'sample');
+  assert.deepEqual(b.lib.read(res2.id).workflow, SAMPLES[0].workflow);
 });
 
-test('migrateToLibrary: storage full ⇒ legacy mode, nothing left behind', () => {
-  const s = fakeStorage({ [KEYS.v2]: V2 }, { quota: V2.length + KEYS.v2.length + 40 });
-  const res = migrateToLibrary(s, deps());
-  assert.equal(res.mode, 'legacy');
-  assert.equal(readIndex(s), null);
-  assert.deepEqual([...s.map.keys()], [KEYS.v2]);
+test('migrateToLibrary: a broken v2 is copied to .broken (never overwritten) and the library starts with the sample', () => {
+  const broken = JSON.stringify({ version: 2, steps: [{ id: 'x', type: 'loop', config: {}, slots: { body: 5 } }] });
+  const a = setup({ [V2_KEY]: broken });
+  const res = migrate(a.lib, a.local);
+  assert.equal(res.from, 'broken');
+  assert.equal(res.brokenKey, BROKEN_KEY);
+  assert.equal(a.local.getItem(BROKEN_KEY), broken);
+  assert.equal(a.local.getItem(V2_KEY), broken);
+  assert.equal(a.lib.items()[0].name, SAMPLES[0].workflow.name);
+  const b = setup({ [V2_KEY]: broken, [BROKEN_KEY]: 'older copy' });
+  const res2 = migrate(b.lib, b.local);
+  assert.equal(b.local.getItem(BROKEN_KEY), 'older copy');
+  assert.deepEqual([res2.brokenKey, res2.brokenOlder], [null, true], 'the message must not claim a copy of this autosave');
 });
 
-test('repairIndex: an entry without its workflow is dropped, an orphan workflow is added back', () => {
-  const s = fakeStorage({
-    [itemKey('a')]: JSON.stringify({ version: 2, name: 'A', steps: [] }),
-    [itemKey('orphan')]: JSON.stringify({ version: 2, name: 'Mồ côi', steps: [{ id: 'x', type: 'record' }] }),
-  });
-  const { index, changed } = repairIndex({ version: 1, activeId: 'gone', items: [{ id: 'a', name: 'A', updatedAt: 5 }, { id: 'gone', name: 'G', updatedAt: 9 }] }, s);
-  assert.ok(changed);
-  assert.deepEqual(index.items.map((it) => [it.id, it.name]), [['a', 'A'], ['orphan', 'Mồ côi']]);
-  assert.equal(index.activeId, 'a', 'activeId falls back to the most recent item');
+test('migrateToLibrary: storage full ⇒ legacy mode, nothing half-written, v2 untouched', () => {
+  const v2 = JSON.stringify(SAMPLES[0].workflow);
+  const { local, lib } = setup({ [V2_KEY]: v2 }, v2.length + 40);
+  const res = migrate(lib, local);
+  assert.equal(res.status, 'legacy');
+  assert.deepEqual(res.workflow, SAMPLES[0].workflow, 'the tab still shows the autosave');
+  assert.deepEqual([...local.map.keys()], [V2_KEY]);
 });
 
-test('copyName: "(bản sao)", then "(bản sao 2)"', () => {
+test('repairIndex drops items without an entry and adds entries missing from the index', () => {
+  const wf = JSON.stringify({ version: 2, name: 'Mồ côi', steps: [{ id: 'a', type: 'record', config: {} }] });
+  const local = fakeStorage({ 'sfdg.wf.w1': '{"version":2,"name":"A","steps":[]}', 'sfdg.wf.orphan': wf, 'sfdg.wf.bad': '{' });
+  const index = { version: 1, activeId: 'gone', items: [{ id: 'w1', name: 'A', createdAt: 1, updatedAt: 5, steps: 0, bytes: 10 }, { id: 'gone', name: 'X', createdAt: 1, updatedAt: 9 }] };
+  const { index: fixed, changed } = repairIndex(index, local, 7);
+  assert.equal(changed, true);
+  assert.deepEqual(fixed.items.map((it) => [it.id, it.name, it.steps, Boolean(it.broken)]), [['w1', 'A', 0, false], ['orphan', 'Mồ côi', 1, false], ['bad', 'Workflow mới', 0, true]]);
+  assert.equal(fixed.activeId, 'w1');
+  assert.equal(repairIndex(fixed, local).changed, false);
+});
+
+test('copyName: (bản sao), (bản sao 2)…', () => {
   assert.equal(copyName('Lead', ['Lead']), 'Lead (bản sao)');
   assert.equal(copyName('Lead', ['Lead', 'Lead (bản sao)']), 'Lead (bản sao 2)');
   assert.equal(copyName('Lead (bản sao)', ['Lead', 'Lead (bản sao)', 'Lead (bản sao 2)']), 'Lead (bản sao 3)');
+  assert.equal(copyName('', []), 'Workflow mới (bản sao)');
 });
 
-test('saveItem: quota ⇒ trash emptied and retried; still full ⇒ not saved; an item deleted elsewhere is added back', () => {
-  const wf = { version: 2, name: 'A', steps: [] };
-  const trash = JSON.stringify({ item: { id: 't' }, workflow: { version: 2, steps: Array(50).fill({ id: 'x', type: 'record' }) } });
-  const room = itemKey('a').length + JSON.stringify(wf).length + 400;
-  const s = fakeStorage({ [KEYS.trash]: trash }, { quota: room });
-  const ok = saveItem(s, 'a', wf, { now: 5 });
-  assert.equal(ok.ok, true, 'saved once the trash was emptied');
-  assert.equal(s.getItem(KEYS.trash), null);
-  assert.equal(ok.readded, true);
-  const big = { ...wf, steps: Array(200).fill({ id: 'y', type: 'record', config: { sobject: 'Account' } }) };
-  assert.deepEqual(saveItem(s, 'a', big, { now: 6 }), { ok: false, error: 'quota' });
-  assert.deepEqual(readItem(s, 'a').workflow, wf, 'the last good save is kept');
-  assert.equal(trySet(s, 'k', 'x'.repeat(room)), 'quota');
+test('entries: create, save, rename, duplicate right below, delete and restore from the trash', () => {
+  const { lib, local } = setup();
+  const a = lib.create({ version: 2, name: 'A', steps: [] });
+  const b = lib.create({ version: 2, name: 'B', steps: [] });
+  assert.deepEqual(lib.items().map((it) => it.name), ['B', 'A']);
+  assert.equal(lib.save(a, { version: 2, name: 'A', steps: [{ id: 'r', type: 'record', config: {} }] }).ok, true);
+  assert.deepEqual(lib.items().map((it) => [it.name, it.steps]), [['A', 1], ['B', 0]]);
+  const c = lib.duplicate(a);
+  assert.deepEqual(lib.items().map((it) => it.name), ['A', 'A (bản sao)', 'B']);
+  lib.rename(c, 'C');
+  assert.equal(lib.read(c).workflow.name, 'C');
+  lib.remove(b);
+  assert.equal(lib.read(b).error !== undefined, true);
+  assert.ok(local.getItem(TRASH_KEY));
+  assert.equal(lib.restoreTrash(), b);
+  assert.equal(lib.read(b).workflow.name, 'B');
+  assert.equal(local.getItem(TRASH_KEY), null);
+  // The key was taken meanwhile (another tab): the trashed entry comes back under a new id.
+  lib.remove(b);
+  local.setItem(`sfdg.wf.${b}`, JSON.stringify({ version: 2, name: 'Khác', steps: [] }));
+  const back = lib.restoreTrash();
+  assert.notEqual(back, b);
+  assert.deepEqual([lib.read(back).workflow.name, lib.read(b).workflow.name], ['B', 'Khác']);
+  // The trash keeps the last delete only: an older delete's undo restores nothing (0012 review 2).
+  const d = lib.create({ version: 2, name: 'D', steps: [] });
+  const e = lib.create({ version: 2, name: 'E', steps: [] });
+  lib.remove(d);
+  lib.remove(e);
+  assert.equal(lib.restoreTrash(d), null);
+  assert.equal(lib.read(d).workflow, undefined);
+  assert.equal(lib.restoreTrash(e), e);
+  assert.equal(lib.restoreTrash(d), null);
+  lib.remove(e);
+  // The undo time is over: the trash is emptied (only if it still holds that entry).
+  lib.remove(back);
+  lib.clearTrash('other');
+  assert.ok(local.getItem(TRASH_KEY));
+  lib.clearTrash(back);
+  assert.equal(local.getItem(TRASH_KEY), null);
+  // An unreadable entry is flagged in the index once read, and the flag goes once it is readable.
+  local.setItem(`sfdg.wf.${c}`, '{');
+  assert.ok(lib.read(c).error);
+  assert.equal(lib.item(c).broken, true);
+  local.setItem(`sfdg.wf.${c}`, JSON.stringify({ version: 2, name: 'C', steps: [] }));
+  lib.read(c);
+  assert.equal(lib.item(c).broken, undefined);
+  // An entry deleted in another tab comes back with the next save of the tab that has it open.
+  local.removeItem(`sfdg.wf.${a}`);
+  assert.equal(lib.save(a, { version: 2, name: 'A', steps: [] }).readded, true);
+  assert.ok(lib.item(a));
 });
 
-test('library file round trip: export, then libraryWorkflows reads it back', () => {
-  const s = fakeStorage();
-  saveItem(s, 'a', { version: 2, name: 'A', steps: [] }, { now: 1 });
-  saveItem(s, 'b', { version: 2, name: 'B', steps: [{ id: 'x', type: 'record' }] }, { now: 2 });
-  s.setItem(itemKey('bad'), '{');
-  const text = exportLibrary(s, readIndex(s), '2026-10-28T10:24:00Z');
-  const obj = JSON.parse(text);
-  assert.deepEqual([obj.sfdg, obj.version, obj.exportedAt], ['library', 1, '2026-10-28T10:24:00Z']);
-  assert.deepEqual(libraryWorkflows(obj).map((w) => w.name), ['B', 'A'], 'most recent first');
-  assert.equal(libraryWorkflows({ version: 2, steps: [] }), null, 'a workflow file is not a library file');
-  assert.match(readItem(s, 'bad').error, /không đọc được/);
+test('quota: save empties the trash and retries; still full ⇒ not saved, nothing else lost', () => {
+  const { lib, local } = setup();
+  const a = lib.create({ version: 2, name: 'A', steps: [] });
+  const b = lib.create({ version: 2, name: 'B', steps: [] });
+  lib.remove(b); // in the trash
+  const used = [...local.map].reduce((n, [k, v]) => n + k.length + v.length, 0);
+  local.limit = used + 30;
+  const big = { version: 2, name: 'A', steps: [{ id: 'x', type: 'record', config: { note: 'x'.repeat(60) } }] };
+  const res = lib.save(a, big);
+  assert.equal(res.ok, true, 'fits once the trash is gone');
+  assert.equal(local.getItem(TRASH_KEY), null);
+  const bigger = { version: 2, name: 'A', steps: [{ id: 'x', type: 'record', config: { note: 'x'.repeat(5000) } }] };
+  const fail = lib.save(a, bigger);
+  assert.deepEqual([fail.ok, fail.quota], [false, true]);
+  assert.deepEqual(lib.read(a).workflow, big, 'the last good save stays');
+  assert.ok(isQuotaError(fail.error));
 });
 
-// ---------- review 0012: the open item of a tab (createLibrary) ----------
-
-const wfOf = (name, n = 0) => ({ version: 2, name, steps: Array.from({ length: n }, (_, i) => ({ id: `s${i}`, type: 'record', config: {} })) });
-function libWith(storage, ids) {
-  for (const id of ids) saveItem(storage, id, wfOf(id), { now: 1 });
-  let k = 0;
-  return createLibrary({ storage, now: () => 10, newId: () => `n${++k}`, activeId: ids[0] });
-}
-
-test('review B1: a pause (another tab wrote the item) ends when another item is opened or created; the new one is saved', () => {
-  const s = fakeStorage();
-  const lib = libWith(s, ['a', 'b']);
-  lib.pause();
-  assert.equal(lib.isPaused(), true);
-  assert.deepEqual(lib.save(wfOf('a edited')), { ok: false, paused: true });
-  assert.equal(readItem(s, 'a').workflow.name, 'a', 'the other tab\'s version is not overwritten');
-  const created = lib.create(wfOf('Mới'));
-  assert.equal(lib.isPaused(), false);
-  assert.equal(lib.save(wfOf('Mới', 1)).ok, true);
-  assert.equal(readItem(s, created.id).workflow.steps.length, 1, 'edits of the new workflow are saved');
-  // The pause of "a" no longer applies: a late "Giữ bản của tab này" for it does nothing.
-  assert.equal(lib.resume('a'), false);
-  lib.open('a');
-  lib.pause();
-  lib.open('b');
-  assert.equal(lib.isPaused(), false);
-  assert.equal(lib.save(wfOf('b edited')).ok, true);
+test('usage counts characters; rename keeps entry and index together when the index cannot be written', () => {
+  const { lib, local } = setup();
+  const a = lib.create({ version: 2, name: 'A', steps: [] });
+  const chars = [...local.map].filter(([k]) => k.startsWith('sfdg.')).reduce((n, [k, v]) => n + k.length + v.length, 0);
+  assert.equal(lib.usage(), chars);
+  const before = local.getItem(`sfdg.wf.${a}`);
+  const realSet = local.setItem.bind(local);
+  local.setItem = (k, v) => { if (k === LIBRARY_KEY) throw Object.assign(new Error('full'), { name: 'QuotaExceededError' }); realSet(k, v); };
+  assert.throws(() => lib.rename(a, 'Tên mới'));
+  local.setItem = realSet;
+  assert.equal(local.getItem(`sfdg.wf.${a}`), before);
+  assert.equal(lib.item(a).name, 'A');
 });
 
-test('review B2 / S1: deleting keeps the undo in memory (trash not writable), opens a successor first, never sfdg.wf.null', () => {
-  const big = JSON.stringify(wfOf('x', 30));
-  // Room for the items and the index, not for a copy in the trash.
-  const s = fakeStorage({}, { quota: 3 * big.length });
-  for (const id of ['a', 'b']) saveItem(s, id, wfOf(id, 30), { now: id === 'a' ? 2 : 1 });
-  const lib = createLibrary({ storage: s, now: () => 10, newId: () => 'n1', activeId: 'a' });
-  const res = lib.remove('a', { empty: wfOf('Workflow mới') });
-  assert.equal(res.ok, true);
-  assert.equal(s.getItem(KEYS.trash), null, 'the trash could not be written');
-  assert.deepEqual([res.opened.id, lib.activeId], ['b', 'b']);
-  assert.equal(s.getItem(itemKey('a')), null);
-  assert.ok(![...s.map.keys()].includes(itemKey('null')));
-  const back = lib.restore(res.undo);
-  assert.deepEqual(back, { ok: true, id: 'a' });
-  assert.equal(readItem(s, 'a').workflow.steps.length, 30);
-  assert.ok(readIndex(s).items.some((it) => it.id === 'a'));
-  // The last item: an empty workflow is created and opened first.
-  const one = fakeStorage();
-  const l1 = libWith(one, ['only']);
-  const r1 = l1.remove('only', { empty: wfOf('Workflow mới') });
-  assert.equal(r1.opened.id, 'n1');
-  assert.equal(readItem(one, 'n1').workflow.name, 'Workflow mới');
-  assert.ok(![...one.map.keys()].includes(itemKey('null')));
+test('library file round trip: export, parse, the workflows as they were', () => {
+  const { lib } = setup();
+  lib.create(SAMPLES[0].workflow);
+  lib.create(SAMPLES[1].workflow);
+  const file = JSON.parse(JSON.stringify(lib.exportAll('2026-10-28T10:24:00.000Z')));
+  assert.deepEqual(Object.keys(file), ['sfdg', 'version', 'exportedAt', 'workflows']);
+  assert.deepEqual(parseLibraryFile(file), { workflows: [SAMPLES[1].workflow, SAMPLES[0].workflow], v1: 0, broken: 0 });
+  assert.equal(parseLibraryFile({ version: 2, steps: [] }), null);
+  const mixed = libraryFile([SAMPLES[0].workflow, { version: 1, nodes: [] }, { version: 2, steps: [{ id: 'l', type: 'loop', slots: { body: 5 } }] }, 'x'], 'x');
+  assert.deepEqual(parseLibraryFile(mixed), { workflows: [SAMPLES[0].workflow], v1: 1, broken: 2 });
+  assert.deepEqual(libraryFile([], 'x').workflows, []);
 });
 
-test('review N3: restoring never overwrites an existing item (a new id then)', () => {
-  const s = fakeStorage();
-  const lib = libWith(s, ['a', 'b']);
-  const res = lib.remove('b');
-  saveItem(s, 'b', wfOf('another b'), { now: 3 });
-  const back = lib.restore(res.undo);
-  assert.equal(back.ok, true);
-  assert.notEqual(back.id, 'b');
-  assert.equal(readItem(s, 'b').workflow.name, 'another b');
-  assert.equal(readItem(s, back.id).workflow.name, 'b');
+test('an imported library file gets valid step ids (review 2 of 0011, item 8)', async () => {
+  const { parseLibraryFile } = await import('../client/js/library.js');
+  const out = parseLibraryFile({ sfdg: 'library', version: 1, workflows: [{ version: 2, name: 'x', steps: [{ id: '-bad id', type: 'record', config: {} }] }] });
+  assert.deepEqual(out.workflows[0].steps.map((s) => s.id), ['bad_id']);
 });

@@ -14,9 +14,9 @@ Option chung (registry tự thêm, generator không cần khai báo):
 
 | `type` | Salesforce | Option riêng | Giá trị sinh ra |
 | --- | --- | --- | --- |
-| `text` | Text | `mode` (words, name, firstName, lastName, company, city, pattern, list), `minWords`, `maxWords`, `pattern`, `values`, `prefix`, `suffix`, `maxLength` | chuỗi |
-| `textarea` | Text Area | `minSentences`, `maxSentences`, `maxLength` (≤255) | chuỗi |
-| `longtextarea` | Text Area (Long) | `minParagraphs`, `maxParagraphs`, `maxLength` | chuỗi có `\n\n` |
+| `text` | Text | `mode` (words, name, firstName, lastName, company, city, pattern, list), `minWords`, `maxWords` (1–1 000), `pattern`, `values`, `prefix`, `suffix`, `maxLength` | chuỗi |
+| `textarea` | Text Area | `minSentences`, `maxSentences` (1–200), `maxLength` (≤255) | chuỗi |
+| `longtextarea` | Text Area (Long) | `minParagraphs`, `maxParagraphs` (1–50), `maxLength` | chuỗi có `\n\n` |
 | `richtextarea` | Text Area (Rich) | như trên | HTML `<p>` (không cắt giữa thẻ) |
 | `encryptedtext` | Text (Encrypted) | `pattern`, `maxLength` (≤175) | chuỗi |
 | `email` | Email | `mode` (fromName, random), `domains`; mặc định `unique` | `first.last12@example.com` |
@@ -43,11 +43,6 @@ Mốc thời gian (`from`/`to` của date/datetime) nhận `YYYY-MM-DD`, ISO đ�
 `today`, `now`, `-1y`, `+30d`, `-6m`, `+2w`, `-12h`. Cả lần chạy dùng chung một mốc "now".
 
 ## Hợp đồng generator
-
-`min` / `max` của option `integer` / `number` là **giới hạn thật** (sửa sau review [0012](design/0012-nang-suat-soan-thao.md)):
-validate (và `POST /api/field-samples`) báo lỗi gắn `fields.<Name>` khi giá trị nằm ngoài, ví dụ `Field "Title": "Số từ tối
-thiểu" phải từ 1 đến 1000 (đang là 100000). …`. Số từ / số câu / số đoạn của Text, Text Area, Text Area (Long) tối đa **1000**
-(`MAX_COUNT` trong `server/generators/text.js`), để một lần chạy hay ví dụ ở inspector không treo server.
 
 ```js
 export const myType = {
@@ -79,21 +74,21 @@ export const myType = {
 
 Lỗi do generator `throw` sẽ được executor gắn `nodeId` và `field` để UI chỉ ra đúng field.
 
+**Giới hạn option số** ([0012](design/0012-nang-suat-soan-thao.md), sau review): `min` / `max` của option `integer` / `number`
+là giới hạn thật, không chỉ cho UI. `resolveOptions` (`server/generators/common.js`) **kẹp** giá trị vào `[min, max]` trước khi gọi
+`generate`, nên không option nào làm generator chạy quá lâu (ví dụ `maxSentences: 1e9`); option số nào có thể làm vòng lặp dài
+phải khai báo `max`. `optionIssues(field)` (`server/generators/index.js`) liệt kê option đang hiện (`showIf`) mà giá trị ngoài
+khoảng hoặc không phải số; validate dùng nó (lỗi `code: "optionRange"`, `field: "fields.<Name>"`, `option`) và
+`POST /api/field-samples` cũng vậy (422). `options` là `null` / không phải object được coi như `{}`. Generator báo lỗi đầu vào bằng
+`Error` thường; lỗi khác (`TypeError`…) là lỗi lập trình: `/api/field-samples` trả 500 và ghi log.
+
 Các `kind` của option mà UI dựng được: `string`, `text`, `integer`, `number`, `boolean`, `select` (cần `choices`),
 `list`, `numberList`, `time`, `ref` (dropdown dựng từ `refChoices` của `shared/scope.js`: bước dùng được ở vị trí này, gần
 nhất trước, kèm `bản ghi cuối` / `có thể trống`; các bước khác nằm trong nhóm "Không dùng được ở đây", bị tắt, kèm lý do).
 Khóa thêm của option ([0005](design/0005-variable-picker.md)):
 
 - `vars: 'template' | 'path'`: option nhận biến. UI gắn bảng chọn biến (nút `{x}`, gõ `{{`, Ctrl+Space) và dải chip;
-  validate kiểm tra mọi tham chiếu trong option đó. `vars: 'number'` ([0013](design/0013-mo-rong-bien-va-lap.md)) cho option
-  `kind: 'integer' | 'number'`: số, hoặc đúng một biến kiểu Số `{{path}}`; hôm nay chỉ `count`/`min`/`max` của bước Lặp dùng
-  nó — option số của generator (Number min/max, Date from/to) **chưa** nhận biến (để sau, 0013 mục 15).
-- `kind: 'list'`: **mỗi dòng một giá trị**, dấu phẩy là một phần của giá trị, khoảng trắng hai đầu bị bỏ, dòng trống bị bỏ
-  (`splitList` trong `shared/list.js`, dùng chung cho form, server và Lặp "Mỗi giá trị trong danh sách"; sửa sau review 0013 —
-  trước đó form và server tách cả theo dấu phẩy và dấu chấm phẩy). Ngoại lệ: danh sách tên field của Query vẫn nhận dấu phẩy
-  (tên field không chứa dấu phẩy); `kind: 'numberList'` vẫn tách theo dòng, dấu phẩy và dấu chấm phẩy.
-- `showIf` bắc cầu (0013): option ẩn khi option nó phụ thuộc đang ẩn. Template dùng được `{{loop.value}}` (Lặp "Mỗi giá trị
-  trong danh sách") và `{{run.seed}}`, `{{run.now}}`, `{{run.today}}` (biến của lần chạy).
+  validate kiểm tra mọi tham chiếu trong option đó.
 - `accepts` (chỉ với `kind: 'ref'`, không bắt buộc): lọc nguồn theo cờ của `exposes`, ví dụ `{ "pool": true }`. Mặc định
   là mọi nguồn có `lookupParent: true`. `placeholder` / `empty` (không bắt buộc): chữ của dòng trống khi có / chưa có
   nguồn nào (Chọn bản ghi: `— chọn pool —` / `— chưa có pool nào —`).
@@ -102,9 +97,11 @@ Khóa thêm của option ([0005](design/0005-variable-picker.md)):
   `{ kind: 'sobject', purpose: 'query' | 'create' }` → datalist sObject (`GET /api/orgs/:org/sobjects?for=query` hoặc danh
   sách createable); `{ kind: 'fields', sobjectKey }` → nút "Chọn field…" (`GET /api/orgs/:org/sobjects/:name/fields`);
   `{ kind: 'poolFields', poolKey }` → datalist field của pool (từ `members` của nguồn trong `analyzeScope`).
+  `{ kind: 'varNames' }` ([0015](design/0015-buoc-dat-bien.md), "Tên biến" của Đặt biến) → datalist các biến đã có trong
+  workflow kèm kiểu và số bước (không cần org).
 - `initial` (option của bước): giá trị khi thêm bước mới từ UI; `default` là giá trị khi thiếu khóa (xem
   [workflow-schema.md](workflow-schema.md#bước)). `rows` / `monospace` cho `kind: 'text'` (ô SOQL).
 
-`GET /api/meta` trả thêm `syntax: { templateToken, valueTypes: [{ value, label }] }` (nhãn tiếng Việt của `valueType`).
+`GET /api/meta` trả thêm `syntax: { templateToken, valueTypes: [{ value, label }], varNamespace }` (nhãn tiếng Việt của `valueType`; `varNamespace` = `var`, nhóm biến của bước Đặt biến, [0015](design/0015-buoc-dat-bien.md)).
 
 Thêm kiểu mới: xem skill `.claude/skills/add-field-type/SKILL.md`.

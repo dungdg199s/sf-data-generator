@@ -3,8 +3,9 @@
 //
 // Items:
 //   { group }                                   group header
+//   { separator: true }                         ends the group; the next rows stand alone under a line
 //   { type, label, desc, kbd, disabled, title, danger, onSelect }   a menu row (`type`: step-type icon tile)
-//   { label, checked, onSelect }                a radio row (role=menuitemradio, ✓ when checked)
+//   { label, checked, onSelect }                a radio row (role=menuitemradio, check icon when checked)
 //   { field: { label, value, placeholder, title, onInput, onEnter } }  a label + text input row
 // Arrow keys move between rows and inputs; a printable key jumps to the next row starting with
 // it (not while an input has focus); Esc and Tab / Shift+Tab close it and put focus back on the
@@ -55,7 +56,7 @@ function fieldRow(f) {
 
 /**
  * Opens a popup under (or above, if there is no room) `anchor`.
- * opts: { title, items, search, onClose, focus } — `focus`: data-field of an input to focus first.
+ * opts: { title, items, search, searchLabel, onClose, focus } — `focus`: data-field of an input to focus first.
  */
 export function openPopup(anchor, { title, items, search = false, searchLabel = 'Tìm loại bước…', onClose = null, focus = null }) {
   closePopup();
@@ -64,13 +65,19 @@ export function openPopup(anchor, { title, items, search = false, searchLabel = 
   const build = (q = '') => {
     focusables.length = 0;
     const needle = q.trim().toLowerCase();
-    // `hiddenUntilSearch` rows (the library past its 20 recent ones) are found through the search only.
-    const shown = items.filter((it) => it.group || it.field || (!needle ? !it.hiddenUntilSearch : `${it.label} ${it.desc ?? ''}`.toLowerCase().includes(needle)));
+    // `searchOnly` rows (the library's older entries) only show up as search results.
+    const shown = items.filter((it) => it.group || it.separator || it.field || (!needle ? !it.searchOnly : `${it.label} ${it.desc ?? ''}`.toLowerCase().includes(needle)));
     const out = [];
     let group = null; // the role=group rows go into, after a group header
     for (const [i, it] of shown.entries()) {
+      if (it.separator) {
+        // Ends the current group: the rows after it stand alone, under a line.
+        group = null;
+        if (out.length && shown[i + 1] && !shown[i + 1].group) out.push(h('div', { class: 'popup-sep', role: 'separator' }));
+        continue;
+      }
       if (it.group) {
-        if (!shown[i + 1] || shown[i + 1].group) continue; // empty after filtering
+        if (!shown[i + 1] || shown[i + 1].group || shown[i + 1].separator) continue; // empty after filtering
         group = h('div', { class: 'popup-groupbox', role: 'group', 'aria-label': it.group }, h('div', { class: 'popup-group', 'aria-hidden': 'true' }, it.group));
         out.push(group);
         continue;
@@ -101,7 +108,7 @@ export function openPopup(anchor, { title, items, search = false, searchLabel = 
         it.onSelect();
       },
     },
-    h('span', { class: 'pi-label' }, it.type ? icoTile() : null, radio ? h('span', { class: 'pi-check', 'aria-hidden': 'true' }, it.checked ? ico('check') : null) : null, it.label),
+    h('span', { class: 'pi-label' }, it.type ? icoTile() : null, it.icon ? ico(it.icon) : null, radio ? h('span', { class: 'pi-check', 'aria-hidden': 'true' }, it.checked ? ico('check') : null) : null, it.label),
     it.desc ? h('small', {}, it.desc) : null,
     it.kbd ? h('kbd', {}, it.kbd) : null);
     if (!it.disabled) focusables.push(b);
@@ -128,7 +135,7 @@ export function openPopup(anchor, { title, items, search = false, searchLabel = 
       // Leaving the menu: back to its button (not to either end of the page).
       e.preventDefault();
       closePopup(true);
-    } else if (!inInput && e.key.length === 1 && /\S/.test(e.key)) {
+    } else if (!inInput && !e.ctrlKey && !e.metaKey && !e.altKey && e.key.length === 1 && /\S/.test(e.key)) {
       const k = e.key.toLowerCase();
       const buttons = focusables.filter((x) => x.matches('button'));
       const at = buttons.indexOf(document.activeElement);
@@ -136,8 +143,8 @@ export function openPopup(anchor, { title, items, search = false, searchLabel = 
       order.find((b) => b.textContent.trim().toLowerCase().startsWith(k))?.focus();
     }
   });
-  // Inside a modal dialog (Lịch sử insert, design 0011) the popup must be in the dialog's top layer.
-  (anchor.closest('dialog[open]') ?? document.body).append(el);
+  // Inside an open modal dialog (its ⋯ buttons): the popup must be in the same top layer to be clickable.
+  (anchor.closest?.('dialog[open]') ?? document.body).append(el);
   const r = anchor.getBoundingClientRect();
   const w = el.offsetWidth;
   const hgt = el.offsetHeight;

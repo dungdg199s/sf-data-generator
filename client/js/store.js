@@ -1,16 +1,15 @@
-// Single app state + undo/redo history + localStorage autosave.
+// Single app state + undo/redo history + autosave (the workflow library of design 0012 A,
+// library-ui.js, sets the handler; without it, the single autosave `sfdg.workflow.v2` of before).
 // Views subscribe and receive the change `source` so a view can skip re-rendering
 // for edits it made itself (keeps input focus while typing in the inspector).
 
-import { findStep, collectAliases, allSteps } from '/shared/workflow-tree.js';
+import { findStep, collectAliases, allSteps, normalizeStepIds, suggestVarName as suggestVarNameIn } from '/shared/workflow-tree.js';
 import { analyzeScope } from '/shared/scope.js';
 import { estimateSteps } from '/shared/estimate.js';
 
+// The single autosave of before the library: only written while the library could not be made
+// (storage full on the first run, design 0012 A "chế độ cũ").
 const STORAGE_KEY = 'sfdg.workflow.v2';
-// Autosave of the old graph editor. Read once for migration, never written or removed.
-const LEGACY_STORAGE_KEY = 'sfdg.workflow.v1';
-// Copy of an autosave that could not be shown, kept so the next edit cannot overwrite it.
-const BROKEN_STORAGE_KEY = 'sfdg.workflow.v2.broken';
 const COLLAPSED_KEY = 'sfdg.collapsed';
 const COLLAPSED_MAX = 500;
 const VIEW_KEY = 'sfdg.view'; // 'process' (Quy trình, default) | 'canvas' (Sơ đồ), design 0003
@@ -24,19 +23,21 @@ export function emptyWorkflow() {
 export const state = {
   meta: null, // { fieldTypes, nodeTypes, stepCategories, limits }
   workflow: emptyWorkflow(),
-  selection: null, // { kind: 'step', id, ids?, anchor? } | { kind: 'workflow' } (ids: several steps, selection.js)
+  // { kind: 'step', id, ids?, anchor? } | { kind: 'workflow' }. `id`: the primary step; `ids`: every
+  // selected step when several are (design 0012 B, selection.js); `anchor`: start of a Shift range.
+  selection: null,
   issues: { errors: [], warnings: [] },
   orgs: [],
   org: '',
   result: null, // last run (design 0004: first previewRows records per sObject + totals)
-  // Inserts that wrote records, newest first (≤ 20, in this tab, across the library's workflows,
-  // design 0012 A): { key: runKey(workflow, seed), org }; the Insert confirmation warns on a repeat.
+  // Inserts that wrote records in this tab, newest last, at most 20 ({ key: runKey(workflow, seed), org }):
+  // kept across workflows of the library, so a copied workflow inserted again with the same seed warns.
   lastInserts: [],
-  deleteResult: null, // last delete of the insert history (design 0011): its "Lỗi xóa" tab
   resultRun: null, // { workflow, seed, now, org, expectQueries } of that run: downloads regenerate from it
   lastRunKey: null,
   lastRunOrg: null, // org the Query steps of the last preview read ('' = sample rows)
   lastRunSteps: null, // JSON of steps at the last run, to dim stale stat chips
+  runLive: null, // counts of the run going on, for the cards (design 0012 D, client/js/run-cards.js)
   collapsed: loadCollapsed(), // ids of containers shown collapsed (UI only, no undo)
   view: 'process', // 'process' | 'canvas' (views.js; UI only, no undo)
 };
@@ -109,9 +110,8 @@ function restore(json) {
   state.workflow = JSON.parse(json);
   lastCoalesce = { key: null, at: 0 };
   revision++;
-  if (state.selection?.kind === 'step' && !stepById(state.selection.id)) state.selection = null;
-  // Undo / redo keep the main step only (design 0012 B: several steps are not restored).
-  else if (state.selection?.ids) state.selection = { kind: 'step', id: state.selection.id, anchor: state.selection.id };
+  // Undo / redo keep the primary step selected if it is still there; a multi-selection is not restored (0012 B).
+  if (state.selection?.kind === 'step') state.selection = stepById(state.selection.id) ? { kind: 'step', id: state.selection.id } : null;
   persist();
   emit('history', 'workflow');
 }
@@ -121,72 +121,39 @@ export function select(selection) {
   emit('app', 'selection');
 }
 
-let persistHook = null;
-/** Where edits are saved (design 0012 A: the library's item); null = the single autosave of before. */
-export function setPersistHook(fn) {
-  persistHook = fn;
+let persistHandler = null;
+/** The library's save (library-ui.js); null: the single autosave of before. */
+export function setPersistHandler(fn) {
+  persistHandler = fn;
 }
 
 export function persist() {
-  if (persistHook) {
-    persistHook(state.workflow);
-    return;
-  }
+  if (persistHandler) return persistHandler(state.workflow);
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state.workflow));
   } catch {
     // Storage full or disabled: autosave is a convenience, not a requirement.
   }
+  return undefined;
 }
 
 /**
  * Show another workflow of the library (design 0012 A): undo / redo start empty (Ctrl+Z never
- * brings workflow A into B), nothing selected, no run result. Not saved here (the library did).
+ * brings workflow A's content into B), nothing selected, no run result. Not saved: it comes from
+ * the library (call persist() when it is new content for the open entry).
  */
-export function loadWorkflow(wf) {
+export function openWorkflow(wf) {
+  // Invalid step ids (old or hand-edited files) are rewritten: the server refuses them (0011 review 2).
+  state.workflow = normalizeStepIds(wf).workflow;
   past.length = 0;
   future.length = 0;
   lastCoalesce = { key: null, at: 0 };
-  state.workflow = wf;
-  state.selection = null;
-  state.result = null;
-  state.resultRun = null;
-  state.lastRunKey = null;
-  state.lastRunSteps = null;
-  state.lastRunOrg = null;
   revision++;
+  state.selection = null;
+  Object.assign(state, { result: null, resultRun: null, lastRunKey: null, lastRunOrg: null, lastRunSteps: null, runLive: null });
   emit('replace', 'workflow');
   emit('app', 'selection');
   emit('run', 'result');
-}
-
-/** Remember an insert that wrote records (newest first, at most 20). */
-export function rememberInsert(key, org) {
-  state.lastInserts = [{ key, org }, ...state.lastInserts.filter((x) => !(x.key === key && x.org === org))].slice(0, 20);
-}
-
-export function loadPersisted() {
-  return readJson(STORAGE_KEY);
-}
-
-/** Keep a copy of an autosave that could not be shown (see main.js). Returns the key or null. */
-export function backupBrokenAutosave(json) {
-  try {
-    localStorage.setItem(BROKEN_STORAGE_KEY, json);
-    return BROKEN_STORAGE_KEY;
-  } catch {
-    return null;
-  }
-}
-
-/** The old editor's autosave (version 1), if any. Read-only. */
-export function loadLegacy() {
-  try {
-    const raw = localStorage.getItem(LEGACY_STORAGE_KEY);
-    return raw ? { raw, workflow: JSON.parse(raw) } : null;
-  } catch {
-    return null;
-  }
 }
 
 function readJson(key) {
@@ -255,22 +222,6 @@ export function fieldType(type) {
   return state.meta?.fieldTypes.find((t) => t.type === type);
 }
 
-/**
- * Default fields of a Record step for `sobject` (design 0012 G): the server's preset
- * (meta.recordPresets: Task → Subject, Contact → FirstName + LastName…), else `Name` (Họ tên).
- * A fresh copy each call.
- */
-export function recordPresetOf(sobject) {
-  const presets = state.meta?.recordPresets ?? {};
-  if (typeof sobject !== 'string' || !sobject) return null;
-  if (Object.hasOwn(presets, sobject)) return presets[sobject];
-  const key = Object.keys(presets).find((k) => k.toLowerCase() === sobject.toLowerCase());
-  return key ? presets[key] : null;
-}
-export function recordDefaultFields(sobject) {
-  return structuredClone(recordPresetOf(sobject)?.fields ?? [{ name: 'Name', type: 'text', options: { mode: 'name' } }]);
-}
-
 /** Slot keys of a step type in reading order, from /api/meta (for shared/workflow-tree.js). */
 export const slotKeys = (type) => nodeType(type)?.slots?.map((s) => s.key) ?? [];
 
@@ -280,6 +231,18 @@ export function locate(id) {
 
 export function stepById(id) {
   return locate(id)?.step ?? null;
+}
+
+let idCache = { revision: -1, workflow: null, map: new Map() };
+/**
+ * id → step of the whole workflow, built once per workflow revision (decoration passes and the
+ * selection look steps up in it instead of walking the tree for each card).
+ */
+export function stepsById() {
+  if (idCache.revision !== revision || idCache.workflow !== state.workflow) {
+    idCache = { revision, workflow: state.workflow, map: new Map(allSteps(state.workflow, slotKeys).map((s) => [s.id, s])) };
+  }
+  return idCache.map;
 }
 
 export function selectedStep() {
@@ -299,17 +262,16 @@ export function currentScope() {
   return scopeCache.scope;
 }
 
-let estimateCache = { revision: -1, workflow: null, result: undefined, estimate: null };
+let estimateCache = { revision: -1, workflow: null, result: null, estimate: null };
 /**
- * Record-count estimate of the current workflow (shared/estimate.js, design 0012 H): per Record
- * step and in total. Query steps count the rows of the last preview. Once per workflow revision
- * (and result).
+ * Record-count estimate of the workflow (design 0012 H, shared/estimate.js): once per workflow
+ * revision and run result (a Query's last read row count makes a Lặp over it exact).
  */
 export function currentEstimate() {
-  const c = estimateCache;
-  if (c.revision !== revision || c.workflow !== state.workflow || c.result !== state.result) {
-    const queryCounts = Object.fromEntries((state.result?.queries ?? []).map((q) => [q.nodeId, q.count]));
-    estimateCache = { revision, workflow: state.workflow, result: state.result, estimate: estimateSteps(state.workflow, state.meta, { queryCounts, limits: state.meta?.limits }) };
+  const result = state.result;
+  if (estimateCache.revision !== revision || estimateCache.workflow !== state.workflow || estimateCache.result !== result) {
+    const queryCounts = Object.fromEntries((result?.queries ?? []).filter((q) => Number.isFinite(q.count)).map((q) => [q.nodeId, q.count]));
+    estimateCache = { revision, workflow: state.workflow, result, estimate: estimateSteps(state.workflow, state.meta, { queryCounts }) };
   }
   return estimateCache.estimate;
 }
@@ -355,6 +317,11 @@ function uniqueAlias(name, exceptStepId, key = 'alias') {
   if (own) taken.delete(own);
   if (!taken.has(name)) return name;
   for (let i = 2; ; i++) if (!taken.has(`${name}${i}`)) return `${name}${i}`;
+}
+
+/** Name of a new Đặt biến step (design 0015): bien1, bien2… not used by any Đặt biến yet. */
+export function suggestVarName() {
+  return suggestVarNameIn(state.workflow, slotKeys);
 }
 
 /** The last preview's result of a Query step (`queries[]` of /api/run), or null. */

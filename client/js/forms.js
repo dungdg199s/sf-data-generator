@@ -4,7 +4,6 @@
 import { h } from './dom.js';
 import { attachVarPicker } from './var-picker.js';
 import { optionShown } from '/shared/scope.js';
-import { splitList } from '/shared/list.js';
 
 let uid = 0;
 
@@ -17,15 +16,14 @@ let uid = 0;
  *                   vars?: { stepId, fieldIndex?, fieldName?, field }, suggest? }
  *                 aliases (or refChoices) feed `ref` dropdowns; `usable: false` ones are listed
  *                 disabled, with `note` saying why (below this step, other branch, turned off).
- *                 Options declaring `vars` get the variable picker (var-picker.js) for `ctx.vars`;
- *                 an `integer`/`number` option with `vars: 'number'` (design 0013) is a text field
- *                 holding a number or one `{{path}}`. `showIf` is transitive (shared/scope.js
- *                 optionShown): an option hides when the option it depends on is hidden.
+ *                 Options declaring `vars` get the variable picker (var-picker.js) for `ctx.vars`.
  *                 Options declaring `suggest` (design 0006: help from the org) get it from
  *                 `ctx.suggest` = { org, sobjects(purpose) → Promise<[{ name, label }]>,
- *                 pickFields(def, values, apply(list)), poolFields(poolAlias) → [path] }:
+ *                 pickFields(def, values, apply(list)), poolFields(poolAlias) → [path],
+ *                 varNames() → [{ value, label }] }:
  *                 kind 'sobject' → a datalist, 'fields' → a "Chọn field…" button (needs an org),
- *                 'poolFields' → a datalist of the pool's fields.
+ *                 'poolFields' → a datalist of the pool's fields, 'varNames' → a datalist of
+ *                 the variables of the workflow (Đặt biến, design 0015).
  */
 export function renderOptions(defs, values, onChange, ctx = {}) {
   const root = h('div', { class: 'options' });
@@ -47,7 +45,8 @@ export function renderOptions(defs, values, onChange, ctx = {}) {
     }
   };
   const refreshVisibility = () => {
-    for (const { def, row } of rows) row.hidden = !optionShown(def, current, defs);
+    // `showIf` is transitive (design 0013): hidden when the option it depends on is hidden.
+    for (const { def, row } of rows) row.hidden = !optionShown(defs, def, current);
   };
 
   for (const def of defs) {
@@ -64,8 +63,7 @@ export function renderOptions(defs, values, onChange, ctx = {}) {
     const helper = def.suggest && ctx.suggest ? suggestHelper(def, control, id, ctx.suggest, current) : null;
     let field = helper ? h('div', { class: 'suggest-wrap' }, control, helper) : control;
     let strip = null;
-    const numberVars = def.vars === 'number' && (def.kind === 'integer' || def.kind === 'number');
-    if (def.vars && ctx.vars && (def.kind === 'string' || def.kind === undefined || numberVars)) {
+    if (def.vars && ctx.vars && (def.kind === 'string' || def.kind === undefined || numberVars(def, ctx))) {
       // Getters, not a spread: the field can be renamed while this form stays on screen.
       const vctx = ctx.vars;
       ({ wrap: field, strip } = attachVarPicker(control, {
@@ -92,6 +90,20 @@ export function renderOptions(defs, values, onChange, ctx = {}) {
 
 let insertSeq = 0;
 
+/** A number option that also takes one variable (`vars: 'number'`, design 0013 B) and has the picker here. */
+const numberVars = (def, ctx) => def.vars === 'number' && (def.kind === 'integer' || def.kind === 'number') && Boolean(ctx.vars);
+
+/**
+ * Value of a number box that takes a variable: '' → undefined (the default), a number → that
+ * number, anything else (`{{acc.X}}`, or text validation reports) → the text as typed.
+ */
+export function numberBoxValue(text) {
+  const s = String(text ?? '').trim();
+  if (s === '') return undefined;
+  if (/^-?(\d+(\.\d*)?|\.\d+)$/.test(s)) return Number(s);
+  return text;
+}
+
 function renderControl(def, value, set, id, ctx, current) {
   const v = value ?? def.default;
   switch (def.kind) {
@@ -99,21 +111,15 @@ function renderControl(def, value, set, id, ctx, current) {
       return h('input', { id, type: 'checkbox', checked: Boolean(v), onchange: (e) => set(e.target.checked) });
     case 'integer':
     case 'number':
-      // A number or exactly one variable (design 0013): a text field, since it must hold {{…}}.
-      // A number typed is stored as a number, empty as undefined (the default), {{…}} as text.
-      if (def.vars === 'number' && ctx.vars) {
+      // A text box (type=number cannot hold {{…}}), numeric keyboard on phones, with the picker.
+      if (numberVars(def, ctx)) {
         return h('input', {
           id,
           type: 'text',
-          inputmode: 'numeric',
+          inputmode: def.kind === 'integer' ? 'numeric' : 'decimal',
           autocomplete: 'off',
           value: v ?? '',
-          oninput: (e) => {
-            const t = e.target.value;
-            const trimmed = t.trim();
-            const next = trimmed === '' ? undefined : !trimmed.includes('{{') && Number.isFinite(Number(trimmed)) ? Number(trimmed) : t;
-            set(next, e.target._varInsert ? { coalesceKey: `insert:${++insertSeq}` } : undefined);
-          },
+          oninput: (e) => set(numberBoxValue(e.target.value), e.target._varInsert ? { coalesceKey: `insert:${++insertSeq}` } : undefined),
         });
       }
       return h('input', {
@@ -139,10 +145,9 @@ function renderControl(def, value, set, id, ctx, current) {
         placeholder: def.placeholder,
         value: Array.isArray(v) ? v.join('\n') : v ?? '',
         oninput: (e) => {
-          // One value per line, commas kept (shared/list.js, the rule of the server too; review
-          // 0013 N4). Numbers may still be separated by commas.
-          const text = e.target.value;
-          set(def.kind === 'numberList' ? text.split(/\n|,/).map((s) => s.trim()).filter(Boolean).map(Number) : splitList(text));
+          // `split: 'lines'`: one value per line, commas kept (Lặp "Mỗi giá trị trong danh sách", 0013).
+          const items = e.target.value.split(def.split === 'lines' ? /\r?\n/ : /\n|,/).map((s) => s.trim()).filter(Boolean);
+          set(def.kind === 'numberList' ? items.map(Number) : items);
         },
       });
     case 'text':
@@ -188,7 +193,7 @@ let dlSeq = 0;
 /** The org helper of an option with `suggest` (see renderOptions). */
 function suggestHelper(def, control, id, sg, current) {
   const kind = def.suggest.kind;
-  if (kind === 'sobject' || kind === 'poolFields') {
+  if (kind === 'sobject' || kind === 'poolFields' || kind === 'varNames') {
     const list = h('datalist', { id: `dl-${id}-${++dlSeq}` });
     control.setAttribute('list', list.id);
     control.setAttribute('autocomplete', 'off');
@@ -197,7 +202,9 @@ function suggestHelper(def, control, id, sg, current) {
       try {
         items = kind === 'sobject'
           ? (sg.org ? await sg.sobjects(def.suggest.purpose) : []).map((x) => ({ value: x.name, label: x.label }))
-          : (sg.poolFields?.(current[def.suggest.poolKey]) ?? []).map((x) => ({ value: x, label: '' }));
+          : kind === 'varNames'
+            ? sg.varNames?.() ?? []
+            : (sg.poolFields?.(current[def.suggest.poolKey]) ?? []).map((x) => ({ value: x, label: '' }));
       } catch {
         items = [];
       }

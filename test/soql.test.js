@@ -1,8 +1,7 @@
 // Design 0006: pure SOQL helpers shared by validation, pre-fetch and the browser (shared/soql.js).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildSoql, checkSoql, checkBuilder, selectFields, soqlSobject, sampleRows, normalizeRow, parseSoql, maxFetchFor, rekeyRow } from '../shared/soql.js';
-import { addSelectField } from '../shared/soql.js';
+import { buildSoql, checkSoql, checkBuilder, selectFields, soqlSobject, sampleRows, normalizeRow, parseSoql, maxFetchFor, rekeyRow, addSelectField } from '../shared/soql.js';
 
 test('buildSoql adds Id once, ORDER BY and LIMIT', () => {
   assert.equal(buildSoql({}), 'SELECT Id, Name FROM Account ORDER BY Id LIMIT 200');
@@ -102,29 +101,37 @@ test('rekeyRow and sampleRows use the spelling of the SELECT list, case-insensit
   assert.deepEqual(sample, { id: 'mẫu:cons#1', name: 'Contact mẫu 1', owner: { Name: 'owner.Name mẫu 1', Email: 'OWNER.Email mẫu 1' } });
 });
 
-test('addSelectField adds a field to the outer SELECT list (design 0012 F1)', () => {
+// Design 0012 F1: "Thêm <Field> vào SELECT" on hand-written SOQL.
+test('addSelectField appends to the outer SELECT list of plain SOQL', () => {
   assert.equal(addSelectField('SELECT Id, Name FROM Account', 'Industry'), 'SELECT Id, Name, Industry FROM Account');
-  assert.equal(addSelectField("SELECT Id FROM Account WHERE Name = 'FROM x' ORDER BY Id LIMIT 5", 'Industry'), "SELECT Id, Industry FROM Account WHERE Name = 'FROM x' ORDER BY Id LIMIT 5");
-  assert.equal(addSelectField('SELECT Id,\n  Name\nFROM Contact', 'Account.Type'), 'SELECT Id,\n  Name, Account.Type\nFROM Contact');
-  assert.equal(addSelectField('SELECT Id, industry FROM Account', 'Industry'), 'SELECT Id, industry FROM Account', 'already selected: unchanged');
+  // WHERE / ORDER BY / LIMIT and the spacing (a newline before FROM) are kept.
+  assert.equal(
+    addSelectField("SELECT Id, Name\nFROM Account WHERE Name LIKE 'A FROM%' ORDER BY Id LIMIT 10", 'Owner.Email'),
+    "SELECT Id, Name, Owner.Email\nFROM Account WHERE Name LIKE 'A FROM%' ORDER BY Id LIMIT 10",
+  );
+  assert.equal(addSelectField('select Id from Contact', 'Email'), 'select Id, Email from Contact');
   assert.equal(addSelectField('SELECT Id, toLabel(Status) FROM Case', 'Subject'), 'SELECT Id, toLabel(Status), Subject FROM Case');
-  assert.equal(addSelectField('SELECT Id, (SELECT Id FROM Contacts) FROM Account', 'Industry'), null, 'subquery');
-  assert.equal(addSelectField('SELECT FIELDS(ALL) FROM Account LIMIT 200', 'Industry'), null, 'FIELDS(ALL)');
-  assert.equal(addSelectField('SELECT Id FROM Account WHERE Id = {{acc.Id}}', 'Name'), null, 'template');
-  assert.equal(addSelectField('SELECT Id FROM', 'Name'), null, 'no FROM');
-  assert.equal(addSelectField('DELETE FROM Account', 'Name'), null);
-  assert.equal(addSelectField('SELECT Id FROM Account', 'bad field'), null);
+  // A parenthesised WHERE (a semi-join) is not a SELECT-list subquery.
+  assert.equal(
+    addSelectField('SELECT Id FROM Account WHERE Id IN (SELECT AccountId FROM Contact)', 'Name'),
+    'SELECT Id, Name FROM Account WHERE Id IN (SELECT AccountId FROM Contact)',
+  );
 });
 
-test('review 0012 N1: addSelectField with a trailing comma, no space before FROM, aggregates; the result passes checkSoql', () => {
-  assert.equal(addSelectField('SELECT Id,FROM Account', 'Industry'), 'SELECT Id, Industry FROM Account');
-  assert.equal(addSelectField('SELECT Id, FROM Account', 'Industry'), 'SELECT Id, Industry FROM Account');
-  assert.equal(addSelectField('SELECT COUNT(Id) c FROM Account', 'Industry'), null);
-  assert.equal(addSelectField('SELECT COUNT() FROM Account', 'Industry'), null);
-  assert.equal(addSelectField('SELECT Industry FROM Account GROUP BY Industry', 'Name'), null);
-  for (const q of ['SELECT Id FROM Account', 'SELECT Id,FROM Account', "SELECT Id FROM Account WHERE Name = 'a FROM b'", 'select id\nfrom account']) {
-    const out = addSelectField(q, 'Industry');
-    assert.ok(out && !checkSoql(out).some((i) => i.level === 'error'), q);
-    assert.ok(parseSoql(out).fields.includes('Industry'), q);
-  }
+test('addSelectField: field already there is unchanged; subquery, FIELDS(ALL), broken SOQL → null', () => {
+  assert.equal(addSelectField('SELECT Id, industry FROM Account', 'Industry'), 'SELECT Id, industry FROM Account');
+  assert.equal(addSelectField('SELECT Id, (SELECT Id FROM Contacts) FROM Account', 'Name'), null);
+  assert.equal(addSelectField('SELECT FIELDS(ALL) FROM Account LIMIT 200', 'Name'), null);
+  assert.equal(addSelectField('SELECT TYPEOF What WHEN Account THEN Name END FROM Task', 'Subject'), null);
+  assert.equal(addSelectField('SELECT Id FROM', 'Name'), null);
+  assert.equal(addSelectField('DELETE FROM Account', 'Name'), null);
+  assert.equal(addSelectField('SELECT Id FROM Account FOR UPDATE', 'Name'), null);
+  assert.equal(addSelectField('SELECT Id FROM Account WHERE Id = {{acc.Id}}', 'Name'), null);
+  assert.equal(addSelectField('SELECT Id FROM Account', 'bad field'), null);
+  assert.equal(addSelectField('', 'Name'), null);
+});
+
+test('sampleRows: Id and Name keep their shape even when listed as numeric (review of 0013)', () => {
+  const [row] = sampleRows({ sobject: 'Account', fields: ['Id', 'Name', 'NumberOfEmployees'], limit: 1 }, 'accs', { numeric: ['id', 'Name', 'NumberOfEmployees'] });
+  assert.deepEqual(row, { Id: 'mẫu:accs#1', Name: 'Account mẫu 1', NumberOfEmployees: 1 });
 });

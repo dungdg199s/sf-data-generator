@@ -1,7 +1,5 @@
 // Tiny DOM helper: h('div', { class: 'x', onclick }, child, 'text').
 
-import { overflowSide, wheelScroll, revealInline } from './sizing.js';
-
 export function h(tag, attrs = {}, ...children) {
   const el = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs ?? {})) {
@@ -35,98 +33,69 @@ export function icoTile() {
 }
 
 /**
- * Action icon (design 0014 §1): `<span class="ico" data-ico="name" aria-hidden="true">`. The SVG is the
- * `--ico-<name>` token, picked by one `.ico[data-ico="<name>"]` rule in app.css; the colour is the
- * text colour of the button around it. A button with only an icon needs an `aria-label` in words.
+ * Action icon (design 0014 §1, docs/ui-design-system.md §5): a mask of `--ico-<name>`, coloured by
+ * currentColor, hidden from screen readers (an icon-only button needs its own aria-label).
  */
 export function ico(name) {
   return h('span', { class: 'ico', 'data-ico': name, 'aria-hidden': 'true' });
 }
 
 /**
- * A row that scrolls sideways (design 0014 §4): marks it `data-scroll-x` and keeps
- * `data-overflow="start" | "end" | "both"` on it (removed when nothing is hidden), so CSS fades the
- * edge that still hides items. Updated on scroll (once a frame), resize and content changes. Focus
- * moving onto an item scrolls it out of the faded edges (the browser's own focus scroll ignores
- * scroll-padding, review 0014 S1). With `wheel` (default) a mostly vertical wheel turn scrolls the
- * row sideways while it can move that way; the sticky results tab row opts out (S5: the wheel there
- * scrolls the table; Shift+wheel and Tab still reach every tab).
- * → a function that stops watching (rows that are rebuilt, like the results tabs).
+ * Horizontal-scroll hint (design 0014 §4): sets `data-overflow="start" | "end" | "both"` on `el` while
+ * it has hidden items on that side (CSS fades that edge), and removes it when nothing overflows.
+ * Recomputed once per frame on scroll, resize and content changes. A vertical wheel over an
+ * overflowing row scrolls it sideways, and only while it can still move that way (then the page
+ * gets the wheel back). → a function that stops watching.
  */
-export function watchOverflow(el, { wheel = true } = {}) {
-  el.setAttribute('data-scroll-x', '');
+export function watchOverflow(el) {
   let frame = 0;
-  // Only while the row is a sideways scroller (the results summary wraps on wide screens).
-  const scrolls = () => /^(?:auto|scroll)$/.test(getComputedStyle(el).overflowX);
   const update = () => {
     frame = 0;
-    const side = scrolls() ? overflowSide({ left: el.scrollLeft, scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }) : null;
-    if (side) {
-      if (el.dataset.overflow !== side) el.dataset.overflow = side;
-    } else if (el.hasAttribute('data-overflow')) el.removeAttribute('data-overflow');
+    const max = el.scrollWidth - el.clientWidth;
+    const start = max > 1 && el.scrollLeft > 1;
+    const end = max > 1 && el.scrollLeft < max - 1;
+    const v = start && end ? 'both' : start ? 'start' : end ? 'end' : null;
+    if (!v) el.removeAttribute('data-overflow');
+    else if (el.dataset.overflow !== v) el.dataset.overflow = v;
   };
   const schedule = () => { if (!frame) frame = requestAnimationFrame(update); };
   const onWheel = (e) => {
-    if (e.ctrlKey || !scrolls()) return; // Ctrl: page zoom
-    const next = wheelScroll({ deltaX: e.deltaX, deltaY: e.deltaY, deltaMode: e.deltaMode, left: el.scrollLeft, scrollWidth: el.scrollWidth, clientWidth: el.clientWidth });
-    if (next === null) return;
+    if (e.ctrlKey || Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return;
+    const max = el.scrollWidth - el.clientWidth;
+    if (max <= 1) return;
+    const delta = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaMode === 2 ? e.deltaY * el.clientWidth : e.deltaY;
+    if ((delta < 0 && el.scrollLeft <= 0) || (delta > 0 && el.scrollLeft >= max - 1)) return;
     e.preventDefault();
-    el.scrollLeft = next;
-  };
-  const onFocus = (e) => {
-    if (e.target === el || !scrolls()) return;
-    // The item itself: the direct child of the row holding the focused element.
-    let item = e.target;
-    while (item.parentElement && item.parentElement !== el) item = item.parentElement;
-    revealInRow(el, item);
-    requestAnimationFrame(() => { if (item.isConnected && item.contains(document.activeElement)) revealInRow(el, item); }); // after the browser's own focus scroll
+    el.scrollLeft += delta;
   };
   el.addEventListener('scroll', schedule, { passive: true });
-  el.addEventListener('focusin', onFocus);
-  if (wheel) el.addEventListener('wheel', onWheel, { passive: false });
+  el.addEventListener('wheel', onWheel, { passive: false });
   const resize = new ResizeObserver(schedule);
   resize.observe(el);
-  const content = new MutationObserver(schedule);
-  content.observe(el, { childList: true, characterData: true, subtree: true });
+  const mutation = new MutationObserver(schedule);
+  mutation.observe(el, { childList: true, characterData: true, subtree: true });
   update();
   return () => {
-    resize.disconnect();
-    content.disconnect();
     cancelAnimationFrame(frame);
     el.removeEventListener('scroll', schedule);
-    el.removeEventListener('focusin', onFocus);
     el.removeEventListener('wheel', onWheel);
+    resize.disconnect();
+    mutation.disconnect();
   };
-}
-
-/** Scrolls a sideways row (only that row) so `item` is outside the faded edges. */
-export function revealInRow(row, item) {
-  const pad = parseFloat(getComputedStyle(row).scrollPaddingInlineStart) || 0;
-  const r = row.getBoundingClientRect();
-  const i = item.getBoundingClientRect();
-  const left = revealInline({ itemLeft: i.left - r.left + row.scrollLeft, itemWidth: i.width, left: row.scrollLeft, clientWidth: row.clientWidth, pad });
-  if (left !== row.scrollLeft) row.scrollLeft = left;
 }
 
 let toastTimer;
 let toastGeneration = 0;
-let toastEl = null;
 /**
  * Short status message at the bottom. With `action: { label, onClick }` (or a list of them) the
- * toast gets buttons (e.g. "Hoàn tác") and stays a little longer; `ms` Infinity: until a button is
- * used or another toast replaces it. Returns { removeAction() } to drop the buttons later (no-op
+ * toast gets buttons (e.g. "Hoàn tác") and stays a little longer; `ms: Infinity` keeps it until
+ * a button is pressed or another toast replaces it. Returns { removeAction(), hide() } (no-ops
  * once another toast replaced this one).
  */
 export function toast(message, ms = 2600, action = null) {
-  toastEl ??= document.getElementById('toast');
-  const el = toastEl;
-  // One action, or several (design 0012 A: "Dùng bản ở tab kia" / "Giữ bản của tab này").
-  const actions = Array.isArray(action) ? action : action ? [action] : [];
-  // Over a modal dialog (Quản lý thư viện, design 0012 A) a toast with a button must be in the
-  // dialog's top layer to be clickable; other toasts stay on the page.
-  const host = (actions.length && document.querySelector('dialog[open]')) || document.body;
-  if (el.parentElement !== host) host.append(el);
+  const el = document.getElementById('toast');
   const generation = ++toastGeneration;
+  const actions = Array.isArray(action) ? action : action ? [action] : [];
   el.replaceChildren(document.createTextNode(message));
   for (const a of actions) {
     el.append(' ', h('button', {
@@ -140,13 +109,15 @@ export function toast(message, ms = 2600, action = null) {
   el.classList.toggle('has-action', actions.length > 0);
   el.classList.add('show');
   clearTimeout(toastTimer);
-  // ms Infinity: stays until an action is chosen (or another toast replaces it).
-  if (ms !== Infinity) toastTimer = setTimeout(() => el.classList.remove('show'), actions.length ? Math.max(ms, 6000) : ms);
+  if (Number.isFinite(ms)) toastTimer = setTimeout(() => el.classList.remove('show'), actions.length ? Math.max(ms, 6000) : ms);
   return {
     removeAction() {
       if (generation !== toastGeneration) return;
       for (const b of el.querySelectorAll('.toast-action')) b.remove();
       el.classList.remove('has-action');
+    },
+    hide() {
+      if (generation === toastGeneration) el.classList.remove('show');
     },
   };
 }
@@ -159,14 +130,4 @@ export function download(filename, content, type = 'application/json') {
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
-}
-
-/** A dialog re-rendered its content: keep a toast shown over it (its "Hoàn tác" button). */
-export function keepToast(dialog) {
-  if (toastEl?.classList.contains('show') && toastEl.parentElement !== dialog) dialog.append(toastEl);
-}
-
-/** The dialog closed: the toast goes back to the page. */
-export function releaseToast() {
-  if (toastEl && toastEl.parentElement !== document.body) document.body.append(toastEl);
 }

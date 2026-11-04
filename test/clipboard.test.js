@@ -1,41 +1,51 @@
-// Design 0012 B: steps on the system clipboard (client/js/clipboard.js, pure).
+// Copy / paste of steps (design 0012 B): the clipboard text format (client/js/clipboard.js).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { toClipboard, parseClipboard, CLIPBOARD_LIMITS } from '../client/js/clipboard.js';
-import { NODE_TYPES } from '../server/workflow/nodes.js';
+import { toClipboard, parseClipboard, PASTE_MAX_STEPS } from '../client/js/clipboard.js';
+import { scopeCatalog } from '../server/workflow/schema.js';
+import { SAMPLES } from '../client/js/samples.js';
 
-const meta = { nodeTypes: NODE_TYPES };
-const steps = [{ id: 'acc', type: 'record', config: { sobject: 'Account', alias: 'acc', fields: [] } }, { id: 'l', type: 'loop', config: { count: 2 }, slots: { body: [] } }];
+const META = scopeCatalog();
+const steps = structuredClone(SAMPLES[0].workflow.steps);
 
-test('round trip: the clipboard format holds the steps and the workflow name', () => {
+test('round trip: copied steps come back as they were, readable JSON marked as ours', () => {
   const text = toClipboard(steps, 'Account + Contact');
-  assert.deepEqual(JSON.parse(text), { sfdg: 'steps', version: 2, from: 'Account + Contact', steps });
-  assert.deepEqual(parseClipboard(text, meta), { steps, from: 'Account + Contact' });
+  assert.match(text, /\n {2}"sfdg": "steps"/, 'pretty-printed');
+  assert.deepEqual(JSON.parse(text).version, 2);
+  assert.deepEqual(parseClipboard(text, META), { steps, from: 'Account + Contact' });
 });
 
-test('a whole v2 workflow file is accepted; version 1 is refused with how to open it', () => {
-  assert.deepEqual(parseClipboard(JSON.stringify({ version: 2, name: 'x', steps }), meta).steps, steps);
-  const v1 = parseClipboard(JSON.stringify({ version: 1, nodes: [], edges: [] }), meta);
-  assert.equal(v1.error, 'v1');
-  assert.match(v1.message, /Thư viện → Mở file JSON/);
+test('a whole v2 workflow file is accepted; a v1 file is refused with how to open it', () => {
+  const file = JSON.stringify(SAMPLES[1].workflow);
+  assert.deepEqual(parseClipboard(file, META), { steps: SAMPLES[1].workflow.steps, from: SAMPLES[1].workflow.name });
+  const v1 = parseClipboard(JSON.stringify({ version: 1, nodes: [], edges: [] }), META);
+  assert.equal(v1.kind, 'v1');
+  assert.match(v1.error, /version 1\. Mở bằng Thư viện → Mở file JSON…/);
 });
 
-test('not JSON, no steps, unknown step type, malformed, too many steps', () => {
-  for (const text of ['hello', '{oops', '[]', '{"a":1}', JSON.stringify({ sfdg: 'steps', version: 2, steps: [] })]) assert.equal(parseClipboard(text, meta).error, 'notSteps', text);
-  const foo = parseClipboard(toClipboard([{ id: 'x', type: 'foo' }], ''), meta);
-  assert.deepEqual(foo, { error: 'unknownType', message: 'Không dán được: bước loại "foo" không có trong phiên bản này.' });
-  const bad = parseClipboard(JSON.stringify({ sfdg: 'steps', version: 2, steps: [1] }), meta);
-  assert.equal(bad.error, 'malformed');
-  assert.match(bad.message, /^Không dán được: steps\[0\] không phải một bước/);
-  const many = Array.from({ length: CLIPBOARD_LIMITS.maxSteps + 1 }, (_, i) => ({ id: `s${i}`, type: 'record', config: {} }));
-  const big = parseClipboard(toClipboard(many, ''), meta);
-  assert.equal(big.error, 'tooBig');
-  assert.match(big.message, /\(hơn 2 000 bước\)\. Dán tối đa 2 000 bước mỗi lần\./);
+test('not ours: plain text, broken JSON, JSON without steps, an empty step list', () => {
+  for (const text of ['hello', '{"version": 2, "steps": [', '{"a": 1}', '[1, 2]', JSON.stringify({ sfdg: 'steps', version: 2, steps: [] }), '', null]) {
+    const res = parseClipboard(text, META);
+    assert.equal(res.kind, 'notSteps', String(text));
+    assert.match(res.error, /không chứa bước nào của SF Data Generator\. Chọn bước rồi bấm Ctrl\+C/);
+  }
 });
 
-test('review 0012 N5: a deeply nested paste is counted without recursion and refused past 2 000 steps', () => {
-  const n = 20000; // built as text: JSON.stringify of such a tree overflows the stack itself
-  const text = `{"sfdg":"steps","version":2,"steps":${'[{"id":"l","type":"loop","slots":{"body":'.repeat(n)}[]${'}}]'.repeat(n)}}`;
-  const res = parseClipboard(text, meta);
-  assert.equal(res.error, 'tooBig');
+test('refused: an unknown step type (also nested), a malformed step, more than 2 000 steps', () => {
+  const nested = [{ id: 'l', type: 'loop', config: {}, slots: { body: [{ id: 'x', type: 'foo', config: {} }] } }];
+  assert.deepEqual(parseClipboard(toClipboard(nested, 'w'), META), { kind: 'unknownType', error: 'Không dán được: bước loại "foo" không có trong phiên bản này.' });
+  const bad = parseClipboard(toClipboard([{ id: 'l', type: 'loop', config: {}, slots: { body: 5 } }], 'w'), META);
+  assert.equal(bad.kind, 'malformed');
+  assert.match(bad.error, /^Không dán được: "slots.body" của bước "l" không phải danh sách\.$/);
+  const many = Array.from({ length: PASTE_MAX_STEPS + 1 }, (_, i) => ({ id: `r${i}`, type: 'record', config: {} }));
+  const big = parseClipboard(toClipboard(many, 'w'), META);
+  assert.equal(big.kind, 'tooLarge');
+  assert.equal(big.error, 'Nội dung dán quá lớn (2.001 bước). Dán tối đa 2.000 bước mỗi lần.');
+  assert.equal(parseClipboard(JSON.stringify({ version: 2, steps: [], pad: 'a'.repeat(5 * 1024 * 1024) }), META).kind, 'tooLarge');
+});
+
+test('pasted text with invalid step ids gets valid ones (review 2 of 0011, item 8)', () => {
+  const text = JSON.stringify({ sfdg: 'steps', version: 2, steps: [{ id: 'a b', type: 'record', config: { sobject: 'Account', alias: 'acc', fields: [] } }, { id: 7, type: 'record', config: { sobject: 'Account', alias: 'acc2', fields: [] } }] });
+  const r = parseClipboard(text, { nodeTypes: [{ type: 'record' }] });
+  assert.deepEqual(r.steps.map((s) => s.id), ['a_b', '7']);
 });

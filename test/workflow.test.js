@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { runWorkflow } from '../server/workflow/executor.js';
+import * as runner from '../server/workflow/executor.js';
 import { validateWorkflow, WorkflowError } from '../server/workflow/schema.js';
 import { wf, record, loop, branch, query, pick, rows, NOW } from './helpers.js';
 import { copy as copyType } from '../server/generators/misc.js';
@@ -798,447 +799,687 @@ test('0010 review: a field path is never suggested onto a pool without a current
   assert.equal(c.suggestion?.to, 'accs.$count');
 });
 
-// ---------- design 0013: validation ----------
+// Design 0012 G: a Record on an sObject without a createable Name (Task, Contact, Case…).
+test('a Task record with a Name field warns with a renameField fix', () => {
+  const w = wf([
+    record('t', 'Task', 'task', [{ name: 'Name', type: 'text', options: { mode: 'name' } }]),
+    record('c', 'Contact', 'con', [{ name: 'LastName', type: 'text' }, { name: 'Description', type: 'template', options: { template: '{{task.Name}}' } }]),
+  ]);
+  const { errors, warnings } = validateWorkflow(w);
+  assert.deepEqual(errors, []);
+  const [warn] = warnings.filter((x) => x.code === 'noNameField');
+  assert.deepEqual(warn, {
+    message: 'Task không ghi được field Name nên insert sẽ lỗi. Đổi thành Subject hoặc xóa field này.',
+    nodeId: 't',
+    field: 'fields.Name',
+    code: 'noNameField',
+    fix: { kind: 'renameField', stepId: 't', from: 'Name', to: 'Subject' },
+  });
+  // Contact / Lead: LastName; case of the sObject and field name is ignored.
+  const con = warningsOf(wf([record('c', 'contact', 'con', [{ name: 'name', type: 'text' }])])).find((x) => x.code === 'noNameField');
+  assert.match(con.message, /^contact không ghi được field Name nên insert sẽ lỗi\. Đổi thành LastName/);
+  assert.deepEqual(con.fix, { kind: 'renameField', stepId: 'c', from: 'name', to: 'LastName' });
+  // The target already exists: no rename fix, the message says to delete the field.
+  const both = warningsOf(wf([record('c', 'Contact', 'con', [{ name: 'Name', type: 'text' }, { name: 'LastName', type: 'text' }])])).find((x) => x.code === 'noNameField');
+  assert.equal(both.fix, undefined);
+  assert.match(both.message, /Xóa field này \(bước đã có field LastName\)\.$/);
+  // Disabled steps are not checked.
+  assert.deepEqual(warningsOf(wf([{ ...record('t', 'Task', 'task', [{ name: 'Name', type: 'text' }]), disabled: true }])), []);
+});
+
+test('no noNameField warning for Account, Opportunity or a custom sObject', () => {
+  for (const sobject of ['Account', 'Opportunity', 'Invoice__c', 'Foo']) {
+    const w = wf([record('r', sobject, 'r1', [{ name: 'Name', type: 'text' }])]);
+    assert.deepEqual(validateWorkflow(w), { errors: [], warnings: [] }, sobject);
+  }
+});
+
+// Design 0012 F1: "Thêm <Field> vào SELECT" — the fix names the Query the rows come from.
+test('unknownMember of a Query source carries an addSelectField fix', () => {
+  const fixOf = (w) => errorsOf(w).find((e) => e.code === 'unknownMember')?.fix;
+  const contact = (tpl) => record('c', 'Contact', 'con', [{ name: 'LastName', type: 'text' }, tplField('Title', tpl)]);
+  // Through a Chọn bản ghi.
+  const viaPick = wf([query('q', 'accs', { fields: ['Id', 'Name'] }), pick('p', 'acc', 'accs'), contact('{{acc.Industry}}')]);
+  const issue = errorsOf(viaPick).find((e) => e.code === 'unknownMember');
+  assert.equal(issue.field, 'fields.Title');
+  assert.deepEqual(issue.fix, { kind: 'addSelectField', stepId: 'q', field: 'Industry' });
+  // Through the record a Lặp `each` loops over (0010), and a pick from a pick.
+  assert.deepEqual(fixOf(wf([query('q', 'accs'), loop('l', { mode: 'each', from: 'accs', itemAlias: 'acc' }, [contact('{{acc.Industry}}')])])), { kind: 'addSelectField', stepId: 'q', field: 'Industry' });
+  assert.deepEqual(fixOf(wf([query('q', 'accs'), pick('p', 'acc', 'accs'), pick('p2', 'acc2', 'acc'), contact('{{acc2.Industry}}')])), { kind: 'addSelectField', stepId: 'q', field: 'Industry' });
+  // A path option (branch `left`) gets it too; a relationship sub-field is added as a path.
+  const left = errorsOf(wf([query('q', 'accs'), pick('p', 'acc', 'accs'), branch('b', { kind: 'compare', left: 'acc.Type', op: 'eq', right: 'x' }, [contact('x')])])).find((e) => e.code === 'unknownMember');
+  assert.deepEqual([left.nodeId, left.field, left.fix], ['b', 'left', { kind: 'addSelectField', stepId: 'q', field: 'Type' }]);
+  const owner = errorsOf(wf([query('q', 'accs', { fields: ['Id', 'Owner.Name'] }), pick('p', 'acc', 'accs'), contact('{{acc.Owner.Email}}')])).find((e) => e.code === 'unknownMember');
+  assert.deepEqual(owner.fix, { kind: 'addSelectField', stepId: 'q', field: 'Owner.Email' });
+  assert.match(owner.message, /không lấy field Owner\.Email\. Thêm Owner\.Email vào/);
+  // The whole member path, also when the Query lacks the relationship itself or a deeper level
+  // (review: cutting at the first missing level gave "SELECT Id, Name, Owner").
+  for (const [fields, path] of [[['Id', 'Name'], 'Owner.Email'], [['Id', 'Owner.Name'], 'Owner.Manager.Email'], [['Id', 'Name'], 'Owner.Manager.Email']]) {
+    const e = errorsOf(wf([query('q', 'accs', { fields }), pick('p', 'acc', 'accs'), contact(`{{acc.${path}}}`)])).find((x) => x.code === 'unknownMember');
+    assert.deepEqual(e.fix, { kind: 'addSelectField', stepId: 'q', field: path }, `${fields} + ${path}`);
+    assert.ok(e.message.includes(`không lấy field ${path}. Thêm ${path} vào`), e.message);
+  }
+  // A path below a plain field (Name.Foo): nothing to add to the SELECT.
+  const plain = errorsOf(wf([query('q', 'accs'), pick('p', 'acc', 'accs'), contact('{{acc.Name.Foo}}')])).find((x) => x.code === 'unknownMember');
+  assert.ok(plain && plain.fix === undefined, JSON.stringify(plain));
+  // Hand-written SOQL: a fix only when the SELECT list can be edited.
+  assert.deepEqual(fixOf(wf([query('q', 'accs', { mode: 'soql', soql: 'SELECT Id, Name FROM Account ORDER BY Id' }), pick('p', 'acc', 'accs'), contact('{{acc.Industry}}')])), { kind: 'addSelectField', stepId: 'q', field: 'Industry' });
+  const sub = wf([query('q', 'accs', { mode: 'soql', soql: 'SELECT Id, Name, (SELECT Id FROM Contacts) FROM Account ORDER BY Id' }), pick('p', 'acc', 'accs'), contact('{{acc.Industry}}')]);
+  assert.equal(errorsOf(sub).find((e) => e.code === 'unknownMember').fix, undefined);
+  // A generated Record pool: no SELECT to fix.
+  assert.equal(fixOf(wf([record('a', 'Account', 'acc', [{ name: 'Name', type: 'text' }]), contact('{{acc.Industry}}')])), undefined);
+});
+
+// ---------- design 0013 (validation): number variables, branch right, values, each extras, weighted pick ----------
 
 const numField = (name) => ({ name, type: 'number', options: {} });
-const issue = (list, nodeId, field) => list.find((i) => i.nodeId === nodeId && i.field === field);
+const issuesOn = (list, nodeId, field) => list.filter((i) => i.nodeId === nodeId && i.field === field);
 
 test('number option format errors carry nodeId and field', () => {
-  const base = (cfg) => wf([record('a', 'Account', 'acc', [numField('N')]), loop('l', cfg, [record('c', 'Contact', 'con', [])])]);
-  const e1 = issue(errorsOf(base({ count: '{{acc.N}} lần' })), 'l', 'count');
-  assert.equal(e1.message, '"Số lần lặp" phải là một số nguyên, hoặc đúng một biến như {{acc.NumberOfEmployees}}. Bỏ phần chữ quanh biến.');
-  assert.equal(e1.code, 'numberFormat');
-  assert.equal(issue(errorsOf(base({ mode: 'range', min: 1, max: '{{acc.N}}{{acc.N}}' })), 'l', 'max').code, 'numberFormat');
-  // The message of before for a bad number; a variable is fine, and min > max only between numbers.
-  assert.equal(issue(errorsOf(base({ count: 'abc' })), 'l', 'count').message, 'Số lần lặp phải là số nguyên từ 0 đến 100000.');
-  assert.equal(issue(errorsOf(base({ count: 100001 })), 'l', 'count').message, 'Số lần lặp phải là số nguyên từ 0 đến 100000.');
-  assert.deepEqual(errorsOf(base({ count: ' {{ acc.N }} ' })), []);
-  assert.deepEqual(errorsOf(base({ mode: 'range', min: 5, max: '{{acc.N}}' })), []);
-  // Hidden in each mode: not checked.
-  assert.deepEqual(errorsOf(wf([record('a', 'Account', 'acc', []), loop('l', { mode: 'each', from: 'acc', itemAlias: 'x', count: '{{bad' }, [record('c', 'Contact', 'con', [])])])), []);
+  const w = wf([
+    record('a', 'Account', 'acc', [numField('N')]),
+    loop('l1', { count: '{{acc.N}} lần' }, [record('x', 'Lead', 'x')]),
+    loop('l2', { mode: 'range', min: '{{acc.N', max: 3 }, [record('y', 'Lead', 'y')]),
+    loop('l3', { count: -1 }, [record('z', 'Lead', 'z')]),
+    loop('l4', { mode: 'range', min: 5, max: 2 }, [record('v', 'Lead', 'v')]),
+    loop('l5', { mode: 'range', min: 5, max: '{{acc.N}}' }, [record('u', 'Lead', 'u')]),
+    loop('l6', { count: ' {{ acc.N }} ' }, [record('t', 'Lead', 't')]),
+  ]);
+  const errors = errorsOf(w);
+  assert.deepEqual(issuesOn(errors, 'l1', 'count').map((e) => [e.code, e.message]), [['numberFormat', '"Số lần lặp" phải là một số nguyên, hoặc đúng một biến như {{acc.NumberOfEmployees}}. Bỏ phần chữ quanh biến.']]);
+  assert.deepEqual(issuesOn(errors, 'l2', 'min').map((e) => e.code), ['numberFormat']);
+  assert.equal(issuesOn(errors, 'l2', 'min')[0].message.startsWith('"Ít nhất" phải là'), true);
+  assert.deepEqual(issuesOn(errors, 'l3', 'count').map((e) => e.message), ['Số lần lặp phải là số nguyên từ 0 đến 100000.'], 'the message of before is kept');
+  assert.deepEqual(issuesOn(errors, 'l4', 'min').map((e) => e.message), ['"Ít nhất" lớn hơn "Nhiều nhất".']);
+  assert.deepEqual(issuesOn(errors, 'l5', 'min'), [], 'a variable bound is only compared while running');
+  assert.deepEqual(errors.filter((e) => e.nodeId === 'l6'), []);
+  // Hidden options are not checked (count in range mode).
+  assert.deepEqual(errorsOf(wf([loop('l', { mode: 'range', count: 'abc', min: 1, max: 2 }, [record('x', 'Lead', 'x')])])), []);
 });
 
 test('number variable of a non-number type: error for Ngày, warning for Chuỗi', () => {
   const w = wf([
-    record('a', 'Account', 'acc', [{ name: 'D', type: 'date', options: {} }, tplField('S', 'x')]),
-    loop('l1', { count: '{{acc.D}}' }, [record('c1', 'Contact', 'c1', [])]),
-    loop('l2', { count: '{{acc.S}}' }, [record('c2', 'Contact', 'c2', [])]),
+    record('a', 'Account', 'acc', [{ name: 'CloseDate', type: 'date', options: {} }, { name: 'Description', type: 'text', options: {} }, numField('N')]),
+    query('q', 'accs', { fields: ['Id', 'NumberOfEmployees'] }),
+    loop('l1', { count: '{{acc.CloseDate}}' }, [record('x', 'Lead', 'x')]),
+    loop('l2', { count: '{{acc.Description}}' }, [record('y', 'Lead', 'y')]),
+    loop('l3', { count: '{{acc.N}}' }, [record('z', 'Lead', 'z')]),
+    loop('l4', { count: '{{accs.$count}}' }, [pick('p', 'pa', 'accs'), loop('l5', { mode: 'range', min: 0, max: '{{pa.NumberOfEmployees}}', alias: 'k' }, [record('v', 'Lead', 'v')])]),
   ]);
   const { errors, warnings } = validateWorkflow(w);
-  assert.equal(issue(errors, 'l1', 'count').message, '"Số lần lặp": {{acc.D}} là Ngày, không phải số. Bấm {x} để chọn biến kiểu Số, ví dụ {{accs.$count}} hoặc {{loop.index}}.');
-  assert.equal(issue(warnings, 'l2', 'count').message, '"Số lần lặp": {{acc.S}} là Chuỗi; lần chạy nào giá trị không phải số thì vòng lặp chạy 0 lần. Nên chọn biến kiểu Số bằng {x}.');
-  assert.equal(issue(warnings, 'l2', 'count').code, 'notNumber');
-  // Scope messages of 0005 apply too, named by the option.
-  const u = issue(errorsOf(wf([loop('l', { count: '{{nope.N}}' }, [record('c', 'Contact', 'con', [])])])), 'l', 'count');
-  assert.equal(u.code, 'unknownName');
-  assert.match(u.message, /^"Số lần lặp": không có biến "nope"/);
+  assert.deepEqual(issuesOn(errors, 'l1', 'count').map((e) => [e.code, e.message]), [['notNumber', '"Số lần lặp": {{acc.CloseDate}} là Ngày, không phải số. Bấm {x} để chọn biến kiểu Số, ví dụ {{accs.$count}} hoặc {{loop.index}}.']]);
+  assert.deepEqual(issuesOn(warnings, 'l2', 'count').map((e) => [e.code, e.message]), [['notNumber', '"Số lần lặp": {{acc.Description}} là Chuỗi; lần chạy nào giá trị không phải số thì vòng lặp chạy 0 lần. Nên chọn biến kiểu Số bằng {x}.']]);
+  assert.deepEqual(issuesOn(errors, 'l2', 'count'), []);
+  for (const id of ['l3', 'l4', 'l5']) assert.deepEqual([...errors, ...warnings].filter((e) => e.nodeId === id && e.code === 'notNumber'), [], id);
+  // A variable that is not there at all: the scope messages of 0005, on the option.
+  const missing = errorsOf(wf([loop('l', { count: '{{nope.N}}' }, [record('x', 'Lead', 'x')])]));
+  assert.deepEqual(missing.map((e) => [e.nodeId, e.field, e.code]), [['l', 'count', 'unknownName']]);
 });
 
 test('branch right with a broken reference is an error on right; {{ left open is unclosed', () => {
-  const br = (right) => wf([acc(), branch('b', { kind: 'compare', left: 'acc.Name', op: 'eq', right }, [record('c', 'Contact', 'con', [])], [])]);
-  const e = issue(errorsOf(br('{{nope.Amount}}')), 'b', 'right');
-  assert.equal(e.code, 'unknownName');
-  const w = issue(warningsOf(br('{{acc.Name')), 'b', 'right');
-  assert.equal(w.code, 'unclosed');
-  assert.deepEqual(errorsOf(br('{{acc.Name}}')), []);
-  assert.deepEqual(errorsOf(br('100000')), []);
+  const opp = record('o', 'Opportunity', 'opp', [{ name: 'Amount', type: 'currency', options: {} }]);
+  const br = (right) => wf([opp, branch('b', { kind: 'compare', left: 'opp.Amount', op: 'gt', right }, [record('x', 'Lead', 'x', [{ name: 'LastName', type: 'text', options: {} }])])]);
+  assert.deepEqual(validateWorkflow(br('{{opp.Amount}}')), { errors: [], warnings: [] });
+  assert.deepEqual(validateWorkflow(br('100000')), { errors: [], warnings: [] });
+  const broken = errorsOf(br('{{op.Amount}}'));
+  assert.deepEqual(broken.map((e) => [e.nodeId, e.field, e.code]), [['b', 'right', 'unknownName']]);
+  assert.match(broken[0].message, /Ý bạn là "opp"\?/);
+  const open = validateWorkflow(br('{{opp.Amount'));
+  assert.deepEqual(open.errors, []);
+  assert.deepEqual(open.warnings.map((e) => [e.nodeId, e.field, e.code]), [['b', 'right', 'unclosed']]);
 });
 
 test('values loop with no values is an error on values', () => {
-  const v = (values) => wf([loop('l', { mode: 'values', values }, [record('c', 'Contact', 'con', [])])]);
-  for (const values of [undefined, [], ['  ', ''], '']) {
-    const e = issue(errorsOf(v(values)), 'l', 'values');
-    assert.equal(e.message, 'Nhập ít nhất một giá trị, mỗi dòng một giá trị (ví dụ Hot, Warm, Cold).');
-    assert.equal(e.code, 'valuesEmpty');
+  for (const values of [undefined, [], ['  ', ''], '\n \n', 42]) {
+    const errors = errorsOf(wf([loop('l', { mode: 'values', values }, [record('x', 'Lead', 'x')])]));
+    assert.deepEqual(errors.map((e) => [e.nodeId, e.field, e.code, e.message]), [['l', 'values', 'valuesEmpty', 'Nhập ít nhất một giá trị, mỗi dòng một giá trị (ví dụ Hot, Warm, Cold).']], JSON.stringify(values));
   }
-  assert.deepEqual(errorsOf(v(['Hot', 'Warm'])), []);
-  assert.deepEqual(errorsOf(v('Hot\nWarm')), []);
-  const big = issue(errorsOf(v(Array.from({ length: 100001 }, (_, i) => `v${i}`))), 'l', 'values');
-  assert.equal(big.message, 'Danh sách có 100.001 giá trị, quá giới hạn 100.000 lần lặp của một bước Lặp. Bớt giá trị.');
-  assert.equal(issue(errorsOf(wf([loop('l', { mode: 'nope' }, [])])), 'l', 'mode').message, 'Chế độ lặp "nope" không hợp lệ.');
+  assert.deepEqual(errorsOf(wf([loop('l', { mode: 'values', values: ['Hot', 'Warm'] }, [record('x', 'Lead', 'x', [{ name: 'Rating', type: 'copy', options: { path: 'loop.value' } }])])])), []);
+  const many = errorsOf(wf([loop('l', { mode: 'values', values: Array.from({ length: 100001 }, (_, i) => `v${i}`) }, [record('x', 'Lead', 'x')])]));
+  assert.deepEqual(many.map((e) => [e.field, e.message]), [['values', 'Danh sách có 100.001 giá trị, quá giới hạn 100.000 lần lặp của một bước Lặp. Bớt giá trị.']]);
+  assert.deepEqual(errorsOf(wf([loop('l', { mode: 'bogus' }, [record('x', 'Lead', 'x')])])).map((e) => e.message), ['Chế độ lặp "bogus" không hợp lệ.']);
 });
 
 test('each filter, order and limit are validated only in each mode', () => {
-  const ev = (extra, mode = 'each') => errorsOf(wf([query('q', 'cons', { sobject: 'Contact', fields: ['Id', 'AccountId'] }), loop('l', { mode, from: 'cons', itemAlias: 'con', count: 1, ...extra }, [record('c', 'Task', 'task', [])])]));
-  assert.deepEqual(ev({ filter: 'compare', filterField: 'AccountId', filterValue: 'x', order: 'shuffle', limit: 3 }), []);
-  assert.equal(issue(ev({ filter: 'compare' }), 'l', 'filterField').message, 'Chưa nhập field để lọc, ví dụ AccountId hoặc Account.Type.');
-  assert.match(issue(ev({ filter: 'compare', filterField: 'a b' }), 'l', 'filterField').message, /^Field "a b" không hợp lệ/);
-  assert.equal(issue(ev({ filter: 'compare', filterField: 'AccountId', filterOp: 'x' }), 'l', 'filterOp').message, 'Phép so sánh không hợp lệ.');
-  assert.equal(issue(ev({ filter: 'x' }), 'l', 'filter').message, 'Cách lọc "x" không hợp lệ.');
-  assert.equal(issue(ev({ order: 'x' }), 'l', 'order').message, 'Thứ tự "x" không hợp lệ.');
-  for (const limit of [-1, 1.5, 'a', 100001]) {
-    assert.equal(issue(ev({ limit }), 'l', 'limit').message, '"Tối đa số bản ghi" phải là số nguyên từ 0 đến 100000 (0 = tất cả).');
-  }
-  // In fixed mode the leftovers are ignored (hidden), and so are references in them.
-  assert.deepEqual(ev({ filter: 'x', order: 'x', limit: -1, filterValue: '{{nope.Id}}' }, 'fixed'), []);
+  const bad = { filter: 'compare', filterField: '', filterOp: 'zz', order: 'random', limit: -2 };
+  const body = [record('x', 'Lead', 'x')];
+  const each = errorsOf(wf([record('a', 'Account', 'acc'), loop('l', { mode: 'each', from: 'acc', itemAlias: 'it', ...bad }, body)]));
+  assert.deepEqual(each.map((e) => [e.nodeId, e.field, e.message]), [
+    ['l', 'filterField', 'Chưa nhập field để lọc, ví dụ AccountId hoặc Account.Type.'],
+    ['l', 'filterOp', 'Phép so sánh không hợp lệ.'],
+    ['l', 'order', 'Thứ tự "random" không hợp lệ.'],
+    ['l', 'limit', '"Tối đa số bản ghi" phải là số nguyên từ 0 đến 100000 (0 = tất cả).'],
+  ]);
+  assert.deepEqual(errorsOf(wf([record('a', 'Account', 'acc'), loop('l', { mode: 'each', from: 'acc', itemAlias: 'it', filter: 'zz', filterField: 'a b' }, body)])).map((e) => e.message), ['Cách lọc "zz" không hợp lệ.']);
+  assert.deepEqual(errorsOf(wf([record('a', 'Account', 'acc'), loop('l', { mode: 'each', from: 'acc', itemAlias: 'it', filter: 'compare', filterField: 'a b' }, body)])).map((e) => e.message), ['Field "a b" không hợp lệ. Dùng API name; field quan hệ viết Account.Type.']);
+  // The same keys in another mode are kept (switching modes keeps hidden values) but not checked.
+  assert.deepEqual(errorsOf(wf([loop('l', { count: 2, ...bad, filterValue: '{{nope.Id}}' }, body)])), []);
+  // A good each filter, shuffle and limit.
+  const ok = wf([query('q', 'cons', { sobject: 'Contact', fields: ['Id', 'AccountId'] }), query('q2', 'accs'), loop('la', { mode: 'each', from: 'accs', itemAlias: 'acc' }, [
+    loop('l', { mode: 'each', from: 'cons', itemAlias: 'con', alias: 'k', filter: 'compare', filterField: 'AccountId', filterValue: '{{acc.Id}}', order: 'shuffle', limit: 3 }, body),
+  ])]);
+  assert.deepEqual(errorsOf(ok), []);
 });
 
 test('weighted pick needs weightField', () => {
-  const pw = (extra) => errorsOf(wf([query('q', 'accs'), pick('p', 'acc', 'accs', { mode: 'weighted', ...extra }), record('c', 'Contact', 'con', [lookup('acc')])]));
-  assert.equal(issue(pw({}), 'p', 'weightField').message, 'Chưa nhập field trọng số, ví dụ NumberOfEmployees hoặc Amount.');
-  assert.equal(issue(pw({ weightField: '1x' }), 'p', 'weightField').message, 'Field "1x" không hợp lệ. Dùng API name; field quan hệ viết Account.NumberOfEmployees.');
-  assert.deepEqual(pw({ weightField: 'Account.NumberOfEmployees' }), []);
+  const base = (extra) => wf([query('q', 'accs', { fields: ['Id', 'NumberOfEmployees'] }), pick('p', 'acc', 'accs', { mode: 'weighted', ...extra }), record('x', 'Contact', 'con', [lookup('acc')])]);
+  assert.deepEqual(errorsOf(base({})).map((e) => [e.nodeId, e.field, e.message]), [['p', 'weightField', 'Chưa nhập field trọng số, ví dụ NumberOfEmployees hoặc Amount.']]);
+  assert.deepEqual(errorsOf(base({ weightField: 'Number Of' })).map((e) => [e.field, e.message]), [['weightField', 'Field "Number Of" không hợp lệ. Dùng API name; field quan hệ viết Account.NumberOfEmployees.']]);
+  assert.deepEqual(errorsOf(base({ weightField: 'NumberOfEmployees' })), []);
+  // Only in weighted mode.
+  assert.deepEqual(errorsOf(wf([query('q', 'accs'), pick('p', 'acc', 'accs', { weightField: '' }), record('x', 'Contact', 'con', [lookup('acc')])])), []);
 });
 
-// ---------- design 0013: execution ----------
+// ---------- design 0013 (execution) ----------
 
 import { createRandom } from '../server/random.js';
 import { compareValues } from '../server/workflow/conditions.js';
-import { LIMITS } from '../server/workflow/nodes.js';
 
-const titles = (r, sobject = 'Contact') => r.records.filter((x) => x.sobject === sobject).map((x) => x.fields.Title);
+const text = (name, template) => ({ name, type: 'template', options: { template } });
+const run0013 = (w, opts = {}) => runWorkflow(w, { seed: 5, now: NOW, ...opts });
+const bySo = (r, so) => r.records.filter((x) => x.sobject === so);
+const qRows = (list) => rows(list.map((x, i) => ({ Id: `001${String(i).padStart(15, '0')}`, Name: `Org ${i}`, ...x })));
 
 test('branch right renders variables before comparing', () => {
   const w = wf([
-    record('a', 'Account', 'acc', [{ name: 'Rev', type: 'number', options: { min: 50, max: 50 } }]),
-    loop('l', { count: 4 }, [
-      record('o', 'Opportunity', 'opp', [{ name: 'Amount', type: 'template', options: { template: '{{loop.index}}0' } }]),
-      branch('b', { kind: 'compare', left: 'acc.Rev', op: 'gt', right: '{{opp.Amount}}' }, [record('t', 'Task', 'task', [tplField('Title', 'yes {{opp.Amount}}')])], []),
-    ]),
+    record('o', 'Opportunity', 'opp', [{ name: 'Amount', type: 'number', options: { min: 50, max: 50, scale: 0 } }]),
+    loop('l', { count: 100 }, [branch('b', { kind: 'compare', left: 'loop.index', op: 'gt', right: '{{opp.Amount}}' }, [record('y', 'Lead', 'big', [text('N', '{{loop.index}}')])])]),
   ]);
-  assert.deepEqual(errorsOf(w), []);
-  const r = runWorkflow(w, { seed: 1, now: NOW });
-  assert.deepEqual(titles(r, 'Task'), ['yes 10', 'yes 20', 'yes 30', 'yes 40']);
-  assert.deepEqual(r.stats.byStep.b, { runs: 4, records: 4, true: 4, false: 0 });
-  // Text around the token is kept: "{{acc.Rev}}0" is 500.
-  const r2 = runWorkflow(wf([record('a', 'Account', 'acc', [{ name: 'Rev', type: 'number', options: { min: 50, max: 50 } }]), branch('b', { kind: 'compare', left: 'acc.Rev', op: 'lt', right: '{{acc.Rev}}0' }, [record('t', 'Task', 'task')], [])]), { seed: 1, now: NOW });
-  assert.equal(r2.stats.byStep.b.true, 1);
+  const r = run0013(w);
+  assert.equal(r.stats.byStep.b.true, 50);
+  assert.equal(bySo(r, 'Lead')[0].fields.N, '51');
+  // Text on both sides: compared as text after rendering.
+  const t = wf([record('a', 'Account', 'acc', [text('Name', 'Acme')]), branch('b', { kind: 'compare', left: 'acc.Name', op: 'eq', right: '{{acc.Name}}' }, [record('y', 'Lead', 'y')])]);
+  assert.equal(run0013(t).stats.byStep.b.true, 1);
 });
 
 test('branch right without {{ compares exactly as before', () => {
-  const run = (right, op = 'eq') => runWorkflow(wf([loop('l', { count: 3 }, [branch('b', { kind: 'compare', left: 'loop.index', op, right }, [record('t', 'Task', 't')], [])])]), { seed: 1, now: NOW }).stats.byStep.b.true;
-  assert.equal(run('2'), 1);
-  assert.equal(run(2), 1);
-  assert.equal(run('2', 'gte'), 2);
-  assert.equal(run('{{2', 'eq'), 0, 'an unclosed {{ is text');
+  const w = (right) => wf([loop('l', { count: 4 }, [branch('b', { kind: 'compare', left: 'loop.index', op: 'lte', right }, [record('y', 'Lead', 'y')])])]);
+  assert.equal(run0013(w('2')).stats.byStep.b.true, 2);
+  assert.equal(run0013(w(3)).stats.byStep.b.true, 3, 'a number right side is not rendered');
+  // A "{" that is not a token stays text (validation warns `unclosed`).
+  const lit = wf([record('a', 'Account', 'acc', [text('Name', 'a{{b')]), branch('b', { kind: 'compare', left: 'acc.Name', op: 'eq', right: 'a{{b' }, [record('y', 'Lead', 'y')])]);
+  assert.equal(run0013(lit).stats.byStep.b.true, 1);
 });
 
 test('branch left Lookup compares by ref', () => {
   const w = wf([
-    record('a', 'Account', 'acc', [], { count: 2 }),
-    loop('l', { count: 4 }, [
-      record('c', 'Contact', 'con', [lk('AccountId', 'acc', 'random')]),
-      branch('b', { kind: 'compare', left: 'con.AccountId', op: 'eq', right: 'acc#2' }, [record('t', 'Task', 't')], []),
+    record('a', 'Account', 'acc', [], { count: 3 }),
+    loop('l', { count: 6 }, [
+      record('c', 'Contact', 'con', [{ name: 'AccountId', type: 'lookup', options: { mode: 'random', ref: 'acc' } }]),
+      record('o', 'Opportunity', 'opp', [{ name: 'AccountId', type: 'lookup', options: { mode: 'random', ref: 'acc' } }]),
+      branch('b', { kind: 'compare', left: 'con.AccountId', op: 'eq', right: '{{opp.AccountId}}' }, [record('y', 'Lead', 'same', [text('Ref', '{{con.AccountId}}')])]),
+      branch('b2', { kind: 'compare', left: 'con.AccountId', op: 'eq', right: 'acc#1' }, [record('z', 'Lead', 'one')]),
     ]),
   ]);
-  const r = runWorkflow(w, { seed: 4, now: NOW });
-  const hits = r.records.filter((x) => x.sobject === 'Contact' && x.fields.AccountId.$ref === 'acc#2').length;
-  assert.equal(r.stats.byStep.b.true, hits);
-  assert.ok(hits > 0 && hits < 4, `seed 4 mixes both parents (${hits})`);
+  const r = run0013(w);
+  const pairs = bySo(r, 'Contact').map((c, i) => [c.fields.AccountId.$ref, bySo(r, 'Opportunity')[i].fields.AccountId.$ref]);
+  assert.equal(r.stats.byStep.b.true, pairs.filter(([a, b]) => a === b).length);
+  assert.equal(r.stats.byStep.b2.true ?? 0, pairs.filter(([a]) => a === 'acc#1').length);
+  assert.ok(r.stats.byStep.b.true > 0 && r.stats.byStep.b.false > 0, 'the seed gives both sides');
 });
 
 test('loop count accepts a number variable; empty and non-numeric values run 0 times with one warning', () => {
-  const ROWS = rows([{ Id: 'a1', N: 2 }, { Id: 'a2', N: '' }, { Id: 'a3', N: '3.7' }, { Id: 'a4', N: 'abc' }, { Id: 'a5', N: -1 }, { Id: 'a6', N: null }]);
+  const accs = qRows([{ N: 2 }, { N: '3' }, { N: null }, { N: 'nhiều' }, {}, { N: -4 }, { N: 2.7 }]);
   const w = wf([
-    query('q', 'accs', { fields: ['Id', 'N'] }),
-    each('la', 'accs', 'acc', [loop('l', { count: '{{acc.N}}', alias: 'k' }, [record('c', 'Contact', 'con', [tplField('Title', '{{acc.Id}}.{{k.index}}/{{k.count}}')])])]),
+    query('q', 'accs', { fields: ['Id', 'Name', 'N'] }),
+    loop('la', { mode: 'each', from: 'accs', itemAlias: 'acc' }, [
+      loop('lc', { count: '{{acc.N}}', alias: 'k' }, [record('c', 'Contact', 'con', [text('T', '{{acc.Name}} {{k.index}}/{{k.count}}')])]),
+    ]),
   ]);
-  assert.deepEqual(errorsOf(w), []);
-  const r = runWorkflow(w, { seed: 1, now: NOW, queryResults: { q: ROWS } });
-  assert.deepEqual(titles(r), ['a1.1/2', 'a1.2/2', 'a3.1/3', 'a3.2/3', 'a3.3/3']);
-  assert.equal(r.stats.byStep.l.iterations, 5);
-  const w1 = r.warnings.filter((x) => x.code === 'numberVarEmpty');
-  assert.equal(w1.length, 1);
-  assert.deepEqual([w1[0].nodeId, w1[0].field], ['l', 'count']);
-  assert.equal(w1[0].message, 'Bước Lặp "k": "Số lần lặp" = {{acc.N}} trống, âm hoặc không phải số ở 4/6 lần chạy qua, nên các lần đó lặp 0 lần. Kiểm tra field trong org hoặc chọn biến khác.');
-  // `$count` of a pool and a loop variable work too, and draw nothing from the rng.
-  const c = runWorkflow(wf([record('a', 'Account', 'acc', [], { count: 3 }), loop('o', { count: 2, alias: 'o' }, [loop('l', { count: '{{o.index}}' }, [record('c', 'Contact', 'con')])])]), { seed: 1, now: NOW });
-  assert.equal(c.stats.byStep.l.iterations, 3);
+  const r = run0013(w, { queryResults: { q: accs } });
+  assert.deepEqual(bySo(r, 'Contact').map((c) => c.fields.T), ['Org 0 1/2', 'Org 0 2/2', 'Org 1 1/3', 'Org 1 2/3', 'Org 1 3/3', 'Org 6 1/2', 'Org 6 2/2']);
+  assert.deepEqual(r.stats.byStep.lc, { runs: 7, records: 7, iterations: 7 });
+  const warns = r.warnings.filter((x) => x.code === 'numberVarEmpty');
+  assert.deepEqual(warns.map((x) => [x.nodeId, x.field, x.message]), [['lc', 'count', 'Bước Lặp "k": "Số lần lặp" = {{acc.N}} trống, âm hoặc không phải số ở 4/7 lần chạy qua, nên các lần đó lặp 0 lần. Kiểm tra field trong org hoặc chọn biến khác.']]);
+  // {{accs.$count}} at the top level.
+  const top = wf([query('q', 'accs', { fields: ['Id'] }), loop('l', { count: '{{accs.$count}}' }, [record('c', 'Contact', 'con')])]);
+  assert.equal(run0013(top, { queryResults: { q: accs } }).stats.byStep.c.records, 7);
 });
 
 test('loop count variable above the limit is clamped with a warning', () => {
-  const big = LIMITS.maxCountPerNode + 5;
-  const w = wf([query('q', 'accs', { fields: ['Id', 'N'] }), each('la', 'accs', 'acc', [loop('l', { count: '{{acc.N}}' }, [])])]);
-  const r = runWorkflow(w, { seed: 1, now: NOW, queryResults: { q: rows([{ Id: 'a', N: big }, { Id: 'b', N: 1 }]) } });
-  assert.equal(r.stats.byStep.l.iterations, LIMITS.maxCountPerNode + 1);
-  const wc = r.warnings.find((x) => x.code === 'numberVarClamped');
-  assert.equal(wc.message, 'Bước Lặp "loop": "Số lần lặp" = {{acc.N}} lớn hơn 100.000 ở 1/2 lần chạy qua, nên đã dùng 100.000.');
-  assert.equal(wc.field, 'count');
+  const w = wf([query('q', 'accs', { fields: ['Id', 'N'] }), pick('p', 'acc', 'accs'), loop('l', { count: '{{acc.N}}' }, [])]);
+  const r = run0013(w, { queryResults: { q: qRows([{ N: 250000 }]) } });
+  assert.equal(r.stats.byStep.l.iterations, 100000);
+  assert.deepEqual(r.warnings.filter((x) => x.code === 'numberVarClamped').map((x) => [x.nodeId, x.field, x.message]), [['l', 'count', 'Bước Lặp "loop": "Số lần lặp" = {{acc.N}} lớn hơn 100.000 ở 1/1 lần chạy qua, nên đã dùng 100.000.']]);
 });
 
 test('range with variable bounds draws exactly one number and uses min when max is smaller', () => {
-  const mk = (min, max) => wf([
-    record('a', 'Account', 'acc', [{ name: 'N', type: 'number', options: { min: 4, max: 4 } }]),
-    loop('l', { mode: 'range', min, max }, [record('c', 'Contact', 'con')]),
-    record('z', 'Lead', 'z', [{ name: 'R', type: 'number', options: { min: 0, max: 1000000 } }]),
-  ]);
-  // max < min with a variable: min is used.
-  const r = runWorkflow(mk('{{acc.N}}', 1), { seed: 3, now: NOW });
-  assert.equal(r.stats.byStep.l.iterations, 4);
-  // One draw either way: the Lead after the loop gets the same value as with plain numbers 4..4.
-  const plain = runWorkflow(mk(4, 4), { seed: 3, now: NOW });
-  assert.deepEqual(r.records.at(-1).fields, plain.records.at(-1).fields);
-  const varMax = runWorkflow(mk(2, '{{acc.N}}'), { seed: 3, now: NOW });
-  const plainMax = runWorkflow(mk(2, 4), { seed: 3, now: NOW });
-  assert.equal(varMax.stats.byStep.l.iterations, plainMax.stats.byStep.l.iterations);
-  assert.deepEqual(varMax.records.at(-1).fields, plainMax.records.at(-1).fields);
+  const after = record('z', 'Lead', 'z', [{ name: 'X', type: 'number', options: { min: 0, max: 1000000, scale: 0 } }], { count: 3 });
+  const src = record('a', 'Account', 'acc', [{ name: 'N', type: 'number', options: { min: 2, max: 2, scale: 0 } }]);
+  const withVar = wf([src, loop('l', { mode: 'range', min: 5, max: '{{acc.N}}' }, []), after]);
+  const fixed = wf([src, loop('l', { mode: 'range', min: 5, max: 5 }, []), after]);
+  const a = run0013(withVar);
+  const b = run0013(fixed);
+  assert.equal(a.stats.byStep.l.iterations, 5, 'max 2 < min 5 → min');
+  assert.deepEqual(a.records, b.records, 'one draw, like rng.int(5, 5)');
+  const lowVar = run0013(wf([src, loop('l', { mode: 'range', min: '{{acc.N}}', max: 4 }, [record('c', 'Contact', 'con')])]));
+  assert.ok(lowVar.stats.byStep.l.iterations >= 2 && lowVar.stats.byStep.l.iterations <= 4);
 });
 
-const CHILDREN = rows([
-  { Id: 'c1', AccountId: 'a1', LastName: 'A' }, { Id: 'c2', AccountId: 'a2', LastName: 'B' }, { Id: 'c3', AccountId: 'a1', LastName: 'C' },
-  { Id: 'c4', AccountId: 'a3', LastName: 'D' }, { Id: 'c5', AccountId: 'a1', LastName: 'E' },
-], 'Contact');
-const PARENTS = rows([{ Id: 'a1', Name: 'P1' }, { Id: 'a2', Name: 'P2' }, { Id: 'a4', Name: 'P4' }]);
-const parentChild = (extra = {}, body = null) => wf([
-  query('q', 'accs', { fields: ['Id', 'Name'] }),
-  query('qc', 'cons', { sobject: 'Contact', fields: ['Id', 'AccountId', 'LastName'] }),
-  each('la', 'accs', 'acc', [
-    each('lc', 'cons', 'con', body ?? [record('t', 'Task', 'task', [tplField('Title', '{{acc.Name}}:{{con.LastName}} {{loop2.index}}/{{loop2.count}}')])], { alias: 'loop2', filter: 'compare', filterField: 'AccountId', filterOp: 'eq', filterValue: '{{acc.Id}}', ...extra }),
-  ]),
-]);
-const pcInputs = { q: PARENTS, qc: CHILDREN };
-
 test('each filter keeps pool order and renders filterValue once per loop start', () => {
-  const w = parentChild();
-  assert.deepEqual(errorsOf(w), []);
-  const r = runWorkflow(w, { seed: 1, now: NOW, queryResults: pcInputs });
-  assert.deepEqual(titles(r, 'Task'), ['P1:A 1/3', 'P1:C 2/3', 'P1:E 3/3', 'P2:B 1/1']);
-  assert.deepEqual(r.stats.byStep.lc, { runs: 3, records: 4, iterations: 4 });
-  assert.ok(!r.warnings.some((x) => x.code === 'eachFilterEmpty'), 'one visit without a match is normal');
-  // Rendered once at the start: a Record inside the body changing what {{…}} would say does not matter.
-  const neq = runWorkflow(parentChild({ filterOp: 'neq' }), { seed: 1, now: NOW, queryResults: pcInputs });
-  assert.equal(neq.stats.byStep.lc.iterations, 2 + 4 + 5);
+  const data = qRows([{ G: 1 }, { G: 2 }, { G: 1 }, { G: '2' }, { G: 1 }, { G: 3 }]);
+  const w = wf([
+    query('q', 'rows', { fields: ['Id', 'Name', 'G'] }),
+    loop('o', { count: 3, alias: 'o' }, [
+      loop('e', { mode: 'each', from: 'rows', itemAlias: 'row', alias: 'k', filter: 'compare', filterField: 'g', filterValue: '{{o.index}}' }, [
+        record('t', 'Task', 'task', [text('S', '{{o.index}}:{{row.Name}} {{k.index}}/{{k.count}}')]),
+      ]),
+    ]),
+  ]);
+  const r = run0013(w, { queryResults: { q: data } });
+  assert.deepEqual(r.records.map((x) => x.fields.S), ['1:Org 0 1/3', '1:Org 2 2/3', '1:Org 4 3/3', '2:Org 1 1/2', '2:Org 3 2/2', '3:Org 5 1/1']);
+  assert.equal(r.stats.byStep.e.iterations, 6);
+  // Another operator (linear, cached per right side): G > 1.
+  const gt = wf([query('q', 'rows', { fields: ['Id', 'Name', 'G'] }), loop('e', { mode: 'each', from: 'rows', itemAlias: 'row', filter: 'compare', filterField: 'G', filterOp: 'gt', filterValue: '1' }, [record('t', 'Task', 'task', [text('S', '{{row.Name}}')])])]);
+  assert.deepEqual(run0013(gt, { queryResults: { q: data } }).records.map((x) => x.fields.S), ['Org 1', 'Org 3', 'Org 5']);
 });
 
 test('each filter eq index gives the same records as a linear filter', () => {
-  const rng = createRandom(11);
-  const values = [null, undefined, '', 0, -0, 1, '1', ' 1 ', '1.0', 2, 'abc', 'ABC', true, 'true', { $ref: 'acc#1' }, 'acc#1', [1], '0x10', 16, 'Infinity', Infinity, 3.5, '3.50'];
-  const poolRows = Array.from({ length: 1000 }, (_, i) => ({ Id: `r${i}`, F: values[Math.floor(rng.next() * values.length)] }));
-  const rights = ['', '0', '1', '1.0', ' 1 ', 'abc', 'true', 'acc#1', '16', '0x10', 'Infinity', '3.5', 'x'];
+  const kinds = [(i) => i % 7, (i) => String(i % 5), (i) => `t${i % 3}`, () => null, () => undefined, (i) => ({ $ref: `acc#${i % 4}` }), (i) => [i % 3], () => true, (i) => (i % 2 ? ' 3' : '3.0'), () => Infinity, () => ''];
+  const list = Array.from({ length: 1000 }, (_, i) => {
+    const v = kinds[(i * 7 + (i >> 3)) % kinds.length](i);
+    return v === undefined ? {} : { K: v };
+  });
+  const data = qRows(list);
+  const rights = ['3', '3.0', ' 3', '0', 't1', '', 'acc#2', 'true', 'Infinity', '2', '[object Object]', 'nope'];
   for (const right of rights) {
-    const w = wf([
-      query('q', 'pool', { fields: ['Id', 'F'] }),
-      each('l', 'pool', 'p', [record('t', 'Task', 'task', [tplField('Title', '{{p.Id}}')])], { filter: 'compare', filterField: 'F', filterValue: right }),
-    ]);
-    const r = runWorkflow(w, { seed: 1, now: NOW, queryResults: { q: rows(poolRows) } });
-    const expected = poolRows.filter((row) => compareValues(row.F && typeof row.F === 'object' && row.F.$ref ? row.F.$ref : row.F, 'eq', right)).map((row) => row.Id);
-    assert.deepEqual(titles(r, 'Task'), expected, `right ${JSON.stringify(right)}`);
+    const w = wf([query('q', 'rows', { fields: ['Id', 'K'] }), loop('e', { mode: 'each', from: 'rows', itemAlias: 'row', filter: 'compare', filterField: 'K', filterValue: right }, [record('t', 'Task', 'task', [text('Id__c', '{{row.Id}}')])])]);
+    const got = run0013(w, { queryResults: { q: data } }).records.map((x) => x.fields.Id__c);
+    const want = data.records.filter((row) => {
+      const v = row.K;
+      return compareValues(v && typeof v === 'object' && v.$ref ? v.$ref : v, 'eq', right);
+    }).map((row) => row.Id);
+    assert.deepEqual(got, want, `right "${right}"`);
   }
 });
 
 test('each shuffle draws exactly min(limit, m) numbers; pool order draws none', () => {
-  // A Lead after the loop shows how many numbers were drawn before it.
-  const after = { name: 'R', type: 'number', options: { min: 0, max: 1000000000 } };
-  const leadAfter = (middle) => runWorkflow(wf([record('a', 'Account', 'acc', [], { count: 6 }), ...middle, record('z', 'Lead', 'z', [after])]), { seed: 5, now: NOW }).records.at(-1).fields.R;
-  const draw = (k) => Array.from({ length: k }, (_, i) => branch(`d${i}`, { kind: 'chance' }, [], [])); // one number each
-  assert.equal(leadAfter([each('l', 'acc', 'x', [], { limit: 2 })]), leadAfter([]), 'pool order + limit: no draw');
-  assert.equal(leadAfter([each('l', 'acc', 'x', [], { order: 'shuffle', limit: 2 })]), leadAfter(draw(2)), 'limit 2: two draws, even with an empty body');
-  assert.equal(leadAfter([each('l', 'acc', 'x', [], { order: 'shuffle', limit: 50 })]), leadAfter(draw(6)), 'limit above the pool: m draws');
-  assert.equal(leadAfter([each('l', 'acc', 'x', [], { order: 'shuffle', filter: 'compare', filterField: 'Nope', filterValue: 'x' })]), leadAfter([]), 'nothing matched: no draw');
-  // The order is rng.shuffleTake of the positions.
-  const titlesOf = (extra) => titles(runWorkflow(wf([record('a', 'Account', 'acc', [], { count: 6 }), each('l', 'acc', 'x', [record('t', 'Task', 'task', [tplField('Title', '{{x.$n}}')])], extra)]), { seed: 5, now: NOW }), 'Task');
-  assert.deepEqual(titlesOf({ order: 'shuffle', limit: 2 }), createRandom(5).shuffleTake([1, 2, 3, 4, 5, 6], 2).map(String));
-  const all = titlesOf({ order: 'shuffle' });
-  assert.deepEqual([...all].sort(), ['1', '2', '3', '4', '5', '6']);
-  assert.deepEqual(all, createRandom(5).shuffleTake([1, 2, 3, 4, 5, 6], 6).map(String));
-  // shuffleTake leaves its input alone and never returns more than the list.
-  const list = [1, 2, 3, 4, 5];
-  assert.equal(createRandom(1).shuffleTake(list, 3).length, 3);
-  assert.deepEqual(list, [1, 2, 3, 4, 5]);
-  assert.equal(createRandom(1).shuffleTake(list, 9).length, 5);
+  const tail = record('z', 'Lead', 'z', [{ name: 'X', type: 'number', options: { min: 0, max: 1000000, scale: 0 } }], { count: 4 });
+  const pool = record('a', 'Account', 'acc', [], { count: 10 });
+  const each = (extra) => wf([pool, loop('e', { mode: 'each', from: 'acc', itemAlias: 'it', ...extra }, []), tail]);
+  const draws = (k) => wf([pool, ...Array.from({ length: k }, (_, i) => loop(`d${i}`, { mode: 'range', min: 0, max: 0, alias: `d${i}` }, [])), tail]);
+  const tailOf = (w) => bySo(run0013(w), 'Lead').map((x) => x.fields.X);
+  assert.deepEqual(tailOf(each({ order: 'shuffle', limit: 3 })), tailOf(draws(3)));
+  assert.deepEqual(tailOf(each({ order: 'shuffle' })), tailOf(draws(10)), 'limit 0 = all: 10 draws');
+  assert.deepEqual(tailOf(each({ order: 'shuffle', limit: 50 })), tailOf(draws(10)));
+  assert.deepEqual(tailOf(each({ order: 'pool', limit: 3 })), tailOf(draws(0)));
+  assert.deepEqual(tailOf(each({ order: 'shuffle', filter: 'compare', filterField: 'Nope', filterValue: 'x' })), tailOf(draws(0)), 'nothing matched: no draw');
+  // The order is the seeded partial Fisher–Yates of rng.shuffleTake, and different from the pool's.
+  const w = wf([pool, loop('e', { mode: 'each', from: 'acc', itemAlias: 'it', order: 'shuffle', limit: 4 }, [record('t', 'Task', 'task', [text('S', '{{it.$n}}')])])]);
+  const got = run0013(w).records.filter((x) => x.sobject === 'Task').map((x) => Number(x.fields.S));
+  assert.deepEqual(got, createRandom(5).shuffleTake([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], 4));
+  assert.equal(new Set(got).size, 4);
+  assert.deepEqual(createRandom(1).shuffleTake([], 3), []);
 });
 
 test('each limit takes the first N records', () => {
-  const r = runWorkflow(parentChild({ limit: 2 }), { seed: 1, now: NOW, queryResults: pcInputs });
-  assert.deepEqual(titles(r, 'Task'), ['P1:A 1/2', 'P1:C 2/2', 'P2:B 1/1']);
-  const nofilter = runWorkflow(wf([record('a', 'Account', 'acc', [], { count: 5 }), each('l', 'acc', 'x', [record('t', 'Task', 'task', [tplField('Title', '{{x.$n}}')])], { limit: 3 })]), { seed: 1, now: NOW });
-  assert.deepEqual(titles(nofilter, 'Task'), ['1', '2', '3']);
+  const data = qRows([{ G: 1 }, { G: 2 }, { G: 1 }, { G: 1 }, { G: 1 }]);
+  const w = (extra) => wf([query('q', 'rows', { fields: ['Id', 'Name', 'G'] }), loop('e', { mode: 'each', from: 'rows', itemAlias: 'row', alias: 'k', ...extra }, [record('t', 'Task', 'task', [text('S', '{{row.Name}} {{k.count}}')])])]);
+  assert.deepEqual(run0013(w({ limit: 2 }), { queryResults: { q: data } }).records.map((x) => x.fields.S), ['Org 0 2', 'Org 1 2']);
+  assert.deepEqual(run0013(w({ limit: 3, filter: 'compare', filterField: 'G', filterValue: '1' }), { queryResults: { q: data } }).records.map((x) => x.fields.S), ['Org 0 3', 'Org 2 3', 'Org 3 3']);
+  assert.equal(run0013(w({ limit: 99 }), { queryResults: { q: data } }).records.length, 5);
 });
 
 test('eachFilterEmpty warns only when no visit matched', () => {
-  const none = runWorkflow(parentChild({ filterField: 'LastName' }), { seed: 1, now: NOW, queryResults: pcInputs });
-  const w = none.warnings.filter((x) => x.code === 'eachFilterEmpty');
-  assert.equal(w.length, 1);
-  assert.deepEqual([w[0].nodeId, w[0].field], ['lc', 'filterValue']);
-  assert.equal(w[0].message, 'Bước Lặp "con": không bản ghi nào của pool "cons" thỏa điều kiện lọc ở cả 3 lần chạy qua, nên các bước bên trong không chạy. Kiểm tra field lọc (có trong "Field cần lấy" của Query chưa?) và giá trị so sánh.');
-  const some = runWorkflow(parentChild(), { seed: 1, now: NOW, queryResults: pcInputs });
-  assert.ok(!some.warnings.some((x) => x.code === 'eachFilterEmpty'));
+  const data = qRows([{ AccountId: 'A' }, { AccountId: 'B' }]);
+  const w = (value) => wf([
+    query('q', 'cons', { sobject: 'Contact', fields: ['Id', 'AccountId'] }),
+    loop('o', { mode: 'values', values: ['A', 'Z', 'Y'], alias: 'v' }, [
+      loop('e', { mode: 'each', from: 'cons', itemAlias: 'con', alias: 'k', filter: 'compare', filterField: 'AccountId', filterValue: value }, [record('t', 'Task', 'task')]),
+    ]),
+  ]);
+  assert.deepEqual(run0013(w('{{v.value}}'), { queryResults: { q: data } }).warnings.filter((x) => x.code === 'eachFilterEmpty'), [], 'some visits matched');
+  const none = run0013(w('Q'), { queryResults: { q: data } }).warnings.filter((x) => x.code === 'eachFilterEmpty');
+  assert.deepEqual(none.map((x) => [x.nodeId, x.field, x.message]), [['e', 'filterValue', 'Bước Lặp "con": không bản ghi nào của pool "cons" thỏa điều kiện lọc ở cả 3 lần chạy qua, nên các bước bên trong không chạy. Kiểm tra field lọc (có trong "Field cần lấy" của Query chưa?) và giá trị so sánh.']]);
+  // An empty pool keeps the warning of 0010, not this one.
+  const empty = run0013(w('Q'), { queryResults: { q: rows([]) } }).warnings.map((x) => x.code);
+  assert.ok(empty.includes('eachEmpty') && !empty.includes('eachFilterEmpty'));
 });
 
 test('values loop runs once per value with loop.value and draws nothing', () => {
-  const after = { name: 'R', type: 'number', options: { min: 0, max: 1000000000 } };
+  const tail = record('z', 'Lead', 'z', [{ name: 'X', type: 'number', options: { min: 0, max: 1000000, scale: 0 } }], { count: 3 });
   const w = wf([
-    loop('l', { mode: 'values', values: ['Hot', ' Warm ', '', 'Cold'] }, [record('ld', 'Lead', 'lead', [{ name: 'Rating', type: 'copy', options: { path: 'loop.value' } }, tplField('Title', '{{loop.index}}/{{loop.count}} {{loop.value}}')])]),
-    record('z', 'Account', 'z', [after]),
+    loop('lr', { mode: 'values', values: ['Hot', ' Warm ', '', 'Cold'] }, [record('lead', 'Lead', 'lead', [{ name: 'Rating', type: 'copy', options: { path: 'loop.value' } }, text('T', '{{loop.index}}/{{loop.count}} {{loop.value}}')])]),
+    tail,
   ]);
-  assert.deepEqual(errorsOf(w), []);
-  const r = runWorkflow(w, { seed: 2, now: NOW });
-  assert.deepEqual(r.records.filter((x) => x.sobject === 'Lead').map((x) => `${x.fields.Rating}|${x.fields.Title}`), ['Hot|1/3 Hot', 'Warm|2/3 Warm', 'Cold|3/3 Cold']);
-  assert.equal(r.stats.byStep.l.iterations, 3);
-  const plain = runWorkflow(wf([record('z', 'Account', 'z', [after])]), { seed: 2, now: NOW });
-  assert.deepEqual(r.records.at(-1).fields, plain.records.at(-1).fields, 'no rng draw');
-  // A multi-line string is accepted like kind 'list'.
-  assert.equal(runWorkflow(wf([loop('l', { mode: 'values', values: 'a\nb' }, [record('x', 'Lead', 'x')])]), { seed: 1, now: NOW }).stats.byStep.l.iterations, 2);
+  const r = run0013(w);
+  assert.deepEqual(r.records.filter((x) => x.alias === 'lead').map((x) => [x.fields.Rating, x.fields.T]), [['Hot', '1/3 Hot'], ['Warm', '2/3 Warm'], ['Cold', '3/3 Cold']]);
+  assert.deepEqual(r.stats.byStep.lr, { runs: 1, records: 3, iterations: 3 });
+  assert.deepEqual(bySo(r, 'Lead').filter((x) => x.alias === 'z'), bySo(run0013(wf([tail])), 'Lead'), 'no rng draw');
+  // A multi-line string is a list too.
+  assert.equal(run0013(wf([loop('l', { mode: 'values', values: 'a\nb' }, [record('x', 'Lead', 'x')])])).stats.byStep.x.records, 2);
 });
 
 test('pick weighted chooses by a numeric field; all-zero weights fall back to uniform with a warning', () => {
-  const W = rows([{ Id: 'a', Name: 'A', W: 0 }, { Id: 'b', Name: 'B', W: 1 }, { Id: 'c', Name: 'C', W: '3' }, { Id: 'd', Name: 'D', W: -5 }, { Id: 'e', Name: 'E', W: 'x' }]);
-  const mk = (field = 'W', count = 4000) => wf([
-    query('q', 'accs', { fields: ['Id', 'Name', 'W'] }),
-    loop('l', { count }, [pick('p', 'acc', 'accs', { mode: 'weighted', weightField: field }), record('c', 'Contact', 'con', [tplField('Title', '{{acc.Name}}')])]),
+  const data = qRows([{ W: 0 }, { W: 1 }, { W: '3' }, { W: null }, { W: -5 }, { W: 'x' }]);
+  const w = (field, n = 4000) => wf([
+    query('q', 'accs', { fields: ['Id', 'Name', 'W', 'Z'] }),
+    loop('l', { count: n }, [pick('p', 'acc', 'accs', { mode: 'weighted', weightField: field }), record('c', 'Contact', 'con', [text('A', '{{acc.Name}}')])]),
   ]);
-  const r = runWorkflow(mk(), { seed: 3, now: NOW, queryResults: { q: W } });
+  const r = run0013(w('w'), { queryResults: { q: data } });
   const counts = {};
-  for (const t of titles(r)) counts[t] = (counts[t] ?? 0) + 1;
-  assert.deepEqual(Object.keys(counts).sort(), ['B', 'C']);
-  assert.ok(Math.abs(counts.C / counts.B - 3) < 0.4, `C ≈ 3 × B (${counts.C}/${counts.B})`);
-  assert.deepEqual(runWorkflow(mk(), { seed: 3, now: NOW, queryResults: { q: W } }).records, r.records, 'reproducible');
-  // Exactly one draw per pick: the same as a random pick in rng consumption.
-  const rnd = (mode) => runWorkflow(wf([query('q', 'accs'), loop('l', { count: 5 }, [pick('p', 'acc', 'accs', { mode, weightField: 'Nope' })]), record('z', 'Lead', 'z', [{ name: 'R', type: 'number', options: { min: 0, max: 1e9 } }])]), { seed: 8, now: NOW, queryResults: { q: W } });
-  const zero = rnd('weighted');
-  assert.deepEqual(zero.records.at(-1).fields, rnd('random').records.at(-1).fields);
-  const wz = zero.warnings.find((x) => x.code === 'pickWeightZero');
-  assert.equal(wz.message, 'Bước Chọn bản ghi "acc": 5/5 lần mọi bản ghi có trọng số 0 (field "Nope" trống hoặc không phải số) nên đã chọn đều. Kiểm tra field trọng số hoặc thêm nó vào "Field cần lấy" của Query.');
-  assert.deepEqual([wz.nodeId, wz.field], ['p', 'weightField']);
-  // Uniform fallback picks the same records as random.
-  assert.deepEqual(zero.samples.p, rnd('random').samples.p);
+  for (const c of bySo(r, 'Contact')) counts[c.fields.A] = (counts[c.fields.A] ?? 0) + 1;
+  assert.deepEqual(Object.keys(counts).sort(), ['Org 1', 'Org 2'], 'zero, empty, negative and text weights are never chosen');
+  assert.ok(counts['Org 2'] / counts['Org 1'] > 2.5 && counts['Org 2'] / counts['Org 1'] < 3.5, JSON.stringify(counts));
+  assert.deepEqual(r.warnings.filter((x) => x.code === 'pickWeightZero'), []);
+  // One number per pick: as many draws as rng.pick.
+  const tail = (mode) => run0013(wf([query('q', 'accs', { fields: ['Id', 'W'] }), loop('l', { count: 5 }, [pick('p', 'acc', 'accs', { mode, weightField: 'W' })]), record('z', 'Lead', 'z', [{ name: 'X', type: 'number', options: { min: 0, max: 1000000, scale: 0 } }], { count: 3 })]), { queryResults: { q: data } }).records;
+  assert.deepEqual(tail('weighted'), tail('random'));
+  // All zero → uniform, one warning.
+  const zero = run0013(w('Z', 600), { queryResults: { q: data } });
+  assert.equal(new Set(bySo(zero, 'Contact').map((c) => c.fields.A)).size, 6);
+  assert.deepEqual(zero.warnings.filter((x) => x.code === 'pickWeightZero').map((x) => [x.nodeId, x.field, x.message]), [['p', 'weightField', 'Bước Chọn bản ghi "acc": 600/600 lần mọi bản ghi có trọng số 0 (field "Z" trống hoặc không phải số) nên đã chọn đều. Kiểm tra field trọng số hoặc thêm nó vào "Field cần lấy" của Query.']]);
+  // A generated pool that grows between picks (prefix sums extended).
+  const grow = wf([loop('l', { count: 5 }, [record('a', 'Account', 'acc', [{ name: 'W', type: 'number', options: { min: 1, max: 1, scale: 0 } }]), pick('p', 'pa', 'acc', { mode: 'weighted', weightField: 'W' }), record('c', 'Contact', 'con', [{ name: 'AccountId', type: 'lookup', options: { ref: 'pa' } }])])]);
+  const refs = bySo(run0013(grow), 'Contact').map((c) => Number(c.fields.AccountId.$ref.split('#')[1]));
+  refs.forEach((n, i) => assert.ok(n >= 1 && n <= i + 1, `pick ${i} chose acc#${n}`));
 });
 
 test('samples include the first record of every Record step', () => {
-  const w = wf([record('a', 'Account', 'acc', accountFields, { count: 2 }), record('b', 'Account', 'child', accountFields), query('q', 'accs'), pick('p', 'pk', 'accs')]);
-  const r = runWorkflow(w, { seed: 1, now: NOW, queryResults: { q: rows(ACCS) } });
+  const w = wf([
+    record('a', 'Account', 'acc', [text('Name', 'P{{this.$n}}')], { count: 2 }),
+    loop('l', { count: 2 }, [record('b', 'Account', 'child', [text('Name', 'C{{loop.index}}')]), pick('p', 'pa', 'acc')]),
+    { ...record('off', 'Lead', 'ld', [text('Name', 'x')]), disabled: true },
+  ]);
+  const r = run0013(w);
   assert.deepEqual(Object.keys(r.samples).sort(), ['a', 'b', 'p']);
-  assert.equal(r.samples.a, r.records[0].fields);
-  assert.equal(r.samples.b, r.records[2].fields);
+  assert.deepEqual([r.samples.a.Name, r.samples.b.Name], ['P1', 'C1']);
+  // Readable on the generator while it runs.
+  const { createRun } = runner;
+  const it = createRun(w, { seed: 5, now: NOW }).records();
+  it.next();
+  assert.deepEqual(Object.keys(it.samples), ['a']);
 });
 
 test('run.seed, run.now and run.today follow seed and now', () => {
-  const w = wf([record('a', 'Account', 'acc', [tplField('Description', 'Batch {{run.seed}} {{run.now}} {{run.today}}'), { name: 'S', type: 'copy', options: { path: 'run.seed' } }])]);
-  const r = runWorkflow(w, { seed: 42, now: NOW });
-  assert.equal(r.records[0].fields.Description, 'Batch 42 2025-06-15T12:00:00.000Z 2025-06-15');
-  assert.equal(r.records[0].fields.S, 42);
-  assert.equal(runWorkflow(w, { seed: 'abc', now: Date.parse('2026-01-02T23:59:00Z') }).records[0].fields.Description, 'Batch abc 2026-01-02T23:59:00.000Z 2026-01-02');
+  const w = wf([record('a', 'Account', 'acc', [text('D', 'Batch {{run.seed}} {{run.now}} {{run.today}}'), { name: 'S', type: 'copy', options: { path: 'run.seed' } }])]);
+  const r = runWorkflow(w, { seed: 4242, now: Date.parse('2026-10-28T03:00:00Z') });
+  assert.equal(r.records[0].fields.D, 'Batch 4242 2026-10-28T03:00:00.000Z 2026-10-28');
+  assert.equal(r.records[0].fields.S, 4242);
   // A name the user gave wins.
-  const own = runWorkflow(wf([loop('l', { count: 1, alias: 'run' }, [record('a', 'Account', 'acc', [tplField('Description', '{{run.index}}')])])]), { seed: 1, now: NOW });
-  assert.equal(own.records[0].fields.Description, '1');
+  const sh = wf([record('a', 'Account', 'run', [{ name: 'seed', type: 'number', options: { min: 7, max: 7, scale: 0 } }]), record('b', 'Lead', 'b', [text('D', '{{run.seed}}')])]);
+  assert.equal(runWorkflow(sh, { seed: 1, now: NOW }).records[1].fields.D, '7');
 });
 
 test('nested each loops with an eq filter over 2 000 × 2 000 rows finish under 2 seconds', () => {
-  const accs = rows(Array.from({ length: 2000 }, (_, i) => ({ Id: `a${i}`, Name: `A${i}` })));
-  const cons = rows(Array.from({ length: 2000 }, (_, i) => ({ Id: `c${i}`, AccountId: `a${(i * 7) % 2000}`, LastName: `L${i}` })), 'Contact');
+  const accs = rows(Array.from({ length: 2000 }, (_, i) => ({ Id: `001${String(i).padStart(15, '0')}`, Name: `A${i}` })));
+  const cons = rows(Array.from({ length: 2000 }, (_, i) => ({ Id: `003${String(i).padStart(15, '0')}`, LastName: `C${i}`, AccountId: `001${String((i * 7) % 2000).padStart(15, '0')}` })), 'Contact');
   const w = wf([
-    query('q', 'accs', { fields: ['Id', 'Name'], limit: 2000 }),
-    query('qc', 'cons', { sobject: 'Contact', fields: ['Id', 'AccountId', 'LastName'], limit: 2000 }),
-    each('la', 'accs', 'acc', [each('lc', 'cons', 'con', [record('t', 'Task', 'task', [lk('WhoId', 'con'), lk('WhatId', 'acc')])], { alias: 'loop2', filter: 'compare', filterField: 'AccountId', filterValue: '{{acc.Id}}' })]),
+    query('q1', 'accs', { fields: ['Id', 'Name'], limit: 2000 }),
+    query('q2', 'cons', { sobject: 'Contact', fields: ['Id', 'LastName', 'AccountId'], limit: 2000 }),
+    loop('la', { mode: 'each', from: 'accs', itemAlias: 'acc' }, [
+      loop('lc', { mode: 'each', from: 'cons', itemAlias: 'con', alias: 'loop2', filter: 'compare', filterField: 'AccountId', filterOp: 'eq', filterValue: '{{acc.Id}}' }, [
+        record('t', 'Task', 'task', [text('Subject', '{{con.LastName}} {{acc.Name}}'), { name: 'WhoId', type: 'lookup', options: { ref: 'con' } }]),
+      ]),
+    ]),
   ]);
   const t0 = performance.now();
-  const r = runWorkflow(w, { seed: 1, now: NOW, queryResults: { q: accs, qc: cons } });
+  const r = runWorkflow(w, { seed: 1, now: NOW, queryResults: { q1: accs, q2: cons } });
   const ms = performance.now() - t0;
   assert.equal(r.records.length, 2000);
-  assert.ok(r.records.every((x) => cons.records.find((c) => c.Id === x.fields.WhoId).AccountId === x.fields.WhatId));
+  assert.equal(r.stats.byStep.lc.iterations, 2000);
+  assert.equal(r.records[0].fields.Subject, 'C0 A0');
   assert.ok(ms < 2000, `took ${ms.toFixed(0)} ms`);
+  console.log(`# nested each 2000 × 2000 with eq filter: ${ms.toFixed(0)} ms`);
 });
 
-// ---------- design 0013, review fixes ----------
+// ---------- review of 0013 (server findings) ----------
 
-import { NOW_MESSAGE } from '../server/workflow/executor.js';
-import { createRun } from '../server/workflow/executor.js';
+test('each shuffle with limit 1 costs O(1) per visit: 20 000 visits over a pool of 20 000 (review of 0013)', () => {
+  const w = wf([
+    record('g', 'Contact', 'gen', [{ name: 'N', type: 'number', options: { min: 0, max: 100, scale: 0 } }], { count: 20000 }),
+    loop('o', { count: 20000, alias: 'o' }, [
+      loop('l', { mode: 'each', from: 'gen', itemAlias: 'x', order: 'shuffle', limit: 1 }, [branch('b', { kind: 'chance' })]),
+    ]),
+  ], { settings: { maxRecords: 200000 } });
+  const t0 = performance.now();
+  const r = runWorkflow(w, { seed: 1, now: NOW });
+  const ms = performance.now() - t0;
+  assert.equal(r.stats.byStep.l.iterations, 20000);
+  assert.ok(ms < 3000, `took ${ms.toFixed(0)} ms`);
+  console.log(`# each shuffle limit 1, 20 000 × 20 000: ${ms.toFixed(0)} ms`);
+});
 
-test('0013 review B1: two weighted picks on one pool with different weight fields keep their own weights', () => {
-  const q = { q: rows([{ Id: 'A', W1: 1, W2: 0 }, { Id: 'B', W1: 0, W2: 1 }]) };
-  const mk = (first) => wf([query('q', 'accs', { fields: ['Id', 'W1', 'W2'] }), loop('l', { count: 50 }, [
-    ...(first ? [pick('p1', 'x1', 'accs', { mode: 'weighted', weightField: 'W1' })] : []),
-    pick('p2', 'x2', 'accs', { mode: 'weighted', weightField: 'W2' }),
-    record('r', 'Lead', 'l', [tplField('Title', `${first ? '{{x1.Id}}' : '-'}|{{x2.Id}}`)]),
-  ])]);
-  for (const first of [false, true]) {
-    const got = runWorkflow(mk(first), { seed: 1, now: NOW, queryResults: q }).records.map((x) => x.fields.Title.split('|'));
-    assert.ok(got.every(([, b]) => b === 'B'), `W2 picks only B (first pick ${first}): ${got.map((x) => x[1]).join('')}`);
-    if (first) assert.ok(got.every(([a]) => a === 'A'), 'W1 picks only A');
+test('shufflePositions is shuffleTake over positions, with the same draws (review of 0013)', () => {
+  for (let seed = 1; seed < 40; seed++) {
+    for (const [len, k] of [[0, 2], [1, 1], [7, 3], [7, 7], [7, 9], [50, 50]]) {
+      const a = createRandom(seed);
+      const b = createRandom(seed);
+      const list = Array.from({ length: len }, (_, i) => `v${i}`);
+      assert.deepEqual(a.shufflePositions(len, k).map((p) => list[p]), b.shuffleTake(list, k));
+      assert.equal(a.next(), b.next(), 'same number of draws');
+    }
+  }
+  // The reference partial Fisher–Yates on a full copy.
+  const ref = (seed, list, k) => {
+    const rng = createRandom(seed);
+    const a = [...list];
+    for (let i = 0; i < k; i++) {
+      const j = i + Math.floor(rng.next() * (a.length - i));
+      [a[i], a[j]] = [a[j], a[i]];
+    }
+    return a.slice(0, k);
+  };
+  const list = Array.from({ length: 30 }, (_, i) => i * 3);
+  for (let seed = 1; seed < 30; seed++) assert.deepEqual(createRandom(seed).shuffleTake(list, 12), ref(seed, list, 12));
+});
+
+test('filter caches of non-eq filters stay within FILTER_CACHE_POSITIONS; long scans yield ticks (review of 0013)', () => {
+  const big = (n, visits, op = 'neq', pickToo = false) => wf([
+    record('g', 'Contact', 'gen', [text('LastName', 'n{{this.$n}}')], { count: n }),
+    loop('o', { count: visits, alias: 'o' }, [
+      loop('l', { mode: 'each', from: 'gen', itemAlias: 'x', filter: 'compare', filterField: 'LastName', filterOp: op, filterValue: 'v{{o.index}}', limit: 1 }, [branch('b', { kind: 'chance' })]),
+      ...(pickToo ? [pick('p', 'pp', 'gen', { filter: 'compare', filterField: 'LastName', filterOp: op, filterValue: 'w{{o.index}}' })] : []),
+    ]),
+  ], { settings: { maxRecords: 200000 } });
+  const cap = runner.FILTER_CACHE_POSITIONS;
+  // 50 visits × 25 000 matching positions (each) + as many records (pick) = 2 500 000 > cap.
+  const run = runner.createRun(big(25000, 50, 'neq', true), { seed: 1, now: NOW });
+  const it = run.records({ ticks: true });
+  let ticks = 0;
+  const ticked = [];
+  for (const x of it) if (x === runner.TICK) ticks++; else ticked.push(x.ref);
+  assert.ok(it.filterCache.peak <= cap, `peak ${it.filterCache.peak}`);
+  assert.ok(it.filterCache.peak >= cap / 2, 'results that fit are still cached');
+  // ~150 step visits (no TICK by visits) but 2.5 M records scanned.
+  assert.ok(ticks >= 10, `ticks ${ticks}`);
+  // Records are the same with or without ticks.
+  assert.deepEqual(ticked, [...run.records()].map((x) => x.ref));
+});
+
+test('a now a Date cannot hold is rejected in Vietnamese before running (review of 0013)', () => {
+  const w = wf([record('a', 'Account', 'acc', [text('Name', 'x')])]);
+  for (const now of [1e20, 8.64e15 + 1, -8.64e15 - 1, Infinity, NaN, '2025']) {
+    assert.throws(() => runner.createRun(w, { seed: 1, now }), (e) => e.status === 400 && e.message === 'Tham số now không hợp lệ.', String(now));
+  }
+  assert.equal(runWorkflow(w, { seed: 1, now: 8.64e15 }).records.length, 1, 'the largest Date is fine');
+  assert.equal(runner.isValidNow(-8.64e15), true);
+});
+
+test('loop counts: booleans, strings that are not plain digits, the label of min/max, objects in values (review of 0013)', () => {
+  let k = 0;
+  const body = () => [record(`x${++k}`, 'Task', `x${k}`)];
+  const { errors } = validateWorkflow(wf([
+    loop('c1', { count: true, alias: 'a1' }, body()),
+    loop('c2', { mode: 'range', min: false, max: 3, alias: 'a2' }, body()),
+    loop('c3', { mode: 'range', min: 1, max: '1e3', alias: 'a3' }, body()),
+    loop('c4', { count: '0x10', alias: 'a4' }, body()),
+    loop('c5', { count: '+5', alias: 'a5' }, body()),
+    loop('c6', { count: ' 7 ', alias: 'a6' }, body()),
+    loop('c7', { mode: 'range', min: 200000, max: 300000, alias: 'a7' }, body()),
+    loop('c8', { mode: 'values', values: [{ a: 1 }, 'x'], alias: 'a8' }, body()),
+    loop('c9', { mode: 'values', values: ['Hot', 2, true], alias: 'a9' }, body()),
+    record('g', 'Account', 'gen'),
+    loop('c10', { mode: 'each', from: 'gen', itemAlias: 'it', limit: '1e2', alias: 'a10' }, body()),
+  ]));
+  const msg = (id, field) => issuesOn(errors, id, field).map((e) => e.message);
+  assert.deepEqual(msg('c1', 'count'), ['Số lần lặp phải là số nguyên từ 0 đến 100000.']);
+  assert.deepEqual(msg('c2', 'min'), ['"Ít nhất" phải là số nguyên từ 0 đến 100000.']);
+  assert.deepEqual(msg('c3', 'max'), ['"Nhiều nhất" phải là số nguyên từ 0 đến 100000.']);
+  assert.deepEqual(msg('c4', 'count'), ['Số lần lặp phải là số nguyên từ 0 đến 100000.']);
+  assert.deepEqual(msg('c5', 'count'), ['Số lần lặp phải là số nguyên từ 0 đến 100000.']);
+  assert.deepEqual(msg('c6', 'count'), [], 'digits with spaces around are a number');
+  assert.deepEqual(msg('c7', 'min'), ['"Ít nhất" phải là số nguyên từ 0 đến 100000.']);
+  assert.deepEqual(issuesOn(errors, 'c8', 'values').map((e) => [e.code, e.message]), [['valuesObject', 'Giá trị thứ 1 của danh sách không phải chữ hoặc số. Nhập mỗi dòng một giá trị (ví dụ Hot, Warm, Cold).']]);
+  assert.deepEqual(msg('c9', 'values'), []);
+  assert.deepEqual(msg('c10', 'limit'), ['"Tối đa số bản ghi" phải là số nguyên từ 0 đến 100000 (0 = tất cả).']);
+});
+
+test('{{run.seed}} under an alias "run" says the alias hides the run variable (review of 0013)', () => {
+  const use = record('h', 'Task', 'h', [text('Subject', '{{run.seed}}')]);
+  for (const steps of [[record('g', 'Contact', 'run'), use], [use, record('g', 'Contact', 'run')]]) {
+    const [e] = issuesOn(validateWorkflow(wf(steps)).errors, 'h', 'fields.Subject');
+    assert.ok(e.message.endsWith(' Alias "run" che biến Lần chạy; đổi alias để dùng {{run.seed}}.'), e.message);
+  }
+  // Another member of a step called run: no hint.
+  const [e] = issuesOn(validateWorkflow(wf([record('g', 'Contact', 'run'), record('h', 'Task', 'h', [text('Subject', '{{run.Foo}}')])])).errors, 'h', 'fields.Subject');
+  assert.ok(!e.message.includes('Lần chạy'), e.message);
+});
+
+test('step ids are letters, digits, _ and - only (review of 0011, B1): the issue names the step', () => {
+  const v = validateWorkflow;
+  for (const id of ['a', 'acc_2', 's1abc-x', 'A'.repeat(64)]) assert.equal(v(wf([record(id, 'Account', 'acc')])).errors.length, 0, id);
+  for (const id of ['q\nAccount', 'a,b', 'a"b', 'a b', 'A'.repeat(65), 'x\u0000', '-cmd']) {
+    const errors = v(wf([record(id, 'Account', 'acc')])).errors;
+    assert.ok(errors.some((e) => e.nodeId === id && /^Id bước ".*" không hợp lệ/.test(e.message)), JSON.stringify(id));
   }
 });
 
-test('0013 review N2: a total weight too big for a number falls back to uniform with a warning', () => {
-  const q = { q: rows([{ Id: '1', W: 1e308 }, { Id: '2', W: 1e308 }, { Id: '3', W: -5 }, { Id: '4', W: 0 }]) };
-  const w = wf([query('q', 'accs', { fields: ['Id', 'W'] }), loop('l', { count: 400 }, [pick('p', 'a', 'accs', { mode: 'weighted', weightField: 'W' }), record('r', 'Lead', 'ld', [tplField('Title', '{{a.Id}}')])])]);
-  const r = runWorkflow(w, { seed: 1, now: NOW, queryResults: q });
-  const counts = {};
-  for (const x of r.records) counts[x.fields.Title] = (counts[x.fields.Title] ?? 0) + 1;
-  assert.deepEqual(Object.keys(counts).sort(), ['1', '2', '3', '4'], 'uniform: every row is picked');
-  const warn = r.warnings.find((x) => x.code === 'pickWeightZero');
-  assert.equal(warn.message, 'Bước Chọn bản ghi "a": 400/400 lần tổng trọng số của field "W" quá lớn để tính nên đã chọn đều. Dùng field có giá trị nhỏ hơn (ví dụ NumberOfEmployees thay cho một số rất lớn).');
+test('a numeric step id is refused (review 2 of 0011, item 2); the issue names the step', () => {
+  const errors = validateWorkflow(wf([record(5, 'Account', 'acc')])).errors;
+  assert.ok(errors.some((e) => e.nodeId === 5 && e.field === 'id' && e.message === 'Id bước 5 phải là chuỗi (ví dụ "acc"), không phải number. Đổi id của bước trong file workflow, hoặc mở file trong app để tự sửa.'));
+  // final review N1: the pattern issue names the field too.
+  assert.ok(validateWorkflow(wf([record('a b', 'Account', 'acc')])).errors.some((e) => e.nodeId === 'a b' && e.field === 'id'));
 });
 
-test('0013 review S2: an empty min or max variable says what the range does', () => {
-  const q = { q: rows([{ Id: 'a', N: '' }]) };
-  const mk = (min, max) => wf([query('q', 'accs', { fields: ['Id', 'N'] }), each('la', 'accs', 'acc', [loop('l', { mode: 'range', min, max, alias: 'k' }, [])])]);
-  const msg = (min, max) => runWorkflow(mk(min, max), { seed: 1, now: NOW, queryResults: q }).warnings.filter((x) => x.code === 'numberVarEmpty').map((x) => `${x.field}: ${x.message}`);
-  assert.deepEqual(msg('{{acc.N}}', 3), ['min: Bước Lặp "k": "Ít nhất" = {{acc.N}} trống, âm hoặc không phải số ở 1/1 lần chạy qua, nên các lần đó lấy "Ít nhất" = 0. Kiểm tra field trong org hoặc chọn biến khác.']);
-  assert.deepEqual(msg(2, '{{acc.N}}'), ['max: Bước Lặp "k": "Nhiều nhất" = {{acc.N}} trống, âm hoặc không phải số ở 1/1 lần chạy qua, nên các lần đó lặp đúng "Ít nhất" lần. Kiểm tra field trong org hoặc chọn biến khác.']);
-  // And that is what happens: max empty → min times.
-  assert.equal(runWorkflow(mk(2, '{{acc.N}}'), { seed: 1, now: NOW, queryResults: q }).stats.byStep.l.iterations, 2);
+// ---------- Đặt biến (design 0015) ----------
+
+import { setVar } from './helpers.js';
+
+const r = (id, alias = id, fields = []) => record(id, 'Account', alias, fields);
+const tpl = (name, template) => ({ name, type: 'template', options: { template } });
+const run = (steps, opts = {}) => runWorkflow(wf(steps), { seed: 7, now: NOW, ...opts });
+
+test('set variable validation: messages carry nodeId and field (setVarName, setVarNotNumber, setVarType, varReserved, scope codes)', () => {
+  const issues = (w) => { const v = validateWorkflow(w); return [...v.errors, ...v.warnings]; };
+  const pick1 = (w, code) => issues(w).find((i) => i.code === code);
+  assert.deepEqual(pick1(wf([setVar('s', '')]), 'setVarName'), { message: 'Đặt tên biến (chữ không dấu, số, "_"), ví dụ total. Bước phía dưới dùng {{var.total}}.', nodeId: 's', field: 'name', code: 'setVarName' });
+  assert.match(pick1(wf([setVar('s', '1x')]), 'setVarName').message, /^Tên biến "1x" không hợp lệ/);
+  assert.match(pick1(wf([setVar('s', 'a'.repeat(41))]), 'setVarName').message, /tối đa 40 ký tự/);
+  assert.equal(pick1(wf([setVar('s', 'n', 'abc', { valueType: 'number' })]), 'setVarNotNumber').field, 'value');
+  assert.match(pick1(wf([setVar('s', 'n', '', { mode: 'add' })]), 'setVarNotNumber').message, /biến số \{\{…\}\}\.$/);
+  assert.equal(pick1(wf([setVar('s', 'n', '{{run.seed}}', { valueType: 'number' })]), 'setVarNotNumber'), undefined);
+  assert.equal(pick1(wf([setVar('s', 'n', 12.5, { valueType: 'number' })]), 'setVarNotNumber'), undefined, 'a JSON number is a value too');
+  assert.equal(pick1(wf([setVar('s', 'n', 'x'.repeat(10001))]), 'setVarTooLong').field, 'value');
+  const type = pick1(wf([setVar('a', 'n', '1', { valueType: 'number' }), setVar('b', 'n', 'x'), setVar('c', 'n', '1', { mode: 'add' })]), 'setVarType');
+  assert.deepEqual([type.nodeId, type.field], ['b', 'valueType']);
+  assert.match(type.message, /^Biến var\.n được đặt kiểu Số ở bước khác; ở đây là Chữ\./);
+  const reserved = issues(wf([record('r', 'Account', 'var'), { ...setVar('s', 'x'), disabled: true }])).find((i) => i.code === 'varReserved');
+  assert.deepEqual([reserved.nodeId, reserved.field], ['r', 'alias']);
+  assert.equal(issues(wf([record('r', 'Account', 'var')])).find((i) => i.code === 'varReserved'), undefined, 'alias var stays valid without a Đặt biến');
+  const loopVar = issues(wf([loop('l', { count: 1, alias: 'var' }, [r('acc')]), setVar('s', 'x')])).find((i) => i.code === 'varReserved');
+  assert.match(loopVar.message, /^Tên biến lặp "var"/);
+  const after = pick1(wf([r('acc', 'acc', [tpl('Name', '{{var.x}}')]), setVar('s', 'x', '1')]), 'after');
+  assert.deepEqual([after.nodeId, after.field, after.message], ['acc', 'fields.Name', 'Field "Name": bước Đặt biến "x" chạy sau bước này nên {{var.x}} chưa có giá trị khi chạy tới đây. Kéo bước Đặt biến "x" lên phía trên.']);
+  const unknown = pick1(wf([setVar('s', 'total', '1'), r('acc', 'acc', [tpl('Name', '{{var.totl}}')])]), 'unknownName');
+  assert.equal(unknown.message, 'Field "Name": chưa có biến var.totl. Ý bạn là var.total? Thêm bước Đặt biến tên totl ở phía trên, hoặc bấm {x} để chọn biến có sẵn.');
+  assert.deepEqual(unknown.suggestion, { option: 'template', from: 'var.totl', to: 'var.total' });
+  const unset = pick1(wf([setVar('s', 's', '{{var.s}}-x')]), 'varUnset');
+  assert.deepEqual([unset.nodeId, unset.field], ['s', 'value']);
+  const notNumber = pick1(wf([setVar('s', 'n', '5'), loop('l', { count: '{{var.n}}' }, [r('acc')])]), 'notNumber');
+  assert.deepEqual([notNumber.field, notNumber.fix], ['count', { kind: 'setVarType', name: 'n', to: 'number' }]);
+  assert.match(notNumber.message, /Đổi "Kiểu" của bước Đặt biến "n" thành Số\.$/);
+  const maybe = pick1(wf([branch('b', {}, [setVar('s', 'x', '1')]), r('acc', 'acc', [tpl('Name', '{{var.x}}')])]), 'maybe');
+  assert.match(maybe.message, /^Field "Name": biến var\.x chỉ được đặt trên một số nhánh/);
+  assert.equal(validateWorkflow(wf([setVar('s', 'bien1')])).errors.length, 0, 'a new step (empty Chữ) is valid');
 });
 
-test('0013 review N1: createRun refuses a now that a Date cannot hold', () => {
-  const w = wf([record('r', 'Lead', 'ld', [])]);
-  for (const now of [1e20, -1e16, Infinity]) assert.throws(() => createRun(w, { seed: 1, now }), (e) => e instanceof WorkflowError && e.message === NOW_MESSAGE);
-  assert.equal(runWorkflow(w, { seed: 1, now: -8.64e15 }).records.length, 1);
+test('set variable: Gán Chữ renders a template once; Gán Số keeps a number; the step yields no record and draws nothing', () => {
+  const out = run([
+    setVar('s1', 'lo', 'TEST-{{run.today}}'), setVar('s2', 'n', '{{run.seed}}', { valueType: 'number' }),
+    r('acc', 'acc', [tpl('Name', '{{var.lo}} {{this.$n}}'), { name: 'NumberOfEmployees', type: 'copy', options: { path: 'var.n' } }]),
+  ]);
+  assert.equal(out.records.length, 1);
+  assert.equal(out.records[0].fields.Name, 'TEST-2025-06-15 1');
+  assert.strictEqual(out.records[0].fields.NumberOfEmployees, 7, '"Lấy từ biến" keeps the number');
+  assert.deepEqual(out.stats.byStep.s1, { runs: 1, records: 0, value: 'TEST-2025-06-15' });
+  assert.deepEqual(out.stats.byStep.s2, { runs: 1, records: 0, value: 7 });
+  assert.deepEqual(out.samples.s1, { lo: 'TEST-2025-06-15' });
+  // No rng: the same workflow without the Đặt biến steps gives the same generated values.
+  const plain = [r('acc', 'acc', [{ name: 'Phone', type: 'phone' }])];
+  const withSet = [setVar('s', 'x', 'a'), ...plain, setVar('s2', 'y', '1', { mode: 'add' })];
+  assert.deepEqual(run(withSet).records, run(plain).records);
 });
 
-test('0013 review N3: a filter or weight field the Record pool does not make is a warning on that field', () => {
-  const base = [record('a', 'Account', 'acc', [{ name: 'Industry', type: 'text', options: {} }], { count: 3 })];
-  const warnAt = (w, id, field) => validateWorkflow(w).warnings.find((x) => x.nodeId === id && x.field === field && x.code === 'unknownPoolField');
-  const p = warnAt(wf([...base, pick('p', 'pk', 'acc', { filter: 'compare', filterField: 'Industy', filterValue: 'x' })]), 'p', 'filterField');
-  assert.equal(p.message, '"Field": bước "acc" không sinh field "Industy" nên điều kiện lọc không khớp bản ghi nào. Thêm field "Industy" vào bước "acc" hoặc chọn field khác trong gợi ý. Field có sẵn: Industry.');
-  assert.ok(warnAt(wf([...base, each('l', 'acc', 'x', [record('c', 'Contact', 'con', [])], { filter: 'compare', filterField: 'Nope', filterValue: 'x' })]), 'l', 'filterField'));
-  assert.match(warnAt(wf([...base, pick('p', 'pk', 'acc', { mode: 'weighted', weightField: 'Size' })]), 'p', 'weightField').message, /nên mọi trọng số là 0/);
-  // Known fields, a Query pool and a hidden filter: no warning.
-  assert.ok(!warnAt(wf([...base, pick('p', 'pk', 'acc', { filter: 'compare', filterField: 'Industry' })]), 'p', 'filterField'));
-  assert.ok(!warnAt(wf([query('q', 'accs'), pick('p', 'pk', 'accs', { filter: 'compare', filterField: 'Whatever' })]), 'p', 'filterField'));
-  assert.ok(!warnAt(wf([...base, each('l', 'acc', 'x', [record('c', 'Contact', 'con', [])], { mode: 'fixed', count: 1, filter: 'compare', filterField: 'Nope' })]), 'l', 'filterField'));
+test('set variable: Cộng thêm sums across a Lặp each, is read after the loop, 0.1 + 0.2 = 0.3, and drives a count and a branch', () => {
+  const out = run([
+    setVar('init', 'total', '0', { valueType: 'number' }),
+    loop('l0', { count: 3 }, [r('acc', 'acc', [{ name: 'NumberOfEmployees', type: 'number', options: { min: 1, max: 9, scale: 0 } }])]),
+    loop('each', { mode: 'each', from: 'acc', itemAlias: 'a' }, [setVar('add', 'total', '{{a.NumberOfEmployees}}', { mode: 'add' })]),
+    setVar('f', 'f', '0', { valueType: 'number' }),
+    loop('l1', { count: 3 }, [setVar('fadd', 'f', '0.1', { mode: 'add' })]),
+    setVar('n', 'n', '2', { valueType: 'number' }),
+    loop('l2', { count: '{{var.n}}', alias: 'i' }, [r('con', 'con', [tpl('LastName', 'C{{i.index}}')])]),
+    branch('b', { kind: 'compare', left: 'var.n', op: 'eq', right: '2' }, [r('yes', 'yes')], [r('no', 'no')]),
+    r('sum', 'sum', [tpl('Name', 'Tổng {{var.total}} {{var.f}}')]),
+  ]);
+  const accs = out.records.filter((x) => x.alias === 'acc');
+  const total = accs.reduce((a, x) => a + x.fields.NumberOfEmployees, 0);
+  const sum = out.records.find((x) => x.alias === 'sum');
+  assert.equal(sum.fields.Name, `Tổng ${total} 0.3`);
+  assert.equal(out.stats.byStep.add.runs, 3);
+  assert.equal(out.stats.byStep.l2.iterations, 2);
+  assert.equal(out.stats.byStep.b.true, 1);
+  assert.equal(out.stats.byStep.fadd.value, 0.3);
 });
 
-test('0013 review N4: list values are one per line, commas kept, the same on the server and in a values loop', async () => {
-  const { toList } = await import('../server/generators/common.js');
-  const { splitList } = await import('../shared/list.js');
-  assert.deepEqual(splitList('Hà Nội, Việt Nam\n  Huế \n\n'), ['Hà Nội, Việt Nam', 'Huế']);
-  assert.deepEqual(toList('a, b\nc;d'), ['a, b', 'c;d']);
-  assert.deepEqual(toList([' x ', '', null, 'y, z']), ['x', 'y, z']);
-  const r = runWorkflow(wf([loop('l', { mode: 'values', values: 'Hà Nội, Việt Nam\nHuế' }, [record('x', 'Lead', 'ld', [tplField('City', '{{loop.value}}')])])]), { seed: 1, now: NOW });
-  assert.deepEqual(r.records.map((x) => x.fields.City), ['Hà Nội, Việt Nam', 'Huế']);
-  const picks = runWorkflow(wf([record('x', 'Lead', 'ld', [{ name: 'City', type: 'text', options: { mode: 'list', values: 'Hà Nội, Việt Nam' } }], { count: 3 })]), { seed: 1, now: NOW });
-  assert.deepEqual([...new Set(picks.records.map((x) => x.fields.City))], ['Hà Nội, Việt Nam']);
-  // Field names still split on commas (a Query field list typed as a SELECT list).
-  assert.deepEqual(validateWorkflow(wf([query('q', 'accs', { fields: ['Id, Name'] }), pick('p', 'a', 'accs')])).errors, []);
-  const { selectFields } = await import('../shared/soql.js');
-  assert.deepEqual(selectFields({ fields: ['Name, Industry', 'Owner.Name'] }).fields, ['Id', 'Name', 'Industry', 'Owner.Name']);
+test('set variable: Gán in a loop body keeps the last value; a turned-off step changes nothing; __proto__ is just a name', () => {
+  const out = run([
+    setVar('s0', 'x', 'start'),
+    loop('l', { count: 3 }, [setVar('s1', 'x', 'v{{loop.index}}')]),
+    { ...setVar('off', 'x', 'off'), disabled: true },
+    setVar('p', '__proto__', 'proto'),
+    r('acc', 'acc', [tpl('Name', '{{var.x}} {{var.__proto__}}')]),
+  ]);
+  assert.equal(out.records[0].fields.Name, 'v3 proto');
+  // `constructor` is no variable either (validation says so: no prototype behind `var`).
+  assert.match(validateWorkflow(wf([r('acc', 'acc', [tpl('Name', '{{var.constructor}}')])])).errors[0].message, /chưa có biến var\.constructor/);
+  assert.equal(out.stats.byStep.off, undefined);
 });
 
-test('a Task record with a Name field warns with a renameField fix; Account and custom objects do not (design 0012 G)', () => {
-  const name = { name: 'Name', type: 'text', options: { mode: 'name' } };
-  const w = (so, fields = [name]) => wf([record('t', so, 'task', fields)]);
-  const task = warningsOf(w('Task')).find((i) => i.code === 'noNameField');
-  assert.equal(task.nodeId, 't');
-  assert.equal(task.field, 'fields.Name');
-  assert.match(task.message, /^Task không có field Name nên insert sẽ lỗi\. Đổi thành Subject hoặc xóa field này\.$/);
-  assert.deepEqual(task.fix, { kind: 'renameField', stepId: 't', from: 'Name', to: 'Subject' });
-  const contact = warningsOf(w('Contact')).find((i) => i.code === 'noNameField');
-  assert.match(contact.message, /Đổi thành LastName/);
-  assert.equal(contact.fix.to, 'LastName');
-  // The target already exists: no rename offered, only "Xóa".
-  const both = warningsOf(w('Case', [name, { name: 'Subject', type: 'text', options: {} }])).find((i) => i.code === 'noNameField');
-  assert.equal(both.fix, undefined);
-  assert.match(both.message, /Xóa field này\./);
-  for (const so of ['Account', 'Opportunity', 'My_Object__c']) assert.ok(!warningsOf(w(so)).some((i) => i.code === 'noNameField'), so);
-  // A warning does not block a preview.
-  assert.ok(runWorkflow(w('Task'), { seed: 1, now: NOW }).records.length);
-  // Turned off: not checked.
-  assert.ok(!warningsOf(wf([{ ...record('t', 'Task', 'task', [name]), disabled: true }])).some((i) => i.code === 'noNameField'));
+test('set variable: a number that does not come out empties the variable (Gán) or adds 0 (Cộng thêm), with one warning per step', () => {
+  const out = run([
+    setVar('s', 'n', '{{run.today}}', { valueType: 'number' }),
+    setVar('t', 't', '5', { valueType: 'number' }),
+    loop('l', { count: 2 }, [setVar('a', 't', '{{run.now}}', { mode: 'add' })]),
+    r('acc', 'acc', [tpl('Name', '[{{var.n}}] {{var.t}}')]),
+  ]);
+  assert.equal(out.records[0].fields.Name, '[] 5');
+  const w = out.warnings.filter((x) => x.code === 'setVarNotNumber');
+  assert.deepEqual(w.map((x) => [x.nodeId, x.field]), [['s', 'value'], ['a', 'value']]);
+  assert.equal(w[0].message, 'Bước Đặt biến "n": giá trị không ra số ở 1/1 lần chạy qua nên biến trống ở các lần đó. Kiểm tra biến trong "Giá trị" hoặc đổi "Kiểu" thành Chữ.');
+  assert.equal(w[1].message, 'Bước Đặt biến "t": giá trị không ra số ở 2/2 lần chạy qua nên đã cộng 0 ở các lần đó. Kiểm tra biến trong "Giá trị".');
 });
 
-test('unknownMember of a Query source carries an addSelectField fix, also through Chọn bản ghi and the record looped over (design 0012 F1)', () => {
-  const title = (tpl) => [{ name: 'LastName', type: 'text', options: {} }, { name: 'Title', type: 'template', options: { template: tpl } }];
-  const fixOf = (w) => errorsOf(w).find((i) => i.code === 'unknownMember')?.fix;
-  const q = query('q', 'accs', { fields: ['Id', 'Name'] });
-  assert.deepEqual(fixOf(wf([q, pick('p', 'acc', 'accs'), record('c', 'Contact', 'con', title('{{acc.Industry}}'))])), { kind: 'addSelectField', stepId: 'q', field: 'Industry' });
-  assert.deepEqual(fixOf(wf([q, loop('l', { mode: 'each', from: 'accs', itemAlias: 'acc' }, [record('c', 'Contact', 'con', title('{{acc.Owner.Name}}'))])])), { kind: 'addSelectField', stepId: 'q', field: 'Owner.Name' });
-  const issue = errorsOf(wf([q, pick('p', 'acc', 'accs'), record('c', 'Contact', 'con', title('{{acc.Industry}}'))])).find((i) => i.code === 'unknownMember');
-  assert.equal(issue.nodeId, 'c');
-  assert.equal(issue.field, 'fields.Title');
-  // Hand-written SOQL: a fix when it can be edited, none with a subquery.
-  const soql = (text) => query('q', 'accs', { mode: 'soql', soql: text });
-  assert.deepEqual(fixOf(wf([soql('SELECT Id, Name FROM Account ORDER BY Id'), pick('p', 'acc', 'accs'), record('c', 'Contact', 'con', title('{{acc.Industry}}'))])), { kind: 'addSelectField', stepId: 'q', field: 'Industry' });
-  assert.equal(fixOf(wf([soql('SELECT Id, Name, (SELECT Id FROM Contacts) FROM Account ORDER BY Id'), pick('p', 'acc', 'accs'), record('c', 'Contact', 'con', title('{{acc.Industry}}'))])), undefined);
-  // A generated record pool: the field is added on the Record step, no SELECT fix.
-  assert.equal(fixOf(wf([record('a', 'Account', 'acc', accountFields), record('c', 'Contact', 'con', title('{{acc.Industry}}'))])), undefined);
+test('set variable: a Chữ value growing past 10 000 characters stops the run on `value`', () => {
+  const steps = [setVar('s0', 's', 'x'.repeat(4000)), loop('l', { count: 5 }, [setVar('s1', 's', '{{var.s}}{{var.s}}')])];
+  assert.throws(() => run(steps), (e) => e instanceof WorkflowError && e.issues[0].nodeId === 's1' && e.issues[0].field === 'value'
+    && e.issues[0].message === 'Bước Đặt biến "s": giá trị dài quá 10.000 ký tự ở lần chạy qua thứ 2. Kiểm tra "Giá trị" (có đang nối thêm vào chính biến này trong vòng lặp?).');
+});
+
+test('set variable: the same seed and now give the same records', () => {
+  const steps = [setVar('s', 'lo', 'B-{{run.seed}}'), loop('l', { count: 3 }, [r('acc', 'acc', [tpl('Name', '{{var.lo}}-{{this.$n}}'), { name: 'Phone', type: 'phone' }])])];
+  assert.deepEqual(run(steps).records, run(steps).records);
+  assert.equal(run(steps).records[2].fields.Name, 'B-7-3');
+});
+
+test('set variable after review (N1, N2): an add past the largest number keeps the value and warns; varUnset of a Cộng thêm does not suggest Cộng thêm', () => {
+  const out = run([setVar('s', 'big', '1e308', { valueType: 'number' }), loop('l', { count: 2 }, [setVar('a', 'big', '1e308', { mode: 'add' })]), r('acc', 'acc', [tpl('Name', '{{var.big}}')])]);
+  assert.equal(out.records[0].fields.Name, '1e+308');
+  assert.deepEqual(out.warnings.filter((w) => w.code === 'setVarNotNumber').map((w) => [w.nodeId, w.message.includes('2/2')]), [['a', true]]);
+  const add = validateWorkflow(wf([setVar('s', 's', '{{var.s}}', { mode: 'add' })])).errors.find((e) => e.code === 'varUnset');
+  assert.match(add.message, /\(ví dụ trước vòng lặp\)\.$/);
+  const set = validateWorkflow(wf([setVar('s', 's', '{{var.s}}-x')])).errors.find((e) => e.code === 'varUnset');
+  assert.match(set.message, /hoặc chọn "Cộng thêm" nếu muốn cộng dồn\.$/);
 });

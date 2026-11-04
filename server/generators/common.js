@@ -6,7 +6,6 @@
 // showIf: { key: otherOptionKey, in: [values] } — UI hides the option unless the condition holds.
 
 import { firstNames, lastNames, companyPrefixes, companySuffixes, words, cities } from '../data/pools.js';
-import { splitList } from '../../shared/list.js';
 
 export const nullRatioOption = {
   key: 'nullRatio',
@@ -31,11 +30,22 @@ export function opt(key, label, kind, def, extra = {}) {
   return { key, label, kind, default: def, ...extra };
 }
 
-/** Merge user options over generator defaults, coercing by kind. */
+/** A field's `options` as an object (null, an array or a scalar count as no options). */
+export const plainOptions = (o) => (o && typeof o === 'object' && !Array.isArray(o) ? o : {});
+
+/** Is option `def` in effect for the resolved `values` (its showIf holds)? */
+export const optionShown = (def, values) => !def.showIf || def.showIf.in.includes(values[def.showIf.key]);
+
+/**
+ * Merge user options over generator defaults, coercing by kind. Numbers are clamped to the
+ * option's `min` / `max`, so no option can make a generator loop for long (design 0012 review);
+ * `optionIssues` (index.js) reports the values that were out of range.
+ */
 export function resolveOptions(generator, userOptions = {}) {
   const out = {};
+  const given = plainOptions(userOptions);
   for (const def of allOptions(generator)) {
-    const raw = userOptions[def.key];
+    const raw = given[def.key];
     out[def.key] = raw === undefined || raw === '' || raw === null ? def.default : coerce(def, raw);
   }
   return out;
@@ -48,32 +58,37 @@ export function allOptions(generator) {
   return list;
 }
 
+/** `v` within the option's min / max (NaN is left for the generator, as before). */
+function clamp(def, v) {
+  if (!Number.isFinite(v)) return v;
+  if (def.min !== undefined && v < def.min) return def.min;
+  if (def.max !== undefined && v > def.max) return def.max;
+  return v;
+}
+
 function coerce(def, raw) {
   switch (def.kind) {
     case 'integer':
-      return Math.trunc(Number(raw));
+      return clamp(def, Math.trunc(Number(raw)));
     case 'number':
-      return Number(raw);
+      return clamp(def, Number(raw));
     case 'boolean':
       return raw === true || raw === 'true';
     case 'list':
       return toList(raw);
     case 'numberList':
-      return toNumberList(raw).map(Number);
+      return toList(raw).map(Number);
     default:
       return raw;
   }
 }
 
-/** A list option: one value per line (shared/list.js, review 0013 N4). */
 export function toList(raw) {
-  return splitList(raw);
-}
-
-/** A number list option: commas, semicolons and newlines all separate (a number has none). */
-export function toNumberList(raw) {
-  const list = Array.isArray(raw) ? raw : String(raw ?? '').split(/[\n,;]/);
-  return list.map((v) => String(v ?? '').trim()).filter(Boolean);
+  if (Array.isArray(raw)) return raw.map((v) => String(v).trim()).filter(Boolean);
+  return String(raw)
+    .split(/[\n,;]/)
+    .map((v) => v.trim())
+    .filter(Boolean);
 }
 
 export function truncate(value, maxLength) {

@@ -1,24 +1,25 @@
 // Variable picker (design 0005): a popup that lists the variables usable at the field being
 // edited, grouped by source step, with type and sample values, and inserts the chosen one.
 // Attached by forms.js to every option that declares `vars` ('template': insert {{path}} at the
-// caret; 'path': replace the whole value; 'number', design 0013: replace the whole value by
-// {{path}}, listing variables of type Số or unknown only). Opens with the {x} button, Alt+↓ (⌥↓,
-// design 0014: macOS keeps Ctrl+Space for input sources), Ctrl+Space, typing "{{" (template,
-// number) or clicking / pressing ↓ in a path field.
+// caret; 'path': replace the whole value; 'number' (design 0013 B): replace the whole value by
+// {{path}}, listing only Số variables and org fields of unknown type). Opens with the {x} button,
+// Ctrl+Space or Alt+↓ (design 0014), typing "{{" (template, number) or focusing an empty / pressing
+// ↓ in a path field.
 //
 // The input keeps the raw text; a read-only chip strip under it shows each {{…}} token, red
 // when validation reports it, grey while it matches no source. Insertions go through
 // execCommand('insertText') so the field's native undo still works, and each one is its own
 // undo step in the store (unique coalesceKey).
 
-import { linkRefTarget, refSourceStep, sourceTitle } from './ref-target.js';
-import { h, icoTile } from './dom.js';
-import { isMac, isPickerKey, pickerKeys, PICKER_SHORTCUTS } from './keys.js';
+import { h, ico, icoTile } from './dom.js';
 import { state, subscribe, stepById, currentScope } from './store.js';
-import { groupsFor, matchScore, tokenize, refAt, previewOf, formatSample, typeLabel, MAX_ROWS, NUMBER_HINT } from './variables.js';
+import { groupsFor, matchScore, tokenize, refAt, typeLabel, MAX_ROWS } from './variables.js';
+import { bindRefTarget, refSourceStep, sourceTitle } from './ref-target.js';
+import { isMac, isPickerOpenKey, pickerKeys, PICKER_ARIA_KEYS } from './keys.js';
+
+const KEYS = pickerKeys(isMac());
 
 let uid = 0;
-const KEYS = pickerKeys(isMac(globalThis.navigator));
 let open = null; // { el, input, opts, mode, query, items, active, replace, render }
 const strips = new Set(); // live chip strips, refreshed on validation and run results
 
@@ -56,7 +57,7 @@ export function attachVarPicker(input, opts) {
   input.setAttribute('role', 'combobox');
   input.setAttribute('aria-autocomplete', 'list');
   input.setAttribute('aria-expanded', 'false'); // aria-controls is set only while the list exists
-  input.setAttribute('aria-keyshortcuts', PICKER_SHORTCUTS);
+  input.setAttribute('aria-keyshortcuts', PICKER_ARIA_KEYS);
   input.spellcheck = false;
   let unsaved = Boolean(opts.unsaved);
   const state0 = { listId, opts, get unsaved() { return unsaved; }, set unsaved(v) { unsaved = v; } };
@@ -65,16 +66,10 @@ export function attachVarPicker(input, opts) {
   const btn = h('button', {
     type: 'button',
     class: 'var-btn',
-    title: KEYS[opts.mode] ?? KEYS.path,
+    title: KEYS[opts.mode === 'path' ? 'path' : 'template'],
     'aria-label': 'Chèn biến',
     onmousedown: (e) => e.preventDefault(), // keep the caret/selection of the input
     onclick: () => (open?.input === input && !open.auto ? closePicker() : openPicker(input, { focusSearch: true })),
-    // Alt+↓ / Ctrl+Space on the button too (review 0014 B1): open on the search box, never move a step.
-    onkeydown: (e) => {
-      if (!isPickerKey(e)) return;
-      e.preventDefault();
-      if (open?.input !== input || open.auto) openPicker(input, { focusSearch: true });
-    },
   }, '{x}');
   const wrap = h('div', { class: 'var-input' }, input, btn);
 
@@ -89,7 +84,7 @@ export function attachVarPicker(input, opts) {
   input.addEventListener('input', () => {
     if (!input._varInsert) unsaved = false;
     schedule(entry);
-    if (tokenMode(opts.mode)) autocomplete(input);
+    if (opts.mode !== 'path') autocomplete(input);
     else if (open?.input === input && !open.searchFocused) {
       open.auto = pathRange(input);
       open.query = open.auto.query;
@@ -98,10 +93,10 @@ export function attachVarPicker(input, opts) {
     }
   });
   input.addEventListener('keydown', (e) => onFieldKey(e, input));
-  // Path fields open like a combobox on a click (or ↓ / Alt+↓ / Ctrl+Space), never on focus alone, so
+  // Path fields open like a combobox on a click (or ↓ / Ctrl+Space), never on focus alone, so
   // tabbing through the form cannot pick a variable.
   input.addEventListener('click', () => {
-    if (tokenMode(opts.mode)) autocomplete(input, { onlyUpdate: true });
+    if (opts.mode !== 'path') autocomplete(input, { onlyUpdate: true });
     else if (open?.input !== input) openPicker(input, { auto: pathRange(input) });
   });
   input.addEventListener('blur', () => {
@@ -112,13 +107,10 @@ export function attachVarPicker(input, opts) {
   return { wrap, strip };
 }
 
-/** Modes whose value holds `{{path}}` tokens (template; number, design 0013). */
-const tokenMode = (mode) => mode === 'template' || mode === 'number';
-
 // ---------- chip strip ----------
 
 function renderStrip(input, opts, chips, preview) {
-  const parts = tokenMode(opts.mode) ? tokenize(input.value) : (input.value.trim() ? [{ kind: 'token', path: stripPathLocal(input.value), start: 0, end: input.value.length }] : []);
+  const parts = opts.mode !== 'path' ? tokenize(input.value) : (input.value.trim() ? [{ kind: 'token', path: stripPathLocal(input.value), start: 0, end: input.value.length }] : []);
   const issues = [...state.issues.errors, ...state.issues.warnings].filter((i) => i.nodeId === opts.stepId && i.field === opts.field);
   const hasToken = parts.some((p) => p.kind === 'token');
   chips.hidden = !hasToken;
@@ -128,10 +120,8 @@ function renderStrip(input, opts, chips, preview) {
   const keep = list.find((c) => c.dataset.path === focused) ?? list[0];
   if (keep) keep.tabIndex = 0;
   if (focused && keep) keep.focus();
-  // A field of a Record has the inspector's row of 3 examples instead (design 0012 E).
-  const value = opts.fieldName !== undefined && !opts.samplesRow ? previewOf(opts.stepId, opts.fieldName) : null;
-  preview.hidden = value === null;
-  preview.textContent = value === null ? '' : `Lần xem trước: ${formatSample(value)}`;
+  // A field's last-preview value moved to the "Ví dụ" row at the end of its options (design 0012 E).
+  preview.hidden = true;
 }
 
 const stripPathLocal = (v) => v.trim().replace(/^\{\{\s*([\s\S]*?)\s*\}\}$/, '$1').trim();
@@ -155,18 +145,22 @@ function chip(part, input, opts, issues) {
   const src = ref?.source !== undefined ? scope.sources[ref.source] : null;
   const [name, ...rest] = part.path.split('.');
   const known = Boolean(src) && ref.code !== 'unknownName';
-  // Built-ins ($n) are neutral (start colour, docs/ui-design-system.md §3); this.* takes the step's colour.
+  // Built-ins ($n) and run variables are neutral (start colour, docs/ui-design-system.md §3); this.* takes the step's colour.
   const type = rest[0]?.startsWith('$') || src?.global ? 'start' : ref?.viaThis ? stepById(opts.stepId)?.type : src?.nodeType;
-  // Design 0012 I: hover / focus highlights the card of the step the chip points at.
-  const target = known && !(issue && state.issues.errors.includes(issue)) ? refSourceStep(ref) : null;
   let title;
   if (issue) title = issue.message;
   else if (!known) title = `Chưa khớp biến nào: ${part.path}`;
-  else {
+  else if (src.kind === 'value') {
+    // A variable of Đặt biến (design 0015): var.total · Số.
+    title = `${part.path} · ${typeLabel({ valueType: ref.valueType ?? src.valueType })}`;
+  } else {
     const member = src.members.find((m) => m.key === rest[0]);
     const owner = src.kind === 'vars' ? `${src.name}` : src.sobject || src.name;
-    title = `${owner}.${rest.join('.')}${member ? ` · ${typeLabel(member)}` : ''}${sourceTitle(target)}`;
+    title = `${owner}.${rest.join('.')}${member ? ` · ${typeLabel(member)}` : ''}`;
   }
+  // Design 0012 I: hover / focus outlines the source step's card; the title names it.
+  const srcStep = known ? refSourceStep(ref) : null;
+  if (srcStep) title += `\n${sourceTitle(srcStep)}`;
   const el = h(
     'button',
     {
@@ -183,21 +177,20 @@ function chip(part, input, opts, issues) {
         openPicker(input, { focusSearch: true, replace: { start: part.start, end: part.end } });
       },
     },
-    known ? h('span', { class: 'ico', 'aria-hidden': 'true' }) : null,
+    known ? ico(type || 'info') : null,
     h('span', { class: 'var-src' }, name),
     rest.length ? ` · ${rest.join('.')}` : '',
   );
-  return linkRefTarget(el, target);
+  return bindRefTarget(el, srcStep);
 }
 
 // ---------- opening ----------
 
 function onFieldKey(e, input) {
   const vp = input._varPicker;
-  if (isPickerKey(e)) {
+  if (isPickerOpenKey(e)) {
     e.preventDefault();
-    if (open?.input === input && !open.auto) return; // already open on its search box
-    const auto = tokenMode(vp.opts.mode) ? autocompleteRange(input) : null; // path: search box, like {x}
+    const auto = vp.opts.mode !== 'path' ? autocompleteRange(input) : null; // path: search box, like {x}
     openPicker(input, { focusSearch: !auto, auto });
     return;
   }
@@ -337,6 +330,7 @@ function position(p) {
 
 function renderList(p) {
   const { groups, hidden } = groupsFor(p.opts.stepId, p.opts.fieldIndex, { mode: p.opts.mode });
+  const numbers = p.opts.mode === 'number';
   const q = p.query.trim();
   if (p.search.value !== p.query && document.activeElement !== p.search) p.search.value = p.query;
   p.hint.hidden = Boolean(state.result);
@@ -376,9 +370,12 @@ function renderList(p) {
   if (!nodes.length) {
     after.push(h('div', { class: 'vp-empty' }, q
       ? `Không có biến nào khớp "${q}".`
-      : 'Chưa có biến nào dùng được ở đây. Biến đến từ: field phía trên trong bước này (this), bước Record chạy trước, hoặc bước Lặp bao quanh.'));
+      : numbers
+        ? 'Chưa có biến kiểu Số nào dùng được ở đây, ví dụ {{accs.$count}} của một pool phía trên hoặc {{loop.index}} của vòng lặp bao quanh.'
+        : 'Chưa có biến nào dùng được ở đây. Biến đến từ: field phía trên trong bước này (this), bước Record chạy trước, hoặc bước Lặp bao quanh.'));
   }
-  if (p.opts.mode === 'number') after.push(h('div', { class: 'vp-foot vp-hint' }, NUMBER_HINT));
+  // Why some variables are missing (design 0013 B).
+  if (numbers) after.push(h('div', { class: 'vp-empty vp-why' }, 'Chỉ hiện biến kiểu Số và field đọc từ org (chưa biết kiểu).'));
   if (hiddenShown.length) {
     const det = h('details', { class: 'vp-hidden', open: p.hiddenOpen }, h('summary', {}, `Không dùng được ở đây (${hiddenShown.length})`), hiddenShown.map((x) => h('div', { class: 'vp-off' }, x.text)));
     det.addEventListener('toggle', () => { p.hiddenOpen = det.open; });
@@ -459,7 +456,7 @@ function insert(path) {
   if (vp.opts.mode === 'path') {
     [start, end, text] = [0, v.length, path];
   } else if (vp.opts.mode === 'number') {
-    [start, end, text] = [0, v.length, `{{${path}}}`]; // one variable: the whole value
+    [start, end, text] = [0, v.length, `{{${path}}}`]; // one variable is the whole value (design 0013 B)
   } else if (p.replace) {
     [start, end] = [p.replace.start, p.replace.end];
     text = `{{${path}}}`;
@@ -498,11 +495,16 @@ function replaceRange(input, start, end, text) {
   input.setSelectionRange(caret, caret);
 }
 
-/** Apply a validation suggestion { option, from, to } to a value of mode `mode`. */
+/**
+ * Apply a validation suggestion { option, from, to } to a value of mode `mode`. 'template' and
+ * 'number' (design 0013 B) replace the token inside {{ }}; a number option holding a number has
+ * no token, so it stays.
+ */
 export function applySuggestion(mode, value, { from, to }) {
   if (mode === 'ref') return to;
   if (mode === 'path') return to;
-  const t = tokenize(value ?? '').find((x) => x.kind === 'token' && x.path === from);
+  if (typeof value !== 'string') return value;
+  const t = tokenize(value).find((x) => x.kind === 'token' && x.path === from);
   if (!t) return value;
   return `${value.slice(0, t.start)}{{${to}}}${value.slice(t.end)}`;
 }

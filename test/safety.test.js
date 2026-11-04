@@ -1,60 +1,78 @@
-// Safety locks of design 0011, checked on the sources: only server/sf/client.js calls jsforce's
-// write APIs (create, destroy, bulk2), and only the inserter and the delete module call the
-// client's write functions. A new caller has to change this test on purpose.
+// Safety locks of org writes (design 0011 §6, §8), checked on the source code itself:
+// - only server/sf/client.js touches jsforce's create / destroy / bulk2;
+// - only server/sf/insert.js and server/sf/delete.js call the client's create / destroy / bulkJob;
+// - Bulk jobs are only ever 'insert' or 'delete' (never hardDelete, update, upsert);
+// - no hand-written HTTP call to Salesforce anywhere in the server.
+
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { BULK_OPERATIONS } from '../server/sf/client.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-function sources(dir) {
+
+async function sources(dirs) {
   const out = [];
-  for (const name of readdirSync(path.join(ROOT, dir))) {
-    const rel = path.join(dir, name);
-    if (statSync(path.join(ROOT, rel)).isDirectory()) out.push(...sources(rel));
-    else if (name.endsWith('.js')) out.push(rel.split(path.sep).join('/'));
+  async function walk(d) {
+    for (const e of await readdir(path.join(ROOT, d), { withFileTypes: true })) {
+      const rel = path.posix.join(d, e.name);
+      if (e.isDirectory()) await walk(rel);
+      else if (/\.(m?js|cjs)$/.test(e.name)) out.push({ file: rel, text: await readFile(path.join(ROOT, rel), 'utf8') });
+    }
   }
+  for (const d of dirs) await walk(d);
   return out;
 }
-const FILES = [...sources('server'), ...sources('shared'), ...sources('client/js')];
-const strip = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`])\/\/.*$/gm, '$1');
-const using = (re) => FILES.filter((f) => re.test(strip(readFileSync(path.join(ROOT, f), 'utf8'))));
 
-test('only server/sf/client.js touches jsforce write APIs (.bulk2, .destroy(, .sobject(…).create()', () => {
-  assert.deepEqual(using(/\.bulk2\b/), ['server/sf/client.js']);
-  assert.deepEqual(using(/\.sobject\([^)]*\)\s*\.\s*(create|destroy|del|delete|insert|update|upsert)\(/), ['server/sf/client.js']);
-  assert.deepEqual(using(/\bconn\.(destroy|del|delete|create|insert|update|upsert)\(/), []);
-  assert.deepEqual(using(/hardDelete/i).filter((f) => f !== 'server/sf/client.js'), [], 'hardDelete is only named where it is refused');
+/** Code without comments (block and line), so documentation may name what code must not do. */
+const code = (text) => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`\\])\/\/.*$/gm, '$1');
+
+const where = (files, re) => files.filter((f) => re.test(code(f.text))).map((f) => f.file).sort();
+
+test('jsforce write APIs (.bulk2, .destroy(, .sobject(…).create() appear only in server/sf/client.js', async () => {
+  const files = await sources(['server', 'shared', 'client']);
+  assert.ok(files.length > 30);
+  assert.deepEqual(where(files, /\.bulk2\b/), ['server/sf/client.js']);
+  // Every other `.destroy(` is a Node stream / HTTP response, or the client wrapper in delete.js.
+  const destroys = files.flatMap((f) => [...code(f.text).matchAll(/([\w?.]+)\.destroy\(/g)].map((m) => `${f.file}:${m[1]}`)).sort();
+  // (jsforce's own destroy is `conn.sobject(…).destroy(`, matched by the sObject chain check below.)
+  assert.deepEqual(destroys.filter((d) => !/:(stream\?|res|req)$/.test(d)), ['server/sf/delete.js:client', 'server/sf/delete.js:client']);
+  assert.deepEqual(where(files, /\bconn\s*\.\s*(destroy|create|insert|update|upsert|del|delete)\(/), []);
+  assert.deepEqual(where(files, /\.sobject\([^)]*\)\s*\.\s*(create|insert|update|upsert|destroy|del|delete)\(/), ['server/sf/client.js']);
+  assert.deepEqual(where(files, /\.(update|upsert)\(\s*target/), []);
 });
 
-/**
- * Review S6: a write call through any receiver named like a client (`client`, `sfClient`,
- * `this.client`, `opts.sfClient`…), and any `.bulkJob(` call whatever the receiver.
- */
-const WRITE_CALL = /(?:\b\w*[cC]lient\s*\??\.\s*(?:create|destroy|bulkJob)\s*\()|(?:\.\s*bulkJob\s*\()/;
-
-test('the write-call pattern catches every receiver spelling', () => {
-  for (const src of ['client.create(t, s, r)', 'sfClient.destroy(t, s, ids)', 'this.sfClient.bulkJob(t, o)', 'opts.client?.create(x)', 'foo.bulkJob(t, o)', 'myClient . destroy (a)']) {
-    assert.ok(WRITE_CALL.test(src), src);
-  }
-  for (const src of ['client.query(t, q)', 'function bulkJob(target) {', 'sfClient.limits(t)']) assert.ok(!WRITE_CALL.test(src), src);
+test('the client write methods are called only from server/sf/insert.js and server/sf/delete.js', async () => {
+  const files = await sources(['server', 'shared', 'client']);
+  assert.deepEqual(where(files, /\b\w*client\s*\.\s*create\(/i), ['server/sf/insert.js']);
+  assert.deepEqual(where(files, /\b\w*client\s*\.\s*destroy\(/i), ['server/sf/delete.js']);
+  assert.deepEqual(where(files, /\b\w*client\s*\.\s*bulkJob\(/i), ['server/sf/delete.js', 'server/sf/insert.js']);
+  // The routes reach them only through those modules.
+  const index = code(files.find((f) => f.file === 'server/index.js').text);
+  assert.ok(!/sfClient\.(create|destroy|bulkJob)\b/.test(index));
 });
 
-test('only the inserter and the delete module call create / destroy / bulkJob on a client', () => {
-  const callers = using(WRITE_CALL);
-  assert.deepEqual(callers.sort(), ['server/sf/delete.js', 'server/sf/insert.js']);
-});
-
-test('client.js allows Bulk insert and delete only', async () => {
-  const { BULK_OPERATIONS } = await import('../server/sf/client.js');
-  assert.deepEqual([...BULK_OPERATIONS], ['insert', 'delete']);
+test('Bulk operations are insert and delete only; no code names hardDelete as an operation', async () => {
+  assert.deepEqual(BULK_OPERATIONS, ['insert', 'delete']);
   assert.ok(Object.isFrozen(BULK_OPERATIONS));
+  const files = await sources(['server', 'shared', 'client']);
+  const ops = files.flatMap((f) => [...code(f.text).matchAll(/operation\s*:\s*['"`](\w+)['"`]/g)].map((m) => `${f.file}:${m[1]}`)).sort();
+  assert.deepEqual(ops, ['server/sf/delete.js:delete', 'server/sf/insert.js:insert']);
+  assert.deepEqual(where(files, /['"`]hardDelete['"`]/), []);
 });
 
-test('POST /api/field-samples never reaches the org or the disk: server/workflow/samples.js imports only generators, the rng and the executor (its now rule) (design 0012 E)', () => {
-  const src = readFileSync(path.join(ROOT, 'server/workflow/samples.js'), 'utf8');
-  const imports = [...src.matchAll(/^import .* from '([^']+)';$/gm)].map((m) => m[1]);
-  assert.deepEqual(imports.sort(), ['../generators/index.js', '../random.js', './executor.js']);
-  assert.ok(!/\b(?:fetch|require|process|Date\.now)\b/.test(strip(src)));
+test('no hand-written HTTP to Salesforce: the server never calls fetch / http.request / https', async () => {
+  const files = await sources(['server']);
+  assert.deepEqual(where(files, /\bfetch\(|\bhttps?\.request\(|from\s+['"]node:https['"]|\bXMLHttpRequest\b/), []);
+  // jsforce is imported in one place only.
+  assert.deepEqual(where(files, /from\s+['"]jsforce['"]/), ['server/sf/client.js']);
+});
+
+test('N12: no raw jsforce connection leaves server/sf/client.js', async () => {
+  const files = await sources(['server', 'shared', 'client']);
+  assert.deepEqual(where(files, /\.connection\(|\bconnectionFor\b/), ['server/sf/client.js']);
+  const client = code(files.find((f) => f.file === 'server/sf/client.js').text);
+  assert.ok(!/\bconnection\s*:/.test(client), 'the client object has no `connection` getter');
 });

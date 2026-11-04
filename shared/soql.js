@@ -106,6 +106,29 @@ export function parseSoql(text) {
   return out;
 }
 
+/**
+ * `soql` with `field` appended to its outer SELECT list (right after the last item, before
+ * FROM; the spacing around FROM is kept), for the "Thêm <Field> vào SELECT" quick fix (design
+ * 0012 F1). Unchanged when the list already has the field (ignoring case). Null when the
+ * statement cannot be edited safely: not a valid read-only SELECT, a subquery or FIELDS(…) /
+ * TYPEOF in the SELECT list, or `field` is not a field path.
+ */
+export function addSelectField(soql, field) {
+  const raw = String(soql ?? '');
+  const name = String(field ?? '').trim();
+  if (!isFieldPath(name)) return null;
+  if (checkSoql(raw).some((i) => i.level === 'error')) return null;
+  const p = parseSoql(raw);
+  if (p.subquery || p.open || !p.fields.length) return null;
+  if (p.fields.some((f) => f.toLowerCase() === name.toLowerCase())) return raw;
+  const head = /^\s*SELECT\s/i.exec(blankStrings(raw));
+  const from = topLevel(blankStrings(raw), /\bFROM\s+([A-Za-z][A-Za-z0-9_]*)/i, head[0].length);
+  if (!from) return null;
+  const before = raw.slice(0, from.index);
+  const at = before.length - /\s*$/.exec(before)[0].length;
+  return `${raw.slice(0, at)}, ${name}${raw.slice(at)}`;
+}
+
 // Checked on text whose string literals are blanked, anywhere (not only at the top level).
 const FOR_CLAUSE = /\bFOR\s+(?:UPDATE|VIEW|REFERENCE)\b/i;
 const UPDATE_WORD = /\bUPDATE\b/i;
@@ -125,10 +148,8 @@ const mode = (config) => (config?.mode ?? QUERY_DEFAULTS.mode) === 'soql' ? 'soq
 /** Builder field list as entered (strings; a newline/comma separated string is accepted too). */
 function builderFields(config) {
   const raw = config?.fields ?? QUERY_DEFAULTS.fields;
-  // Field names hold no comma: "Id, Name" on one line is two fields (SELECT-list habit), also in an
-  // array item (the form keeps commas in list values, review 0013 N4).
-  const list = (Array.isArray(raw) ? raw : [raw]).flatMap((f) => String(f ?? '').split(/[\n,;]/));
-  return list.map((f) => f.trim()).filter(Boolean);
+  const list = Array.isArray(raw) ? raw : String(raw).split(/[\n,;]/);
+  return list.map((f) => String(f ?? '').trim()).filter(Boolean);
 }
 
 /** Fields the Query step reads: { fields: ['Id', …], open }. The builder always reads Id (first). */
@@ -182,38 +203,6 @@ export const SOQL_MESSAGES = {
   whereClause: 'Đặt ORDER BY và LIMIT ở ô riêng, không viết trong "Điều kiện (WHERE)".',
   orderByLimit: 'Đặt LIMIT ở ô "Số bản ghi tối đa (LIMIT)", không viết trong "Sắp xếp (ORDER BY)".',
 };
-
-/**
- * "Thêm Industry vào SELECT" (design 0012 F1): `soql` with `, <field>` after the last item of
- * the outer SELECT list (before FROM); unchanged when the field is already selected (ignoring
- * case). null when the statement cannot be edited safely: not a valid SELECT, a subquery,
- * FIELDS(…) / TYPEOF / a function in the SELECT list, a template, or `field` not a field path.
- */
-export function addSelectField(soql, field) {
-  const raw = String(soql ?? '');
-  const name = String(field ?? '').trim();
-  if (!isFieldPath(name)) return null;
-  const p = parseSoql(raw);
-  if (!p.select || !p.sobject || p.subquery || p.open || p.template) return null;
-  if (checkSoql(raw).some((i) => i.level === 'error')) return null;
-  if (p.fields.some((f) => f.toLowerCase() === name.toLowerCase())) return raw;
-  const s = blankStrings(raw);
-  const head = /^\s*SELECT\s/i.exec(s);
-  const from = topLevel(s, /\bFROM\s+([A-Za-z][A-Za-z0-9_]*)/i, head[0].length);
-  if (!from) return null;
-  // Review 0012 N1: an aggregate query (COUNT, SUM…, GROUP BY) cannot take a plain field.
-  const list = raw.slice(head[0].length, from.index);
-  if (/\b(?:COUNT|COUNT_DISTINCT|SUM|AVG|MIN|MAX)\s*\(/i.test(blankStrings(list)) || topLevel(s.slice(from.index), /\bGROUP\s+BY\b/i)) return null;
-  let end = from.index;
-  while (end > head[0].length && /\s/.test(raw[end - 1])) end--;
-  // A trailing comma (an empty last item) takes the field without another comma; FROM keeps a space before it.
-  const trailingComma = raw[end - 1] === ',';
-  const gap = end === from.index ? ' ' : '';
-  const out = `${raw.slice(0, end)}${trailingComma ? ' ' : ', '}${name}${gap}${raw.slice(end)}`;
-  const after = parseSoql(out);
-  if (checkSoql(out).some((i) => i.level === 'error') || !after.fields.some((f) => f.toLowerCase() === name.toLowerCase()) || after.sobject !== p.sobject) return null;
-  return out;
-}
 
 /**
  * Problems of a hand-written SOQL statement: [{ code, level: 'error' | 'warning', message }].
@@ -319,10 +308,12 @@ export function normalizeRow(row) {
 /**
  * Deterministic sample rows when no org is selected (no rng): Id `mẫu:accs#1`, Name
  * `Account mẫu 1`, other fields `<field> mẫu 1`; relationship fields become nested objects.
+ * A field listed in `numeric` (design 0013 F, any case) is the row number 1, 2, 3… (not Id / Name).
  */
 export function sampleRows(config, alias, { numeric = [] } = {}) {
-  // Design 0013: fields used as numbers (a Lặp count, a weight) get the row number 1, 2, 3…
-  const num = new Set((numeric ?? []).map((f) => String(f).toLowerCase()));
+  // Fields read as numbers (design 0013 F: a loop count, a pick weight) get the row number, so a
+  // preview without an org still loops and weighs (`numericSampleFields` in shared/scope.js).
+  const isNumeric = new Set((numeric ?? []).map((f) => String(f).toLowerCase()));
   const max = maxFetchFor(config, SAMPLE_ROWS);
   const n = Math.max(0, Math.min(SAMPLE_ROWS, Number.isFinite(max) ? max : SAMPLE_ROWS));
   const sobject = soqlSobject(config) || 'Record';
@@ -340,9 +331,10 @@ export function sampleRows(config, alias, { numeric = [] } = {}) {
       });
       const leaf = parts[parts.length - 1];
       let value = `${f} mẫu ${i}`;
-      if (num.has(f.toLowerCase())) value = i;
-      else if (parts.length === 1 && leaf.toLowerCase() === 'id') value = `mẫu:${alias || 'q'}#${i}`;
+      // Id and Name keep their shape even when read as a number somewhere (review of 0013).
+      if (parts.length === 1 && leaf.toLowerCase() === 'id') value = `mẫu:${alias || 'q'}#${i}`;
       else if (parts.length === 1 && leaf.toLowerCase() === 'name') value = `${sobject} mẫu ${i}`;
+      else if (isNumeric.has(f.toLowerCase())) value = i;
       level[leaf] = value;
     }
     rows.push(row);

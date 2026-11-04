@@ -1,67 +1,68 @@
-// Steps on the system clipboard (design 0012 B): pure functions, tested in Node
-// (test/clipboard.test.js). The relative import resolves to /shared/ in the browser and to
-// shared/ in Node.
+// Copy / paste of steps through the system clipboard (design 0012 B): the text format and its
+// checks. Pure (no DOM, no store), so test/clipboard.test.js runs it in Node; the relative import
+// resolves to /shared/ in the browser too. main.js wires the copy / cut / paste events.
 //
-// Format (text/plain, readable when pasted into a chat or an editor):
-//   { "sfdg": "steps", "version": 2, "from": "<workflow name>", "steps": [ … ] }
-// A whole workflow file { "version": 2, "steps": [ … ] } is accepted too.
+// Format (text/plain, readable JSON):
+//   { "sfdg": "steps", "version": 2, "from": "<workflow name>", "steps": [ step… ] }
+// A whole workflow file { "version": 2, "steps": [ … ] } is accepted as well.
 
-import { malformedSteps } from '../../shared/workflow-tree.js';
+import { malformedSteps, countSteps, normalizeStepIds } from '../../shared/workflow-tree.js';
 
-export const CLIPBOARD_LIMITS = { maxSteps: 2000, maxBytes: 5 * 1024 * 1024 };
+export const PASTE_MAX_STEPS = 2000;
+export const PASTE_MAX_BYTES = 5 * 1024 * 1024;
 
-/** JSON text for the clipboard. */
+const fmt = (n) => Number(n).toLocaleString('vi-VN');
+
+/** Clipboard text for `steps` (reading order) copied from the workflow named `name`. */
 export function toClipboard(steps, name) {
   return JSON.stringify({ sfdg: 'steps', version: 2, from: name ?? '', steps }, null, 2);
 }
 
-const fmt = (n) => String(n ?? 0).replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
-
 /**
- * Steps from clipboard text, checked against the catalogue `meta` ({ nodeTypes }).
- * → { steps } or { error: 'notSteps' | 'v1' | 'tooBig' | 'malformed' | 'unknownType', message }.
- * `notSteps` is said only when the user pasted into the tree (the caller decides).
+ * Read clipboard text. `meta`: /api/meta (step types known to this version).
+ * → { steps, from } or { error, kind }: kind 'notSteps' (not ours: the caller decides whether to
+ * say so), 'v1', 'malformed', 'unknownType', 'tooLarge'. Messages are the toasts of the design.
  */
 export function parseClipboard(text, meta) {
-  try {
-    return parse(text, meta);
-  } catch (e) {
-    // e.g. a RangeError of a pathological file: refused like any other bad paste.
-    return { error: 'malformed', message: `Không dán được: ${e.message}.` };
+  const notSteps = { kind: 'notSteps', error: 'Bộ nhớ tạm không chứa bước nào của SF Data Generator. Chọn bước rồi bấm Ctrl+C để sao chép.' };
+  if (typeof text !== 'string' || !text.trim()) return notSteps;
+  if (text.length > PASTE_MAX_BYTES) {
+    return { kind: 'tooLarge', error: `Nội dung dán quá lớn (hơn ${fmt(PASTE_MAX_BYTES / 1024 / 1024)} MB). Dán tối đa ${fmt(PASTE_MAX_STEPS)} bước mỗi lần.` };
   }
-}
-
-function parse(text, meta) {
-  const raw = String(text ?? '');
-  const notSteps = { error: 'notSteps', message: 'Bộ nhớ tạm không chứa bước nào của SF Data Generator. Chọn bước rồi bấm Ctrl+C để sao chép.' };
-  if (!raw.trim().startsWith('{')) return notSteps;
-  if (raw.length > CLIPBOARD_LIMITS.maxBytes) return { error: 'tooBig', message: `Nội dung dán quá lớn (hơn ${fmt(Math.round(CLIPBOARD_LIMITS.maxBytes / 1048576))} MB). Dán tối đa ${fmt(CLIPBOARD_LIMITS.maxSteps)} bước mỗi lần.` };
-  let obj;
+  let data;
   try {
-    obj = JSON.parse(raw);
+    data = JSON.parse(text);
   } catch {
     return notSteps;
   }
-  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return notSteps;
-  if (obj.version === 1 && Array.isArray(obj.nodes)) return { error: 'v1', message: 'Đây là workflow version 1. Mở bằng Thư viện → Mở file JSON… để chuyển đổi.' };
-  const ours = obj.sfdg === 'steps' || (obj.version === 2 && obj.sfdg === undefined);
-  if (!ours || !Array.isArray(obj.steps) || !obj.steps.length) return notSteps;
-  const bad = malformedSteps({ steps: obj.steps });
-  if (bad) return { error: 'malformed', message: `Không dán được: ${bad}.` };
-  // Iterative and stopped past the limit (review 0012 N5): a very deep or huge paste never
-  // overflows the stack.
-  let count = 0;
-  let unknown = null;
-  const types = new Set((meta?.nodeTypes ?? []).map((t) => t.type));
-  const todo = [obj.steps];
-  while (todo.length && count <= CLIPBOARD_LIMITS.maxSteps) {
-    for (const st of todo.pop()) {
-      if (++count > CLIPBOARD_LIMITS.maxSteps) break;
-      if (unknown === null && !types.has(st.type)) unknown = st.type;
-      for (const children of Object.values(st.slots ?? {})) todo.push(children);
-    }
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return notSteps;
+  if (data.version === 1 && Array.isArray(data.nodes)) {
+    return { kind: 'v1', error: 'Đây là workflow version 1. Mở bằng Thư viện → Mở file JSON… để chuyển đổi.' };
   }
-  if (count > CLIPBOARD_LIMITS.maxSteps) return { error: 'tooBig', message: `Nội dung dán quá lớn (hơn ${fmt(CLIPBOARD_LIMITS.maxSteps)} bước). Dán tối đa ${fmt(CLIPBOARD_LIMITS.maxSteps)} bước mỗi lần.` };
-  if (unknown !== null) return { error: 'unknownType', message: `Không dán được: bước loại "${unknown}" không có trong phiên bản này.` };
-  return { steps: obj.steps, from: typeof obj.from === 'string' ? obj.from : '' };
+  const ours = data.sfdg === 'steps' || data.version === 2;
+  if (!ours || !Array.isArray(data.steps) || !data.steps.length) return notSteps;
+  const n = countSteps(data.steps); // at most 5 MB of text: counting all of it is cheap
+  if (n > PASTE_MAX_STEPS) {
+    return { kind: 'tooLarge', error: `Nội dung dán quá lớn (${fmt(n)} bước). Dán tối đa ${fmt(PASTE_MAX_STEPS)} bước mỗi lần.` };
+  }
+  const bad = malformedSteps(data);
+  if (bad) return { kind: 'malformed', error: `Không dán được: ${bad}.` };
+  const known = new Set((meta?.nodeTypes ?? []).map((t) => t.type));
+  if (known.size) {
+    const unknown = firstUnknownType(data.steps, known);
+    if (unknown !== null) return { kind: 'unknownType', error: `Không dán được: bước loại "${unknown}" không có trong phiên bản này.` };
+  }
+  // Invalid step ids (hand-written text, old files) are rewritten before pasting (0011 review 2).
+  return { steps: normalizeStepIds({ steps: data.steps }).workflow.steps, from: typeof data.from === 'string' ? data.from : typeof data.name === 'string' ? data.name : '' };
+}
+
+/** The first step type (reading order, nested included) not in `known`, or null. */
+function firstUnknownType(steps, known) {
+  const todo = [...steps].reverse();
+  while (todo.length) {
+    const s = todo.pop();
+    if (!known.has(s.type)) return String(s.type);
+    for (const list of Object.values(s.slots ?? {}).reverse()) todo.push(...[...list].reverse());
+  }
+  return null;
 }

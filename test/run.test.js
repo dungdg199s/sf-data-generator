@@ -33,9 +33,7 @@ const drive = async (opts) => {
 
 test('preview emits start, progress, done with the first 200 rows per sObject', async () => {
   const run = createRun(accCon(600), { seed: 5, now: NOW });
-  // A clock that stands still: only the every-1 000-records yields emit progress (under load the
-  // 50 ms time budget added extra ones and made this count flaky in parallel runs).
-  const { events, end } = await drive({ run, start: { runId: 'r1', queries: [] }, clock: () => 0 });
+  const { events, end } = await drive({ run, start: { runId: 'r1', queries: [] } });
   assert.deepEqual(events.map((e) => e.type).filter((t, i, a) => t !== a[i - 1]), ['start', 'progress', 'done']);
   assert.deepEqual([events[0].runId, events[0].seed, events[0].now], ['r1', 5, NOW]);
   const progress = events.filter((e) => e.type === 'progress');
@@ -73,7 +71,7 @@ test('org target emits plan before insert progress; the insert gets the same rec
   assert.ok(planAt > 0 && types.slice(0, planAt).every((t) => t === 'start' || t === 'progress:generate'));
   assert.ok(types.slice(planAt + 1, -1).every((t) => t === 'progress:insert'));
   assert.equal(types.at(-1), 'done');
-  // 0011: the plan also says how each step is sent (no Bulk below 10 000 records).
+  // Design 0011: the plan names each Record step's mode (2 000 Contacts < bulkMinRecords: Collections).
   assert.deepEqual(events[planAt], {
     type: 'plan', total: 2500, bySobject: { Account: 500, Contact: 2000 }, apiCalls: 13, apiCallsBy: { collections: 13, bulk: 0 },
     steps: [{ nodeId: 'a', sobject: 'Account', mode: 'collections', probe: 0, jobs: 0 }, { nodeId: 'c', sobject: 'Contact', mode: 'collections', probe: 0, jobs: 0 }],
@@ -90,6 +88,27 @@ test('org target emits plan before insert progress; the insert gets the same rec
   // NDJSON returns the Ids of the preview rows only (Lookup targets were kept while inserting).
   for (const x of r.records) assert.ok(r.insert.ids[x.ref], x.ref);
   assert.equal(Object.keys(r.insert.ids).length, r.records.length);
+});
+
+test('insert progress events and the result carry byStep counts per record step (0012 D)', async () => {
+  // Every third Contact fails; nothing else does.
+  let k = 0;
+  const client = fakeClient({ fail: (_r, sobject) => sobject === 'Contact' && ++k % 3 === 0 });
+  const run = createRun(accCon(300, 2), { seed: 4, now: NOW });
+  const { events, end } = await drive({ run, target: 'dev', sfClient: client });
+  const ins = events.filter((e) => e.phase === 'insert');
+  assert.ok(ins.length > 1);
+  for (const e of ins) {
+    // Same totals by step as by sObject (a = Account, c = Contact), growing as the insert goes.
+    assert.deepEqual(Object.keys(e.byStep).sort(), Object.keys(e.byStep).length === 1 ? ['a'] : ['a', 'c']);
+    assert.equal(e.byStep.a.inserted + e.byStep.a.failed, e.bySobject.Account.inserted + e.bySobject.Account.failed);
+    assert.equal((e.byStep.c?.inserted ?? 0) + (e.byStep.c?.failed ?? 0), e.bySobject.Contact.inserted + e.bySobject.Contact.failed);
+  }
+  const last = ins.at(-1).byStep;
+  assert.deepEqual(last, { a: { inserted: 300, failed: 0 }, c: { inserted: 400, failed: 200 } });
+  assert.deepEqual(end.result.insert.byStep, last);
+  // Events carry copies: an early event is not rewritten by later batches.
+  assert.ok(ins[0].byStep.a.inserted < 300 || ins[0].byStep.c === undefined || ins[0].byStep.c.inserted < 400);
 });
 
 test('cancel during insert emits done with cancelled true and the exact counts', async () => {
@@ -242,112 +261,169 @@ test('loop iterations count as step visits: a body of turned-off steps hits maxS
   assert.throws(() => runWorkflow(each, { seed: 1, now: NOW }), (e) => /quá 2000000 bước/.test(e.message));
 });
 
-// ---------- design 0011: history ----------
-
-test('a history entry that cannot be created ends the run with an error before any write (insert null)', async () => {
-  const client = fakeClient();
-  const history = { dir: '/nope/history', create: async () => { throw new Error('EACCES: permission denied'); } };
-  const { events, end } = await drive({ run: createRun(accCon(10), { seed: 1, now: NOW }), target: 'dev', sfClient: client, record: { history, org: {}, workflow: null } });
-  assert.equal(client.calls.length, 0);
-  assert.equal(end.type, 'error');
-  assert.equal(end.insert, null);
-  assert.equal(end.error, 'Không ghi được Lịch sử (EACCES: permission denied), nên chưa ghi gì vào org. Kiểm tra quyền ghi thư mục /nope/history hoặc đặt SFDG_DATA_DIR.');
-  assert.ok(!events.some((e) => e.type === 'plan'));
-});
-
-test('an Id append failing mid-run stops after the call in flight (stopped.reason history); the entry is finished', async () => {
-  const client = fakeClient();
-  let appends = 0;
-  const finished = [];
-  const entry = {
-    id: 'h20261028T103200Z-abcdef',
-    data: { steps: [{ nodeId: 'a' }, { nodeId: 'c' }] },
-    appendIds: async () => { if (++appends === 3) throw new Error('ENOSPC: no space left on device'); },
-    recordJob: async () => {},
-    finish: async (patch) => { finished.push(patch); },
-  };
-  const history = { dir: '/d', create: async () => entry };
-  const { events, end } = await drive({ run: createRun(accCon(500), { seed: 1, now: NOW }), target: 'dev', sfClient: client, record: { history, org: {}, workflow: null } });
-  assert.equal(events.find((e) => e.type === 'plan').historyId, entry.id);
-  assert.equal(client.calls.length, 3);
-  const ins = end.result.insert;
-  assert.deepEqual([ins.stopped.reason, ins.historyId, ins.inserted], ['history', entry.id, 600]);
-  assert.deepEqual([finished[0].status, finished[0].inserted, finished[0].stopped.reason], ['stopped', 600, 'history']);
-});
-
 // ---------- design 0013 ----------
 
 import { prefetchQueries } from '../server/sf/query.js';
-
-const q0013 = wf([
-  { id: 'q', type: 'query', config: { sobject: 'Account', alias: 'accs', fields: ['Id', 'Name', 'NumberOfEmployees', 'Industry'] } },
-  loop('la', { mode: 'each', from: 'accs', itemAlias: 'acc', order: 'shuffle', limit: 4 }, [
-    loop('ln', { count: '{{acc.NumberOfEmployees}}', alias: 'n' }, [
-      record('c', 'Contact', 'con', [{ name: 'LastName', type: 'text', options: { mode: 'lastName' } }, { name: 'AccountId', type: 'lookup', options: { ref: 'acc' } }, { name: 'Title', type: 'template', options: { template: '{{acc.Name}} {{n.index}}/{{n.count}} {{run.seed}}' } }]),
-    ]),
-  ]),
-  loop('lw', { count: 5 }, [
-    { id: 'p', type: 'pick', config: { from: 'accs', alias: 'big', mode: 'weighted', weightField: 'NumberOfEmployees' } },
-    record('o', 'Opportunity', 'opp', [{ name: 'AccountId', type: 'lookup', options: { ref: 'big' } }, { name: 'Name', type: 'template', options: { template: '{{big.Name}} {{run.today}}' } }]),
-  ]),
-]);
+import { sampleRows } from '../shared/soql.js';
 
 test('sample Query rows give numbers for fields used as numbers', async () => {
-  const { results } = await prefetchQueries({ client: null, org: null, workflow: q0013 });
-  const rows0 = results.q.records;
-  assert.deepEqual(rows0.map((r) => r.NumberOfEmployees), [1, 2, 3, 4, 5]);
-  assert.equal(rows0[0].Industry, 'Industry mẫu 1', 'other fields stay text');
-  assert.equal(rows0[0].Id, 'mẫu:accs#1');
-  // Deterministic, and the preview without an org loops by them.
-  assert.deepEqual((await prefetchQueries({ client: null, org: null, workflow: q0013 })).results, results);
-  const r = runWorkflow(q0013, { seed: 3, now: NOW, queryResults: results });
-  assert.ok(r.stats.byStep.ln.iterations > 0);
-  assert.ok(!r.warnings.some((w) => w.code === 'numberVarEmpty' || w.code === 'pickWeightZero'));
+  const w = wf([
+    { id: 'q', type: 'query', config: { sobject: 'Account', alias: 'accs', fields: ['Id', 'Name', 'NumberOfEmployees', 'AnnualRevenue', 'Owner.Score__c'] } },
+    { id: 'q2', type: 'query', config: { sobject: 'Contact', alias: 'cons', fields: ['Id', 'LastName', 'Weight__c'] } },
+    loop('la', { mode: 'each', from: 'accs', itemAlias: 'acc' }, [
+      loop('lc', { count: '{{acc.numberofemployees}}', alias: 'k' }, [record('c', 'Contact', 'con', [{ name: 'Title', type: 'template', options: { template: '{{acc.Name}} {{k.index}}' } }])]),
+      loop('lr', { mode: 'range', min: 0, max: '{{acc.Owner.Score__c}}', alias: 'r' }, []),
+    ]),
+    { id: 'p', type: 'pick', config: { from: 'cons', alias: 'pc', mode: 'weighted', weightField: 'Weight__c' } },
+  ]);
+  const { results } = await prefetchQueries({ client: null, org: null, workflow: w });
+  const [first, second] = results.q.records;
+  assert.deepEqual([first.NumberOfEmployees, second.NumberOfEmployees, first.Owner.Score__c, first.AnnualRevenue, first.Name], [1, 2, 1, 'AnnualRevenue mẫu 1', 'Account mẫu 1']);
+  assert.deepEqual(results.q2.records.map((r) => r.Weight__c), [1, 2, 3, 4, 5]);
+  // Without numeric fields the rows are as before (0006).
+  assert.deepEqual(sampleRows(w.steps[0].config, 'accs'), sampleRows(w.steps[0].config, 'accs', { numeric: [] }));
+  assert.equal(sampleRows(w.steps[0].config, 'accs')[0].NumberOfEmployees, 'NumberOfEmployees mẫu 1');
+  // So the preview without an org loops 1 + 2 + 3 + 4 + 5 times.
+  const r = runWorkflow(w, { seed: 1, now: NOW, queryResults: results });
+  assert.equal(r.stats.byStep.c.records, 15);
+  assert.deepEqual(r.warnings.filter((x) => x.code === 'numberVarEmpty' || x.code === 'pickWeightZero'), []);
 });
 
 test('preview and insert give the same data with number variables, shuffle and weighted pick on Query rows', async () => {
-  const qr = { q: { sobject: 'Account', records: Array.from({ length: 6 }, (_, i) => ({ Id: `001000000000000AA${i}`, Name: `Org ${i}`, NumberOfEmployees: [2, 0, 3, null, 1, 4][i] })) } };
+  const qr = { q: { sobject: 'Account', records: Array.from({ length: 8 }, (_, i) => ({ Id: `001${String(i).padStart(15, '0')}`, Name: `Org ${i}`, N: i % 4 })) } };
+  const w = wf([
+    { id: 'q', type: 'query', config: { sobject: 'Account', alias: 'accs', fields: ['Id', 'Name', 'N'] } },
+    loop('la', { mode: 'each', from: 'accs', itemAlias: 'acc', order: 'shuffle', limit: 5 }, [
+      loop('lc', { count: '{{acc.N}}', alias: 'k' }, [record('c', 'Contact', 'con', [{ name: 'LastName', type: 'text', options: { mode: 'lastName' } }, { name: 'AccountId', type: 'lookup', options: { ref: 'acc' } }, { name: 'Description', type: 'template', options: { template: '{{run.seed}} {{k.index}}' } }])]),
+    ]),
+    loop('lw', { count: 6 }, [
+      { id: 'p', type: 'pick', config: { from: 'accs', alias: 'big', mode: 'weighted', weightField: 'N' } },
+      record('o', 'Opportunity', 'opp', [{ name: 'AccountId', type: 'lookup', options: { ref: 'big' } }, { name: 'Amount', type: 'currency', options: {} }]),
+    ]),
+  ]);
   const client = fakeClient();
-  const preview = await drive({ run: createRun(q0013, { seed: 8, now: NOW, queryResults: qr }) });
-  const insert = await drive({ run: createRun(q0013, { seed: 8, now: NOW, queryResults: qr }), target: 'dev', sfClient: client });
+  const preview = await drive({ run: createRun(w, { seed: 12, now: NOW, queryResults: qr }) });
+  const insert = await drive({ run: createRun(w, { seed: 12, now: NOW, queryResults: qr }), target: 'dev', sfClient: client });
   assert.equal(insert.end.type, 'done');
   const sent = client.calls.flatMap((c) => c.recs);
-  assert.deepEqual(sent, preview.end.result.records.map((r) => r.fields));
-  assert.ok(sent.some((x) => / 8$/.test(x.Title ?? '')), '{{run.seed}} is the seed in both passes');
-  assert.ok(sent.some((x) => (x.Name ?? '').endsWith(' 2025-06-15')));
-  assert.deepEqual(insert.end.result.samples, preview.end.result.samples);
+  // Same records in the same order (inserted grouped by sObject, so compare per sObject).
+  for (const so of ['Contact', 'Opportunity']) {
+    const call = client.calls.filter((c) => c.sobject === so).flatMap((c) => c.recs);
+    assert.deepEqual(call, preview.end.result.records.filter((r) => r.sobject === so).map((r) => r.fields), so);
+  }
+  assert.ok(sent.length > 6);
+  assert.ok(sent.filter((x) => x.Description).every((x) => x.Description.startsWith('12 ')));
 });
 
 test('a cancelled preview still returns the samples it has', async () => {
   const controller = new AbortController();
-  const events = [];
-  const end = await executeRun({
-    run: createRun(accCon(600), { seed: 5, now: NOW }), signal: controller.signal, progressIntervalMs: 0, clock: () => 0,
-    emit: (e) => { events.push(e); if (e.type === 'start') controller.abort(); },
-  });
-  assert.equal(end.type, 'done');
+  const w = wf([
+    record('a', 'Account', 'acc', [{ name: 'Name', type: 'text', options: { mode: 'company' } }]),
+    loop('l', { count: 100000 }, [loop('m', { count: 7 }, [{ id: 'b', type: 'branch', config: { kind: 'chance', probability: 0.5 }, slots: { true: [], false: [] } }])]),
+    record('z', 'Lead', 'ld', [{ name: 'LastName', type: 'text', options: { mode: 'lastName' } }]),
+  ]);
+  setTimeout(() => controller.abort(), 20);
+  const end = await executeRun({ run: createRun(w, { seed: 1, now: NOW }), signal: controller.signal, emit: () => {} });
   assert.equal(end.result.cancelled, true);
-  assert.deepEqual(Object.keys(end.result.samples).sort(), ['a', 'c']);
-  assert.equal(typeof end.result.samples.a.Name, 'string');
+  assert.deepEqual(Object.keys(end.result.samples), ['a']);
+  assert.equal(end.result.samples.a.Name, end.result.records[0].fields.Name);
 });
 
-test('insert progress events and the result carry byStep counts per record step (design 0012 D)', async () => {
-  // Every third Account is refused: its Contacts are skipped ("Bỏ qua vì bản ghi cha lỗi") and count as failed on `c`.
-  let accounts = 0;
-  const client = fakeClient({ fail: (_r, sobject) => sobject === 'Account' && ++accounts % 3 === 0 });
-  const run = createRun(accCon(30, 2), { seed: 4, now: NOW });
-  const { events, end } = await drive({ run, target: 'dev', sfClient: client });
-  const ins = events.filter((e) => e.phase === 'insert');
-  assert.ok(ins.length >= 2);
-  for (const e of ins) {
-    assert.deepEqual(Object.keys(e.byStep).sort(), Object.keys(e.byStep).filter((id) => ['a', 'c'].includes(id)).sort());
-    const sum = (k) => Object.values(e.byStep).reduce((n, x) => n + x[k], 0);
-    assert.equal(sum('inserted'), e.inserted);
-    assert.equal(sum('failed'), e.failed);
-  }
-  const last = ins.at(-1);
-  assert.deepEqual(last.byStep, { a: { inserted: 20, failed: 10 }, c: { inserted: 40, failed: 20 } });
-  // Per step and per sObject agree (one step per sObject here).
-  assert.deepEqual([last.byStep.a.inserted + last.byStep.a.failed, last.byStep.c.inserted + last.byStep.c.failed], [last.bySobject.Account.total, last.bySobject.Contact.total]);
-  assert.deepEqual(end.result.insert.byStep, last.byStep);
+// ---------- design 0011: history entry and Bulk plan around the insert ----------
+
+test('history that cannot be created ⇒ error event, insert: null, and not a single create call', async () => {
+  const client = fakeClient();
+  const history = { dir: '/nope/history', create: async () => { throw new Error('EACCES: permission denied'); }, markActive: () => () => {} };
+  const run = createRun(accCon(10), { seed: 1, now: NOW });
+  const { events, end } = await drive({ run, target: 'dev', sfClient: client, history, org: { alias: 'dev' } });
+  assert.equal(end.type, 'error');
+  assert.equal(end.insert, null);
+  assert.equal(end.error, 'Không ghi được Lịch sử (EACCES: permission denied), nên chưa ghi gì vào org. Kiểm tra quyền ghi thư mục /nope/history hoặc đặt SFDG_DATA_DIR.');
+  assert.equal(client.calls.length, 0);
+  assert.ok(!events.some((e) => e.type === 'plan'));
+});
+
+function memoryHistory({ failAppendAt = 0 } = {}) {
+  const h = { entries: {}, appends: 0, active: [] };
+  Object.assign(h, {
+    dir: '/mem',
+    async create(data) {
+      h.entries.h1 = { ...data, ids: [], status: 'running' };
+      return 'h1';
+    },
+    markActive(hid, kind) {
+      h.active.push([hid, kind]);
+      return () => h.active.push([hid, 'released']);
+    },
+    async appendIds(hid, rows) {
+      if (++h.appends === failAppendAt) throw new Error('ENOSPC: no space left on device');
+      h.entries[hid].ids.push(...rows);
+    },
+    async update(hid, patch) {
+      Object.assign(h.entries[hid], typeof patch === 'function' ? patch(h.entries[hid]) : patch);
+    },
+    async finish(hid, patch) {
+      Object.assign(h.entries[hid], patch);
+    },
+  });
+  return h;
+}
+
+test('an insert writes its history entry: every Id, the final status and counts; plan and result carry historyId', async () => {
+  const client = fakeClient();
+  const history = memoryHistory();
+  const run = createRun(accCon(100), { seed: 1, now: NOW });
+  const { events, end } = await drive({ run, target: 'dev', sfClient: client, history, org: Promise.resolve({ alias: 'dev', username: 'me@x.com', accessToken: 'nope' }), workflow: { name: 'W', steps: [] } });
+  const e = history.entries.h1;
+  assert.equal(events.find((x) => x.type === 'plan').historyId, 'h1');
+  assert.equal(end.result.insert.historyId, 'h1');
+  assert.equal(e.ids.length, 500);
+  assert.equal(new Set(e.ids.map((r) => r.id)).size, 500);
+  assert.deepEqual(e.ids[0], { sobject: 'Account', nodeId: 'a', ref: 'acc#1', id: 'A1' });
+  assert.equal(e.status, 'done');
+  assert.deepEqual(e.steps.map((s) => [s.nodeId, s.sobject, s.mode, s.total, s.inserted]), [['a', 'Account', 'collections', 100, 100], ['c', 'Contact', 'collections', 400, 400]]);
+  assert.deepEqual(e.org, { alias: 'dev', username: 'me@x.com', accessToken: 'nope' }, 'history.create gets the org (server/history.js keeps only the identity)');
+  assert.deepEqual(history.active, [['h1', 'insert'], ['h1', 'released']]);
+});
+
+test('an Id write failing mid-insert stops after the call in flight (stopped.reason history); status stopped', async () => {
+  const client = fakeClient();
+  const history = memoryHistory({ failAppendAt: 2 });
+  const run = createRun(accCon(500), { seed: 1, now: NOW });
+  const { end } = await drive({ run, target: 'dev', sfClient: client, history, org: {} });
+  assert.equal(end.result.insert.stopped.reason, 'history');
+  assert.match(end.result.insert.stopped.message, /ENOSPC/);
+  assert.equal(client.calls.length, 2, 'the call whose Ids could not be written was the last one');
+  assert.equal(history.entries.h1.status, 'stopped');
+  assert.equal(history.entries.h1.ids.length, 200, 'Ids of the first call are on disk');
+});
+
+test('a big leaf step is planned Bulk; target bulk off sends everything by Collections', async () => {
+  const w = wf([record('c', 'Contact', 'con', [{ name: 'LastName', type: 'text', options: { mode: 'lastName' } }], { count: 10000 })]);
+  const off = await drive({ run: createRun(w, { seed: 1, now: NOW }), target: 'dev', sfClient: fakeClient(), bulk: 'off' });
+  const plan = off.events.find((e) => e.type === 'plan');
+  assert.deepEqual(plan.steps, [{ nodeId: 'c', sobject: 'Contact', mode: 'collections', probe: 0, jobs: 0 }]);
+  assert.equal(off.end.result.insert.inserted, 10000);
+  const auto = await drive({ run: createRun(w, { seed: 1, now: NOW }), target: 'dev', sfClient: fakeClient(), bulk: 'auto', previewRows: 1 });
+  assert.deepEqual(auto.events.find((e) => e.type === 'plan').steps, [{ nodeId: 'c', sobject: 'Contact', mode: 'bulk', probe: 200, jobs: 1 }]);
+  assert.deepEqual(auto.events.find((e) => e.type === 'plan').apiCallsBy, { collections: 1, bulk: 12 });
+});
+
+test('run registry: cancel aborts the run signal; force (Dừng ngay) aborts the force signal too', () => {
+  const runs = createRunRegistry();
+  const a = runs.open();
+  const b = runs.open();
+  assert.ok(runs.cancel(a.id));
+  assert.deepEqual([a.signal.aborted, a.forceSignal.aborted], [true, false]);
+  assert.ok(runs.cancel(b.id, { force: true }));
+  assert.deepEqual([b.signal.aborted, b.forceSignal.aborted], [true, true]);
+});
+
+test('S4: the plan event warns when this insert prunes a history entry that still has records in an org', async () => {
+  const history = memoryHistory();
+  history.prunePreview = async () => [{ id: 'hOLD', startedAt: '2026-10-01T08:00:00.000Z', org: { alias: 'uat' }, workflowName: 'Acc', remaining: 1200 }];
+  const { events } = await drive({ run: createRun(accCon(2), { seed: 1, now: NOW }), target: 'dev', sfClient: fakeClient(), history, org: { alias: 'dev' } });
+  const plan = events.find((e) => e.type === 'plan');
+  assert.deepEqual(plan.warnings.map((w) => [w.code, w.historyId]), [['historyPruned', 'hOLD']]);
+  assert.equal(plan.warnings[0].message, 'Lịch sử đã đầy nên lần insert này bỏ ghi chép của lần insert lúc 2026-10-01T08:00:00.000Z vào org "uat" (workflow "Acc"), còn 1200 bản ghi trong org: sau đó không tải Id hay xóa dữ liệu của lần đó qua app được nữa.');
 });

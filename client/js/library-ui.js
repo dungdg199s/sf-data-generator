@@ -1,405 +1,524 @@
-// Workflow library in the app (design 0012 A): boot (first-start migration, the tab's open item),
-// autosave of the open item (quota, two tabs), the "▾" popup next to the name (Ctrl+O) and the
-// "Quản lý thư viện" dialog. Storage rules: library.js.
+// Workflow library, the UI (design 0012 A): the ▾ popup next to the name (Ctrl+O), the "Quản lý
+// thư viện" dialog, Mới / Mở file / Mẫu as new entries, autosave of the open entry, the storage-full
+// state (▲ Chưa lưu), two tabs on one workflow, and the first-run migration of the old autosave.
+// Storage itself is library.js.
 
-import { h, ico, toast, download, keepToast, releaseToast } from './dom.js';
-import { state, setPersistHook, loadWorkflow, updateWorkflow, emptyWorkflow } from './store.js';
+import { h, ico, toast, download } from './dom.js';
+import { state, openWorkflow, replaceWorkflow, persist, setPersistHandler, updateWorkflow, emptyWorkflow } from './store.js';
+import { normalizeStepIds } from '/shared/workflow-tree.js';
 import {
-  KEYS, readIndex, repairIndex, copyName, migrateToLibrary, saveItem, readItem, exportLibrary, byRecent, trySet,
-  usedBytes, RECENT, countSteps, createLibrary, itemKey,
+  createLibrary, migrateToLibrary, parseLibraryFile, sortedItems, ENTRY_PREFIX, NEW_NAME, RECENT_MAX,
 } from './library.js';
 import { openPopup, closePopup, popupAnchor } from './popup.js';
+import { SAMPLES } from './samples.js';
 
 const $ = (id) => document.getElementById(id);
-const store = window.localStorage;
-const session = window.sessionStorage;
-const BUSY = 'Đang chạy. Bấm Dừng hoặc chờ chạy xong rồi đổi workflow.';
-const LEGACY = 'Chưa tạo được Thư viện vì bộ nhớ trình duyệt đầy. Workflow này vẫn được tự lưu như trước.';
+const LOCKED_TITLE = 'Đang chạy. Bấm Dừng hoặc chờ chạy xong rồi đổi workflow.';
+const LEGACY_TITLE = 'Chưa tạo được Thư viện vì bộ nhớ trình duyệt đầy. Workflow này vẫn được tự lưu như trước.';
 
-const lib = {
-  mode: 'library', // 'library' | 'legacy' (storage full at the first start: one autosave as before)
-  unsaved: false, // the last save failed (quota)
-  quotaToasted: false,
-};
-let ctl = createLibrary({ storage: store, now: () => Date.now(), newId: () => newId() }); // open item, pause (library.js)
-let isRunning = () => false;
-let onOpenFile = () => {};
+let lib = null;
+let legacy = false; // storage full on the first run: the single autosave of before
+let activeId = null;
+let locked = false; // a run is going on
+let lastJson = null; // what this tab last wrote into its entry (to tell our writes from another tab's)
+let unsaved = false; // the last save failed: storage full
+let paused = false; // another tab changed the open entry: autosave waits for the user's choice
+let undoNote = null; // { text, undo } of the last delete, for 10 s (the dialog's own "Hoàn tác")
+let deps = {}; // { onMigrated(report, raw, name), fileBase(name) } from main.js
 
-export const libraryMode = () => lib.mode;
+const fileBase = (name) => (name || 'workflow').replace(/[^\w.-]+/g, '_');
+const fmtBytes = (n) => (n < 1024 * 1024 ? `${Math.max(1, Math.round(n / 1024))} KB` : `${(n / 1024 / 1024).toLocaleString('vi-VN', { maximumFractionDigits: 1 })} MB`);
 
-function newId() {
-  return `w${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+/** `10:24` today, `hôm qua`, else `21/10`. */
+export function whenText(ts, now = new Date()) {
+  const d = new Date(ts);
+  const day = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const diff = Math.round((day(now) - day(d)) / 86400000);
+  if (diff <= 0) return d.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
+  if (diff === 1) return 'hôm qua';
+  return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}`;
 }
-const setSessionActive = (id) => { try { session.setItem(KEYS.active, id); } catch { /* optional */ } };
+
+export const libraryReady = () => Boolean(lib) && !legacy;
 
 /**
- * Before the first render: the workflow this tab shows. deps: { sample, migrateV1 }.
- * → { announce } for main.js (v1 report, v2 moved, broken autosave).
+ * Before the first render: the library (made from the old autosave on the first run) and the
+ * workflow to show. → a function to call once the app is drawn (toasts, the migration report).
  */
-export function bootLibrary({ sample, migrateV1 }) {
-  let index = readIndex(store);
-  if (!index) {
-    const res = migrateToLibrary(store, { sample, migrateV1, now: Date.now(), newId });
+export function initLibrary(options) {
+  deps = options;
+  lib = createLibrary({ local: localStorage, session: sessionStorage });
+  let res;
+  try {
+    res = migrateToLibrary(lib, localStorage, { samples: SAMPLES, migrateV1: options.migrateV1 });
+  } catch (e) {
+    console.error(e);
+    res = { status: 'legacy', workflow: structuredClone(SAMPLES[0].workflow), from: 'sample' };
+  }
+  wireTopBar();
+  const after = [];
+  if (res.from === 'v2' && res.status === 'migrated') {
+    after.push(() => toast('Workflow đang soạn đã được đưa vào Thư viện (nút Thư viện cạnh tên). Bản lưu cũ vẫn được giữ trong trình duyệt.', 8000));
+  }
+  if (res.from === 'v1') after.push(() => deps.onMigrated(res.report, res.rawV1, res.workflow.name));
+  if (res.v1Error) after.push(() => toast(`Không chuyển được workflow cũ trong trình duyệt (${res.v1Error}). Bản cũ vẫn được giữ nguyên.`, 6000));
+  if (res.from === 'broken') {
+    after.push(() => toast(
+      `Không hiển thị được workflow lưu tự động (${res.brokenError}). Đang mở mẫu "${SAMPLES[0].label}"; bản lưu cũ chưa bị ghi đè${res.brokenKey ? ` và có bản sao trong trình duyệt (${res.brokenKey})` : res.brokenOlder ? ' (bản sao cũ hơn ở sfdg.workflow.v2.broken cũng được giữ nguyên)' : ''}. Bấm "Tải bản lưu" để lấy file JSON, sửa rồi Mở lại.`,
+      15000,
+      { label: 'Tải bản lưu', onClick: () => download('workflow-autosave.json', res.brokenRaw) },
+    ));
+  }
+  if (res.status === 'legacy') {
+    legacy = true;
     state.workflow = res.workflow;
-    if (res.mode === 'legacy') {
-      lib.mode = 'legacy';
-      return { announce: res.announce, legacy: true };
-    }
-    ctl = createLibrary({ storage: store, now: () => Date.now(), newId, activeId: res.activeId });
-    setSessionActive(res.activeId);
-    setPersistHook(save);
-    return { announce: res.announce };
+    if (res.from === 'v1') persist(); // as before the library: the migrated v1 becomes the v2 autosave
+    const btn = $('btn-library');
+    btn.disabled = true;
+    btn.title = LEGACY_TITLE;
+    return () => after.forEach((f) => f());
   }
-  const repaired = repairIndex(index, store);
-  index = repaired.index;
-  if (repaired.changed) trySet(store, KEYS.index, JSON.stringify(index));
-  let wanted = null;
-  try { wanted = session.getItem(KEYS.active); } catch { /* optional */ }
-  const order = [...new Set([wanted, index.activeId, ...byRecent(index.items).map((it) => it.id)].filter((id) => id && index.items.some((it) => it.id === id)))];
-  let opened = null;
-  for (const id of order) {
-    const r = readItem(store, id);
-    if (r.workflow) {
-      opened = { id, workflow: r.workflow };
-      break;
-    }
-  }
-  if (!opened) {
-    const id = newId();
-    const wf = structuredClone(sample);
-    saveItem(store, id, wf, { now: Date.now() });
-    opened = { id, workflow: wf };
-  }
-  ctl = createLibrary({ storage: store, now: () => Date.now(), newId, activeId: opened.id });
-  state.workflow = opened.workflow;
-  setSessionActive(opened.id);
-  setPersistHook(save);
-  return { announce: null };
+  setPersistHandler(save);
+  state.workflow = startWorkflow(res, after);
+  window.addEventListener('storage', onStorage);
+  window.addEventListener('beforeunload', (e) => {
+    // Storage full, or another tab's version not chosen yet: leaving would lose this tab's changes.
+    if (!unsaved && !paused) return;
+    e.preventDefault();
+    e.returnValue = '';
+  });
+  return () => after.forEach((f) => f());
 }
 
-/** The open item could not be shown: a new item with `wf` takes its place (the broken one is kept). */
-export function replaceBrokenActive(wf) {
-  if (lib.mode !== 'library') return;
-  const res = ctl.create(wf);
-  if (res.ok) setSessionActive(res.id);
+/** The entry to open at start: this tab's, else the last opened, else the newest readable one. */
+function startWorkflow(res, after) {
+  if (res.status === 'migrated') {
+    activeId = res.id;
+    lastJson = lib.raw(activeId);
+    return res.workflow;
+  }
+  const first = lib.activeId();
+  for (const id of [first, ...lib.items().map((it) => it.id)]) {
+    if (!id) continue;
+    const r = lib.read(id);
+    if (!r.workflow) {
+      if (id === first) after.push(() => brokenToast(lib.item(id), r));
+      continue;
+    }
+    activeId = id;
+    lib.setActive(id);
+    lastJson = lib.raw(id);
+    return r.workflow;
+  }
+  // Nothing readable: a new entry with the first sample.
+  const wf = structuredClone(SAMPLES[0].workflow);
+  try {
+    activeId = lib.create(wf);
+    lib.setActive(activeId);
+    lastJson = lib.raw(activeId);
+  } catch {
+    activeId = null;
+  }
+  return wf;
 }
 
-/** Autosave of the open item (the store's persist hook). */
+function brokenToast(item, r) {
+  toast(
+    `Không mở được workflow "${item?.name ?? '?'}" (${r.error}). Workflow đang mở không đổi. Bấm "Tải bản lưu" để lấy file JSON, sửa rồi Mở lại.`,
+    12000,
+    r.raw ? { label: 'Tải bản lưu', onClick: () => download(`${fileBase(item?.name)}-hong.json`, r.raw) } : null,
+  );
+}
+
+// ---------- autosave of the open entry ----------
+
+let unsavedToastShown = false;
 function save(wf) {
-  const res = ctl.save(wf);
-  if (res.paused) return updateIndicator();
-  if (!res.ok) return setUnsaved(true, wf);
-  if (lib.unsaved) {
-    setUnsaved(false);
-    toast(`Đã lưu lại "${wf.name || 'Workflow'}".`);
+  if (paused) return;
+  if (!activeId) {
+    // No entry yet (storage was full when the tab started): try to make one now.
+    try {
+      activeId = lib.create(wf);
+      lib.setActive(activeId);
+    } catch {
+      return markUnsaved(wf);
+    }
+  }
+  const res = lib.save(activeId, wf);
+  if (!res.ok) return markUnsaved(wf);
+  lastJson = res.json;
+  if (res.readded) toast(`"${wf.name || NEW_NAME}" đã bị xóa ở tab khác; tab này vẫn giữ và đã lưu lại.`, 6000);
+  if (unsaved) {
+    unsaved = false;
+    unsavedToastShown = false;
+    updateIndicator();
+    toast(`Đã lưu lại "${wf.name || NEW_NAME}".`);
   }
   return undefined;
 }
 
 /**
- * The persistent indicator next to the name (review 0012 B1): "Tạm dừng lưu" while another tab's
- * change waits for a choice (reopens it), else "Chưa lưu" when storage is full (opens the library).
+ * The top bar's ▲ button: "▲ Chưa lưu" (storage full: opens the library dialog) or "▲ Tab khác đã
+ * sửa" (autosave paused: the two choices again). Changes are read out by the #save-status region.
  */
 function updateIndicator() {
-  const btn = $('btn-unsaved');
-  if (!btn) return;
-  const paused = ctl.isPaused();
-  btn.hidden = !paused && !lib.unsaved;
-  btn.textContent = paused ? 'Tạm dừng lưu' : 'Chưa lưu';
-  btn.title = paused
+  const b = $('btn-unsaved');
+  const text = paused ? 'Tab khác đã sửa' : unsaved ? 'Chưa lưu' : '';
+  b.hidden = !text;
+  if (!text) return say('');
+  b.replaceChildren(ico('warning'), text);
+  b.title = paused
     ? 'Workflow này vừa được sửa ở một tab khác nên tab này tạm dừng tự lưu. Bấm để chọn giữ bản nào.'
-    : 'Chưa lưu được thay đổi vào trình duyệt. Bấm để mở Thư viện.';
-  btn.onclick = paused ? showConflict : openManager;
+    : 'Bộ nhớ trình duyệt đầy: thay đổi chưa được lưu. Bấm để mở Thư viện và xóa bớt workflow.';
+  return say(paused ? 'Tạm dừng tự lưu: workflow vừa được sửa ở một tab khác.' : 'Chưa lưu: bộ nhớ trình duyệt đã đầy.');
 }
 
-function setUnsaved(on, wf) {
-  lib.unsaved = on;
+function say(text) {
+  const live = $('save-status');
+  if (live && live.textContent !== text) live.textContent = text;
+}
+
+function markUnsaved(wf) {
+  unsaved = true;
   updateIndicator();
-  if (on && !lib.quotaToasted) {
-    lib.quotaToasted = true;
-    toast(`Bộ nhớ trình duyệt đã đầy nên chưa lưu được thay đổi của "${wf?.name || 'Workflow'}". Xóa bớt workflow trong Thư viện, hoặc bấm Lưu (Ctrl+S) để tải file JSON.`, 12000, { label: 'Mở Thư viện', onClick: openManager });
-  }
-  if (!on) lib.quotaToasted = false;
+  if (unsavedToastShown) return;
+  unsavedToastShown = true;
+  toast(
+    `Bộ nhớ trình duyệt đã đầy nên chưa lưu được thay đổi của "${wf.name || NEW_NAME}". Xóa bớt workflow trong Thư viện, hoặc bấm Lưu (Ctrl+S) để tải file JSON.`,
+    12000,
+    { label: 'Mở Thư viện', onClick: openManage },
+  );
 }
 
-/** beforeunload must ask: unsaved changes, or autosave paused by another tab. */
-export const mustWarnOnLeave = () => lib.unsaved || ctl.isPaused();
-
-/** Another tab wrote or deleted the open item (storage event). */
+/** Another tab wrote this tab's entry: stop saving until the user picks a version. */
 function onStorage(e) {
-  if (lib.mode !== 'library' || e.storageArea !== store || !ctl.activeId) return;
-  if (e.key !== itemKey(ctl.activeId)) return;
-  const name = state.workflow.name || 'Workflow';
-  if (e.newValue === null) {
-    // Deleted in another tab: this tab keeps it and saves it back.
-    save(state.workflow);
-    toast(`"${name}" đã bị xóa ở tab khác; tab này vẫn giữ và đã lưu lại.`, 6000);
-    return;
-  }
-  if (e.newValue === JSON.stringify(state.workflow)) return;
-  ctl.pause();
+  if (e.storageArea !== localStorage || !e.key?.startsWith(ENTRY_PREFIX)) return;
+  lib.repair(); // entries added or removed by another tab: keep the index right
+  if (!activeId || e.key !== `${ENTRY_PREFIX}${activeId}`) return;
+  if (e.newValue === null || e.newValue === lastJson) return; // deleted elsewhere: the next save adds it back
+  paused = true;
   updateIndicator();
-  showConflict();
+  conflictToast();
 }
 
-/**
- * The choice for a paused item (also from "Tạm dừng lưu"). Both actions do nothing once another
- * item was opened (the pause ended with it); "Dùng bản ở tab kia" waits while a run goes on.
- */
-function showConflict() {
-  const id = ctl.activeId;
-  if (!ctl.isPaused()) return;
-  toast(`"${state.workflow.name || 'Workflow'}" vừa được sửa ở một tab khác. Tab này tạm dừng tự lưu tới khi bạn chọn.`, Infinity, [
+/** [Dùng bản ở tab kia] [Giữ bản của tab này], for the entry open now (a later switch makes it stale). */
+function conflictToast() {
+  const id = activeId;
+  const name = state.workflow.name || NEW_NAME;
+  const stillHere = () => {
+    if (id === activeId && paused) return true;
+    toast('Workflow đó không còn mở ở tab này; không có gì để chọn.', 4000);
+    return false;
+  };
+  toast(`"${name}" vừa được sửa ở một tab khác.`, Infinity, [
     {
       label: 'Dùng bản ở tab kia',
       onClick: () => {
-        if (ctl.activeId !== id || !ctl.isPaused()) return;
-        if (isRunning()) {
-          toast(`${BUSY} Rồi bấm "Tạm dừng lưu" để chọn lại.`, 6000);
-          return;
-        }
-        const r = readItem(store, id);
-        ctl.resume(id);
-        if (r.workflow) loadWorkflow(r.workflow);
-        updateIndicator();
+        if (!stillHere()) return;
+        const r = lib.read(id);
+        if (!r.workflow) return brokenToast(lib.item(id), r);
+        show(id, r.workflow);
+        return undefined;
       },
     },
     {
       label: 'Giữ bản của tab này',
       onClick: () => {
-        if (!ctl.resume(id)) return;
-        save(state.workflow);
+        if (!stillHere()) return;
+        paused = false;
         updateIndicator();
+        persist();
       },
     },
   ]);
 }
 
-/** Toolbar wiring: ▾, Ctrl+O, "Chưa lưu", the running lock. */
-export function initLibraryUi({ running, openFile }) {
-  isRunning = running;
-  onOpenFile = openFile;
-  const btn = $('btn-library');
-  if (lib.mode === 'legacy') {
-    btn.disabled = true;
-    btn.title = LEGACY;
-  } else btn.onclick = () => (popupAnchor() === btn ? closePopup() : openLibraryMenu());
-  updateIndicator();
-  window.addEventListener('storage', onStorage);
-  window.addEventListener('beforeunload', (e) => {
-    if (!mustWarnOnLeave()) return;
-    e.preventDefault();
-    e.returnValue = '';
+/**
+ * Before leaving the open workflow while its changes are not saved (storage full, or paused by
+ * another tab's change): ask, and offer the JSON file. → Promise<boolean> (go on).
+ */
+function confirmLeave() {
+  const modal = $('modal');
+  if (modal.open) modal.close();
+  const name = state.workflow.name || NEW_NAME;
+  const why = paused
+    ? `"${name}" vừa được sửa ở một tab khác và tab này đã tạm dừng tự lưu: thay đổi của tab này chưa được lưu.`
+    : `Bộ nhớ trình duyệt đầy nên thay đổi của "${name}" chưa được lưu.`;
+  return new Promise((resolve) => {
+    const done = (v) => { modal.onclose = null; modal.close(); resolve(v); };
+    modal.replaceChildren(
+      h('h2', {}, 'Đổi workflow khi chưa lưu?'),
+      h('p', {}, `${why} Đổi sang workflow khác thì các thay đổi đó mất. Bấm "Tải file JSON" để giữ một bản trên máy trước.`),
+      h('div', { class: 'actions' },
+        h('button', { onclick: () => download(`${fileBase(state.workflow.name)}.json`, JSON.stringify(state.workflow, null, 2)) }, 'Tải file JSON'),
+        h('button', { onclick: () => done(false) }, 'Hủy'),
+        h('button', { class: 'danger solid', onclick: () => done(true) }, 'Vẫn đổi')),
+    );
+    // Ignore a stale close event: "Mở" in "Quản lý thư viện" closes the dialog just before this
+    // reopens it, and Chromium fires that close later, while this question is already shown.
+    modal.onclose = () => { if (!modal.open) resolve(false); };
+    modal.showModal();
+    modal.querySelector('.actions button:nth-child(2)')?.focus();
   });
 }
 
-/** Locks what would change the workflow while a run goes on (Mới, the popup's rows). */
-export function setLibraryBusy(busy) {
-  const nb = $('btn-new');
-  nb.disabled = busy;
-  nb.title = busy ? BUSY : 'Workflow mới (thêm vào Thư viện)';
+// ---------- open, new, switch ----------
+
+/** A run is going on: the workflow cannot be switched (main.js). */
+export function setLibraryLocked(on) {
+  locked = on;
+  const btn = $('btn-new');
+  btn.disabled = on;
+  btn.title = on ? LOCKED_TITLE : 'Workflow mới';
+  if (on && popupAnchor() === $('btn-library')) closePopup();
 }
 
-const hhmm = (t) => {
-  if (!t) return '';
-  const d = new Date(t);
-  const today = new Date();
-  const y = new Date(today);
-  y.setDate(today.getDate() - 1);
-  const same = (a, b) => a.toDateString() === b.toDateString();
-  if (same(d, today)) return d.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
-  if (same(d, y)) return 'hôm qua';
-  return d.toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit' });
-};
-const kb = (n) => (n < 1024 ? `${n} B` : `${Math.round(n / 1024)} KB`);
+// The open entry is reused only when empty, still named "Workflow mới", and not waiting for a
+// choice between this tab and another one (its stored version may have content).
+const reusable = () => !paused && !state.workflow.steps?.length && (state.workflow.name ?? '') === NEW_NAME;
 
-/** The ▾ popup (also Ctrl+O): new, open file, recent workflows (radio), manage. */
+/**
+ * Mới / Mở file / Mẫu (design 0012 A): `wf` opens as a new entry, never over another workflow,
+ * except the open one when it is empty and still named "Workflow mới". → true when opened.
+ */
+export async function openAsNew(wf) {
+  wf = normalizeStepIds(wf).workflow; // a file's invalid step ids are fixed before it is stored (0011 review 2)
+  if (locked) {
+    toast(LOCKED_TITLE);
+    return false;
+  }
+  // (No await unless there is something to lose: otherwise this runs to the end synchronously.)
+  if (!legacy && (unsaved || paused) && !(await confirmLeave())) return false;
+  if (legacy) {
+    // The single autosave of before: replaced in place, with a question (and Ctrl+Z).
+    if (state.workflow.steps?.length && !confirm('Thay workflow hiện tại? (Vẫn có thể hoàn tác bằng Ctrl+Z)')) return false;
+    replaceWorkflow(wf);
+    return true;
+  }
+  if (activeId && reusable()) {
+    openWorkflow(wf);
+    persist();
+    return true;
+  }
+  let id;
+  try {
+    id = lib.create(wf);
+  } catch {
+    toast('Bộ nhớ trình duyệt đã đầy nên chưa tạo được workflow mới. Xóa bớt workflow trong Thư viện rồi thử lại.', 8000, { label: 'Mở Thư viện', onClick: openManage });
+    return false;
+  }
+  show(id, wf);
+  return true;
+}
+
+function show(id, wf) {
+  activeId = id;
+  lib.setActive(id);
+  lastJson = lib.raw(id);
+  paused = false;
+  unsaved = false;
+  unsavedToastShown = false;
+  updateIndicator();
+  openWorkflow(wf);
+}
+
+/** Open entry `id` of the library. */
+export async function switchTo(id) {
+  if (locked) return toast(LOCKED_TITLE);
+  if (id === activeId) return undefined;
+  if ((unsaved || paused) && !(await confirmLeave())) return undefined;
+  // Read after the question: another tab may have changed or deleted the entry meanwhile, and a
+  // run may have started.
+  if (locked) return toast(LOCKED_TITLE);
+  if (id === activeId) return undefined;
+  const r = lib.read(id);
+  if (!r.workflow) return brokenToast(lib.item(id), r);
+  show(id, r.workflow);
+  return undefined;
+}
+
+/** "Mở file JSON…" with a library file: every workflow becomes a new entry (nothing opened). */
+export function importLibraryFile(data) {
+  const file = parseLibraryFile(data);
+  if (!file) return false;
+  if (legacy) {
+    toast(LEGACY_TITLE, 6000);
+    return true;
+  }
+  let n = 0;
+  for (const wf of file.workflows) {
+    try {
+      lib.create(wf);
+      n++;
+    } catch {
+      toast(`Bộ nhớ trình duyệt đã đầy: mới thêm được ${n}/${file.workflows.length} workflow vào thư viện. Xóa bớt workflow rồi mở lại file.`, 8000);
+      return true;
+    }
+  }
+  const skipped = [
+    file.v1 ? `${file.v1} workflow version 1 (lưu từng workflow ra file rồi Mở file JSON… để chuyển)` : '',
+    file.broken ? `${file.broken} mục không phải workflow hợp lệ` : '',
+  ].filter(Boolean).join(' và ');
+  toast(`${n ? `Đã thêm ${n} workflow vào thư viện.` : 'File thư viện không có workflow nào mở được.'}${skipped ? ` Bỏ qua ${skipped}.` : ''}`, skipped ? 8000 : 5000);
+  return true;
+}
+
+// ---------- top bar: ▾, ▲ Chưa lưu ----------
+
+function wireTopBar() {
+  const btn = $('btn-library');
+  btn.onclick = () => (popupAnchor() === btn ? closePopup() : openLibraryMenu());
+  $('btn-unsaved').onclick = () => (paused ? conflictToast() : openManage());
+}
+
+/** The ▾ popup (also Ctrl+O). */
 export function openLibraryMenu() {
   const btn = $('btn-library');
-  if (lib.mode !== 'library') return toast(LEGACY, 6000);
-  const index = readIndex(store) ?? { items: [] };
-  const busy = isRunning();
-  const lock = (it) => (busy ? { ...it, disabled: true, title: BUSY } : it);
-  const recent = byRecent(index.items);
-  const rows = recent.map((it, i) => {
-    const r = readItem(store, it.id);
-    return lock({
-      label: it.name || 'Workflow',
-      desc: r.workflow ? `${it.steps ?? countSteps(r.workflow)} bước · ${hhmm(it.updatedAt)}` : 'không mở được',
-      checked: it.id === ctl.activeId,
-      hiddenUntilSearch: i >= RECENT,
+  if (!libraryReady()) {
+    toast(LEGACY_TITLE, 6000);
+    return;
+  }
+  const items = sortedItems(lib.repair());
+  const lock = locked ? { disabled: true, title: LOCKED_TITLE } : {};
+  const rows = items.map((it, i) => {
+    return {
+      label: it.name,
+      // `broken` is cached in the index (set when an entry could not be read): no parsing here.
+      desc: it.broken ? 'không mở được' : `${it.steps} bước · ${whenText(it.updatedAt)}`,
+      checked: it.id === activeId,
+      searchOnly: i >= RECENT_MAX,
+      ...lock,
       onSelect: () => switchTo(it.id),
-    });
+    };
   });
   btn.setAttribute('aria-expanded', 'true');
   openPopup(btn, {
     title: 'Thư viện',
-    search: recent.length > 6,
+    search: items.length > 6,
     searchLabel: 'Tìm workflow…',
     items: [
-      lock({ label: '+ Workflow mới', onSelect: () => newWorkflow(emptyWorkflow()) }),
-      lock({ label: 'Mở file JSON…', onSelect: () => onOpenFile() }),
+      { label: 'Workflow mới', icon: 'plus', ...lock, onSelect: () => openAsNew(emptyWorkflow()) },
+      { label: 'Mở file JSON…', icon: 'folder', ...lock, onSelect: () => $('file-input').click() },
       { group: 'Gần đây' },
       ...rows,
-      { group: 'Thư viện' },
-      { label: 'Quản lý thư viện…', onSelect: openManager },
+      { separator: true },
+      { label: 'Quản lý thư viện…', onSelect: openManage },
     ],
     onClose: () => btn.setAttribute('aria-expanded', 'false'),
   });
-  return undefined;
-}
-
-/** Open item `id` (undo reset, no result). A broken item: toast, the open workflow stays. */
-export function switchTo(id) {
-  if (isRunning()) return toast(BUSY);
-  if (id === ctl.activeId) return undefined;
-  const r = ctl.open(id);
-  if (!r.workflow) {
-    return toast(`Không mở được workflow này (${r.error}). Workflow đang mở không đổi. Bấm "Tải bản lưu" để lấy file JSON, sửa rồi Mở file lại.`, 12000,
-      r.raw ? { label: 'Tải bản lưu', onClick: () => download('workflow-luu.json', r.raw) } : null);
-  }
-  setSessionActive(id);
-  loadWorkflow(r.workflow);
-  updateIndicator();
-  return undefined;
-}
-
-/**
- * Mới, Mở file, Mẫu: a new item with `wf`, opened. The open item is reused when it is empty and
- * still named "Workflow mới" (no junk items). Legacy mode: replaces the one autosave.
- */
-export function newWorkflow(wf) {
-  if (isRunning()) return toast(BUSY);
-  if (lib.mode !== 'library') {
-    loadWorkflow(wf);
-    updateWorkflow(() => {}, { history: false }); // persists to sfdg.workflow.v2 as before
-    return undefined;
-  }
-  const cur = state.workflow;
-  // Not over an item another tab is editing (paused).
-  const reuse = !(cur.steps?.length) && (cur.name ?? 'Workflow mới') === 'Workflow mới' && !ctl.isPaused();
-  const res = ctl.create(wf, { reuseId: reuse ? ctl.activeId : null });
-  if (!res.ok) {
-    setUnsaved(true, wf);
-    return toast('Bộ nhớ trình duyệt đã đầy nên chưa tạo được workflow mới. Xóa bớt workflow trong Thư viện hoặc tải file JSON.', 8000, { label: 'Mở Thư viện', onClick: openManager });
-  }
-  setSessionActive(res.id);
-  loadWorkflow(wf);
-  updateIndicator();
-  return undefined;
-}
-
-/** A library file was opened: every workflow becomes a new item (none is opened). */
-export function addWorkflows(list) {
-  let n = 0;
-  for (const wf of list) {
-    if (ctl.add(wf)) n++;
-  }
-  toast(n === list.length ? `Đã thêm ${n} workflow vào thư viện.` : `Đã thêm ${n}/${list.length} workflow vào thư viện; bộ nhớ trình duyệt đã đầy.`, 6000);
 }
 
 // ---------- "Quản lý thư viện" ----------
 
-function rename(id, name) {
-  if (id === ctl.activeId) {
-    updateWorkflow((wf) => { wf.name = name; }, { source: 'library' });
-    return;
-  }
-  const r = readItem(store, id);
-  if (r.workflow) saveItem(store, id, { ...r.workflow, name }, { now: Date.now(), activeId: ctl.activeId });
+/** The dialog shows the library now (not another question that took the same <dialog>). */
+const libraryShown = () => $('modal').open && Boolean($('modal').querySelector('.lib-list'));
+
+export function openManage() {
+  if (!libraryReady()) return;
+  lib.repair();
+  const modal = $('modal');
+  const render = () => {
+    const items = lib.items();
+    const rowEl = (it) => {
+      const isOpen = it.id === activeId;
+      const actions = [
+        { label: 'Nhân bản', onSelect: () => { duplicate(it.id); render(); } },
+        { label: 'Tải JSON', onSelect: () => { const raw = lib.raw(it.id); if (raw) download(`${fileBase(it.name)}.json`, JSON.stringify(JSON.parse(raw), null, 2)); } },
+        { label: 'Xóa', danger: true, onSelect: () => remove(it, render) },
+      ];
+      return h('li', { class: `lib-row${isOpen ? ' is-open' : ''}`, 'data-id': it.id },
+        h('input', {
+          class: 'lib-name',
+          value: it.name,
+          'aria-label': 'Tên workflow',
+          onchange: (e) => rename(it.id, e.target.value.trim() || NEW_NAME),
+        }),
+        h('span', { class: 'lib-meta' }, `${it.steps} bước · ${whenText(it.updatedAt)} · ${fmtBytes(it.bytes)}`),
+        h('span', { class: 'lib-actions' },
+          h('button', { disabled: isOpen || locked, title: isOpen ? 'Workflow này đang mở.' : locked ? LOCKED_TITLE : undefined, onclick: () => { modal.close(); switchTo(it.id); } }, 'Mở'),
+          ...actions.map((a) => h('button', { class: `lib-wide${a.danger ? ' danger' : ''}`, onclick: a.onSelect }, a.label)),
+          h('button', {
+            class: 'icon lib-more',
+            'aria-label': `Thao tác khác với "${it.name}"`,
+            'aria-haspopup': 'menu',
+            onclick: (e) => openPopup(e.currentTarget, { title: it.name, items: actions }),
+          }, ico('more'))));
+    };
+    const used = lib.usage();
+    modal.replaceChildren(...[
+      h('h2', {}, 'Thư viện workflow'),
+      undoNote ? h('p', { class: 'lib-undo', role: 'status' }, undoNote.text, ' ', h('button', { onclick: undoNote.undo }, 'Hoàn tác')) : null,
+      h('ul', { class: 'lib-list', 'aria-label': 'Các workflow trong thư viện' }, items.map(rowEl)),
+      h('p', { class: 'hint' }, `Lưu trong trình duyệt này (${location.origin}): mở bằng địa chỉ khác (ví dụ localhost thay cho 127.0.0.1) là một thư viện khác. Đã dùng khoảng ${fmtBytes(used)} / 5 MB (trình duyệt tính theo số ký tự).`),
+      h('div', { class: 'actions' },
+        h('button', { onclick: () => download(`sfdg-library-${new Date().toISOString().slice(0, 10)}.json`, JSON.stringify(lib.exportAll(), null, 2)) }, 'Tải tất cả (JSON)'),
+        h('button', { class: 'primary', onclick: () => modal.close() }, 'Đóng')),
+    ].filter(Boolean));
+  };
+  render();
+  modal.onclose = null;
+  if (!modal.open) modal.showModal();
 }
 
 function duplicate(id) {
-  const r = readItem(store, id);
-  const index = readIndex(store);
-  if (!r.workflow || !index) return;
-  const name = copyName(r.workflow.name || 'Workflow', index.items.map((it) => it.name));
-  const copyId = newId();
-  const res = saveItem(store, copyId, { ...r.workflow, name }, { now: Date.now(), activeId: ctl.activeId });
-  if (!res.ok) return toast('Bộ nhớ trình duyệt đã đầy nên chưa nhân bản được.', 6000);
-  // Right below the original in the list (same edit time; the copy comes after it).
-  const orig = res.index.items.find((it) => it.id === id);
-  const copy = res.index.items.find((it) => it.id === copyId);
-  if (orig && copy) {
-    copy.updatedAt = orig.updatedAt;
-    trySet(store, KEYS.index, JSON.stringify(res.index));
+  try {
+    lib.duplicate(id);
+  } catch {
+    toast('Bộ nhớ trình duyệt đã đầy nên chưa nhân bản được. Xóa bớt workflow rồi thử lại.', 6000);
   }
-  return undefined;
 }
 
-function remove(id) {
-  // The open workflow cannot go while a run uses it (review 0012 S1).
-  if (id === ctl.activeId && isRunning()) return toast(BUSY);
-  const name = readIndex(store)?.items.find((it) => it.id === id)?.name ?? 'Workflow';
-  const res = ctl.remove(id, { empty: emptyWorkflow() });
-  if (!res.ok) {
-    return toast(res.error === 'quota' ? 'Bộ nhớ trình duyệt đã đầy nên chưa xóa được workflow đang mở (không tạo được workflow thay nó). Xóa một workflow khác trước.' : 'Workflow này không còn trong thư viện.', 6000);
+function rename(id, name) {
+  if (id === activeId) {
+    // Like typing in the name field: one undo step, the top bar follows.
+    updateWorkflow((wf) => { wf.name = name; }, { source: 'app' });
+  } else {
+    try {
+      lib.rename(id, name);
+    } catch {
+      toast('Bộ nhớ trình duyệt đã đầy nên chưa đổi được tên.', 5000);
+    }
   }
-  if (res.opened) {
-    setSessionActive(res.opened.id);
-    loadWorkflow(res.opened.workflow);
-    updateIndicator();
-  }
-  // The undo keeps the item and its JSON in memory: it works even when the trash was not written.
-  toast(`Đã xóa workflow "${name}".`, 10000, { label: 'Hoàn tác', onClick: () => restoreDeleted(res.undo) });
-  return undefined;
 }
 
-function restoreDeleted(undo) {
-  const res = ctl.restore(undo);
-  if (!res.ok) return toast('Bộ nhớ trình duyệt đã đầy nên chưa hoàn tác được. Xóa bớt workflow khác rồi tải lại file JSON nếu cần.', 8000, { label: 'Tải bản đã xóa', onClick: () => download('workflow-da-xoa.json', undo.raw) });
-  toast(`Đã khôi phục "${undo.item.name}".`);
-  if ($('modal').open && $('modal').dataset.dialog === 'library') openManager();
-  return undefined;
-}
-
-/** "Quản lý thư viện…" (also the "Chưa lưu" button): rename, duplicate, download, delete. */
-export function openManager() {
-  const modal = $('modal');
-  closePopup();
-  const index = readIndex(store) ?? { items: [] };
-  const rows = byRecent(index.items).map((it) => {
-    const r = readItem(store, it.id);
-    const name = h('input', {
-      value: it.name, 'aria-label': 'Tên workflow', class: 'lib-name',
-      onchange: (e) => { rename(it.id, e.target.value.trim() || 'Workflow'); },
-    });
-    const dl = () => r.workflow && download(`${(r.workflow.name || 'workflow').replace(/[^\w.-]+/g, '_')}.json`, JSON.stringify(r.workflow, null, 2));
-    const act = (label, onclick, attrs = {}) => h('button', { onclick, ...attrs }, label);
-    const more = h('button', {
-      class: 'icon lib-more', title: 'Thao tác khác', 'aria-label': `Thao tác khác với "${it.name}"`, 'aria-haspopup': 'menu',
-      onclick: () => openPopup(more, { title: it.name, items: [
-        { label: 'Nhân bản', onSelect: () => { duplicate(it.id); openManager(); } },
-        { label: 'Tải JSON', disabled: !r.workflow, onSelect: dl },
-        { label: 'Xóa', danger: true, disabled: it.id === ctl.activeId && isRunning(), title: it.id === ctl.activeId && isRunning() ? BUSY : undefined, onSelect: () => { remove(it.id); openManager(); } },
-      ] }),
-    }, ico('more'));
-    return h('div', { class: `lib-row${it.id === ctl.activeId ? ' active' : ''}`, role: 'row', 'data-id': it.id },
-      h('span', { role: 'cell', class: 'lib-cell-name' }, name),
-      h('span', { role: 'cell', class: 'lib-meta' }, r.workflow ? `${it.steps ?? countSteps(r.workflow)} bước · ${hhmm(it.updatedAt)} · ${kb(it.bytes ?? 0)}` : 'không mở được'),
-      h('span', { role: 'cell', class: 'lib-actions' },
-        act('Mở', () => { modal.close(); switchTo(it.id); }, { disabled: it.id === ctl.activeId || isRunning() || !r.workflow, title: isRunning() ? BUSY : undefined }),
-        act('Nhân bản', () => { duplicate(it.id); openManager(); }, { class: 'lib-wide' }),
-        act('Tải JSON', dl, { class: 'lib-wide', disabled: !r.workflow }),
-        act('Xóa', () => { remove(it.id); openManager(); }, { class: 'danger lib-wide', disabled: it.id === ctl.activeId && isRunning(), title: it.id === ctl.activeId && isRunning() ? BUSY : undefined }),
-        more));
-  });
-  const used = usedBytes(store) / 1048576;
-  modal.dataset.dialog = 'library';
-  modal.replaceChildren(
-    h('h2', {}, 'Thư viện workflow'),
-    h('div', { class: 'lib-table', role: 'table', 'aria-label': 'Các workflow trong thư viện' },
-      h('div', { class: 'lib-row lib-head', role: 'row' }, h('span', { role: 'columnheader' }, 'Tên'), h('span', { role: 'columnheader' }, 'Bước · Sửa lúc · Dung lượng'), h('span', { role: 'columnheader' }, '')),
-      rows),
-    h('p', { class: 'hint lib-where' }, `Lưu trong trình duyệt này (${location.origin}); địa chỉ khác (ví dụ localhost thay cho 127.0.0.1) có thư viện riêng. Đã dùng ${used.toLocaleString('vi-VN', { maximumFractionDigits: 1 })} MB / khoảng 5 MB.`),
-    h('div', { class: 'actions' },
-      h('button', { onclick: () => download(`sfdg-library-${new Date().toISOString().slice(0, 10)}.json`, exportLibrary(store, readIndex(store) ?? { items: [] }, new Date().toISOString())) }, 'Tải tất cả (JSON)'),
-      h('button', { class: 'primary', onclick: () => modal.close() }, 'Đóng')),
-  );
-  modal.onclose = () => {
-    delete modal.dataset.dialog;
-    releaseToast();
+function remove(item, render) {
+  if (locked && item.id === activeId) return toast(LOCKED_TITLE);
+  lib.remove(item.id);
+  if (item.id === activeId) {
+    const next = lib.items().find((it) => lib.read(it.id).workflow);
+    if (next) show(next.id, lib.read(next.id).workflow);
+    else {
+      const wf = emptyWorkflow();
+      try {
+        show(lib.create(wf), wf);
+      } catch {
+        activeId = null;
+        openWorkflow(wf);
+      }
+    }
+  }
+  // Storage was full: the delete made room, so try the save again.
+  if (unsaved) persist();
+  const undo = () => {
+    if (undoNote === note) undoNote = null;
+    if (lib.restoreTrash(item.id) === null) {
+      // The trash keeps the last delete only (or the undo time is over).
+      toast(lib.raw(item.id) !== null
+        ? `"${item.name}" đã có lại trong thư viện.`
+        : `Không hoàn tác được lần xóa "${item.name}": thùng rác chỉ giữ lần xóa gần nhất, hoặc đã quá 10 giây. Nếu có file JSON của workflow này, bấm Mở file JSON… để thêm lại.`, 8000);
+    }
+    if (libraryShown()) render();
   };
-  if (!modal.open) modal.showModal();
-  keepToast(modal);
+  // The dialog is modal (the toast behind it cannot be clicked): the undo is also a line in it.
+  const note = { text: `Đã xóa workflow "${item.name}".`, undo };
+  undoNote = note;
+  setTimeout(() => {
+    lib.clearTrash(item.id); // the undo time is over: the copy no longer takes room
+    if (undoNote !== note) return;
+    undoNote = null;
+    if (libraryShown()) render();
+  }, 10000);
+  if (libraryShown()) render();
+  toast(note.text, 10000, { label: 'Hoàn tác', onClick: undo });
+  return undefined;
 }

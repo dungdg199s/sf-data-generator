@@ -2,11 +2,11 @@
 // the Lookup "Bản ghi cha" dropdown, the variable picker and rename propagation.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { analyzeScope, refChoices, refsTo, loopMinIterations, tokenize, stripPath, hasUnclosed, closest } from '../shared/scope.js';
+import { analyzeScope, refChoices, refsTo, loopMinIterations, tokenize, stripPath, hasUnclosed, closest, referenceOptions, optionShown, pathsIn, numberVarPath, isVar, numericSampleFields } from '../shared/scope.js';
 import { scopeCatalog, validateWorkflow } from '../server/workflow/schema.js';
 import { NODE_TYPES } from '../server/workflow/nodes.js';
 import { describeGenerators } from '../server/generators/index.js';
-import { wf, record, loop, branch } from './helpers.js';
+import { wf, record, loop, branch, query, pick } from './helpers.js';
 
 const catalog = scopeCatalog();
 const r = (id, alias = id, fields = []) => record(id, 'Account', alias, fields);
@@ -23,7 +23,7 @@ const stateOf = (scope, id, source) => view(scope, id).find((x) => x.startsWith(
 test('scope: upstream record and enclosing loop vars are visible in the loop body, nearest first', () => {
   const w = wf([loop('loopAcc', { count: 5, alias: 'i' }, [r('acc', 'acc'), loop('loopCon', { mode: 'range', min: 1, max: 4 }, [r('con', 'con')])])]);
   const scope = scopeOf(w);
-  // Workflow-wide variables (`run`, design 0013) always come last.
+  // The run variables (0013 G) always come last.
   assert.deepEqual(scope.at.con.visible.map((v) => v.source), ['loopCon', 'acc', 'loopAcc', '$run']);
   assert.ok(scope.at.con.visible.every((v) => v.certainty === 'always'));
   assert.deepEqual(view(scope, 'acc'), ['i:always', 'run:always', 'acc:-after', 'loop:-outsideLoop', 'con:-after']);
@@ -266,204 +266,310 @@ test('scope: sources created in an each loop are maybe after it', () => {
   assert.deepEqual(bad.refs.map((x) => `${x.nodeId}.${x.field}:${x.code ?? 'ok'}`), ['l.from:unknownName', 'c.fields.T:ok']);
 });
 
-// ---------- design 0013: biến và vòng lặp mở rộng ----------
-
-import { optionShown, numberVarPath, isVar, pathsIn, numericSampleFields, referenceOptions } from '../shared/scope.js';
+// ---------- design 0013: number variables, each extras, values loop, run variables ----------
 
 const num = (name) => ({ name, type: 'number', options: {} });
-const lookupField = (ref) => ({ name: 'L', type: 'lookup', options: { mode: 'current', ref } });
-const codesAt = (scope, id) => scope.refs.filter((x) => x.nodeId === id).map((x) => `${x.field}:${x.path}:${x.code ?? 'ok'}${x.level ? `/${x.level}` : ''}`);
+const day = (name) => ({ name, type: 'date', options: {} });
+const refsAt = (scope, id, field) => scope.refs.filter((x) => x.nodeId === id && (field === undefined || x.field === field));
 
 test('showIf is transitive: an option whose showIf key is hidden is hidden', () => {
-  const loopType = catalog.nodeTypes.find((t) => t.type === 'loop');
-  const defs = loopType.options;
-  const def = (k) => defs.find((d) => d.key === k);
-  const values = (c) => ({ ...Object.fromEntries(defs.map((d) => [d.key, d.default])), ...c });
-  // `filter: compare` left over from an each loop: in fixed mode every filter option is hidden.
-  assert.equal(optionShown(def('filterField'), values({ mode: 'fixed', filter: 'compare' }), defs), false);
-  assert.equal(optionShown(def('filterField'), values({ mode: 'each', filter: 'compare' }), defs), true);
-  assert.equal(optionShown(def('filterField'), values({ mode: 'each' }), defs), false);
-  // Without the siblings only the option's own condition counts (as before).
-  assert.equal(optionShown(def('filterField'), values({ mode: 'fixed', filter: 'compare' })), true);
-  // referenceOptions follows the same rule: the hidden filterValue is kept for renames only.
-  const step = loop('l', { mode: 'fixed', count: 2, filter: 'compare', filterValue: '{{acc.Id}}' });
-  assert.deepEqual(referenceOptions(step, catalog, { includeHidden: true }).filter((o) => o.option === 'filterValue').map((o) => o.hidden), [true]);
-  assert.ok(!referenceOptions(step, catalog).some((o) => o.option === 'filterValue'));
+  const defs = [
+    { key: 'mode', default: 'fixed' },
+    { key: 'filter', default: 'none', showIf: { key: 'mode', in: ['each'] } },
+    { key: 'filterValue', default: '', showIf: { key: 'filter', in: ['compare'] } },
+  ];
+  const fv = defs[2];
+  assert.equal(optionShown(defs, fv, { mode: 'fixed', filter: 'compare' }), false, 'filter is hidden in fixed mode, so is its value');
+  assert.equal(optionShown(defs, fv, { mode: 'each', filter: 'none' }), false);
+  assert.equal(optionShown(defs, fv, { mode: 'each', filter: 'compare' }), true);
+  // A cycle in a broken catalogue does not hang.
+  const cyc = [{ key: 'a', showIf: { key: 'b', in: [1] } }, { key: 'b', showIf: { key: 'a', in: [1] } }];
+  assert.equal(optionShown(cyc, cyc[0], { a: 1, b: 1 }), true);
+  // The real catalogue: the filter value of a Lặp is hidden (still listed for renames) unless each + compare.
+  const at = (config) => referenceOptions(loop('l', config, []), catalog, { includeHidden: true }).find((o) => o.option === 'filterValue');
+  assert.equal(at({ mode: 'fixed', filter: 'compare', filterValue: '{{acc.Id}}' }).hidden, true);
+  assert.equal(at({ mode: 'each', filterValue: '{{acc.Id}}' }).hidden, true);
+  assert.equal(at({ mode: 'each', filter: 'compare', filterValue: '{{acc.Id}}' }).hidden, false);
 });
 
 test('number mode references are analysed like templates and carry valueType', () => {
   const w = wf([
-    r('a', 'acc', [num('N'), tpl('T', 'x')]),
-    q('qq', 'accs', ['Id', 'NumberOfEmployees']),
-    loop('outer', { count: 2, alias: 'o' }, [
-      loop('l1', { count: '{{acc.N}}', alias: 'i1' }, [r('b1')]),
-      loop('l2', { count: ' {{ accs.$count }} ', alias: 'i2' }, [r('b2')]),
-      loop('l3', { mode: 'range', min: '{{o.index}}', max: '{{acc.T}}', alias: 'i3' }, [r('b3')]),
-    ]),
+    record('a', 'Account', 'acc', [num('NumberOfEmployees'), day('Since__c'), tpl('Note', 'x')]),
+    loop('l1', { count: '{{acc.NumberOfEmployees}}' }, [r('x1')]),
+    loop('l2', { mode: 'range', min: 1, max: ' {{ acc.$n }} ' }, [r('x2')]),
+    loop('l3', { count: '{{acc.Since__c}}' }, [r('x3')]),
+    loop('l4', { count: '{{acc.Note}}' }, [r('x4')]),
   ]);
   const scope = scopeOf(w);
-  assert.deepEqual(scope.refs.filter((x) => x.mode === 'number').map((x) => `${x.nodeId}.${x.field}:${x.path}:${x.valueType}:${x.code ?? 'ok'}`), [
-    'l1.count:acc.N:number:ok', 'l2.count:accs.$count:number:ok', 'l3.min:o.index:number:ok', 'l3.max:acc.T:string:notNumber',
-  ]);
-  assert.equal(numberVarPath(' {{ acc.N }} '), 'acc.N');
-  assert.equal(numberVarPath('{{acc.N}} lần'), null);
-  assert.equal(numberVarPath('{{a.N}}{{b.N}}'), null);
-  assert.equal(numberVarPath(5), null);
-  assert.equal(isVar('{{x.y}}'), true);
+  const [c1] = refsAt(scope, 'l1', 'count');
+  assert.deepEqual([c1.mode, c1.path, c1.valueType, c1.code], ['number', 'acc.NumberOfEmployees', 'number', undefined]);
+  assert.deepEqual(refsAt(scope, 'l2', 'max').map((x) => [x.path, x.valueType, x.code]), [['acc.$n', 'number', undefined]]);
+  assert.deepEqual(refsAt(scope, 'l3', 'count').map((x) => [x.valueType, x.code, x.level]), [['date', 'notNumber', 'error']]);
+  assert.deepEqual(refsAt(scope, 'l4', 'count').map((x) => [x.valueType, x.code, x.level]), [['string', 'notNumber', 'warning']]);
+  assert.deepEqual([numberVarPath(' {{ acc.X }} '), numberVarPath('{{acc.X}} lần'), numberVarPath(5), isVar('{{a.b}}'), isVar('5')], ['acc.X', null, null, true, false]);
 });
 
 test('numeric values of a number option hold no reference', () => {
   assert.deepEqual(pathsIn('number', 5), []);
   assert.deepEqual(pathsIn('number', undefined), []);
   assert.deepEqual(pathsIn('number', '12'), []);
-  assert.deepEqual(pathsIn('number', '{{acc.N}}').map((p) => p.path), ['acc.N']);
-  const scope = scopeOf(wf([loop('l', { count: 3 }, [r('x')])]));
-  assert.equal(scope.refs.length, 0);
+  assert.deepEqual(pathsIn('number', '{{a.b}}').map((p) => p.path), ['a.b']);
+  const scope = scopeOf(wf([loop('l', { count: 5 }, [r('x')]), loop('m', { mode: 'range', min: 2, max: 4 }, [r('y')])]));
+  assert.deepEqual(refsAt(scope, 'l'), []);
+  assert.deepEqual(refsAt(scope, 'm'), []);
 });
 
 test('loopMinIterations: variable counts give 0, values give the list length', () => {
   assert.equal(loopMinIterations({ count: '{{acc.N}}' }), 0);
   assert.equal(loopMinIterations({ mode: 'range', min: '{{acc.N}}', max: 5 }), 0);
-  assert.equal(loopMinIterations({ mode: 'range', min: 2, max: '{{acc.N}}' }), 2);
-  assert.equal(loopMinIterations({ mode: 'values', values: ['Hot', ' ', 'Warm'] }), 2);
-  assert.equal(loopMinIterations({ mode: 'values', values: 'Hot\nWarm\nCold' }), 3);
+  assert.equal(loopMinIterations({ mode: 'range', min: 2, max: '{{acc.N}}' }), 2, 'max < min uses min while running');
+  assert.equal(loopMinIterations({ mode: 'values', values: ['Hot', ' ', 'Warm', 'Cold'] }), 3);
+  assert.equal(loopMinIterations({ mode: 'values', values: 'Hot\nWarm' }), 2);
   assert.equal(loopMinIterations({ mode: 'values' }), 0);
-  // Variable count: what is created inside is maybe after the loop.
-  const w = wf([r('a', 'acc', [num('N')]), loop('l', { count: '{{acc.N}}' }, [r('c')]), r('after')]);
-  assert.equal(stateOf(scopeOf(w), 'after', 'c'), 'maybe');
-  assert.equal(stateOf(scopeOf(wf([loop('l', { mode: 'values', values: ['a'] }, [r('c')]), r('after')])), 'after', 'c'), 'last');
+  assert.equal(loopMinIterations({ mode: 'each', from: 'acc' }, { poolNonEmpty: () => true }), 1);
+  assert.equal(loopMinIterations({ mode: 'each', from: 'acc', limit: 2 }, { poolNonEmpty: () => true }), 1);
+  assert.equal(loopMinIterations({ mode: 'each', from: 'acc', filter: 'compare' }, { poolNonEmpty: () => true }), 0);
 });
 
 test('an each loop over an always Record pool runs at least once (no maybe after it)', () => {
-  const w = wf([r('a', 'acc'), each('l', 'acc', 'a2', [r('c')]), r('after', 'after', [lookupField('c')])]);
+  const w = wf([
+    record('a', 'Account', 'acc', [], { count: 5 }),
+    loop('l', { mode: 'each', from: 'acc', itemAlias: 'it' }, [record('c', 'Contact', 'con')]),
+    record('t', 'Task', 'task', [{ name: 'WhoId', type: 'lookup', options: { ref: 'con' } }]),
+  ]);
   const scope = scopeOf(w);
-  assert.equal(stateOf(scope, 'after', 'c'), 'last');
-  assert.deepEqual(codesAt(scope, 'after'), ['fields.L:c:ok']);
-  // With a limit it still runs ≥ 1 time.
-  assert.equal(stateOf(scopeOf(wf([r('a', 'acc'), each('l', 'acc', 'a2', [r('c')], { limit: 1, order: 'shuffle' }), r('after')])), 'after', 'c'), 'last');
-  // A Record made in a finished loop (last) still counts.
-  assert.equal(stateOf(scopeOf(wf([loop('m', { count: 2 }, [r('a', 'acc')]), each('l', 'acc', 'a2', [r('c')]), r('after')])), 'after', 'c'), 'last');
+  assert.equal(stateOf(scope, 't', 'c'), 'last');
+  assert.deepEqual(validateWorkflow(w).warnings.filter((x) => x.code === 'maybe'), []);
 });
 
 test('an each loop with a filter, over a Query, or over a maybe pool may run 0 times', () => {
-  const after = (w) => stateOf(scopeOf(w), 'after', 'c');
-  assert.equal(after(wf([r('a', 'acc'), each('l', 'acc', 'a2', [r('c')], { filter: 'compare', filterField: 'Name', filterValue: 'x' }), r('after')])), 'maybe');
-  assert.equal(after(wf([q('qq', 'accs'), each('l', 'accs', 'a2', [r('c')]), r('after')])), 'maybe');
-  assert.equal(after(wf([branch('b', {}, [r('a', 'acc')], []), each('l', 'acc', 'a2', [r('c')]), r('after')])), 'maybe');
-  assert.equal(after(wf([loop('z', { mode: 'range', min: 0, max: 2 }, [r('a', 'acc')]), each('l', 'acc', 'a2', [r('c')]), r('after')])), 'maybe');
-  // A Chọn bản ghi pool may be skipped: not nonEmpty.
-  assert.equal(after(wf([r('a', 'acc'), { id: 'p', type: 'pick', config: { from: 'acc', alias: 'pk' } }, each('l', 'pk', 'a2', [r('c')]), r('after')])), 'maybe');
+  const after = (l) => [l, record('t', 'Task', 'task', [{ name: 'WhoId', type: 'lookup', options: { ref: 'con' } }])];
+  const body = [record('c', 'Contact', 'con')];
+  const filtered = wf([record('a', 'Account', 'acc'), ...after(loop('l', { mode: 'each', from: 'acc', itemAlias: 'it', filter: 'compare', filterField: 'Name', filterValue: 'x' }, body))]);
+  assert.equal(stateOf(scopeOf(filtered), 't', 'c'), 'maybe');
+  const overQuery = wf([query('q', 'accs'), ...after(loop('l', { mode: 'each', from: 'accs', itemAlias: 'it' }, body))]);
+  assert.equal(stateOf(scopeOf(overQuery), 't', 'c'), 'maybe');
+  const maybePool = wf([branch('b', {}, [record('a', 'Account', 'acc')]), ...after(loop('l', { mode: 'each', from: 'acc', itemAlias: 'it' }, body))]);
+  assert.equal(stateOf(scopeOf(maybePool), 't', 'c'), 'maybe');
+  const overPick = wf([record('a', 'Account', 'acc'), pick('p', 'pa', 'acc'), ...after(loop('l', { mode: 'each', from: 'pa', itemAlias: 'it' }, body))]);
+  assert.equal(stateOf(scopeOf(overPick), 't', 'c'), 'maybe', 'a Chọn bản ghi may skip: not nonEmpty');
 });
 
 test('loop.value exists only in values mode', () => {
-  const inValues = scopeOf(wf([loop('l', { mode: 'values', values: ['Hot'] }, [r('c', 'c', [tpl('T', '{{loop.value}}')])])]));
-  assert.deepEqual(codesAt(inValues, 'c'), ['fields.T:loop.value:ok']);
-  assert.equal(inValues.sources.l.label, 'Vòng lặp theo 1 giá trị');
-  assert.equal(inValues.sources.l.members.find((m) => m.key === 'value').example, '"Hot"');
-  const fixed = scopeOf(wf([loop('l', { count: 2 }, [r('c', 'c', [tpl('T', '{{loop.value}}')])])]));
-  assert.deepEqual(codesAt(fixed, 'c'), ['fields.T:loop.value:unknownMember/error']);
-  assert.deepEqual(fixed.refs[0].when, { key: 'mode', in: ['values'] });
-  const { errors } = validateWorkflow(wf([loop('l', { count: 2 }, [r('c', 'c', [tpl('T', '{{loop.value}}')])])]));
-  assert.equal(errors[0].message, 'Field "T": biến lặp "loop" chỉ có index, index0, count; không có "value". {{loop.value}} chỉ có khi "Lặp theo" là "Mỗi giá trị trong danh sách".');
-  // Count given by a variable: label and example say so.
-  const v = scopeOf(wf([r('a', 'acc', [num('N')]), loop('l', { count: '{{acc.N}}' }, [r('c')])]));
+  const use = (config) => wf([loop('l', config, [r('x', 'x', [tpl('T', '{{loop.value}}')])])]);
+  const ok = scopeOf(use({ mode: 'values', values: ['Hot', 'Warm'] }));
+  assert.deepEqual(refsAt(ok, 'x').map((x) => [x.source, x.code, x.valueType]), [['l', undefined, 'string']]);
+  assert.equal(ok.sources.l.label, 'Vòng lặp theo 2 giá trị');
+  assert.equal(ok.sources.l.members.find((m) => m.key === 'value').example, '"Hot", "Warm"');
+  const bad = scopeOf(use({ count: 3 }));
+  assert.deepEqual(refsAt(bad, 'x').map((x) => x.code), ['unknownMember']);
+  assert.deepEqual(bad.sources.l.members.map((m) => m.key), ['index', 'index0', 'count']);
+  const msg = validateWorkflow(use({ count: 3 })).errors.find((e) => e.nodeId === 'x').message;
+  assert.match(msg, /không có "value"\. \{\{loop\.value\}\} chỉ có khi "Lặp theo" là "Mỗi giá trị trong danh sách"\./);
+  // A variable count: label and example as written.
+  const v = scopeOf(wf([record('a', 'Account', 'acc', [num('N')]), loop('l', { count: '{{acc.N}}' }, [r('y')])]));
   assert.equal(v.sources.l.label, 'Vòng lặp {{acc.N}} lần');
   assert.equal(v.sources.l.members.find((m) => m.key === 'count').example, 'giá trị của acc.N');
 });
 
 test("a loop's own variable in its own options is ownLoop", () => {
   const w = wf([
-    q('qq', 'cons', ['Id', 'AccountId']),
-    loop('l', { count: '{{loop.index}}' }, [r('c')]),
-    each('e', 'cons', 'con', [r('d')], { filter: 'compare', filterField: 'AccountId', filterValue: '{{con.Id}}' }),
+    query('q', 'cons', { sobject: 'Contact', fields: ['Id', 'AccountId'] }),
+    loop('l', { count: '{{loop.index}}' }, [r('x')]),
+    loop('e', { mode: 'each', from: 'cons', itemAlias: 'con', alias: 'k', filter: 'compare', filterField: 'AccountId', filterValue: '{{con.Id}}' }, [r('y')]),
+    // An enclosing loop of the same name: the count reads the outer loop (computed outside the body).
+    loop('outer', { count: 2 }, [loop('inner', { count: '{{loop.index}}' }, [r('z')])]),
   ]);
   const scope = scopeOf(w);
-  assert.deepEqual(codesAt(scope, 'l'), ['count:loop.index:ownLoop/error']);
-  assert.deepEqual(codesAt(scope, 'e'), ['from:cons:ok', 'filterValue:con.Id:ownLoop/error']);
-  const { errors } = validateWorkflow(w);
-  assert.ok(errors.some((e) => e.nodeId === 'l' && e.field === 'count' && e.message === '"Số lần lặp": {{loop.index}} là biến của chính bước Lặp này, chỉ có bên trong thân; ô này được tính một lần trước lần lặp đầu. Dùng biến của bước phía trên.'));
-  assert.ok(errors.some((e) => e.nodeId === 'e' && e.field === 'filterValue' && e.message.startsWith('"So với": {{con.Id}} là bản ghi đang lặp của chính bước Lặp này')));
-  // The variable of an enclosing loop with the same name is fine.
-  assert.deepEqual(codesAt(scopeOf(wf([loop('o', { count: 2 }, [loop('l', { count: '{{loop.index}}' }, [r('c')])])])), 'l'), ['count:loop.index:ok']);
+  assert.deepEqual(refsAt(scope, 'l', 'count').map((x) => x.code), ['ownLoop']);
+  assert.deepEqual(refsAt(scope, 'e', 'filterValue').map((x) => x.code), ['ownLoop']);
+  assert.deepEqual(refsAt(scope, 'inner', 'count').map((x) => [x.source, x.code]), [['outer', undefined]]);
+  const errs = validateWorkflow(w).errors;
+  assert.equal(errs.find((x) => x.nodeId === 'l' && x.field === 'count').message, '"Số lần lặp": {{loop.index}} là biến của chính bước Lặp này, chỉ có bên trong thân; ô này được tính một lần trước lần lặp đầu. Dùng biến của bước phía trên.');
+  assert.match(errs.find((x) => x.nodeId === 'e' && x.field === 'filterValue').message, /^"So với": \{\{con\.Id\}\} là bản ghi đang lặp của chính bước Lặp này/);
 });
 
 test('run variables are visible everywhere and shadowed by an alias named run', () => {
-  const w = wf([r('a', 'acc', [tpl('T', '{{run.seed}} {{run.today}} {{run.now}} {{run.nope}}')]), loop('l', { count: '{{run.seed}}' }, [r('c')])]);
+  const w = wf([r('a', 'acc', [tpl('D', 'Batch {{run.seed}} {{run.today}}')]), loop('l', { count: 2 }, [r('b', 'b', [tpl('D', '{{run.now}}')])])]);
   const scope = scopeOf(w);
-  assert.equal(scope.sources.$run.global, true);
   assert.equal(scope.sources.$run.nodeId, null);
-  assert.deepEqual(codesAt(scope, 'a'), ['fields.T:run.seed:ok', 'fields.T:run.today:ok', 'fields.T:run.now:ok', 'fields.T:run.nope:unknownMember/error']);
-  assert.deepEqual(scope.refs.filter((x) => x.nodeId === 'a').slice(0, 3).map((x) => x.valueType), ['number', 'date', 'datetime']);
-  assert.deepEqual(codesAt(scope, 'l'), ['count:run.seed:ok']);
-  assert.equal(scope.at.a.visible.at(-1).source, '$run');
-  // An alias named run wins: run.* points at it, the group is hidden as shadowed.
-  const sh = scopeOf(wf([r('x', 'run', [tpl('Name', 'n')]), r('a', 'acc', [tpl('T', '{{run.Name}}')])]));
-  assert.deepEqual(codesAt(sh, 'a'), ['fields.T:run.Name:ok']);
-  assert.equal(sh.refs[0].source, 'x');
-  const hid = sh.at.a.hidden.find((h) => h.source === '$run');
-  assert.deepEqual([hid.reason, hid.note], ['shadowed', 'bị alias "run" che']);
-  // A loop variable named run, inside its body only.
-  const lv = scopeOf(wf([loop('l', { count: 2, alias: 'run' }, [r('in', 'in', [tpl('T', '{{run.index}}')])]), r('out', 'out', [tpl('T', '{{run.seed}}')])]));
-  assert.deepEqual([...codesAt(lv, 'in'), ...codesAt(lv, 'out')], ['fields.T:run.index:ok', 'fields.T:run.seed:ok']);
-  assert.equal(lv.at.in.hidden.find((h) => h.source === '$run').note, 'bị biến lặp "run" che');
+  assert.deepEqual(scope.sources.$run.members.map((m) => `${m.key}:${m.valueType}`), ['seed:number', 'now:datetime', 'today:date']);
+  assert.deepEqual(refsAt(scope, 'a').map((x) => [x.source, x.code]), [['$run', undefined], ['$run', undefined]]);
+  assert.equal(scope.at.b.visible.at(-1).source, '$run');
+  assert.deepEqual(validateWorkflow(w).errors, []);
+  // An alias named `run` wins (and is not an error); the run group is hidden as shadowed.
+  const sh = wf([r('a', 'run', [num('seed')]), r('b', 'b', [tpl('D', '{{run.seed}}')])]);
+  const s2 = scopeOf(sh);
+  assert.deepEqual(refsAt(s2, 'b').map((x) => x.source), ['a']);
+  assert.deepEqual(s2.at.b.hidden.find((h) => h.source === '$run'), { source: '$run', reason: 'shadowed', note: 'bị alias "run" che' });
+  assert.ok(!s2.at.b.visible.some((v) => v.source === '$run'));
+  assert.deepEqual(validateWorkflow(sh).errors, []);
+  // So does a loop variable named `run`, inside its body only.
+  const lv = scopeOf(wf([loop('l', { count: 2, alias: 'run' }, [r('x', 'x', [tpl('D', '{{run.index}}')])]), r('y', 'y', [tpl('D', '{{run.seed}}')])]));
+  assert.deepEqual([refsAt(lv, 'x')[0].source, refsAt(lv, 'y')[0].source], ['l', '$run']);
 });
 
 test('numericSampleFields lists Query fields used as numbers or weights', () => {
   const w = wf([
-    q('qa', 'accs', ['Id', 'NumberOfEmployees', 'AnnualRevenue', 'Name']),
-    q('qo', 'opps', ['Id', 'Amount']),
-    { id: 'p', type: 'pick', config: { from: 'opps', alias: 'opp', mode: 'weighted', weightField: 'Amount' } },
-    each('l', 'accs', 'acc', [loop('n', { count: '{{acc.numberofemployees}}' }, [r('c', 'c', [tpl('T', '{{acc.Name}}')])])]),
-    { id: 'p2', type: 'pick', config: { from: 'accs', alias: 'a2', weightField: 'AnnualRevenue' } },
+    query('q', 'accs', { fields: ['Id', 'Name', 'NumberOfEmployees', 'AnnualRevenue', 'Owner.Num__c'] }),
+    query('q2', 'cons', { sobject: 'Contact', fields: ['Id', 'Score__c'] }),
+    loop('la', { mode: 'each', from: 'accs', itemAlias: 'acc' }, [
+      loop('lc', { count: '{{acc.NumberOfEmployees}}' }, [r('x')]),
+      loop('lr', { mode: 'range', min: '{{acc.Owner.Num__c}}', max: '{{accs.$count}}' }, [r('y')]),
+    ]),
+    pick('p', 'c1', 'cons', { mode: 'weighted', weightField: 'Score__c' }),
+    pick('p2', 'a1', 'accs'),
+    loop('lp', { count: '{{a1.AnnualRevenue}}' }, [r('z')]),
+    { ...loop('off', { count: '{{a1.Name}}' }, [r('w')]), disabled: true },
   ]);
-  assert.deepEqual(numericSampleFields(w, catalog), { qa: ['numberofemployees'], qo: ['Amount'] });
+  const out = numericSampleFields(w, catalog);
+  assert.deepEqual(Object.keys(out).sort(), ['q', 'q2']);
+  assert.deepEqual(out.q.sort(), ['AnnualRevenue', 'NumberOfEmployees', 'Owner.Num__c']);
+  assert.deepEqual(out.q2, ['Score__c']);
 });
 
-// ---------- design 0013, review fixes ----------
+test('a skipping Chọn bản ghi before the Record in a loop body: its pool is not certain after the loop (review of 0013)', () => {
+  const after = [loop('l2', { mode: 'each', from: 'con', itemAlias: 'it' }, [record('c2', 'Task', 'task')]), record('z', 'Note', 'z', [{ name: 'T', type: 'lookup', options: { ref: 'task' } }])];
+  const make = (pk, extra = []) => wf([record('a', 'Account', 'acc', [], { count: 2 }), loop('l1', { count: 3 }, [...extra, pk, record('c', 'Contact', 'con')]), ...after]);
+  // A filtered pick may find nothing: every iteration may stop before the Contact.
+  const filtered = pick('p', 'pa', 'acc', { filter: 'compare', filterField: 'Name', filterValue: 'x' });
+  assert.equal(stateOf(scopeOf(make(filtered)), 'z', 'c2'), 'maybe');
+  // Inside a branch of the body, the skip still ends the iteration.
+  assert.equal(stateOf(scopeOf(wf([record('a', 'Account', 'acc'), loop('l1', { count: 3 }, [branch('b', {}, [filtered], []), record('c', 'Contact', 'con')]), ...after])), 'z', 'c2'), 'maybe');
+  // "Báo lỗi" never skips; an unfiltered random pick from an always-filled pool always finds one.
+  assert.equal(stateOf(scopeOf(make({ ...filtered, config: { ...filtered.config, onEmpty: 'error' } })), 'z', 'c2'), 'last');
+  assert.equal(stateOf(scopeOf(make(pick('p', 'pa', 'acc'))), 'z', 'c2'), 'last');
+  assert.equal(stateOf(scopeOf(make(pick('p', 'pa', 'acc', { mode: 'unique' }))), 'z', 'c2'), 'maybe', 'unique may run out');
+  // A turned-off pick does not run; a skip in an inner loop's body ends only that loop's iteration.
+  assert.equal(stateOf(scopeOf(make({ ...filtered, disabled: true })), 'z', 'c2'), 'last');
+  assert.equal(stateOf(scopeOf(wf([record('a', 'Account', 'acc'), loop('l1', { count: 3 }, [loop('in', { count: 2 }, [filtered]), record('c', 'Contact', 'con')]), ...after])), 'z', 'c2'), 'last');
+  // Within the same iteration, after the Contact ran, its pool does hold a record.
+  const inside = wf([record('a', 'Account', 'acc'), loop('l1', { count: 3 }, [filtered, record('c', 'Contact', 'con'), loop('l2', { mode: 'each', from: 'con', itemAlias: 'it' }, [record('c2', 'Task', 'task')]), record('z', 'Note', 'z', [{ name: 'T', type: 'lookup', options: { ref: 'task' } }])])]);
+  assert.equal(stateOf(scopeOf(inside), 'z', 'c2'), 'last');
+});
 
-test('0013 review S1: a Chọn bản ghi that may skip makes what follows it in the loop body maybe after the loop', () => {
-  const qq = q('q', 'accs', ['Id']);
-  const pk = (extra = {}) => ({ id: 'p', type: 'pick', config: { from: 'accs', alias: 'pp', filter: 'compare', filterField: 'Id', filterValue: 'zzz', ...extra } });
-  const w = wf([qq, loop('o', { count: 2 }, [r('b', 'before'), pk(), r('a', 'acc')]), each('e', 'acc', 'x', [r('c', 'con')]), r('t', 'tk', [lookupField('con')])]);
+// ---------- Đặt biến (design 0015): {{var.<name>}} ----------
+
+import { setVar } from './helpers.js';
+import * as scopeFns from '../shared/scope.js';
+
+const refOf = (scope, nodeId, path) => scope.refs.find((x) => x.nodeId === nodeId && x.path === path);
+
+test('set variable: a source of kind value, visible downstream (always), kept out of the alias namespace', () => {
+  const w = wf([setVar('s1', 'total', '0', { valueType: 'number' }), r('acc', 'acc', [tpl('Name', '{{var.total}} {{total.x}}')])]);
   const scope = scopeOf(w);
-  assert.equal(stateOf(scope, 't', 'a'), 'maybe', 'acc is after the pick: some iterations skipped it');
-  assert.equal(stateOf(scope, 't', 'b'), 'last', 'what came before the pick is still last');
-  assert.equal(stateOf(scope, 't', 'c'), 'maybe', 'the each loop over acc may run 0 times (poolNonEmpty is false)');
-  assert.deepEqual(scope.at.t.visible.find((v) => v.source === 'a').why, { loop: 'loop', loopId: 'o', skip: 'pp' });
-  assert.equal(scope.at.t.visible.find((v) => v.source === 'a').note, 'bước "pp" có thể bỏ qua phần sau của vòng lặp "loop"');
-  // Inside the body, after the pick, acc is always there (the iteration went on).
-  assert.equal(stateOf(scope, 'a', 'p'), 'always');
-  // onEmpty "error" never skips; a skip at the top level ends the run (nothing after is maybe).
-  assert.equal(stateOf(scopeOf(wf([qq, loop('o', { count: 2 }, [pk({ onEmpty: 'error' }), r('a', 'acc')]), r('t')])), 't', 'a'), 'last');
-  assert.equal(stateOf(scopeOf(wf([qq, pk(), r('a', 'acc', [], { count: 3 }), each('e', 'acc', 'x', [r('c', 'con')]), r('t')])), 't', 'c'), 'last');
-  // A pick in one branch column also makes what follows the branch maybe; a pick in a nested loop does not leak out.
-  const br = scopeOf(wf([qq, loop('o', { count: 2 }, [branch('bb', {}, [pk()], [r('n', 'n')]), r('a', 'acc')]), r('t')]));
-  assert.equal(stateOf(br, 't', 'a'), 'maybe');
-  const nested = scopeOf(wf([qq, loop('o', { count: 2 }, [loop('i', { count: 1 }, [pk()]), r('a', 'acc')]), r('t')]));
-  assert.equal(stateOf(nested, 't', 'a'), 'last');
-  // The message names the pick.
-  const { warnings } = validateWorkflow(wf([qq, loop('o', { count: 2 }, [pk(), r('a', 'acc')]), r('t', 'tk', [lookupField('acc')])]));
-  assert.equal(warnings.find((x) => x.nodeId === 't').message, 'Field "L": bước "pp" có thể bỏ qua phần còn lại của vòng lặp "loop" (khi không còn bản ghi để chọn), nên "acc" có thể chưa có bản ghi. Đặt "acc" trước bước "pp" hoặc chọn "Báo lỗi và dừng".');
-  // Declared in the catalogue, not per type in shared/.
-  assert.deepEqual(catalog.nodeTypes.find((t) => t.type === 'pick').flow.canSkip, { key: 'onEmpty', in: ['skip'] });
+  const src = scope.sources.s1;
+  assert.deepEqual([src.kind, src.namespace, src.name, src.valueType, src.label], ['value', 'var', 'total', 'number', 'Biến']);
+  assert.equal(stateOf(scope, 'acc', 's1'), 'always');
+  const ref = refOf(scope, 'acc', 'var.total');
+  assert.deepEqual([ref.source, ref.certainty, ref.varName, ref.namespace, ref.valueType, ref.code], ['s1', 'always', 'total', 'var', 'number', undefined]);
+  // `total` is not an alias: {{total.x}} is unknown, and nothing suggests the variable as an alias.
+  const bare = refOf(scope, 'acc', 'total.x');
+  assert.equal(bare.code, 'unknownName');
+  assert.equal(bare.suggestion, undefined);
+  // Cộng thêm is always Số; Gán defaults to Chữ.
+  assert.equal(scopeOf(wf([setVar('a', 'n', '1', { mode: 'add', valueType: 'text' })])).sources.a.valueType, 'number');
+  assert.equal(scopeOf(wf([setVar('a', 'n', 'x')])).sources.a.valueType, 'string');
 });
 
-test('0013 review N5: numberVarPath uses the template token syntax', async () => {
-  const { readFileSync } = await import('node:fs');
-  const src = readFileSync(new URL('../shared/scope.js', import.meta.url), 'utf8');
-  assert.match(src, /new RegExp\(`\^\\\\s\*\$\{TEMPLATE_TOKEN_SOURCE\}\\\\s\*\$`\)/, 'built from TEMPLATE_TOKEN_SOURCE');
-  for (const s of ['{{a.b}}', ' {{ a.$n }} ', '{{a.b}} x', '{{a b}}', '{{}}', '{{a.b}}{{c.d}}', 'x']) {
-    const one = tokenize(s.trim());
-    assert.equal(numberVarPath(s), one.length === 1 && one[0].kind === 'token' ? one[0].path : null, s);
-  }
+test('set variable: certainty after a branch (maybe), after a loop (last / maybe), and init + add in a loop (always)', () => {
+  const inBranch = scopeOf(wf([branch('b', {}, [setVar('s1', 'x', '1')], []), r('acc', 'acc', [tpl('Name', '{{var.x}}')])]));
+  assert.deepEqual([refOf(inBranch, 'acc', 'var.x').code, refOf(inBranch, 'acc', 'var.x').level], ['maybe', 'warning']);
+  const once = scopeOf(wf([loop('l', { count: 2 }, [setVar('s1', 'x', '1')]), r('acc', 'acc', [tpl('Name', '{{var.x}}')])]));
+  assert.equal(refOf(once, 'acc', 'var.x').certainty, 'last');
+  const zero = scopeOf(wf([loop('l', { count: 0 }, [setVar('s1', 'x', '1')]), r('acc', 'acc', [tpl('Name', '{{var.x}}')])]));
+  assert.equal(refOf(zero, 'acc', 'var.x').code, 'maybe');
+  // An `always` assignment above is enough: the nearest one is the source, the best certainty counts.
+  const acc = scopeOf(wf([
+    setVar('s0', 't', '0', { valueType: 'number' }),
+    loop('l', { count: 0 }, [setVar('s1', 't', '{{loop.index}}', { mode: 'add' })]),
+    r('sum', 'sum', [tpl('Name', 'Tổng {{var.t}}')]),
+  ]));
+  const ref = refOf(acc, 'sum', 'var.t');
+  assert.deepEqual([ref.source, ref.certainty, ref.code], ['s1', 'always', undefined]);
 });
 
-test('0013 review N6: a turned-off step named run does not hide {{run.*}}', () => {
-  const w = wf([{ ...r('x', 'run', [tpl('Name', 'n')]), disabled: true }, r('a', 'acc', [tpl('T', '{{run.seed}}')])]);
+test('set variable: after, otherBranch, disabled, varUnset, unknown name with a suggestion, var / var.x.y', () => {
+  const after = scopeOf(wf([r('acc', 'acc', [tpl('Name', '{{var.x}}')]), setVar('s1', 'x', '1')]));
+  assert.deepEqual([refOf(after, 'acc', 'var.x').code, refOf(after, 'acc', 'var.x').source], ['after', 's1']);
+  assert.equal(after.at.acc.hidden.find((h) => h.source === 's1').note, 'Đặt biến chạy sau bước này');
+  const other = scopeOf(wf([branch('b', {}, [setVar('s1', 'x', '1')], [r('acc', 'acc', [tpl('Name', '{{var.x}}')])])]));
+  assert.equal(refOf(other, 'acc', 'var.x').code, 'otherBranch');
+  const off = scopeOf(wf([{ ...setVar('s1', 'x', '1'), disabled: true }, setVar('s2', 'x', '2'), r('acc', 'acc', [tpl('Name', '{{var.x}}')])]));
+  assert.equal(refOf(off, 'acc', 'var.x').source, 's2', 'a turned-off step does not count, another one does');
+  const offOnly = scopeOf(wf([{ ...setVar('s1', 'x', '1'), disabled: true }, r('acc', 'acc', [tpl('Name', '{{var.x}}')])]));
+  assert.equal(refOf(offOnly, 'acc', 'var.x').code, 'disabled');
+  // Reads itself before any assignment.
+  const self = scopeOf(wf([loop('l', { count: 2 }, [setVar('s1', 's', '{{var.s}}-x')])]));
+  assert.equal(refOf(self, 's1', 'var.s').code, 'varUnset');
+  // With an initial value above it reads that one (appending in a loop).
+  const init = scopeOf(wf([setVar('s0', 's', 'a'), loop('l', { count: 2 }, [setVar('s1', 's', '{{var.s}}-x')])]));
+  assert.equal(refOf(init, 's1', 'var.s').code, undefined);
+  const typo = scopeOf(wf([setVar('s1', 'total', '1'), r('acc', 'acc', [tpl('Name', '{{var.totl}} {{var}} {{var.total.x}}')])]));
+  assert.deepEqual(refOf(typo, 'acc', 'var.totl').suggestion, { option: 'template', from: 'var.totl', to: 'var.total' });
+  assert.deepEqual([refOf(typo, 'acc', 'var').code, refOf(typo, 'acc', 'var').example], ['wholeRecord', 'total']);
+  assert.deepEqual([refOf(typo, 'acc', 'var.total.x').code, refOf(typo, 'acc', 'var.total.x').missing], ['unknownMember', 'x']);
+});
+
+test('set variable: number options take Số variables (Chữ is a warning); a loop variable or alias called var wins; run is untouched', () => {
+  const w = wf([
+    setVar('n', 'n', '5', { valueType: 'number' }), setVar('t', 't', 'abc'),
+    loop('l1', { count: '{{var.n}}' }, []), loop('l2', { count: '{{var.t}}', alias: 'l2' }, []),
+  ]);
   const scope = scopeOf(w);
-  assert.deepEqual(codesAt(scope, 'a'), ['fields.T:run.seed:ok']);
-  assert.equal(scope.refs.find((x) => x.nodeId === 'a').source, '$run');
-  assert.equal(scope.at.a.visible.at(-1).source, '$run');
-  // Turned on again, the alias wins (and run.seed is its unknown field).
-  assert.deepEqual(codesAt(scopeOf(wf([r('x', 'run', [tpl('Name', 'n')]), r('a', 'acc', [tpl('T', '{{run.seed}}')])])), 'a'), ['fields.T:run.seed:unknownMember/error']);
+  assert.equal(refOf(scope, 'l1', 'var.n').code, undefined);
+  assert.deepEqual([refOf(scope, 'l2', 'var.t').code, refOf(scope, 'l2', 'var.t').level], ['notNumber', 'warning']);
+  // Gán Số in one step and Chữ in another: the type is unknown (any), so no notNumber.
+  const mixed = scopeOf(wf([setVar('a', 'n', '5', { valueType: 'number' }), setVar('b', 'n', 'x'), loop('l', { count: '{{var.n}}' }, [])]));
+  assert.equal(refOf(mixed, 'l', 'var.n').valueType, 'any');
+  // A loop variable called var in scope wins (validation reports varReserved).
+  const shadow = scopeOf(wf([setVar('s', 'x', '1'), loop('l', { count: 1, alias: 'var' }, [r('acc', 'acc', [tpl('Name', '{{var.index}}')])])]));
+  assert.deepEqual([refOf(shadow, 'acc', 'var.index').source, refOf(shadow, 'acc', 'var.index').code], ['l', undefined]);
+  // A step aliased `run` still hides the run variables; a variable called run does not.
+  const run = scopeOf(wf([setVar('s', 'run', '1'), r('acc', 'acc', [tpl('Name', '{{run.seed}} {{var.run}}')])]));
+  assert.equal(refOf(run, 'acc', 'run.seed').source, '$run');
+  assert.equal(refOf(run, 'acc', 'var.run').source, 's');
+});
+
+test('set variable: a Query field read into a Số variable counts as numeric for sample rows', () => {
+  const w = wf([query('q', 'accs', { fields: ['Id', 'NumberOfEmployees', 'Name'] }), pick('p', 'acc', 'accs'),
+    setVar('s', 'n', '{{acc.NumberOfEmployees}}', { valueType: 'number' }), setVar('s2', 'name', '{{acc.Name}}')]);
+  assert.deepEqual(numericSampleFields(w, catalog), { q: ['NumberOfEmployees'] });
+});
+
+test('set variable after review (S1): set on both sides of a Rẽ nhánh is always; on one side maybe; in a 0-times loop too', () => {
+  const both = scopeOf(wf([branch('b', {}, [setVar('s1', 'lo', 'A')], [setVar('s2', 'lo', 'B')]), r('acc', 'acc', [tpl('Name', '{{var.lo}}')])]));
+  const ref = refOf(both, 'acc', 'var.lo');
+  assert.deepEqual([ref.certainty, ref.code, ref.source], ['always', undefined, 's2']);
+  const nested = scopeOf(wf([branch('b', {}, [branch('b2', {}, [setVar('s1', 'lo', 'A')], [setVar('s3', 'lo', 'C')])], [setVar('s2', 'lo', 'B')]), r('acc', 'acc', [tpl('Name', '{{var.lo}}')])]));
+  assert.equal(refOf(nested, 'acc', 'var.lo').certainty, 'always');
+  const one = scopeOf(wf([branch('b', {}, [setVar('s1', 'lo', 'A')], [setVar('s2', 'other', 'B')]), r('acc', 'acc', [tpl('Name', '{{var.lo}}')])]));
+  assert.equal(refOf(one, 'acc', 'var.lo').code, 'maybe');
+  // The name keys never show as sources in the picker's list.
+  assert.ok(both.at.acc.visible.every((v) => both.sources[v.source]));
+});
+
+test('brokenRefs (S3): only references that resolved before and are errors after the removal', () => {
+  const { brokenRefs, sourceLabel } = scopeFns;
+  const steps = (keep) => wf([
+    ...keep, r('acc', 'acc', [tpl('Name', '{{var.lo}}')]), setVar('late', 'lo', 'Z'),
+  ]);
+  const before = scopeOf(steps([setVar('s1', 'lo', 'A')]));
+  // Only a step after the reader still sets `lo`: the reference breaks (after).
+  const after = scopeOf(steps([]));
+  const broken = brokenRefs(before, after, { removed: new Set(['s1']) });
+  assert.deepEqual(broken.map((x) => [x.nodeId, x.path]), [['acc', 'var.lo']]);
+  assert.equal(sourceLabel(before, broken[0].source), 'var.lo');
+  // Another step above still sets it: nothing breaks.
+  const two = wf([setVar('s0', 'lo', 'A'), setVar('s1', 'lo', 'B'), r('acc', 'acc', [tpl('Name', '{{var.lo}}')])]);
+  const twoAfter = wf([setVar('s0', 'lo', 'A'), r('acc', 'acc', [tpl('Name', '{{var.lo}}')])]);
+  assert.deepEqual(brokenRefs(scopeOf(two), scopeOf(twoAfter), { removed: new Set(['s1']) }), []);
+  // A turned-off one does not keep it valid.
+  const offAfter = wf([{ ...setVar('s0', 'lo', 'A'), disabled: true }, r('acc', 'acc', [tpl('Name', '{{var.lo}}')])]);
+  const offBefore = wf([{ ...setVar('s0', 'lo', 'A'), disabled: true }, setVar('s1', 'lo', 'B'), r('acc', 'acc', [tpl('Name', '{{var.lo}}')])]);
+  assert.equal(brokenRefs(scopeOf(offBefore), scopeOf(offAfter), { removed: new Set(['s1']) }).length, 1);
+  // A record alias as before: a Lookup / template to a removed Record breaks.
+  const recBefore = wf([r('a1', 'acc', [tpl('Name', 'x')]), r('c', 'con', [tpl('T', '{{acc.Name}}')])]);
+  const recAfter = wf([r('c', 'con', [tpl('T', '{{acc.Name}}')])]);
+  assert.equal(sourceLabel(scopeOf(recBefore), brokenRefs(scopeOf(recBefore), scopeOf(recAfter), { removed: new Set(['a1']) })[0].source), 'acc');
 });

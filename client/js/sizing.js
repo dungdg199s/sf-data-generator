@@ -1,130 +1,97 @@
-// Pure sizing rules of design 0014 (no DOM, so node:test loads it): the "còn mục" side of a
-// sideways-scrolling row (§4), the results panel height (§2) and the two notches of the bottom
-// sheet (§3). The callers (dom.js, results.js, inspector.js) measure and apply.
+// Sizes the user drags (design 0014 §2, §3): the results panel height and the bottom sheet's two
+// snaps. Pure (no DOM), so node:test loads it; results.js and inspector.js measure and apply.
 
-// ---------- rows that scroll sideways (§4) ----------
-
-/**
- * Which edge of a row still hides items: 'start', 'end', 'both' or null (nothing hidden).
- * `left` may be negative in a right-to-left row; only its size matters.
- */
-export function overflowSide({ left, scrollWidth, clientWidth }, threshold = 1) {
-  const max = scrollWidth - clientWidth;
-  if (!(max > threshold)) return null;
-  const x = Math.abs(left);
-  const start = x > threshold;
-  const end = x < max - threshold;
-  if (start && end) return 'both';
-  return start ? 'start' : end ? 'end' : null;
-}
-
-const LINE_PX = 16; // WheelEvent.deltaMode 1 (lines, Firefox)
+/** Defaults, in px (the CSS tokens of the same name: --results-min-h, --layout-min-h). */
+export const RESULTS_MIN = 160;
+export const LAYOUT_MIN = 240;
+/** Below this range (max − min) the handle is hidden: nothing useful to drag (a landscape phone). */
+export const MIN_RANGE = 24;
+/** Dragged this far under the minimum and released: the panel collapses (its saved height is kept). */
+export const COLLAPSE_PAST = 48;
+/** Default height: 38 % of the window, as before design 0014. */
+export const DEFAULT_RATIO = 0.38;
 
 /**
- * A mostly vertical wheel turn over a row that overflows sideways scrolls the row instead.
- * → the new scrollLeft, or null when the row should leave the event alone (not overflowing, a
- * sideways gesture, or already at that end: the page gets the wheel back).
+ * Limits of the results panel and the height to use.
+ * total: height below the top bar (main + results); want: the height asked for (px).
+ * → { height, min, max, resizable }. The main area (palette + middle column) keeps at least
+ * min(layoutMin, total / 2); when max − min < MIN_RANGE the panel is not resizable and `height`
+ * is `want` unchanged (the CSS default applies).
  */
-export function wheelScroll({ deltaX = 0, deltaY = 0, deltaMode = 0, left, scrollWidth, clientWidth }) {
-  const max = scrollWidth - clientWidth;
-  if (!(max > 1) || Math.abs(deltaY) <= Math.abs(deltaX)) return null;
-  const dy = deltaMode === 1 ? deltaY * LINE_PX : deltaMode === 2 ? deltaY * clientWidth : deltaY;
-  const next = Math.min(max, Math.max(0, left + dy));
-  return Math.abs(next - left) < 0.5 ? null : next;
-}
-
-/** scrollLeft that brings [itemLeft, itemLeft + itemWidth] into view, outside a `pad` px fade at each edge. */
-export function revealInline({ itemLeft, itemWidth, left, clientWidth, pad = 0 }) {
-  if (itemLeft - pad < left) return Math.max(0, itemLeft - pad);
-  if (itemLeft + itemWidth + pad > left + clientWidth) return itemLeft + itemWidth + pad - clientWidth;
-  return left;
-}
-
-// ---------- results panel height (§2) ----------
-
-export const RESULTS = {
-  min: 160, // --results-min-h: head 48 + tab row 37 + table head + 2 rows
-  layoutMin: 240, // --layout-min-h: the palette + middle column keep min(240 px, 50 %)
-  defaultRatio: 0.38, // 38vh, as before design 0014
-  step: 16, // ↑ / ↓
-  bigStep: 64, // Shift+↑ / Shift+↓
-  collapseBelow: 48, // released this far under min: collapse
-  hideBelow: 24, // less room than this between min and max: no handle
-};
-
-/**
- * Height range of the open panel for `total` px under the top bar → { min, max, usable }.
- * `usable` is false when there is less than 24 px to change (landscape phone): no handle then.
- */
-export function resultsRange(total) {
-  const max = total - Math.min(RESULTS.layoutMin, total * 0.5);
-  return { min: RESULTS.min, max, usable: max - RESULTS.min >= RESULTS.hideBelow };
-}
-
-/** `want` px kept within the range of `total` (rounded to whole px). */
-export function clampResults(want, total) {
-  const { min, max } = resultsRange(total);
-  return Math.round(Math.min(Math.max(want, min), Math.max(min, max)));
+export function clampResults({ want, total, min = RESULTS_MIN, layoutMin = LAYOUT_MIN }) {
+  const max = Math.floor(total - Math.min(layoutMin, total / 2));
+  const resizable = max - min >= MIN_RANGE;
+  if (!resizable) return { height: want, min, max, resizable };
+  const height = Math.round(Math.min(max, Math.max(min, want)));
+  return { height, min, max, resizable };
 }
 
 /**
- * Height for a stored ratio (0–1) of `total`. A missing or broken ratio gives the default of
- * before design 0014: 38 % of the window height `viewport` (38vh), clamped too.
+ * What a key does on the panel's handle (role=separator): `{ delta }` in px (↑ taller), `{ to: 'min' |
+ * 'max' }` (Home / End), `{ toggle: true }` (Enter collapses / reopens), or null (not ours).
  */
-export function resultsFromRatio(ratio, total, viewport = total) {
-  const r = ratio === null || ratio === undefined || ratio === '' ? NaN : Number(ratio);
-  if (Number.isFinite(r) && r > 0 && r <= 1) return clampResults(r * total, total);
-  return clampResults(RESULTS.defaultRatio * viewport, total);
-}
-
-/** The ratio stored in localStorage['sfdg.resultsH']: 3 decimals, as a string. */
-export const resultsRatio = (height, total) => (total > 0 ? (Math.round((height / total) * 1000) / 1000).toFixed(3) : String(RESULTS.defaultRatio));
-
-/**
- * Key on the separator → { height } (new height, clamped), { toggle: true } (Enter: collapse /
- * open) or null (not a key of the handle).
- */
-export function resultsKey(key, shift, height, total) {
-  const { min, max } = resultsRange(total);
-  const d = shift ? RESULTS.bigStep : RESULTS.step;
+export function resultsKeyStep(key, shift = false) {
+  const step = shift ? 64 : 16;
   switch (key) {
-    case 'ArrowUp': return { height: clampResults(height + d, total) };
-    case 'ArrowDown': return { height: clampResults(height - d, total) };
-    case 'Home': return { height: clampResults(min, total) };
-    case 'End': return { height: clampResults(max, total) };
+    case 'ArrowUp': return { delta: step };
+    case 'ArrowDown': return { delta: -step };
+    case 'Home': return { to: 'min' };
+    case 'End': return { to: 'max' };
     case 'Enter': return { toggle: true };
     default: return null;
   }
 }
 
-/** Released after dragging below min by more than 48 px: the panel collapses (the stored height stays). */
-export const shouldCollapse = (dragHeight, min = RESULTS.min) => dragHeight < min - RESULTS.collapseBelow;
-
-/** ARIA values of the separator: percent of `total` (the space under the top bar), and the text read out. */
-export function resultsAria(height, total) {
-  const { min, max } = resultsRange(total);
-  const pct = (v) => (total > 0 ? Math.round((v / total) * 100) : 0);
-  return { now: pct(height), min: pct(min), max: pct(Math.max(min, max)), text: `Cao ${Math.round(height)} px (${pct(height)} % của vùng dưới thanh trên)` };
+/** A drag released at height `drag` (unclamped) collapses the panel when it went 48 px under the minimum. */
+export function shouldCollapse(drag, min = RESULTS_MIN) {
+  return drag < min - COLLAPSE_PAST;
 }
 
-// ---------- bottom sheet notches (§3) ----------
+/** The saved ratio (0–1, `sfdg.resultsH`) → a number, or null when missing or invalid. */
+export function parseRatio(raw) {
+  if (raw === null || raw === undefined || raw === '') return null;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 && n < 1 ? n : null;
+}
 
-export const SHEET = {
-  dragStart: 8, // px of movement before a press on the sheet head is a drag
-  flick: 0.5, // px/ms over the last 100 ms: go to the next notch
-};
+/** Height (px) as a ratio of `total`, 3 decimals, for `sfdg.resultsH`. */
+export const toRatio = (height, total) => (total > 0 ? Math.round((height / total) * 1000) / 1000 : DEFAULT_RATIO);
+
+/** ARIA values of the handle: percentages of `total`, rounded, and the spoken text. */
+export function resultsAria({ height, min, max, total }) {
+  const pct = (v) => Math.round((v / total) * 100);
+  return { min: pct(min), max: pct(max), now: pct(height), text: `Cao ${Math.round(height)} px (${pct(height)} % màn hình)` };
+}
+
+/** A drag on the sheet's head becomes a drag past this many px (under it: a tap). */
+export const SHEET_DRAG_START = 8;
+/** px/ms over the last 100 ms of a drag above which the release is a flick (next snap that way). */
+export const FLICK_SPEED = 0.5;
 
 /**
- * Where a released sheet drag lands: 'closed', 'mid' or 'full'. `height` is the sheet height at
- * release, `velocity` px/ms of height change (positive: dragged up), `mid` / `full` the notches,
- * `from` the notch the drag started at. A flick goes to the next notch in its direction from
- * the release: up → mid if under it, else full; down from full → mid (closed only when released under half of mid,
- * review 0014 S3), down from mid → closed. Otherwise the nearest of mid and full, or closed below
- * half of mid.
+ * Where the bottom sheet goes when a drag of its head is released (design 0014 §3).
+ * height: its height at release (px); velocity: px/ms, > 0 growing (finger going up); mid / full:
+ * the two snaps (px). A flick goes to the next snap that way from `height` (below the middle snap
+ * that is closing); a slow release goes to the nearest of { closed (only under half the middle snap),
+ * mid, full }. → 'closed' | 'mid' | 'full'.
  */
-export function snapSheet({ height, velocity = 0, mid, full, from = 'mid' }) {
-  if (velocity > SHEET.flick) return height < mid ? 'mid' : 'full';
-  if (velocity < -SHEET.flick) return from === 'full' && height >= mid / 2 ? 'mid' : 'closed';
+export function snapSheet({ height, velocity = 0, mid, full }) {
+  if (velocity > FLICK_SPEED) return height < mid ? 'mid' : 'full';
+  if (velocity < -FLICK_SPEED) return height > mid ? 'mid' : 'closed';
   if (height < mid / 2) return 'closed';
-  return Math.abs(height - mid) <= Math.abs(height - full) ? 'mid' : 'full';
+  return Math.abs(height - mid) <= Math.abs(full - height) ? 'mid' : 'full';
+}
+
+/** The sheet's two snaps in px, as the CSS computes them (--sheet-h, --sheet-h-full). */
+export function sheetSnaps({ viewport, topbar }) {
+  return { mid: Math.min(0.6 * viewport, viewport - 200), full: Math.min(0.9 * viewport, viewport - topbar) };
+}
+
+/** Velocity (px/ms, > 0 upward) over the last `ms` of pointer samples [{ t, y }]. */
+export function dragVelocity(samples, ms = 100) {
+  if (samples.length < 2) return 0;
+  const last = samples[samples.length - 1];
+  const first = samples.find((s) => last.t - s.t <= ms) ?? samples[0];
+  const dt = Math.max(1, last.t - first.t);
+  return (first.y - last.y) / dt;
 }

@@ -55,7 +55,8 @@ export function createSfCli({ run = defaultRun } = {}) {
         instanceUrl: r.instanceUrl.replace(/\/$/, ''),
         apiVersion: r.apiVersion || '62.0',
         username: r.username,
-        orgId: r.id ?? null, // 00D… (design 0011: a delete checks the alias still names the org of the insert)
+        // Org Id (`id` of sf org display): the identity a delete checks against history (design 0011).
+        orgId: r.id ?? null,
       };
       cache.set(target, { conn, at: Date.now() });
       return conn;

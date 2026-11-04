@@ -32,3 +32,8 @@ export function pick(id, alias, from, config = {}) {
 export function rows(records, sobject = 'Account') {
   return { records, sobject };
 }
+
+/** Đặt biến step (design 0015). */
+export function setVar(id, name, value = '', config = {}) {
+  return { id, type: 'set', config: { name, value, ...config } };
+}

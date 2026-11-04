@@ -11,9 +11,6 @@ import {
   slug,
 } from './common.js';
 
-/** Most words / sentences / paragraphs one value may have (review 0012 S3). */
-export const MAX_COUNT = 1000;
-
 const TEXT_MODES = [
   { value: 'words', label: 'Từ ngẫu nhiên' },
   { value: 'name', label: 'Họ tên' },
@@ -33,9 +30,8 @@ export const text = {
   uniqueable: true,
   options: [
     opt('mode', 'Kiểu nội dung', 'select', 'words', { choices: TEXT_MODES }),
-    // Review 0012 S3: bounded, so a run (and the inspector's examples) cannot loop for ever.
-    opt('minWords', 'Số từ tối thiểu', 'integer', 1, { min: 1, max: MAX_COUNT, showIf: { key: 'mode', in: ['words'] } }),
-    opt('maxWords', 'Số từ tối đa', 'integer', 3, { min: 1, max: MAX_COUNT, showIf: { key: 'mode', in: ['words'] } }),
+    opt('minWords', 'Số từ tối thiểu', 'integer', 1, { min: 1, max: 1000, showIf: { key: 'mode', in: ['words'] } }),
+    opt('maxWords', 'Số từ tối đa', 'integer', 3, { min: 1, max: 1000, showIf: { key: 'mode', in: ['words'] } }),
     opt('pattern', 'Mẫu', 'string', 'ID-####', {
       showIf: { key: 'mode', in: ['pattern'] },
       help: '# = chữ số, ? = chữ hoa, * = chữ hoặc số, \\ để giữ nguyên ký tự.',
@@ -86,8 +82,8 @@ export const textarea = {
   category: 'Text',
   sfTypes: ['textarea'],
   options: [
-    opt('minSentences', 'Số câu tối thiểu', 'integer', 1, { min: 1, max: MAX_COUNT }),
-    opt('maxSentences', 'Số câu tối đa', 'integer', 3, { min: 1, max: MAX_COUNT }),
+    opt('minSentences', 'Số câu tối thiểu', 'integer', 1, { min: 1, max: 200 }),
+    opt('maxSentences', 'Số câu tối đa', 'integer', 3, { min: 1, max: 200 }),
     opt('maxLength', 'Độ dài tối đa', 'integer', 255, { min: 1, max: 255 }),
   ],
   generate(o, { rng }) {
@@ -104,8 +100,8 @@ export const longtextarea = {
   category: 'Text',
   sfTypes: [],
   options: [
-    opt('minParagraphs', 'Số đoạn tối thiểu', 'integer', 1, { min: 1, max: MAX_COUNT }),
-    opt('maxParagraphs', 'Số đoạn tối đa', 'integer', 3, { min: 1, max: MAX_COUNT }),
+    opt('minParagraphs', 'Số đoạn tối thiểu', 'integer', 1, { min: 1, max: 50 }),
+    opt('maxParagraphs', 'Số đoạn tối đa', 'integer', 3, { min: 1, max: 50 }),
     opt('maxLength', 'Độ dài tối đa', 'integer', 32768, { min: 1, max: 131072 }),
   ],
   generate(o, { rng }) {
@@ -122,8 +118,8 @@ export const richtextarea = {
   category: 'Text',
   sfTypes: [],
   options: [
-    opt('minParagraphs', 'Số đoạn tối thiểu', 'integer', 1, { min: 1 }),
-    opt('maxParagraphs', 'Số đoạn tối đa', 'integer', 3, { min: 1 }),
+    opt('minParagraphs', 'Số đoạn tối thiểu', 'integer', 1, { min: 1, max: 50 }),
+    opt('maxParagraphs', 'Số đoạn tối đa', 'integer', 3, { min: 1, max: 50 }),
     opt('maxLength', 'Độ dài tối đa', 'integer', 32768, { min: 1, max: 131072 }),
   ],
   generate(o, { rng }) {

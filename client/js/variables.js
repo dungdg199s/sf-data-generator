@@ -70,13 +70,6 @@ export function sampleFor(nodeId, keys) {
   return { text: formatSample(v), title: stale ? 'Từ lần xem trước; workflow đã thay đổi sau đó.' : 'Từ lần xem trước.', stale };
 }
 
-/** Value the server generated for `fieldName` in the first record of the step (the "Lần xem trước" line). */
-export function previewOf(nodeId, fieldName) {
-  const rec = state.result ? firstRecords().get(nodeId) : null;
-  if (!rec || !(fieldName in (rec.fields ?? {}))) return null;
-  return rec.fields[fieldName];
-}
-
 function flatten(members, prefix = []) {
   const out = [];
   for (const m of members ?? []) {
@@ -88,23 +81,31 @@ function flatten(members, prefix = []) {
 
 function item(group, m, keys, nodeId) {
   const sample = m.example ? { text: m.example, title: m.label ?? '' } : m.builtin ? null : sampleFor(nodeId, keys);
-  return { path: [group.name, ...keys].join('.'), key: keys.join('.'), typeLabel: typeLabel(m), help: m.label ?? '', sample, valueType: m.valueType ?? 'string' };
+  const valueType = m.valueType ?? (m.type && fieldType(m.type)?.valueType) ?? 'string';
+  return { path: [group.name, ...keys].join('.'), key: keys.join('.'), typeLabel: typeLabel(m), help: m.label ?? '', sample, valueType };
 }
 
-/** Sample of a workflow-wide variable (design 0013, `run.*`): from the last preview's seed and now. */
-function globalSample(key) {
+/**
+ * Sample of a run variable (design 0013 G): the value it had in the last preview (`run.seed` is
+ * that preview's seed), else the catalogue's example (none for the seed: it changes every run
+ * unless fixed).
+ */
+function runSample(m) {
   const r = state.result;
-  if (!r) return null;
-  const iso = Number.isFinite(r.now) ? new Date(r.now).toISOString() : null;
-  const value = { seed: r.seed, now: iso, today: iso?.slice(0, 10) }[key];
-  if (value === undefined || value === null) return null;
+  // An empty Seed box: every run draws a new seed.
+  const random = !(document.getElementById('seed')?.value.trim());
+  const seedNote = random ? ' (đổi mỗi lần chạy nếu không giữ seed)' : '';
+  if (!r) return m.key === 'seed' ? { text: '—', title: `Seed của lần chạy${seedNote}. Bấm Xem trước để thấy giá trị.` } : m.example ? { text: m.example, title: `Ví dụ. ${m.label ?? ''}` } : null;
+  const iso = Number.isFinite(Number(r.now)) ? new Date(Number(r.now)).toISOString() : null;
+  const v = m.key === 'seed' ? r.seed : m.key === 'now' ? iso : m.key === 'today' ? iso?.slice(0, 10) : undefined;
+  if (v === undefined || v === null) return m.example ? { text: m.example, title: m.label ?? '' } : null;
   const stale = samplesStale();
-  return { text: formatSample(key === 'seed' ? value : String(value)), title: stale ? 'Từ lần xem trước; mỗi lần chạy có seed và thời điểm riêng.' : 'Từ lần xem trước.', stale };
+  const title = stale ? 'Từ lần xem trước; workflow đã thay đổi sau đó.' : 'Từ lần xem trước.';
+  return { text: m.key === 'seed' ? String(v) : formatSample(v), title: m.key === 'seed' ? `${title}${seedNote}` : title, stale };
 }
 
-/** Number options (design 0013) list numbers, and org fields whose type is not known. */
-export const NUMBER_HINT = 'Chỉ hiện biến kiểu Số và field đọc từ org (chưa biết kiểu).';
-const fitsMode = (it, mode) => mode !== 'number' || it.valueType === 'number' || it.valueType === 'any';
+/** Value types a number option takes (design 0013 B): Số, and org fields whose type is unknown. */
+const NUMBER_TYPES = new Set(['number', 'any']);
 
 const BADGES = {
   last: ['bản ghi cuối', 'Tạo trong vòng lặp đã kết thúc: giá trị là bản ghi của lần lặp cuối. Lookup "Ngẫu nhiên" sẽ chọn trong tất cả.'],
@@ -113,15 +114,10 @@ const BADGES = {
 /**
  * Groups for the picker at `stepId` (field `fieldIndex` of a record step, or a step option):
  * → { groups: [{ id, nodeType, name, label, badge?, badgeTitle?, note?, items: [...] }], hidden: [{ text }] }
- * `mode: 'number'` keeps the items of type Số or unknown (org fields) only.
+ * `mode: 'number'` (a number option, design 0013 B) keeps only Số variables and org fields of
+ * unknown type; groups left empty are dropped. The run variables (`run`, "Lần chạy") come last.
  */
 export function groupsFor(stepId, fieldIndex, { mode } = {}) {
-  const out = groupsAll(stepId, fieldIndex);
-  if (mode !== 'number') return out;
-  return { ...out, groups: out.groups.map((g) => ({ ...g, items: g.items.filter((it) => fitsMode(it, mode)) })).filter((g) => g.items.length) };
-}
-
-function groupsAll(stepId, fieldIndex) {
   const scope = currentScope();
   const step = stepById(stepId);
   const here = scope.at[stepId];
@@ -140,11 +136,15 @@ function groupsAll(stepId, fieldIndex) {
     });
     groups.push(g);
   }
+  // Variables of Đặt biến (design 0015): one group `var · Biến`, one row per name, the nearest
+  // assignment first, placed after the aliases and before the run variables.
+  const varGroup = valueGroup(scope, here);
   for (const v of here?.visible ?? []) {
     const src = scope.sources[v.source];
-    if (!src) continue;
+    if (!src || src.kind === 'value') continue;
+    if (src.global && varGroup && !groups.includes(varGroup)) groups.push(varGroup);
     const g = {
-      // Workflow-wide variables (`run`, design 0013) are neutral like built-ins.
+      // Run variables are neutral like the built-ins ($n): the Start colour (docs/ui-design-system.md §3).
       id: src.id ?? src.nodeId, nodeType: src.global ? 'start' : src.nodeType, name: src.name, label: src.label || src.sobject || '', items: [],
       ...(v.certainty === 'last' ? { badge: BADGES.last[0], badgeTitle: BADGES.last[1] } : {}),
       ...(v.certainty === 'maybe' ? { badge: 'có thể trống', badgeTitle: v.note ?? '' } : {}),
@@ -163,17 +163,70 @@ function groupsAll(stepId, fieldIndex) {
     for (const b of builtins) g.items.push(item(g, b, [b.key], sampleId));
     for (const { m, keys } of flatten(fields)) {
       const it = item(g, m, keys, sampleId);
-      if (src.global) it.sample = globalSample(m.key);
+      if (src.global) it.sample = runSample(m);
       g.items.push(it);
     }
     groups.push(g);
   }
+  if (varGroup && !groups.includes(varGroup)) groups.push(varGroup);
+  const shownVars = new Set(varGroup?.items.map((it) => it.key) ?? []);
+  const hiddenVars = new Set();
   for (const hdn of here?.hidden ?? []) {
     const src = scope.sources[hdn.source];
     if (!src || src.nodeId === stepId) continue;
+    if (src.kind === 'value') {
+      // A name set by a usable step is usable: only names with no usable assignment are listed.
+      if (!src.name || shownVars.has(src.name) || hiddenVars.has(src.name)) continue;
+      hiddenVars.add(src.name);
+      hidden.push({ text: `${src.namespace}.${src.name} — ${hdn.note}` });
+      continue;
+    }
     hidden.push({ text: `${src.name} · ${src.label || src.sobject || ''} — ${hdn.note}` });
   }
+  // Only the usable groups are filtered by type: "Không dùng được ở đây" keeps every source.
+  if (mode === 'number') {
+    for (const g of groups) g.items = g.items.filter((it) => NUMBER_TYPES.has(it.valueType));
+    return { groups: groups.filter((g) => g.items.length), hidden };
+  }
   return { groups, hidden };
+}
+
+const VALUE_NOTES = {
+  maybe: 'Có thể trống: chỉ được đặt trên một số nhánh hoặc trong vòng lặp có thể chạy 0 lần phía trên.',
+  last: 'Giá trị lần lặp cuối: được đặt trong vòng lặp đã kết thúc.',
+};
+
+/**
+ * The `var · Biến` group of the picker (design 0015) from the visible Đặt biến sources at `here`,
+ * or null when there is none: one row per variable name (nearest assignment first: `visible` is
+ * sorted that way), its type (one type, or Bất kỳ when the steps disagree), the value of the last
+ * preview, and a note when it may be empty or is the value of a finished loop.
+ */
+function valueGroup(scope, here) {
+  const byName = new Map();
+  for (const v of here?.visible ?? []) {
+    const src = scope.sources[v.source];
+    if (src?.kind !== 'value' || !src.name) continue;
+    const e = byName.get(src.name);
+    if (!e) byName.set(src.name, { src, ns: src.namespace, types: new Set([src.valueType]), certainty: v.certainty });
+    else {
+      e.types.add(src.valueType);
+      if ({ always: 0, last: 1, maybe: 2 }[v.certainty] < { always: 0, last: 1, maybe: 2 }[e.certainty]) e.certainty = v.certainty;
+    }
+  }
+  if (!byName.size) return null;
+  const first = [...byName.values()][0];
+  // The colour of the step type (docs/ui-design-system.md §3.4), the label of its `exposes`.
+  const g = { id: `$${first.ns}`, nodeType: first.src.nodeType, name: first.ns, label: first.src.label || 'Biến', items: [] };
+  for (const [name, e] of byName) {
+    const valueType = e.types.size === 1 ? [...e.types][0] : 'any';
+    const note = VALUE_NOTES[e.certainty];
+    g.items.push({
+      path: `${e.ns}.${name}`, key: name, typeLabel: valueTypeLabel(valueType), valueType,
+      help: note ?? '', sample: sampleFor(e.src.nodeId, [name]),
+    });
+  }
+  return g;
 }
 
 /** Score of an item for `q` (lower first); null when it does not match. */

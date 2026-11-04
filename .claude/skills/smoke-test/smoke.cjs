@@ -1,8 +1,7 @@
 // UI smoke test: starts the server, loads the editor ("Quy trình" view) in headless Chromium and
 // exercises the main flows; fails on any page error. Flows (described in SKILL.md):
 //   1. load the "Account + Contact" sample; steps, Start card and palette items have data-type and an
-//      icon tile, no inline --c; NODE_COLORS is gone from the client (0008); icons are data-ico SVG masks,
-//      icon-only buttons have an aria-label, 16 px in buttons (0014)
+//      icon tile, no inline --c; NODE_COLORS is gone from the client (0008)
 //   2. "+" inside the inner loop body (menu rows typed + icons) → Record; Alt+↑ moves it; Delete then
 //      Ctrl+Z restores it
 //   3. Ctrl+Enter previews: results table (sticky header right under the tabs) and "bản ghi" / "lần lặp"
@@ -14,10 +13,10 @@
 //   5. "Hoàn tác" on the delete toast disappears after another edit
 //  5b. variable picker (0005): {x} + search + Enter inserts {{acc.Industry}}, "{{in" puts loop.index first,
 //      chips are coloured by source type, a misspelt field turns its chip red with an error badge on the card,
-//      "Sửa thành" fixes it, renaming the field updates the template; Alt+↓ opens the picker (0014)
+//      "Sửa thành" fixes it, renaming the field updates the template
 //  5c. Query → Chọn bản ghi → Record without an org (0006): the "Contact cho Account có sẵn" sample previews with
-//      5 sample rows (tab "↓ accs", warning on the Query card), "Chọn bản ghi" from the palette fills from/alias,
-//      "{{" in WHERE outlines the field; at 390 px no card row is wider than its card (0014)
+//      5 sample rows (tab "accs · Account", warning on the Query card), "Chọn bản ghi" from the palette fills from/alias,
+//      "{{" in WHERE outlines the field
 //   6. a v1 autosave is migrated on load (toast) and the sfdg.workflow.v1 key is left untouched
 //   7. a malformed v2 autosave falls back to the sample without being overwritten
 //   8. a malformed v2 file is refused with a toast
@@ -32,23 +31,49 @@
 //      warns about repeating the data, error groups are role=button rows (Space) with a remainder row
 //  13. screen layout (0009): issues bar docked under the canvas (F8, collapse kept after reload, expands on a
 //      failed run), top bar rows / no overflow with a long (mocked) org label, the "⋯" menu (Mẫu, Seed chip),
-//      bottom sheet keeps the selected card above it and closes on run, one-row results header with "Tải";
-//      0014: sheet notches (grip, drag, F8 back to mid), fading row edges, results height handle (keys, drag, kept)
+//      bottom sheet keeps the selected card above it and closes on run, one-row results header with "⤓ Tải"
 //  14. Lặp "Mỗi bản ghi trong pool" (0010): the sample previews 15 Contacts ("5 lần lặp"), "⋯ → Lặp qua từng
 //      bản ghi" on the Query inserts a filled each-loop (one undo), switching a Lặp to each fills pool and name,
 //      a Contact moved out of the loop gets the outsideLoop error
 //  15. Sơ đồ view (0003 đợt B): M switches with the selection kept, focused and inside the viewport; "+" on a
 //      connector adds a Record there; Delete removes it; ↑ walks the tree; M back; dark screenshot; at 390 px
 //      the saved Sơ đồ is not applied, the ⋯ menu switches (not saved) and a tap opens the sheet above the card
-// 15b. minimap (0014, 480 steps): shown, ≤ 16 paths, track / map clicks move the viewport,
-//      ensureVisible keeps a card clear of it, the button hides it (kept after reload), hidden under the sheet / small
-//  16. insert history and delete (0011, every org call mocked in the page): Bulk checkbox and limit warning in the
-//      Insert confirmation, Tải Id / Lịch sử links, "Xóa dữ liệu này…" opens the delete confirmation (Hủy focused),
-//      production needs the org name typed, the history dialog (org filter, interrupted title, forget, 390 px)
-//  17. variables and loops (0013): "Số lần lặp" {x} lists number variables only and inserts {{accs.$count}};
-//      turning the each filter on fills AccountId = {{acc.Id}} (toast, one undo); shuffle + limit 2 → "10 lần
-//      lặp"; filter options hidden in fixed mode; run.seed sample; branch right {x}; values loop empty → error,
-//      Hot/Warm/Cold → summary
+//  16. editor productivity (0012): G — a saved Task with Name warns, "Đổi thành Subject" fixes it (template
+//      follows); a new Record switched to Task gets Subject at once. F1 — {{acc.Industry}} from Query "accs"
+//      gets "Thêm Industry vào SELECT của "accs"", which adds it to the Query and clears the error
+//      I — hovering / focusing a variable or Lookup chip outlines the source card (.is-ref-target).
+//      C — "Bọc trong Lặp qua từng bản ghi" on con: Lặp each over accs, [Đổi] re-points the Lookup
+//      H — estimate chips before a run (≈ on con, total and limit on Start, over-limit tag)
+//      D — a mocked insert (route NDJSON with byStep): live "insert n/N" chip and "lỗi 3" tag, the tag opens the group
+//      E — "Ví dụ:" row of an open picklist (POST /api/field-samples) follows its weights; a dependent field shows the preview's
+//  17. multi-select and copy / paste (0012 B): Shift+click two cards (inspector "2 bước đã chọn", aria-multiselectable,
+//      aria-selected), "Bọc trong Lặp" then one ↶, Shift+↓ + Ctrl+C / Ctrl+V pastes renamed copies (acc2, con2), Ctrl+/
+//      turns both off; at 390 px "⋯ → Chọn nhiều bước" shows the select bar, a tap adds a card, Xong leaves.
+//      Workflow library (0012 A): ▾ → "＋ Workflow mới" makes a second entry, a step copied in the first pastes
+//      there with its alias kept, Ctrl+O switches back (same content, Ctrl+Z does nothing), a Mẫu on a workflow
+//      with steps is a third entry (the first untouched), "Quản lý thư viện…" deletes one and "Hoàn tác" brings it back,
+//      with autosave paused (a storage event) Mở → "Vẫn đổi" switches, at 390 px the row's ⋯ (a popup inside the modal
+//      dialog) deletes one. F2 (mocked org): "Thiếu 1 field bắt buộc của Contact trong dev: Region__c." on con, Chọn…
+//      groups it first in Import (the filter hides an emptied heading), Thêm 1 field adds it and focuses its name (↶
+//      undoes), Bỏ qua hides it
+//  18. Sơ đồ minimap (0014 §5, flowMinimap): 1 000 steps, ≤ 16 paths, 75 % of the track, End keeps the card out from
+//      under it, the button hides it (remembered), hidden with the sheet at 800 px, no button at 390 px, none for one step.
+//  19. variables and loops (0013, flowVarsLoops): "Số lần lặp" {x} lists only Số variables (+ the explanation line,
+//      "Lần chạy" last, "Không dùng được ở đây" kept) and fills {{accs.$count}} (chip, card "{{accs.$count}} lần", ≈ estimate); a preview without an
+//      org loops 5 times; Alt+↓ in the number box shows run.seed = the preview's seed; "Lọc" on a nested each fills
+//      AccountId = {{acc.Id}} with a toast, "fixed" hides every filter box, one ↶ takes back filter + fill; Xáo trộn +
+//      Tối đa 2 ⇒ "10 lần lặp"; an empty values list is outlined with valuesEmpty, a comma stays inside a value, Hot/Warm/Cold fill the card; Rẽ
+//      nhánh "So với" {x} inserts {{opp.Amount}}
+//  20. insert history and delete (0011, its smoke 16a–d; flowHistory, flowHistoryProd): mocked orgs / limits / history and a held
+//      insert stream in the page; Bulk checkbox and calls, limits warn-box, target.bulk "off", Bulk progress, Dừng ngay, ⤓ Id, the
+//      "Xóa dữ liệu này…" toast, delete confirmation (Hủy focused, 409 new count needs a new click), Lỗi xóa tab, history off ⇒
+//      Insert locked; production name typed (typedOrg), history dialog filter / interrupted title / Quên, full screen at 390 px
+//  21. Đặt biến (0015, flowSetVar): "+" at the top → Đặt biến (copper card, name bien1 selected and focused), typing lo
+//      and TEST-{{run.today}}; on acc.Name "{{lo" opens the picker with the "var · Biến" group, Enter inserts {{var.lo}}
+//      (copper chip); Ctrl+Enter: card chip "đặt 1 lần · = "TEST-…"", Name in the results table; renaming lo → ma
+//      renames {{var.ma}} (toast with Hoàn tác); a Chữ variable in "Số lần lặp" offers "Đổi Kiểu thành Số".
+//  0014 also adds: SVG icons and aria-labels (1), Alt+↓ opens the picker (5b), Quy trình cards never overflow at 390 px,
+//      fades of sideways rows (13d, 13e), the results panel's height handle (13, wide), the sheet's two snaps (11, 13d).
 // The flows run in parallel, one browser context each (independent storage): see SKILL.md.
 // Usage: node .claude/skills/smoke-test/smoke.cjs [screenshotDir]
 // Needs Playwright with a Chromium build available (require('playwright')).
@@ -75,16 +100,15 @@ try {
  * stale server on a fixed port can never answer instead. The sf CLI is a stub that fails like a
  * machine without `sf` (503), so the smoke can never reach a real org.
  */
-let smokeTmp = null; // temporary dir of the run (insert history of design 0011, files to open), removed at the end
-
 async function startServer() {
   const { createApp, allowedHostsFor } = await import(pathToFileURL(path.join(root, 'server/index.js')).href);
   const { createHistory } = await import(pathToFileURL(path.join(root, 'server/history.js')).href);
   const noCli = async () => { throw Object.assign(new Error('smoke: không dùng sf CLI'), { status: 503 }); };
-  // Never the user's real data directory: the history goes to a temporary one.
-  smokeTmp = fs.mkdtempSync(path.join(os.tmpdir(), 'sfdg-smoke-'));
-  const history = createHistory({ dir: path.join(smokeTmp, 'history') });
-  const server = http.createServer(createApp({ cli: { listOrgs: noCli, getConnection: noCli }, history, allowedHosts: allowedHostsFor('127.0.0.1') }));
+  // Insert history (design 0011) in a temporary directory: the UI reads GET /api/history once an org is
+  // selected, and the smoke must never touch the user's data directory.
+  historyDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sfdg-smoke-'));
+  const history = createHistory({ dir: historyDir });
+  const server = http.createServer(createApp({ cli: { listOrgs: noCli, getConnection: noCli }, allowedHosts: allowedHostsFor('127.0.0.1'), history }));
   await new Promise((res, rej) => server.once('error', rej).listen(0, '127.0.0.1', res));
   return server;
 }
@@ -113,59 +137,40 @@ const V1_ORPHAN = {
 
 const errors = [];
 const check = (cond, msg) => { if (!cond) errors.push(msg); };
-// Time budget of the whole run (SMOKE_BUDGET_MS, default 20 s; review 0013 S3, raised after 0012).
-const BUDGET_MS = Number(process.env.SMOKE_BUDGET_MS) > 0 ? Number(process.env.SMOKE_BUDGET_MS) : 20000;
-const { AsyncLocalStorage } = require('node:async_hooks');
-const flowOf = new AsyncLocalStorage(); // name of the flow a page is opened by
-const pages = new Map(); // flow name → its pages, for the failure screenshot
-const artefacts = []; // files written for a failed flow, printed at the end
-/** The selector a Playwright error was waiting for, if it says. */
-const pendingSelector = (e) => /(?:waiting for|locator\()\s*['"(]?([^'")\n]+)/.exec(String(e?.message ?? e))?.[1] ?? null;
+
+/**
+ * Total time cap (ms): SMOKE_BUDGET_MS, else 20 000 on 4 or more CPUs, scaled up on fewer
+ * (20 000 × 4 / CPUs), since the parallel flows are CPU-bound.
+ */
+function smokeBudgetMs() {
+  const env = Number(process.env.SMOKE_BUDGET_MS);
+  if (Number.isFinite(env) && env > 0) return env;
+  const cpus = typeof os.availableParallelism === 'function' ? os.availableParallelism() : os.cpus().length;
+  return Math.round(20000 * Math.max(1, 4 / Math.max(1, cpus)));
+}
+
+/** Fixed waits make the smoke slow and flaky: wait on a response, an element or a function instead. */
+function noFixedWaits() {
+  const banned = 'waitFor' + 'Timeout('; // split so this check does not match itself
+  const lines = fs.readFileSync(__filename, 'utf8').split('\n').map((l, i) => [i + 1, l]).filter(([, l]) => l.includes(banned));
+  for (const [n] of lines) errors.push(`smoke.cjs:${n} uses ${banned}…): wait on a response, a selector or waitForFunction instead`);
+}
 let browser;
 let base;
+let historyDir = null;
 
-const sharedCtx = new Map(); // flow name → context reused by its pages with { shared: true }
-/**
- * A fresh context (empty storage) and page; page errors are reported with `label`. With
- * `shared: true` the pages of one flow share a context (and its HTTP cache: modules come back as
- * 304, review 0012); the flow clears storage between its parts.
- */
-async function newPage(label, { shared = false, ...ctxOpts } = {}) {
-  const key = flowOf.getStore() ?? '?';
-  const reuse = shared && sharedCtx.get(key);
-  const ctx = reuse || await browser.newContext({ viewport: { width: 1440, height: 900 }, ...ctxOpts });
-  if (shared) sharedCtx.set(key, ctx);
-  if (!reuse) await addSmokeHelpers(ctx);
-  const page = await ctx.newPage();
-  return trackPage(label, page);
-}
-
-async function addSmokeHelpers(ctx) {
-  // Design 0012 A: edits are saved in the library's item, not sfdg.workflow.v2. smokeStored() is
-  // the open item of the tab; smokeSetAutosave(wf) makes the next load start from a v2 autosave
-  // again (library keys and the tab's item removed), as the flows did before the library.
+/** A fresh context (empty storage) and page; page errors are reported with `label`. */
+async function newPage(label, ctxOpts = {}) {
+  // Reduced motion: no transition to wait for (the app honours prefers-reduced-motion).
+  const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, reducedMotion: 'reduce', ...ctxOpts });
+  // The workflow the app saved automatically: the library entry this tab has open (design 0012 A).
   await ctx.addInitScript(() => {
-    window.smokeStored = () => {
-      const id = sessionStorage.getItem('sfdg.activeId') ?? JSON.parse(localStorage.getItem('sfdg.library') ?? '{}').activeId;
-      return JSON.parse(localStorage.getItem(`sfdg.wf.${id}`) ?? 'null');
-    };
-    // Opens `wf` in the app like Mới / Mở file (a new library item): no reload when the load
-    // itself is not what a check is about (review 0012: page loads were most of the smoke's CPU).
-    window.smokeOpen = async (wf) => {
-      (await import('/js/library-ui.js')).newWorkflow(wf);
-    };
-    window.smokeSetAutosave = (wf) => {
-      for (const k of Object.keys(localStorage)) if (k === 'sfdg.library' || k.startsWith('sfdg.wf.')) localStorage.removeItem(k);
-      sessionStorage.removeItem('sfdg.activeId');
-      localStorage.setItem('sfdg.workflow.v2', JSON.stringify(wf));
+    window.smokeSaved = () => {
+      const raw = localStorage.getItem(`sfdg.wf.${sessionStorage.getItem('sfdg.activeId')}`);
+      return raw ? JSON.parse(raw) : null;
     };
   });
-}
-
-function trackPage(label, page) {
-  const flowName = flowOf.getStore() ?? '?';
-  if (!pages.has(flowName)) pages.set(flowName, []);
-  pages.get(flowName).push({ label, page });
+  const page = await ctx.newPage();
   page.on('pageerror', (e) => errors.push(`${label ? `[${label}] ` : ''}${e}`));
   page.on('dialog', (d) => d.accept());
   return page;
@@ -189,6 +194,19 @@ async function flowEditing() {
   const untyped = await page.$$eval('.step, .start-card, #palette-items .palette-item', (els) =>
     els.filter((e) => !e.dataset.type || !e.querySelector('.ico-tile .ico') || e.style.getPropertyValue('--c')).length);
   check(untyped === 0, `${untyped} step/palette elements without data-type + .ico-tile (or with inline --c)`);
+  // 0014 §1 icons: with a Record selected (inspector head and field cards drawn), every button without text has an
+  // aria-label, every .ico picks its icon (data-ico) unless it is a step-type tile, and icons in buttons are 16 px.
+  await page.click('.step-card[data-id="acc"] .type');
+  await page.waitForSelector('#inspector .field-card .actions button[aria-label="Xóa field"]');
+  const icons = await page.evaluate(() => {
+    const unnamed = [...document.querySelectorAll('button')].filter((b) => !b.closest('[hidden]') && !b.textContent.trim() && !b.getAttribute('aria-label')).map((b) => b.id || b.className || b.title);
+    const unpicked = [...document.querySelectorAll('.ico')].filter((i) => !i.dataset.ico && !i.closest('.ico-tile')).length;
+    const sizes = [...document.querySelectorAll('button:not(.link) > .ico')].filter((i) => i.getClientRects().length).map((i) => Math.round(i.getBoundingClientRect().width));
+    return { unnamed, unpicked, sizes: [...new Set(sizes)], count: sizes.length };
+  });
+  check(icons.unnamed.length === 0, `buttons without text or aria-label: ${icons.unnamed.join(', ')}`);
+  check(icons.unpicked === 0, `${icons.unpicked} .ico without data-ico outside an .ico-tile`);
+  check(icons.count >= 10 && icons.sizes.join() === '16', `button icons should be 16 px (${JSON.stringify(icons)})`);
   // Each type wins over the neutral [data-type] fallback (equal specificity: source order).
   const stripes = await page.evaluate(() => {
     const probe = document.createElement('div');
@@ -229,9 +247,8 @@ async function flowEditing() {
 
   await page.keyboard.press('Control+Enter');
   await page.waitForSelector('table.data tbody tr');
-  // Design 0012 H: Record cards show an estimate (.stat.est) until a run; wait for the real chips.
-  await page.waitForSelector('.step-card .stat:not(.est)');
-  const chips = await page.$$eval('.step-card .stat:not(.est)', (n) => n.map((x) => x.textContent));
+  await page.waitForSelector('.step-card .stat');
+  const chips = await page.$$eval('.step-card .stat', (n) => n.map((x) => x.textContent));
   check(chips.some((c) => /\d+ bản ghi/.test(c)), `no "bản ghi" stat chip (${chips.join(', ')})`);
   check(chips.some((c) => /\d+ lần lặp/.test(c)), 'no "lần lặp" stat chip');
   const summary = await page.textContent('#results-summary');
@@ -248,25 +265,6 @@ async function flowEditing() {
     return scrolled ? gap : 0;
   });
   check(Math.abs(stickyGap) < 0.5, `sticky table header is ${stickyGap}px away from the tab row`);
-  // Design 0014 §1: icons are SVG masks picked by data-ico (never a step type's inherited --ico);
-  // icon-only buttons have a name in words; 16 px in buttons, 14 px in links.
-  await page.click('.step-card[data-id="con"] .type');
-  await page.waitForSelector('#inspector .field-card .actions button[aria-label="Xóa field"]');
-  const icons = await page.evaluate(() => {
-    const shown = (el) => el.getClientRects().length > 0;
-    const root = getComputedStyle(document.documentElement);
-    const unnamed = [...document.querySelectorAll('button')].filter((b) => shown(b) && !b.textContent.trim() && !b.getAttribute('aria-label'))
-      .map((b) => b.id || b.className);
-    const stray = [...document.querySelectorAll('.ico:not([data-ico])')].filter((i) => !i.closest('.ico-tile, .var-chip')).length;
-    const wrong = [...document.querySelectorAll('.ico[data-ico]')]
-      .filter((i) => getComputedStyle(i).getPropertyValue('--ico').trim() !== root.getPropertyValue(`--ico-${i.dataset.ico}`).trim()).map((i) => i.dataset.ico);
-    const width = (sel, px) => [...document.querySelectorAll(sel)].filter(shown).map((i) => i.getBoundingClientRect().width).filter((w) => Math.abs(w - px) > 0.5);
-    const head = [...document.querySelectorAll('#inspector .node-head button.icon')].map((b) => b.getAttribute('aria-label'));
-    return { unnamed, stray, wrong, inButtons: width('button:not(.link):not(.add-btn) > .ico', 16), inLinks: width('button.link > .ico', 14), head,
-      caret: document.querySelector('#btn-results-toggle .caret').dataset.ico };
-  });
-  check(!icons.unnamed.length && !icons.stray && !icons.wrong.length && !icons.inButtons.length && !icons.inLinks.length && icons.caret === 'chevron-down'
-    && icons.head.join() === 'Tắt bước,Nhân bản,Xóa bước', `icons (0014): ${JSON.stringify(icons)}`);
   console.log(`steps=${before + 1}`);
   console.log(`summary=${summary.trim()}`);
   if (outDir) await page.screenshot({ path: path.join(outDir, 'smoke-1440.png') });
@@ -278,18 +276,9 @@ async function flowEditing() {
   // The request is held until Dừng was clicked (no fixed delay: a slow machine cannot finish the run first).
   let releaseRun;
   const runGate = new Promise((res) => { releaseRun = res; });
-  // The held request must be the one this Ctrl+Enter sends: wait for it to reach the route and for
-  // the header to say so (one snapshot right after #btn-stop showed was racy under CPU load, review 0011).
-  let routedRun;
-  const runRouted = new Promise((res) => { routedRun = res; });
-  // No run may still be going (a Ctrl+Enter during one only says "Đang chạy"): seen once under load,
-  // with a failure screenshot showing a second, unheld result (review 0013 S3).
-  await page.waitForFunction(() => document.getElementById('btn-stop').hidden && !document.getElementById('btn-preview').disabled, null, { timeout: 10000 });
-  await page.route('**/api/run', async (r) => { routedRun(); await runGate; await r.continue().catch(() => {}); });
+  await page.route('**/api/run', async (r) => { await runGate; await r.continue().catch(() => {}); });
   await page.keyboard.press('Control+Enter');
-  await Promise.race([runRouted, new Promise((res) => setTimeout(res, 10000))]);
-  await page.waitForFunction(() => /Đang sinh dữ liệu/.test(document.getElementById('results-summary').textContent) && !document.getElementById('btn-stop').hidden, null, { timeout: 10000 })
-    .catch(() => errors.push('3b: the held preview never showed its running state (Ctrl+Enter lost or the request was not held)'));
+  await page.waitForSelector('#btn-stop:not([hidden])');
   const during = await page.evaluate(() => {
     const head = document.querySelector('.results-head').getBoundingClientRect();
     const bar = document.getElementById('run-progress').getBoundingClientRect();
@@ -341,19 +330,20 @@ async function flowEditing() {
   await page.click('.step-card[data-id="con"] .type');
   await page.fill('#inspector input[data-key="count"]', '60');
   await page.keyboard.press('Tab');
-  const prevSummary = await page.textContent('#results-summary');
+  // Wait for this run's result (not the one on screen) before reading its tabs.
+  const before60 = await page.textContent('#results-summary');
   await page.keyboard.press('Control+Enter');
-  // The tab of the previous result can be replaced while it is clicked: wait for the new one.
   await page.waitForFunction((prev) => {
-    const t = document.getElementById('results-summary').textContent;
-    return t !== prev && /bản ghi/.test(t) && document.getElementById('btn-stop').hidden;
-  }, prevSummary, { timeout: 10000 });
+    const s = document.getElementById('results-summary').textContent;
+    return document.getElementById('btn-stop').hidden && s !== prev && /bản ghi/.test(s);
+  }, before60);
   await page.click('.tabs button:has-text("Contact (")');
   await page.waitForSelector('.table-more');
   const conTotal = Number((await page.textContent('.tabs button:has-text("Contact (")')).replace(/\D/g, ''));
   const more = await page.textContent('.table-more');
   check(conTotal > 200 && more.includes(`Hiển thị 200/${conTotal.toLocaleString('en').replace(/,/g, ' ')} dòng đầu`), `no truncated-table hint (${more})`);
-  const [dl] = await Promise.all([page.waitForEvent('download'), page.click('#btn-dl-csv')]);
+  // The click itself must not wait for a navigation the download never makes (a 30 s stall under load).
+  const [dl] = await Promise.all([page.waitForEvent('download'), page.evaluate(() => document.getElementById('btn-dl-csv').click())]);
   const csvLines = fs.readFileSync(await dl.path(), 'utf8').trim().split(/\r\n/);
   check(csvLines.length === conTotal + 1 && /^ref,FirstName,LastName/.test(csvLines[0]), `CSV export: ${csvLines.length} lines for ${conTotal} Contacts, header ${csvLines[0]}`);
   await page.fill('#inspector input[data-key="count"]', '1');
@@ -364,11 +354,11 @@ async function flowEditing() {
   const aliasInput = '#inspector input[data-key="alias"]';
   await page.fill(aliasInput, '');
   await page.type(aliasInput, 'account');
-  const ref = await page.evaluate(() => JSON.stringify(smokeStored()).match(/"ref":"(\w+)"/)?.[1]);
+  const ref = await page.evaluate(() => JSON.stringify(smokeSaved()).match(/"ref":"(\w+)"/)?.[1]);
   check(ref === 'account', `Lookup ref did not follow the alias rename (${ref})`);
   check(await page.evaluate((sel) => document.activeElement === document.querySelector(sel), aliasInput), 'alias input lost focus while typing');
   for (let i = 0; i < 'account'.length + 1; i++) await page.keyboard.press('Control+z');
-  await page.waitForFunction(() => /"ref":"acc"/.test(JSON.stringify(smokeStored())));
+  await page.waitForFunction(() => /"ref":"acc"/.test(JSON.stringify(smokeSaved())));
 
   // "Hoàn tác" in the delete toast only undoes the delete: another edit removes the button.
   await page.click(`.step-card[data-id="${added}"] .type`);
@@ -395,30 +385,13 @@ async function flowPicker() {
   const tplInput = `${title} input[data-key="template"]`;
   await page.waitForSelector(tplInput);
   await page.fill(tplInput, '');
-  // Design 0014 §6: Alt+↓ (⌥↓ on a Mac, where Ctrl+Space switches input sources) opens the picker on its search box.
-  check((await page.getAttribute(tplInput, 'aria-keyshortcuts')) === 'Alt+ArrowDown Control+Space', 'template field: no aria-keyshortcuts');
-  check(/Alt\+↓/.test(await page.getAttribute(`${title} .var-btn`, 'title')), '{x} title does not name Alt+↓');
-  await page.focus(tplInput);
+  // 0014 §6: Alt+↓ (⌥↓ on a Mac, where Ctrl+Space switches the input source) opens the picker with its search focused.
+  check(/Alt\+ArrowDown/.test(await page.getAttribute(tplInput, 'aria-keyshortcuts') ?? ''), 'template field: aria-keyshortcuts without Alt+ArrowDown');
   await page.keyboard.press('Alt+ArrowDown');
-  await page.waitForSelector('.var-picker .vp-item');
-  check(await page.evaluate(() => document.activeElement?.classList.contains('var-search')), 'Alt+↓ did not focus the picker search');
+  await page.waitForSelector('.var-picker .vp-item', { timeout: 2000 }).catch(() => errors.push('Alt+ArrowDown in the template field did not open the picker'));
+  check(await page.evaluate(() => document.activeElement?.classList.contains('var-search')), 'Alt+ArrowDown did not focus the picker search');
   await page.keyboard.press('Escape');
-  await page.waitForSelector('.var-picker', { state: 'detached' });
-  // Review 0014 B1: Alt+↓ on the {x} button opens the picker (it moved the step before); on the field's
-  // "Xuống" button it does nothing to the tree.
-  const storedBefore = await page.evaluate(() => JSON.stringify(smokeStored()));
-  await page.focus(`${title} .var-btn`);
-  await page.keyboard.press('Alt+ArrowDown');
-  const onBtn = await page.waitForSelector('.var-picker .vp-item', { timeout: 2000 }).then(() => true, () => false);
-  check(onBtn && await page.evaluate(() => document.activeElement?.classList.contains('var-search')), 'Alt+↓ on {x} did not open the picker on its search box');
-  await page.keyboard.press('Escape');
-  await page.waitForSelector('.var-picker', { state: 'detached' });
-  // (Before the fix the step had moved and the inspector was rebuilt: a short timeout, then the check.)
-  if (await page.focus('#inspector .field-card .actions button[aria-label="Xuống"]', { timeout: 2000 }).then(() => true, () => false)) {
-    await page.keyboard.press('Alt+ArrowDown');
-    await page.keyboard.press('Alt+ArrowUp');
-  }
-  check((await page.evaluate(() => JSON.stringify(smokeStored()))) === storedBefore, 'Alt+↓ / Alt+↑ on {x} or an inspector button changed the workflow (moved the step)');
+  await page.waitForFunction(() => !document.querySelector('.var-picker'), null, { timeout: 2000 }).catch(() => errors.push('Esc did not close the picker opened by Alt+ArrowDown'));
   await page.click(`${title} .var-btn`);
   await page.waitForSelector('.var-picker .vp-item');
   check(await page.evaluate(() => document.activeElement?.classList.contains('var-search')), '{x} did not focus the picker search');
@@ -462,12 +435,12 @@ async function flowPicker() {
   const industry = await page.$('#inspector .field-card[data-field="fields.Industry"] input[aria-label="Tên field"]');
   await industry.fill('Industry__c');
   await industry.press('Tab');
-  const followed = await page.evaluate(() => JSON.stringify(smokeStored()).match(/"name":"Title","type":"template","options":\{"template":"([^"]*)"/)?.[1]);
+  const followed = await page.evaluate(() => JSON.stringify(smokeSaved()).match(/"name":"Title","type":"template","options":\{"template":"([^"]*)"/)?.[1]);
   check(followed === '{{acc.Industry__c}} #{{loop.index}} {{acc.Name}}', `field rename did not follow (${followed})`);
   check(/Đã cập nhật 1 tham chiếu: acc.Industry → acc.Industry__c/.test(await page.textContent('#toast')), 'no rename toast');
   // One undo restores both the name and the references.
   await page.click('#btn-undo');
-  const undone = await page.evaluate(() => JSON.stringify(smokeStored()));
+  const undone = await page.evaluate(() => JSON.stringify(smokeSaved()));
   check(undone.includes('"name":"Industry","type":"picklist"') && undone.includes('"template":"{{acc.Industry}} #{{loop.index}} {{acc.Name}}"'), 'one Ctrl+Z did not undo the field rename and its references together');
 
   // Renaming the field that owns a chip strip keeps the strip live; $n chips are neutral; ⊗ on unresolved error chips.
@@ -492,12 +465,14 @@ async function flowPicker() {
   check(/trỏ tới Lead/.test(refText), `"Bản ghi cha" did not refresh after referenceTo (${refText})`);
 
   // Path fields (branch "Giá trị"): a valid default outside loops, no opening on focus, Tab never inserts untouched.
-  await page.evaluate(() => {
+  {
     const rec = { id: 'a', type: 'record', config: { sobject: 'Account', alias: 'acc', fields: [{ name: 'Name', type: 'text', options: {} }] } };
     const top = { id: 'top', type: 'branch', config: { kind: 'chance', probability: 0.5 }, slots: { true: [], false: [] } };
     const inner = { id: 'B', type: 'branch', config: { kind: 'compare', left: '', op: 'eq', right: '1' }, slots: { true: [], false: [] } };
-    return smokeOpen({ version: 2, name: 'p', steps: [rec, top, { id: 'L', type: 'loop', config: { count: 2, alias: 'loop' }, slots: { body: [inner] } }] });
-  });
+    const wf = { version: 2, name: 'p', steps: [rec, top, { id: 'L', type: 'loop', config: { count: 2, alias: 'loop' }, slots: { body: [inner] } }] };
+    // Opened as a file (no reload: one app boot less for this flow).
+    await page.setInputFiles('#file-input', { name: 'p.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(wf)) });
+  }
   await page.waitForSelector('.step-card[data-id="top"]');
   await page.click('.step-card[data-id="top"] .type');
   await page.selectOption('#inspector select[data-key="kind"]', 'compare');
@@ -517,10 +492,12 @@ async function flowPicker() {
   await page.keyboard.press('ArrowDown');
   await page.keyboard.press('Tab');
   check((await page.inputValue(leftSel)) !== '', 'Tab after moving the selection did not insert');
+  // Alt+↓ opens the path field's list too (0014 §6).
   await page.focus(leftSel);
+  check(!(await page.$('.var-picker')), 'the path picker is open before Alt+ArrowDown');
   await page.keyboard.press('Alt+ArrowDown');
-  await page.waitForSelector('.var-picker .vp-item');
-  check(await page.evaluate(() => document.activeElement?.classList.contains('var-search')), 'Alt+↓ in a path field did not open the picker');
+  check(await page.waitForSelector('.var-picker .vp-item', { timeout: 2000 }).catch(() => null), 'Alt+ArrowDown in a path field did not open the picker');
+  check(/Alt\+ArrowDown/.test(await page.getAttribute(leftSel, 'aria-keyshortcuts') ?? ''), 'path field: aria-keyshortcuts without Alt+ArrowDown');
   await page.context().close();
 }
 
@@ -546,18 +523,10 @@ async function flowFiles() {
   await page.waitForSelector('.step-card[data-id="accs"] .tag-sample');
   await page.keyboard.press('Control+Enter');
   const qTab = await page.waitForSelector('.tabs .tab-query[data-query="accs"]', { timeout: 3000 }).catch(() => null);
-  check(qTab && /↓ accs · Account \(5\)/.test(await qTab.textContent()), 'no "↓ accs · Account (5)" tab of sample rows');
+  check(qTab && (await qTab.textContent()) === 'accs · Account (5)', 'no "accs · Account (5)" tab of sample rows (Query icon, no ↓)');
   check(/accs: 5 bản ghi mẫu/.test(await page.textContent('#results-summary')), 'results summary does not mention the sample rows');
   check(/Contact: 10/.test(await page.textContent('#results-summary')), 'the Query sample did not generate 10 Contacts');
   check(await page.isVisible('.step-card[data-id="accs"].has-warning'), 'no warning on the Query card without an org');
-  // Design 0014 §7: at 390 px no card row is wider than its card (stat chip + ▲ badge + no-org tag pushed ⋯ off screen).
-  await page.setViewportSize({ width: 390, height: 844 });
-  const fit = await page.$$eval('#process .step-card', (cards) => cards.map((c) => {
-    const menu = c.querySelector('.menu-btn')?.getBoundingClientRect();
-    return { id: c.dataset.id, over: c.scrollWidth - c.clientWidth, menu: menu ? menu.right <= innerWidth && menu.left >= 0 : true };
-  }).filter((x) => x.over > 0 || !x.menu));
-  check(!fit.length, `390px: cards wider than the screen or with ⋯ off screen (${JSON.stringify(fit)})`);
-  await page.setViewportSize({ width: 1440, height: 900 });
   const staleDone = page.waitForEvent('requestfinished', (q) => q === heldValidate);
   releaseValidate();
   await staleDone;
@@ -567,7 +536,7 @@ async function flowFiles() {
   // A later validation of the same workflow (name edited and put back) keeps the run's warning.
   const name = await page.inputValue('#wf-name');
   await page.fill('#wf-name', `${name} x`);
-  const revalidated = page.waitForResponse((r) => r.url().endsWith('/api/validate') && JSON.parse(r.request().postData() ?? '{}').workflow?.name === name);
+  const revalidated = page.waitForResponse((r) => r.url().endsWith('/api/validate'));
   await page.fill('#wf-name', name);
   await revalidated;
   await page.evaluate(() => new Promise((r) => setTimeout(r, 0)));
@@ -582,29 +551,29 @@ async function flowFiles() {
   await page.fill('#inspector input[data-key="where"]', 'AccountId = {{acc.Id}}');
   check(await page.waitForSelector('#inspector input[data-key="where"].invalid', { timeout: 3000 }).catch(() => null), '"{{" in WHERE is not outlined');
 
-  // Migration of a v1 autosave on load (design 0012 A: into a library item; v1 untouched, v2 not written).
+  // Migration of a v1 autosave on load.
   const v1Text = JSON.stringify(V1_SAMPLE);
-  await page.evaluate((t) => { localStorage.clear(); sessionStorage.clear(); localStorage.setItem('sfdg.workflow.v1', t); }, v1Text);
+  await page.evaluate((t) => { localStorage.clear(); localStorage.setItem('sfdg.workflow.v1', t); }, v1Text);
   await page.reload();
   await page.waitForSelector('.step-card[data-id="a"]');
   const toastText = await page.textContent('#toast');
   check(/Đã chuyển workflow đang soạn sang định dạng mới/.test(toastText), `no migration toast (${toastText})`);
-  const kept = await page.evaluate(() => [localStorage.getItem('sfdg.workflow.v1'), localStorage.getItem('sfdg.workflow.v2'), JSON.parse(localStorage.getItem('sfdg.library') ?? 'null')?.items?.length, smokeStored()?.version]);
+  const kept = await page.evaluate(() => [localStorage.getItem('sfdg.workflow.v1'), smokeSaved()?.version, localStorage.getItem('sfdg.workflow.v2'), JSON.parse(localStorage.getItem('sfdg.library'))?.items.length]);
   check(kept[0] === v1Text, 'sfdg.workflow.v1 was modified');
-  check(kept[1] === null && kept[2] === 1 && kept[3] === 2, `the v1 autosave did not become one library item (v2 ${kept[1] === null ? 'not written' : 'written'}, items ${kept[2]}, version ${kept[3]})`);
-  // A v2 autosave becomes the first item; the v2 key is kept byte for byte.
-  const v2Text = JSON.stringify({ version: 2, name: 'Bản v2', steps: [{ id: 'v2a', type: 'record', config: { sobject: 'Account', alias: 'v2a', fields: [] } }] });
-  await page.evaluate((t) => { localStorage.clear(); sessionStorage.clear(); localStorage.setItem('sfdg.workflow.v2', t); }, v2Text);
+  check(kept[1] === 2 && kept[3] === 1, `the v1 autosave did not become a library entry (${kept})`);
+  check(kept[2] === null, 'sfdg.workflow.v2 was written');
+  // A v2 autosave becomes the first library entry, and the v2 key stays byte for byte (0012 A).
+  const v2Text = JSON.stringify({ version: 2, name: 'Đang soạn', steps: [{ id: 'q', type: 'record', config: { sobject: 'Account', alias: 'acc', count: 1, fields: [] } }] });
+  await page.evaluate((t) => { localStorage.clear(); localStorage.setItem('sfdg.workflow.v2', t); }, v2Text);
   await page.reload();
-  await page.waitForSelector('.step-card[data-id="v2a"]');
-  check(/đã được đưa vào Thư viện/.test(await page.textContent('#toast')), `no "đưa vào Thư viện" toast (${await page.textContent('#toast')})`);
-  await page.fill('#wf-name', 'Bản v2 đã sửa');
-  await page.waitForFunction(() => smokeStored()?.name === 'Bản v2 đã sửa');
-  check(await page.evaluate((t) => localStorage.getItem('sfdg.workflow.v2') === t, v2Text), 'sfdg.workflow.v2 changed after the move into the library');
+  await page.waitForSelector('.step-card[data-id="q"]');
+  check(/Workflow đang soạn đã được đưa vào Thư viện/.test(await page.textContent('#toast')), `no library migration toast (${await page.textContent('#toast')})`);
+  const lib = await page.evaluate(() => [localStorage.getItem('sfdg.workflow.v2'), JSON.parse(localStorage.getItem('sfdg.library')).items.map((i) => i.name).join(), smokeSaved()?.name]);
+  check(lib[0] === v2Text && lib[1] === 'Đang soạn' && lib[2] === 'Đang soạn', `v2 autosave → library: ${JSON.stringify(lib)}`);
 
   // A malformed v2 autosave: the sample is shown, the autosave is not overwritten.
   const broken = JSON.stringify({ version: 2, name: 'Hỏng', steps: [{ id: 'x', type: 'loop', config: {}, slots: { body: 5 } }] });
-  await page.evaluate((t) => { localStorage.clear(); sessionStorage.clear(); localStorage.setItem('sfdg.workflow.v2', t); }, broken);
+  await page.evaluate((t) => { localStorage.clear(); localStorage.setItem('sfdg.workflow.v2', t); }, broken);
   await page.reload();
   await page.waitForSelector('.step-card[data-id="con"]');
   const brokenToast = await page.textContent('#toast');
@@ -614,14 +583,14 @@ async function flowFiles() {
   check(stored[0] === broken && stored[1] === broken, 'broken autosave was overwritten or not backed up');
 
   // A malformed v2 file is refused.
-  const badFile = path.join(fs.mkdtempSync(path.join(smokeTmp, 'f-')), 'bad.json');
+  const badFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'sfdg-smoke-')), 'bad.json');
   fs.writeFileSync(badFile, JSON.stringify({ version: 2, steps: [{ id: 'a', type: 'record', config: {} }, 3] }));
   await page.setInputFiles('#file-input', badFile);
   await page.waitForFunction(() => /Không mở được file: steps\[1\]/.test(document.getElementById('toast').textContent));
   check(await page.isVisible('.step-card[data-id="con"]'), 'malformed file replaced the workflow');
 
   // Opening a v1 file with an unconnected node → report dialog.
-  const tmp = path.join(fs.mkdtempSync(path.join(smokeTmp, 'f-')), 'old.json');
+  const tmp = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'sfdg-smoke-')), 'old.json');
   fs.writeFileSync(tmp, JSON.stringify(V1_ORPHAN));
   page.removeAllListeners('dialog');
   page.on('dialog', (d) => d.accept());
@@ -804,6 +773,10 @@ async function seedStorage(page, { workflow, org }) {
 
 /** Waits until CSS transitions (sheet, toast) are over: no fixed timeouts. */
 const settle = (page) => page.waitForFunction(() => document.getAnimations().every((a) => a.playState !== 'running'));
+/** Waits (≤ 2 s) until `fn(arg)` is true in the page; a failed wait leaves the check after it to report. */
+const until = (page, fn, arg) => page.waitForFunction(fn, arg, { timeout: 2000 }).then(() => true, () => false);
+/** The selected card `id` is fully above the open sheet (the reveal runs in a frame after the sheet opens). */
+const cardAboveSheet = (id) => document.querySelector(`.step-card[data-id="${id}"]`).getBoundingClientRect().bottom <= document.getElementById('inspector').getBoundingClientRect().top + 0.5;
 
 /** Top bar measurements at the current viewport. */
 const topbarBox = (page) => page.evaluate(() => {
@@ -820,7 +793,7 @@ const topbarBox = (page) => page.evaluate(() => {
 
 /** 13a (issues bar), 13b (top bar, wide widths), 13e (download buttons at 1440). */
 async function flowLayoutWide() {
-  const page = await newPage('0009 wide', { shared: true });
+  const page = await newPage('0009 wide');
   await mockOrgs(page, LONG_ORGS);
   await seedStorage(page, { workflow: await issuesWorkflow(), org: LONG_ORGS[0].alias });
   await page.goto(base);
@@ -880,69 +853,6 @@ async function flowLayoutWide() {
   check((await page.$$('#issues .issue.current')).length === 1, 'F8 does not mark the current row');
   await page.keyboard.press('Shift+F8');
   check((await selected()) === 'opp', 'Shift+F8 did not go back to the last row (opp)');
-  // Design 0014 §2: the results panel height handle (keyboard, mouse; kept over the reload below), never
-  // breaking 0009's guarantees (issues bar ≤ 25 % of the middle column, the selected card in view).
-  await page.setViewportSize({ width: 1440, height: 900 });
-  await page.click('.step-card[data-id="con"] .type');
-  if ((await page.getAttribute('#btn-results-toggle', 'aria-expanded')) !== 'true') await page.click('#btn-results-toggle');
-  await page.focus('#btn-results-toggle');
-  await page.keyboard.press('Shift+Tab');
-  check(await page.evaluate(() => document.activeElement?.id === 'results-resize'), 'the height handle is not the tab stop before "Kết quả"');
-  const panelH = () => page.evaluate(() => Math.round(document.getElementById('results').getBoundingClientRect().height));
-  const h0 = await panelH();
-  for (let i = 0; i < 3; i++) await page.keyboard.press('ArrowUp');
-  const h3 = await panelH();
-  await page.keyboard.press('Home');
-  const hMin = await panelH();
-  await page.keyboard.press('End');
-  // The selected card was in view: it is revealed again in the next frame.
-  await page.waitForFunction(() => {
-    const c = document.querySelector('.step-card[data-id="con"]').getBoundingClientRect();
-    const v = document.getElementById('process').getBoundingClientRect();
-    return c.top >= v.top - 0.5 && c.bottom <= v.bottom + 0.5;
-  }, null, { timeout: 2000 }).catch(() => {});
-  const top = await page.evaluate(() => {
-    const r = (s) => document.querySelector(s).getBoundingClientRect();
-    const card = r('.step-card[data-id="con"]');
-    const view = r('#process');
-    return { main: r('.layout').height, bar: r('#issues').height, col: r('.view-wrap').height, card: card.top >= view.top - 0.5 && card.bottom <= view.bottom + 0.5, now: document.getElementById('results-resize').getAttribute('aria-valuenow') };
-  });
-  check(h3 === h0 + 48 && hMin === 160, `handle keys: ${h0} → ↑×3 ${h3} (+48 expected), Home ${hMin} (160 expected)`);
-  check(Math.abs(top.main - 240) <= 1 && top.bar <= 0.25 * top.col + 0.5 && top.card && top.now === '72', `End: main area ${JSON.stringify(top)} (240 px, issues bar ≤ 25 %, con in view)`);
-  // Review S4: a selected card only partly visible (half under the bottom edge of the short canvas) is revealed
-  // whole when the panel grows.
-  for (let i = 0; i < 4; i++) await page.keyboard.press('ArrowDown');
-  await page.evaluate(() => {
-    const view = document.getElementById('process');
-    const c = document.querySelector('.step-card[data-id="con"]').getBoundingClientRect();
-    view.scrollTop += c.top - (view.getBoundingClientRect().bottom - c.height / 2);
-  });
-  const half = await page.evaluate(() => {
-    const c = document.querySelector('.step-card[data-id="con"]').getBoundingClientRect();
-    const v = document.getElementById('process').getBoundingClientRect();
-    return c.top < v.bottom && c.bottom > v.bottom;
-  });
-  for (let i = 0; i < 2; i++) await page.keyboard.press('ArrowUp');
-  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))); // the reveal runs in the next frame
-  const whole = await page.evaluate(() => {
-    const c = document.querySelector('.step-card[data-id="con"]').getBoundingClientRect();
-    const v = document.getElementById('process').getBoundingClientRect();
-    return c.top >= v.top - 0.5 && c.bottom <= v.bottom + 0.5;
-  });
-  check(half && whole, `growing the panel left the partly visible selected card cut off (set up half visible: ${half})`);
-  await page.keyboard.press('Home');
-  // Review N1: with Alt / Ctrl the handle's keys are not the handle's (Alt+↑ / Ctrl+↑ change nothing).
-  await page.keyboard.press('Alt+ArrowUp');
-  await page.keyboard.press('Control+ArrowUp');
-  check((await panelH()) === hMin, `Alt+↑ / Ctrl+↑ on the handle resized the panel (${await panelH()} vs ${hMin})`);
-  await page.keyboard.press('Home');
-  const grip = await page.$eval('#results-resize', (e) => { const r = e.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; });
-  await page.mouse.move(grip.x, grip.y);
-  await page.mouse.down();
-  await page.mouse.move(grip.x, grip.y - 100, { steps: 4 });
-  await page.mouse.up();
-  const dragged = await panelH();
-  check(Math.abs(dragged - 260) <= 1, `dragging the handle up 100 px gave ${dragged} px (260 expected)`);
   // Collapse: one 32 px row, kept after a reload; its first line jumps to the first issue.
   await page.click('#btn-issues-toggle');
   const collapsed = () => page.evaluate(() => ({
@@ -956,12 +866,6 @@ async function flowLayoutWide() {
   await page.waitForSelector('#issues:not([hidden])');
   c = await collapsed();
   check(c.h <= 40 && c.expanded === 'false', `collapsed state not kept after reload (${JSON.stringify(c)})`);
-  await page.click('#btn-results-toggle');
-  check(Math.abs((await panelH()) - dragged) <= 1, `the panel height was not kept after a reload (${await panelH()} vs ${dragged})`);
-  await page.focus('#results-resize');
-  await page.keyboard.press('Enter');
-  const shut = await page.evaluate(() => ({ expanded: document.getElementById('btn-results-toggle').getAttribute('aria-expanded'), focus: document.activeElement?.id, hidden: document.getElementById('results-resize').hidden }));
-  check(shut.expanded === 'false' && shut.focus === 'btn-results-toggle' && shut.hidden, `Enter on the handle (${JSON.stringify(shut)}: collapsed, focus on Kết quả)`);
   await page.click('#issues-first');
   check((await selected()) === 'task', 'the collapsed first line did not go to its step');
   // A run that fails validation expands the bar (background validation never does).
@@ -973,8 +877,12 @@ async function flowLayoutWide() {
   await page.setViewportSize({ width: 1440, height: 900 });
   const dl = await page.evaluate(() => ['btn-dl-json', 'btn-dl-csv', 'btn-dl-menu'].map((id) => document.getElementById(id).getBoundingClientRect().width > 0));
   check(dl.join() === 'true,true,false', `1440px: download buttons ${dl} (JSON, CSV shown; ⤓ Tải hidden)`);
+  // 0014 §4: the wide palette is a column, nothing hidden sideways, so no fade.
+  check(await page.waitForFunction(() => !document.querySelector('.palette').hasAttribute('data-overflow'), null, { timeout: 2000 }).then(() => true, () => false), '1440px: .palette has data-overflow');
   // N5: a selection on a wide screen does not pop a sheet open when the window gets narrow.
   await page.setViewportSize({ width: 800, height: 900 });
+  // A state, not the end of animations: the media query change makes the inspector inert.
+  await page.waitForFunction(() => document.getElementById('inspector').inert, null, { timeout: 2000 }).catch(() => {});
   await settle(page);
   const narrowed = await page.evaluate(() => {
     const insp = document.getElementById('inspector');
@@ -983,18 +891,70 @@ async function flowLayoutWide() {
   check(!narrowed.open && !narrowed.sheet && narrowed.inert && narrowed.top >= 899, `narrowing the window popped the sheet open (${JSON.stringify(narrowed)})`);
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.waitForFunction(() => !document.getElementById('inspector').inert, null, { timeout: 2000 }).catch(() => errors.push('the inspector stays inert on a wide screen'));
-  check(!(await page.$('.palette[data-overflow], #results-summary[data-overflow]')), '1440px: the palette or the summary is marked as overflowing sideways');
   const theme = await page.evaluate(() => ({ title: document.getElementById('theme-select').title, color: getComputedStyle(document.querySelector('#theme-select option')).color }));
   check(theme.title === 'Giao diện: Theo hệ thống' && !/rgba\(0, 0, 0, 0\)|transparent/.test(theme.color), `theme select title/option colour (${JSON.stringify(theme)})`);
+  await resultsHeightSteps(page);
   await page.context().close();
+}
+
+/** 0014 §2 at 1440 × 900: the results panel's height handle (keys, mouse, remembered, Enter collapses). */
+async function resultsHeightSteps(page) {
+  await page.click('.step-card[data-id="con"] .type');
+  if ((await page.getAttribute('#btn-results-toggle', 'aria-expanded')) !== 'true') await page.click('#btn-results-toggle');
+  await page.focus('#btn-results-toggle');
+  await page.keyboard.press('Shift+Tab');
+  check(await page.evaluate(() => document.activeElement?.id === 'results-resize'), 'Shift+Tab from "Kết quả" did not reach the height handle');
+  const box = () => page.evaluate(() => {
+    const r = (s) => document.querySelector(s).getBoundingClientRect();
+    const card = r('.step-card[data-id="con"]');
+    const proc = r('#process');
+    const handle = document.getElementById('results-resize');
+    return {
+      h: r('#results').height, main: r('.layout').height, issues: r('#issues').height, col: r('.view-wrap').height,
+      cardIn: card.top >= proc.top - 0.5 && card.bottom <= proc.bottom + 0.5, now: handle.getAttribute('aria-valuenow'), text: handle.getAttribute('aria-valuetext'),
+    };
+  });
+  const h0 = (await box()).h;
+  for (let i = 0; i < 3; i++) await page.keyboard.press('ArrowUp');
+  let b = await box();
+  check(Math.abs(b.h - h0 - 48) <= 1 && /^Cao \d+ px \(\d+ % màn hình\)$/.test(b.text), `↑ × 3 on the handle: ${h0} → ${b.h} (+48 expected; ${b.text})`);
+  await page.keyboard.press('Home');
+  b = await box();
+  check(Math.abs(b.h - 160) <= 1, `Home on the handle: ${b.h} px (160 expected)`);
+  await page.keyboard.press('End');
+  await page.waitForFunction(() => {
+    const c = document.querySelector('.step-card[data-id="con"]').getBoundingClientRect();
+    const p = document.getElementById('process').getBoundingClientRect();
+    return c.top >= p.top - 0.5 && c.bottom <= p.bottom + 0.5;
+  }, null, { timeout: 2000 }).catch(() => {});
+  b = await box();
+  check(Math.abs(b.main - 240) <= 1 && b.issues <= 0.25 * b.col + 0.5 && b.cardIn, `End on the handle: main ${b.main} px (240), issues bar ${b.issues}/${b.col}, con visible ${b.cardIn}`);
+  // The mouse: from the minimum, up 100 px.
+  await page.keyboard.press('Home');
+  const hb = await page.$eval('#results-resize', (e) => { const r = e.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; });
+  await page.mouse.move(hb.x, hb.y);
+  await page.mouse.down();
+  await page.mouse.move(hb.x, hb.y - 50);
+  await page.mouse.move(hb.x, hb.y - 100);
+  await page.mouse.up();
+  b = await box();
+  check(Math.abs(b.h - 260) <= 1, `dragging the handle up 100 px: ${b.h} px (260 expected)`);
+  // Remembered after a reload (the panel opens at that height).
+  await page.reload();
+  await page.waitForSelector('.step-card[data-id="con"]');
+  await page.click('#btn-results-toggle');
+  b = await box();
+  check(Math.abs(b.h - 260) <= 1, `after a reload the panel is ${b.h} px (260 expected)`);
+  // Enter collapses; focus goes to "Kết quả" (the handle hides with the body).
+  await page.focus('#results-resize');
+  await page.keyboard.press('Enter');
+  const col = await page.evaluate(() => ({ collapsed: document.getElementById('results').classList.contains('collapsed'), focus: document.activeElement?.id, hidden: document.getElementById('results-resize').hidden }));
+  check(col.collapsed && col.hidden && col.focus === 'btn-results-toggle', `Enter on the handle (${JSON.stringify(col)})`);
 }
 
 /** 11 (narrow sheet), 13b (top bar at 390/360), 13c (⋯ menu, Seed chip), 13d (sheet), 13e (results header). */
 async function flowLayoutNarrow() {
   const m = await newPage('390', { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
-  // Reduced motion for the whole flow (no sheet / toast transitions to wait out; the 0 ms path of the
-  // sheet notches is covered too); one notch toggle below runs with motion (review 0014 N9).
-  await m.emulateMedia({ reducedMotion: 'reduce' });
   await mockOrgs(m, LONG_ORGS);
   await seedStorage(m, { org: LONG_ORGS[0].alias });
   await m.goto(base);
@@ -1017,10 +977,61 @@ async function flowLayoutNarrow() {
   // 11 + 13d: the sheet opens with the card just above its edge.
   await m.tap('.step-card[data-id="con"] .type');
   await m.waitForSelector('#inspector.open');
-  await settle(m);
+  await until(m, cardAboveSheet, 'con');
   let s = await sheet();
   check(s.card <= s.sheet + 0.5 && s.sheet - s.canvas >= 190, `390px: sheet covers the selected card or leaves < 190px of canvas (${JSON.stringify(s)})`);
   if (outDir) await m.screenshot({ path: path.join(outDir, 'smoke-390-sheet.png') });
+  // 0014 §3: two snaps. Enter on the grip → tall (its top at the top bar's bottom), a toast above it; Enter → middle,
+  // con back on the sheet's edge; a pointer drag on the head row up 200 px → tall; from the middle, down 400 px → closed like Xong.
+  const snap = () => m.evaluate(() => {
+    const insp = document.getElementById('inspector');
+    return {
+      top: insp.getBoundingClientRect().top, h: insp.getBoundingClientRect().height, bar: document.querySelector('.topbar').getBoundingClientRect().bottom,
+      expanded: insp.querySelector('.sheet-grip').getAttribute('aria-expanded'), open: insp.classList.contains('open'), inert: insp.inert,
+      card: document.querySelector('.step-card[data-id="con"]').getBoundingClientRect().bottom, focus: document.activeElement?.dataset.id ?? document.activeElement?.className,
+    };
+  });
+  await m.focus('#inspector .sheet-grip');
+  await m.keyboard.press('Enter');
+  await until(m, () => document.getElementById('inspector').classList.contains('full'));
+  let sn = await snap();
+  check(Math.abs(sn.top - sn.bar) <= 1 && sn.expanded === 'true', `Enter on the sheet grip: tall snap expected (${JSON.stringify(sn)})`);
+  await m.keyboard.press('F8'); // nothing to go to: a toast, above the tall sheet
+  await m.waitForSelector('#toast.show');
+  await settle(m);
+  const toastTall = await m.evaluate(() => ({ toast: document.getElementById('toast').getBoundingClientRect().bottom, sheet: document.getElementById('inspector').getBoundingClientRect().top }));
+  check(toastTall.toast <= toastTall.sheet + 0.5, `toast under the tall sheet (${JSON.stringify(toastTall)})`);
+  await m.focus('#inspector .sheet-grip');
+  await m.keyboard.press('Enter');
+  await until(m, () => !document.getElementById('inspector').classList.contains('full'));
+  await until(m, cardAboveSheet, 'con');
+  sn = await snap();
+  check(sn.expanded === 'false' && sn.top > sn.bar + 100 && sn.card <= sn.top + 0.5, `Enter again: middle snap with con above it (${JSON.stringify(sn)})`);
+  const dragHead = async (dy) => {
+    const hb = await m.$eval('#inspector .sheet-head', (e) => { const r = e.getBoundingClientRect(); return { x: r.right - 40, y: r.top + r.height / 2 }; });
+    await m.mouse.move(hb.x, hb.y);
+    await m.mouse.down();
+    await m.mouse.move(hb.x, hb.y + dy / 2);
+    await m.mouse.move(hb.x, hb.y + dy);
+    await m.mouse.up();
+    await settle(m);
+  };
+  await dragHead(-200);
+  sn = await snap();
+  check(Math.abs(sn.top - sn.bar) <= 1 && sn.expanded === 'true', `dragging the sheet head up 200 px: tall snap expected (${JSON.stringify(sn)})`);
+  // Closing from the middle snap: 506 − 400 px is under half of it, so it closes at any speed (from the tall snap a
+  // slow release would land on the middle one: the result would depend on the machine's speed).
+  await m.focus('#inspector .sheet-grip');
+  await m.keyboard.press('Enter');
+  await until(m, () => !document.getElementById('inspector').classList.contains('full'));
+  await dragHead(400);
+  sn = await snap();
+  check(!sn.open && sn.inert && sn.focus === 'con', `dragging the sheet head down 400 px: closed, inert, focus on con expected (${JSON.stringify(sn)})`);
+  await m.tap('.step-card[data-id="con"] .type');
+  await m.waitForSelector('#inspector.open');
+  await settle(m);
+  sn = await snap();
+  check(sn.expanded === 'false' && sn.top > sn.bar + 100, `the sheet reopened at the tall snap (${JSON.stringify(sn)})`);
   // "‹ Xong" by keyboard: focus goes to the selected card, the closed sheet is inert.
   await m.focus('#inspector .sheet-close');
   await m.keyboard.press('Enter');
@@ -1037,7 +1048,7 @@ async function flowLayoutNarrow() {
     seed: Boolean(document.querySelector('.popup input[data-field="seed"]')),
     radio: document.querySelector('.popup [role="group"][aria-label="Giao diện"] [role="menuitemradio"][aria-checked="true"]')?.textContent ?? '',
   }));
-  const want = ['Mới', 'Thư viện…', 'Mở file JSON…', 'Lưu', 'Account + Contact', 'Tối'];
+  const want = ['Mới', 'Thư viện…', 'Mở file JSON…', 'Lưu', 'Account + Contact', 'Tối']; // 0012 A: Mở… is in the library
   check(want.every((w) => menu.items.some((x) => x.includes(w))) && menu.seed && /Theo hệ thống/.test(menu.radio), `⋯ menu at 390px (${JSON.stringify(menu)})`);
   check(!menu.aria.length, `text or input directly inside role=menu: ${menu.aria.join(' | ')}`);
   await m.fill('.popup input[data-field="seed"]', '42');
@@ -1065,8 +1076,8 @@ async function flowLayoutNarrow() {
   await m.setViewportSize({ width: 800, height: 900 });
   await m.click('#btn-more');
   const groups = await m.$$eval('.popup .popup-group', (n) => n.map((x) => x.textContent));
-  // 0011: "Lịch sử insert" sits in a Chạy group of the ⋯ menu (≤ 900 px).
-  check(groups.join() === 'Chạy,Mẫu', `800px: ⋯ menu groups ${groups} (Chạy with Lịch sử insert, then Mẫu)`);
+  // 0011: "Lịch sử insert" (group Chạy) whenever the ⋯ menu exists.
+  check(groups.join() === 'Chạy,Mẫu' && await m.isVisible('.popup .popup-item:has-text("Lịch sử insert")'), `800px: ⋯ menu groups ${groups} (Chạy with Lịch sử insert, then Mẫu)`);
   await m.keyboard.press('Escape');
   await m.setViewportSize({ width: 390, height: 844 });
 
@@ -1085,56 +1096,23 @@ async function flowLayoutNarrow() {
     return r.height > 0 && r.top < Math.min(innerHeight, document.getElementById('inspector').getBoundingClientRect().top);
   });
   check(!s.open && (await m.isVisible('.step-card.selected[data-id="con"]')) && table, `Xem trước with the sheet open (${JSON.stringify(s)}, table ${table})`);
-  // Design 0014 §7: nested cards with stat chips still fit (⋯ and the chevron on screen).
-  const over = await m.$$eval('#process .step-card', (cards) => cards.filter((c) => c.scrollWidth > c.clientWidth).map((c) => c.dataset.id));
-  check(!over.length, `390px: card rows wider than their card after Xem trước (${over})`);
   const typedIn = await m.evaluate(() => ({ inSheet: document.getElementById('inspector').contains(document.activeElement), inert: document.getElementById('inspector').inert }));
   await m.keyboard.type('ZZ');
   check(!typedIn.inSheet && typedIn.inert && (await m.inputValue('#inspector input[data-key="alias"]')) === 'con', `typing after a run edited the hidden sheet (${JSON.stringify(typedIn)})`);
   // 13e: one-row results header, "⤓ Tải" menu with the two downloads.
   const head = await m.evaluate(() => ({ h: document.querySelector('.results-head').getBoundingClientRect().height, expanded: document.getElementById('btn-results-toggle').getAttribute('aria-expanded') }));
   check(head.h <= 50 && head.expanded === 'true', `390px results header after Xem trước (${JSON.stringify(head)})`);
-  const grip390 = await m.evaluate(() => { const g = document.getElementById('results-resize'); return { hidden: g.hidden, h: g.getBoundingClientRect().height, coarse: matchMedia('(pointer: coarse)').matches }; });
-  check(!grip390.hidden && (!grip390.coarse || Math.abs(grip390.h - 24) < 0.5), `390px: results height handle ${JSON.stringify(grip390)} (shown; a 24 px row on touch)`);
-  // Design 0014 §4: the summary and the palette fade their hidden edge; a vertical wheel scrolls the summary sideways.
-  const fade = (sel, want) => m.waitForFunction(([q, w]) => document.querySelector(q)?.dataset.overflow === w, [sel, want], { timeout: 2000 }).then(() => true, () => false);
-  check(await fade('#results-summary', 'end') && await fade('.palette', 'end'), `390px: summary / palette overflow ${await m.evaluate(() => [document.getElementById('results-summary').dataset.overflow, document.querySelector('.palette').dataset.overflow])} (end expected)`);
-  const wheeled = await m.evaluate(() => {
-    const el = document.getElementById('results-summary');
-    const ev = new WheelEvent('wheel', { deltaY: 60, bubbles: true, cancelable: true });
-    el.dispatchEvent(ev);
-    return { left: el.scrollLeft, prevented: ev.defaultPrevented };
-  });
-  check(wheeled.left > 0 && wheeled.prevented, `a vertical wheel on the summary did not scroll it sideways (${JSON.stringify(wheeled)})`);
-  await m.evaluate(() => { const el = document.getElementById('results-summary'); el.scrollLeft = el.scrollWidth; });
-  check(await fade('#results-summary', 'start'), 'scrolled to its end, the summary does not fade only its start');
-  // Review 0014 S1 / S5 on the tab row (narrowed to 170 px, with three extra tabs, so it overflows on both
-  // sides): a vertical wheel is left to the table (not turned sideways), and Tab onto a partly hidden tab
-  // brings it fully out of the 24 px fades.
-  const tabsWheel = await m.evaluate(async () => {
-    const t = document.querySelector('#results-body .tabs');
-    for (const x of ['Lead (1)', 'Case (2)', 'Task (3)']) t.append(Object.assign(document.createElement('button'), { textContent: x, className: 'smoke-tab' }));
-    t.style.maxWidth = '170px';
-    t.scrollLeft = 0;
-    await new Promise((r) => requestAnimationFrame(r));
-    const ev = new WheelEvent('wheel', { deltaY: 60, bubbles: true, cancelable: true });
-    t.dispatchEvent(ev);
-    return { over: t.scrollWidth > t.clientWidth + 1, prevented: ev.defaultPrevented, left: t.scrollLeft };
-  });
-  check(tabsWheel.over && !tabsWheel.prevented && tabsWheel.left === 0, `a vertical wheel over the tab row scrolled it sideways (${JSON.stringify(tabsWheel)})`);
-  await m.focus('#results-body .tabs button');
-  await m.keyboard.press('Tab');
-  await m.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
-  const tabFocus = await m.evaluate(() => {
-    const t = document.querySelector('#results-body .tabs').getBoundingClientRect();
-    const a = document.activeElement.getBoundingClientRect();
-    const row = document.querySelector('#results-body .tabs');
-    const res = { tab: document.activeElement.textContent, left: Math.round(a.left - t.left), right: Math.round(t.right - a.right), overflow: row.dataset.overflow };
-    row.style.maxWidth = '';
-    for (const b of row.querySelectorAll('.smoke-tab')) b.remove();
-    return res;
-  });
-  check(tabFocus.tab.startsWith('Contact') && tabFocus.overflow === 'both' && tabFocus.left >= 23.5 && tabFocus.right >= 23.5, `Tab onto a partly hidden tab left it in a fade (${JSON.stringify(tabFocus)}: ≥ 24 px from both faded edges)`);
+  // 0014 §4: rows that scroll sideways fade the side that has more; a vertical wheel scrolls them sideways.
+  const overflowIs = (sel, want) => m.waitForFunction(({ sel, want }) => (document.querySelector(sel).dataset.overflow ?? '') === want, { sel, want }, { timeout: 2000 }).then(() => true, () => false);
+  check(await overflowIs('#results-summary', 'end'), `390px: #results-summary data-overflow is "${await m.getAttribute('#results-summary', 'data-overflow')}" ("end" expected)`);
+  check(await overflowIs('.palette', 'end'), `390px: .palette data-overflow is "${await m.getAttribute('.palette', 'data-overflow')}" ("end" expected)`);
+  const sumBox = await m.$eval('#results-summary', (e) => { const r = e.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; });
+  await m.mouse.move(sumBox.x, sumBox.y);
+  await m.mouse.wheel(0, 60);
+  check(await m.waitForFunction(() => document.getElementById('results-summary').scrollLeft > 0, null, { timeout: 2000 }).then(() => true, () => false), 'a vertical wheel over the summary did not scroll it sideways');
+  await m.$eval('#results-summary', (e) => { e.scrollLeft = e.scrollWidth; });
+  check(await overflowIs('#results-summary', 'start'), `390px: #results-summary scrolled to the end has data-overflow "${await m.getAttribute('#results-summary', 'data-overflow')}" ("start" expected)`);
+  await m.$eval('#results-summary', (e) => { e.scrollLeft = 0; });
   await m.tap('#btn-dl-menu');
   const dl = await m.$$eval('.popup .popup-item', (n) => n.map((x) => x.textContent));
   check(dl.join('|') === 'Tải JSON|Tải CSV (tab hiện tại)', `⤓ Tải menu: ${dl.join('|')}`);
@@ -1151,65 +1129,6 @@ async function flowLayoutNarrow() {
     return insp.scrollTop > 0 && b.top >= a.top - 0.5 && b.bottom <= a.bottom;
   });
   check(stuck, '"‹ Xong" scrolls away with the sheet');
-  // Design 0014 §3: two notches. Enter on the grip: full (top at the top bar's bottom), the toast above it; again: mid.
-  // This toggle runs with motion (the transitionend path); the rest of the flow with reduced motion.
-  const notch = () => m.evaluate(() => {
-    const i = document.getElementById('inspector');
-    return { top: i.getBoundingClientRect().top, h: i.getBoundingClientRect().height, bar: document.querySelector('.topbar').getBoundingClientRect().bottom, expanded: i.querySelector('.sheet-grip').getAttribute('aria-expanded'), open: i.classList.contains('open'), inert: i.inert, focus: document.activeElement?.dataset.id ?? document.activeElement?.className };
-  });
-  const covered = () => m.evaluate(() => ['.palette', '.view-wrap', '#results', '.topbar'].map((q) => document.querySelector(q).inert).join());
-  await m.emulateMedia({ reducedMotion: 'no-preference' });
-  await m.focus('#inspector .sheet-grip');
-  await m.keyboard.press('Enter');
-  await settle(m);
-  let n = await notch();
-  check(Math.abs(n.top - n.bar) <= 1 && n.expanded === 'true', `390px: full sheet notch ${JSON.stringify(n)} (top = top bar bottom, aria-expanded)`);
-  // Review S2: at the full notch the palette, the views and the results are inert (Tab cannot reach what the sheet covers); the top bar is not.
-  check((await covered()) === 'true,true,true,false', `full notch: inert of palette, views, results, top bar = ${await covered()} (true,true,true,false)`);
-  await m.keyboard.press('F8'); // nothing to go to: a toast, above the full sheet
-  await m.waitForSelector('#toast.show');
-  await settle(m);
-  const toastFull = await m.evaluate(() => document.getElementById('toast').getBoundingClientRect().bottom);
-  check(toastFull <= n.top + 0.5, `toast under the full sheet (${toastFull} > ${n.top})`);
-  await m.keyboard.press('Enter');
-  // Review N4: a transitionend bubbling from a child (a button's hover transition) must not end the notch change early.
-  await m.evaluate(() => document.querySelector('#inspector .sheet-close').dispatchEvent(new TransitionEvent('transitionend', { propertyName: 'height', bubbles: true })));
-  await settle(m);
-  await m.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
-  const overlap = await m.evaluate(() => {
-    const view = document.querySelector('.view-wrap > .view:not([hidden])').getBoundingClientRect();
-    const want = Math.max(0, Math.round(view.bottom - (innerHeight - document.getElementById('inspector').offsetHeight)));
-    return { want, got: parseFloat(document.body.style.getPropertyValue('--sheet-overlap')) };
-  });
-  check(Math.abs(overlap.want - overlap.got) <= 1, `back at mid, --sheet-overlap was measured mid-transition (${JSON.stringify(overlap)})`);
-  s = await sheet();
-  check(s.open && s.card <= s.sheet + 0.5 && (await notch()).expanded === 'false', `back to the mid notch, con not above the sheet (${JSON.stringify(s)})`);
-  check((await covered()) === 'false,false,false,false', `mid notch: the covered areas stay inert (${await covered()})`);
-  await m.emulateMedia({ reducedMotion: 'reduce' });
-  // Review N3: a mouse press on the grip focuses it (and toggles).
-  await m.focus('#inspector .sheet-close');
-  await m.click('#inspector .sheet-grip');
-  n = await notch();
-  check(n.focus === 'sheet-grip' && n.expanded === 'true', `a mouse press on the grip (${JSON.stringify(n)}: focused, full)`);
-  await m.click('#inspector .sheet-grip');
-  // Dragging the sheet head with a pointer: up 200 px → full; down 400 px from full → mid at any speed (review
-  // S3: a flick down from full stops at mid); down 400 px from mid → closed like Xong (inert, focus on the card).
-  const headAt = () => m.$eval('#inspector .sheet-head', (e) => { const r = e.getBoundingClientRect(); return { x: r.x + r.width * 0.8, y: r.y + r.height / 2 }; });
-  for (const [dy, want] of [[-200, 'full'], [400, 'mid'], [400, 'closed']]) {
-    const at = await headAt();
-    await m.mouse.move(at.x, at.y);
-    await m.mouse.down();
-    await m.mouse.move(at.x, at.y + dy, { steps: 4 });
-    await m.mouse.up();
-    await settle(m);
-    n = await notch();
-    const got = !n.open ? 'closed' : n.expanded === 'true' ? 'full' : 'mid';
-    check(got === want && (want !== 'full' || Math.abs(n.top - n.bar) <= 1) && (want !== 'closed' || (n.inert && n.focus === 'con')), `dragging the sheet head ${dy} px: ${got} (${JSON.stringify(n)}), ${want} expected`);
-  }
-  await m.tap('.step-card[data-id="con"] .type');
-  await m.waitForSelector('#inspector.open');
-  await settle(m);
-  check((await notch()).expanded === 'false', 'the sheet did not reopen at the mid notch');
   await m.keyboard.press('F8'); // nothing to go to: a toast
   await m.waitForSelector('#toast.show');
   await settle(m);
@@ -1220,14 +1139,13 @@ async function flowLayoutNarrow() {
   await settle(m);
   s = await sheet();
   check(s.sheet >= s.palette + 60 - 0.5 && s.sheet - s.canvas >= 60 - 0.5, `844×390: less than 60 px of canvas above the sheet (${JSON.stringify(s)})`);
-  check(await m.waitForFunction(() => document.getElementById('results-resize').hidden, null, { timeout: 2000 }).then(() => true, () => false), '844×390: the results height handle shows although there is no room to resize');
   await m.focus('#inspector .sheet-grip');
   await m.keyboard.press('Enter');
-  await settle(m);
-  n = await notch();
-  check(Math.abs(n.top - n.bar) <= 1 && Math.abs(n.h - (390 - n.bar)) <= 1, `844×390: full notch ${JSON.stringify(n)} (390 − top bar)`);
+  await until(m, () => document.getElementById('inspector').classList.contains('full'));
+  const tall = await m.evaluate(() => document.getElementById('inspector').getBoundingClientRect().height);
+  check(Math.abs(tall - 301) <= 1, `844×390: tall snap ${tall} px (301 expected)`);
   await m.keyboard.press('Enter');
-  await settle(m);
+  await until(m, () => !document.getElementById('inspector').classList.contains('full'));
   await m.tap('#btn-more');
   check(await m.$('.popup .popup-item:has-text("Thu gọn tất cả")'), '844×390: "Thu gọn tất cả" is neither on screen nor in the ⋯ menu');
   await m.keyboard.press('Escape');
@@ -1235,8 +1153,9 @@ async function flowLayoutNarrow() {
   await m.tap('#inspector .sheet-close');
 
   // Going to an issue on a phone: the card ends up fully between the palette and the sheet.
-  // A reload (not smokeOpen): the layout under test is the one a fresh load gives (panel collapsed).
-  await m.evaluate((wf) => smokeSetAutosave(wf), await issuesWorkflow());
+  // Opened as a file (a new library entry), then a reload: the tab reopens its entry, panels as at start.
+  await m.setInputFiles('#file-input', { name: 'issues.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(await issuesWorkflow())) });
+  await m.waitForSelector('.step-card[data-id="opp"]');
   await m.reload();
   await m.waitForSelector('#issues:not([hidden]) .issue.error');
   const cardBetween = (id) => m.evaluate((id) => {
@@ -1249,22 +1168,26 @@ async function flowLayoutNarrow() {
     if (await m.$('#inspector.open')) await m.tap('#inspector .sheet-close');
     await m.tap(`#issues ${row}`);
     await m.waitForSelector('#inspector.open');
-    await settle(m);
+    await until(m, cardAboveSheet, id); // the reveal runs a frame after the sheet opens
     const b = await cardBetween(id);
     check(b.ok, `${width}×${height}: after tapping its issue, "${id}" is not fully visible above the sheet (${JSON.stringify(b)})`);
   }
   await m.setViewportSize({ width: 390, height: 844 });
-  // F8 with the sheet at its full notch: back to mid, the card of the issue above it (design 0014 §3).
-  await m.focus('#inspector .sheet-grip');
-  await m.keyboard.press('Enter');
-  await settle(m);
-  await m.keyboard.press('F8');
-  await settle(m);
-  const f8 = await m.evaluate(() => document.querySelector('.step-card.selected')?.dataset.id);
-  const f8Box = f8 ? await cardBetween(f8) : null;
-  check((await notch()).expanded === 'false' && f8Box?.ok, `F8 from the full sheet (${f8}, ${JSON.stringify(f8Box)}: mid notch, card above the sheet)`);
+  if (await m.$('#inspector.open')) await m.tap('#inspector .sheet-close');
+  // 13d (0014 §7): after a preview of the Query sample without an org (chip, warning badge, "chưa chọn org"),
+  // no card is wider than itself and every ⋯ stays on screen.
+  await m.selectOption('#org-select', '');
+  await m.tap('#btn-more');
+  await m.tap('.popup .popup-item:has-text("Contact cho Account có sẵn")');
+  await m.waitForSelector('.step-card[data-id="accs"] .tag-sample', { state: 'attached' });
+  await m.keyboard.press('Control+Enter');
+  await m.waitForSelector('.step-card[data-id="accs"] .stat:not(.est)', { timeout: 5000 }).catch(() => errors.push('390px: no run chip on the Query card after Xem trước'));
+  const overflow = await m.evaluate(() => [...document.querySelectorAll('.step-card')].map((c) => {
+    const menu = c.querySelector(':scope > .menu-btn')?.getBoundingClientRect();
+    return { id: c.dataset.id, over: c.scrollWidth - c.clientWidth, menuOut: menu ? menu.right > innerWidth || menu.left < 0 : false };
+  }).filter((x) => x.over > 0 || x.menuOut));
+  check(!overflow.length, `390px: cards wider than themselves or ⋯ off screen after Xem trước (${JSON.stringify(overflow)})`);
   if (outDir) {
-    await m.tap('#inspector .sheet-close');
     await m.emulateMedia({ colorScheme: 'dark' });
     await settle(m);
     await m.screenshot({ path: path.join(outDir, 'smoke-390-dark.png') });
@@ -1294,8 +1217,7 @@ async function flowEach() {
 
   // ⋯ on the Query card → "Lặp qua từng bản ghi": a filled Lặp right after it, selected.
   await page.click('.step-card[data-id="accs"] .menu-btn');
-  // Exact label: design 0012 C adds "Bọc trong Lặp qua từng bản ghi" to the same menu.
-  await page.click('.popup [role="menuitem"]:has(.pi-label:text-is("Lặp qua từng bản ghi"))');
+  await page.click('.popup [role="menuitem"]:has(.pi-label:text-is("Lặp qua từng bản ghi"))'); // not "Bọc trong Lặp qua…" (0012 C)
   await page.waitForSelector('#inspector select[data-key="from"]');
   const filled = await page.evaluate(() => ({
     mode: document.querySelector('#inspector select[data-key="mode"]').value,
@@ -1327,7 +1249,7 @@ async function flowEach() {
   // Renaming the record looped over moves the references inside the body.
   await page.click(`${loopCard} .type`);
   await page.fill('#inspector input[data-key="itemAlias"]', 'a');
-  const con = await page.evaluate(() => smokeStored().steps[1].slots.body[0].config.fields);
+  const con = await page.evaluate(() => smokeSaved().steps[1].slots.body[0].config.fields);
   check(con.find((f) => f.name === 'AccountId')?.options.ref === 'a' && /\{\{a\.Name\}\}/.test(con.find((f) => f.name === 'Title')?.options.template), `itemAlias rename did not follow: ${JSON.stringify(con)}`);
   await page.click('#btn-undo');
 
@@ -1349,7 +1271,8 @@ async function flowEach() {
     { id: 'e', type: 'loop', config: { mode: 'each', from: 'acc', itemAlias: 'a' }, slots: { body: [{ id: 'c', type: 'record', config: { sobject: 'Contact', alias: 'c', fields: [tpl('LastName')] } }] } },
     { id: 'e2', type: 'loop', config: { mode: 'each', from: 'accs', itemAlias: 'row', alias: 'k' }, slots: { body: [{ id: 'c2', type: 'record', config: { sobject: 'Contact', alias: 'c2', fields: [tpl('Title')] } }] } },
   ] };
-  await page.evaluate((w) => smokeOpen(w), wfN);
+  await page.setInputFiles('#file-input', { name: 'review.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(wfN)) });
+  await page.waitForSelector('.step-card[data-id="e"]');
   await page.click('.step-card[data-id="e"] .type');
   const accOpt = await page.$eval('#inspector select[data-key="from"] option:checked', (o) => o.textContent);
   check(accOpt === 'acc (Account · đã sinh)', `pool option of a record made in a finished loop: ${accOpt}`);
@@ -1363,6 +1286,663 @@ async function flowEach() {
   await page.context().close();
 }
 
+/**
+ * Flow 16: editor productivity (design 0012), own context. G: a saved Task with
+ * a `Name` field gets the noNameField warning and "Đổi thành Subject" fixes it (the template
+ * follows); a new Record switched to Task gets the preset field Subject at once. F1: a template
+ * reading a field the Query does not select gets "Thêm <Field> vào SELECT", which fixes the Query.
+ * I: hovering / focusing a chip outlines its source card. C: "Bọc trong Lặp qua từng bản ghi".
+ * H: estimate chips before a run. D: live chips and the insert-error tag of a mocked insert.
+ * E: the "Ví dụ" row of an open field.
+ */
+async function flowProductivity() {
+  // One page (a second context costs more CPU than it saves: the flows run in parallel and the
+  // smoke is CPU-bound). G first, then F1, I, C, H, D, E, each going on from the workflow the
+  // previous part left.
+  const page = await productivityPage('productivity', PRODUCTIVITY_G);
+  await productivityG(page);
+  await productivityRest(page);
+  await page.context().close();
+}
+
+/** A page of flow 16 with the mocked org `dev` selected (`describes`: answered by the route, never the sf CLI). */
+async function productivityPage(label, { workflow, describes = {} } = {}) {
+  const page = await newPage(label);
+  await seedStorage(page, { workflow, org: 'dev' });
+  await page.route('**/api/orgs', (r) => r.fulfill({ json: [{ alias: 'dev', username: 'dev@acme.com', isSandbox: true, isScratch: false, connectedStatus: 'Connected' }] }));
+  await page.route('**/api/orgs/dev/**', (r) => {
+    const m = /\/sobjects(?:\/([^/?]+))?(?:\?|$)/.exec(r.request().url());
+    if (m && !m[1]) return r.fulfill({ json: Object.keys(describes).map((name) => ({ name, label: name })) });
+    if (m && describes[m[1]]) return r.fulfill({ json: describes[m[1]] });
+    return r.fulfill({ status: 404, json: { error: 'smoke: org giả lập' } });
+  });
+  await page.goto(base);
+  return page;
+}
+
+/**
+ * Flow 16's start: a saved Task with a Name field and a Contact reading it; a mocked org (never the
+ * sf CLI) whose describes are shaped like mapDescribe's. Task / Event mark nothing required except
+ * a custom Event field; Invoice__c has an auto-number Name (not createable).
+ */
+const PRODUCTIVITY_G = {
+  workflow: { version: 2, name: 'Task cũ', steps: [
+    { id: 't', type: 'record', config: { sobject: 'Task', alias: 'task', count: 1, fields: [{ name: 'Name', type: 'text', options: { mode: 'name' } }] } },
+    { id: 'c', type: 'record', config: { sobject: 'Contact', alias: 'con', count: 1, fields: [{ name: 'LastName', type: 'text', options: {} }, { name: 'Description', type: 'template', options: { template: 'Việc {{task.Name}}' } }] } },
+  ] },
+  describes: {
+    Task: { sobject: 'Task', label: 'Task', nameField: 'Subject', fields: [{ name: 'Subject', type: 'text', options: {}, label: 'Subject', required: false }] },
+    Event: { sobject: 'Event', label: 'Event', nameField: 'Subject', fields: [
+      { name: 'Type__c', type: 'picklist', options: { values: ['A'] }, label: 'Type', required: true },
+      { name: 'Subject', type: 'text', options: {}, label: 'Subject', required: false },
+    ] },
+    Invoice__c: { sobject: 'Invoice__c', label: 'Invoice', nameField: 'Name', fields: [{ name: 'Amount__c', type: 'currency', options: {}, label: 'Amount', required: false }] },
+  },
+};
+
+/** Flow 16, G (field names per sObject). */
+async function productivityG(page) {
+  // G: the old Task warns on its Name field; the fix renames it and the reference follows.
+  await page.waitForSelector('.step-card[data-id="t"].has-warning', { timeout: 3000 });
+  await page.click('.step-card[data-id="t"] .type');
+  const nameCard = '#inspector .field-card[data-field="fields.Name"]';
+  const fixBtn = await page.waitForSelector(`${nameCard} .quick-fix[data-fix="renameField"]`, { timeout: 3000 }).catch(() => null);
+  check(fixBtn && (await fixBtn.textContent()) === 'Đổi thành Subject', `noNameField fix button: ${fixBtn && await fixBtn.textContent()}`);
+  check(/^Task không ghi được field Name nên insert sẽ lỗi\. Đổi thành Subject/.test(await page.textContent(`${nameCard} .error-text`)), 'no noNameField message under the Name field');
+  if (fixBtn) {
+    await fixBtn.click();
+    await page.waitForFunction(() => !document.querySelector('.step-card[data-id="t"].has-warning'), null, { timeout: 3000 }).catch(() => {});
+    check(!(await page.$('.step-card[data-id="t"].has-warning')), 'the noNameField warning stayed after "Đổi thành Subject"');
+    const saved = await page.evaluate(() => smokeSaved().steps);
+    const subject = saved[0].config.fields[0];
+    check(subject.name === 'Subject' && subject.options.mode === 'list', `renamed field: ${JSON.stringify(subject)}`);
+    check(saved[1].config.fields[1].options.template === 'Việc {{task.Subject}}', `template did not follow the rename: ${saved[1].config.fields[1].options.template}`);
+  }
+  // G: a new Record switched to Task has the preset field list right away (focus stays in sObject).
+  await page.click('#palette-items .palette-item[data-type="record"]');
+  await page.waitForSelector('#inspector input[data-key="sobject"]');
+  const before = await page.$$eval('#inspector .fields-section .field-card input[aria-label="Tên field"]', (els) => els.map((e) => e.value));
+  check(before.join() === 'Name', `a new Record (Account) starts with ${before}`);
+  await page.fill('#inspector input[data-key="sobject"]', 'Task');
+  const after = await page.evaluate(() => ({
+    names: [...document.querySelectorAll('#inspector .fields-section .field-card input[aria-label="Tên field"]')].map((e) => e.value),
+    focus: document.activeElement?.dataset.key,
+  }));
+  check(after.names.join() === 'Subject' && after.focus === 'sobject', `Record switched to Task: ${JSON.stringify(after)}`);
+  // With the org: Event keeps its preset and only gains the required field the describe adds.
+  const names = () => page.$$eval('#inspector .fields-section .field-card input[aria-label="Tên field"]', (els) => els.map((e) => e.value).join());
+  await page.fill('#inspector input[data-key="sobject"]', 'Event');
+  await page.waitForFunction(() => /Đã thêm field bắt buộc của Event theo dev: Type__c\./.test(document.getElementById('toast').textContent), null, { timeout: 3000 }).catch(() => {});
+  check(await names() === 'Subject,ActivityDateTime,DurationInMinutes,Type__c', `Event after describe: ${await names()}`);
+  // A custom object whose Name is auto-number: the auto-filled [Name] becomes empty, with a toast.
+  await page.fill('#inspector input[data-key="sobject"]', 'Invoice__c');
+  await page.waitForFunction(() => /auto-number/.test(document.getElementById('toast').textContent), null, { timeout: 3000 }).catch(() => {});
+  check(await names() === '', `Invoice__c (auto-number Name) after describe: ${await names()}`);
+  check(await page.evaluate(() => document.activeElement?.dataset.key) === 'sobject', 'focus left the sObject field when the describe landed');
+}
+
+/** Flow 16, F1, I, C, H, D, E: each part goes on from the workflow the previous one left. */
+async function productivityRest(page) {
+  // F1: {{acc.Industry}} with acc picked from Query "accs" (Id, Name): one click adds Industry to its SELECT.
+  await page.click('#sample-items .palette-item:has-text("Contact cho Account có sẵn")');
+  await page.waitForSelector('.step-card[data-id="con"]');
+  await page.click('.step-card[data-id="con"] .type');
+  const title = '#inspector .field-card[data-field="fields.Title"]';
+  await page.click(`${title} .actions button[title="Tùy chọn"]`);
+  await page.fill(`${title} input[data-key="template"]`, 'Ngành {{acc.Industry}}');
+  const addBtn = await page.waitForSelector(`${title} .quick-fix[data-fix="addSelectField"]`, { timeout: 3000 }).catch(() => null);
+  check(addBtn && (await addBtn.textContent()) === 'Thêm Industry vào SELECT của "accs"', `addSelectField button: ${addBtn && await addBtn.textContent()}`);
+  if (addBtn) {
+    await addBtn.click();
+    await page.waitForFunction(() => !document.querySelector('.step-card[data-id="con"].has-error'), null, { timeout: 3000 }).catch(() => {});
+    check(!(await page.$('.step-card[data-id="con"].has-error')), 'the unknownMember error stayed after "Thêm Industry vào SELECT"');
+    const fields = await page.evaluate(() => smokeSaved().steps[0].config.fields);
+    check(fields.join() === 'Id,Name,Industry', `Query fields after the fix: ${fields}`);
+    check(/Đã thêm Industry vào Query "accs"\. Bấm Xem trước để đọc lại\./.test(await page.textContent('#toast')), 'no "Đã thêm Industry vào Query" toast');
+  }
+
+  // I: hovering the chip [acc · Industry] outlines the card of the pick acc; leaving it clears it. Focusing
+  // the Lookup chip "AccountId · Lookup → acc" on con's card does the same, and its title names the source.
+  const target = () => page.$$eval('.step-card.is-ref-target', (els) => els.map((e) => e.dataset.id).join());
+  await page.hover(`${title} .var-chip[data-path="acc.Industry"]`);
+  check(await target() === 'acc', `hovering [acc · Industry]: outlined ${await target()}`);
+  await page.mouse.move(5, 5);
+  check(await target() === '', `after leaving the chip: outlined ${await target()}`);
+  const lookupChip = '.step-card[data-id="con"] ~ .details .field-chip[data-field="fields.AccountId"]';
+  await page.click('.step-card[data-id="con"] button.toggle[aria-label="Hiện các field"]');
+  await page.focus(lookupChip);
+  check(await target() === 'acc' && /Nguồn: Chọn bản ghi "acc"/.test(await page.getAttribute(lookupChip, 'title')), `focused Lookup chip: outlined ${await target()}`);
+  await page.focus(`${title} input[data-key="template"]`);
+  check(await target() === '', `after blurring the Lookup chip: outlined ${await target()}`);
+
+  // C: ⋯ on con → "Bọc trong Lặp qua từng bản ghi": a Lặp each over accs (con refers to the pick acc
+  // of accs), the record named acc2 (acc is taken); [Đổi] of the toast re-points the Lookup.
+  const saved = () => page.evaluate(() => smokeSaved().steps);
+  await page.click('.step-card[data-id="con"] .menu-btn');
+  await page.click('.popup [role="menuitem"]:has-text("Bọc trong Lặp qua từng bản ghi")');
+  const wrapped = (await saved())[1].slots.body[1];
+  check(wrapped.type === 'loop' && wrapped.config.mode === 'each' && wrapped.config.from === 'accs' && wrapped.config.itemAlias === 'acc2'
+    && wrapped.slots.body.map((s) => s.id).join() === 'con', `Bọc trong Lặp qua từng bản ghi: ${JSON.stringify(wrapped).slice(0, 300)}`);
+  check(await page.$eval('.step-card.selected', (c) => c.dataset.id) === wrapped.id, 'the new each-loop is not selected');
+  const ask = await page.textContent('#toast');
+  check(ask.startsWith('Đổi Lookup AccountId (con) sang bản ghi đang lặp "acc2"?'), `rewire toast: ${ask}`);
+  await page.click('#toast .toast-action');
+  const lookup = (await saved())[1].slots.body[1].slots.body[0].config.fields.find((f) => f.name === 'AccountId').options;
+  check(lookup.ref === 'acc2' && lookup.mode === 'current', `[Đổi] did not re-point the Lookup: ${JSON.stringify(lookup)}`);
+
+  // H: before any run, con (in Lặp 10 × each row of accs, not read yet: LIMIT 200) shows "≈ 2.000 bản ghi" with the range in
+  // its title, the Start card the total and the limit; a limit of 1 000 adds the "Ước tính vượt giới hạn" tag.
+  const est = await page.$eval('.step-card[data-id="con"] .stat.est', (c) => ({ text: c.textContent, title: c.title })).catch(() => null);
+  check(est?.text === '≈ 2.000 bản ghi' && /khoảng 0–2\.000/.test(est.title), `con estimate chip: ${JSON.stringify(est)}`);
+  check(/≈ 2\.000 bản ghi · ≤ 50\.000$/.test(await page.textContent('.start-card .sum')), `Start estimate: ${await page.textContent('.start-card .sum')}`);
+  await page.click('.start-card .type');
+  await page.fill('#inspector input[data-key="maxRecords"]', '1000');
+  const over = await page.waitForSelector('.start-card .tag-est-over', { timeout: 3000 }).catch(() => null);
+  check(over && /quá giới hạn 1\.000 mỗi lần chạy/.test(await over.getAttribute('title')), 'no "Ước tính vượt giới hạn" tag on the Start card');
+
+  // D: an insert into the mocked org `dev`, answered by the route itself (never the server nor an org): its NDJSON
+  // has insert progress with byStep. A MutationObserver records the texts the live chip and tag took on the cards.
+  await page.route('**/api/run', (r) => {
+    const body = r.request().postDataJSON();
+    if (!body?.target) return r.continue(); // the preview before the confirmation: the real server, no Query
+    const byStep = { acc: { inserted: 5, failed: 0 }, con: { inserted: 4, failed: 3 } };
+    const group = { sobject: 'Contact', nodeId: 'con', field: 'fields.LastName', message: 'REQUIRED_FIELD_MISSING: x', count: 3, refs: ['con#1', 'con#2', 'con#3'] };
+    const result = {
+      runId: 'rmock0012', seed: body.seed, now: body.now, warnings: [], records: [], samples: {},
+      stats: { total: 12, bySobject: { Account: 5, Contact: 7 }, byStep: { loopAcc: { runs: 1, records: 12, iterations: 5 }, acc: { runs: 5, records: 5 }, loopCon: { runs: 5, records: 7, iterations: 7 }, con: { runs: 7, records: 7 } }, durationMs: 1, previewRows: 200, truncated: false },
+      insert: {
+        inserted: 9, failed: 3, errorsTotal: 3, total: 12, notSent: 0, cancelled: false, stopped: null, ids: {},
+        bySobject: { Account: { inserted: 5, failed: 0 }, Contact: { inserted: 4, failed: 3 } }, byStep,
+        errors: group.refs.map((ref) => ({ ref, sobject: 'Contact', nodeId: 'con', field: 'fields.LastName', message: group.message })), errorGroups: [group], errorGroupsOther: null,
+      },
+    };
+    const events = [
+      { type: 'start', runId: 'rmock0012', seed: body.seed, now: body.now, warnings: [] },
+      { type: 'plan', total: 12, bySobject: { Account: 5, Contact: 7 }, apiCalls: 2 },
+      { type: 'progress', phase: 'insert', inserted: 9, failed: 3, total: 12, bySobject: { Account: { inserted: 5, failed: 0, total: 5 }, Contact: { inserted: 4, failed: 3, total: 7 } }, byStep },
+      { type: 'done', result },
+    ];
+    return r.fulfill({ status: 200, contentType: 'application/x-ndjson', body: events.map((e) => `${JSON.stringify(e)}\n`).join('') });
+  });
+  await page.click('#sample-items .palette-item:has-text("Account + Contact")');
+  await page.waitForSelector('.step-card[data-id="con"] .stat.est');
+  await page.evaluate(() => {
+    window.smokeLive = [];
+    new MutationObserver((ms) => {
+      // m.target: a replaced text node has no parent any more when the callback runs.
+      for (const m of ms) for (const n of m.addedNodes) if (n.nodeType === 3 && m.target.matches?.('.stat, .tag-insert-err')) window.smokeLive.push(`${m.target.closest('.step-card').dataset.id}:${n.data}`);
+    }).observe(document.getElementById('process'), { subtree: true, childList: true });
+  });
+  await page.click('#btn-insert');
+  await page.click('dialog[open] .actions button.danger');
+  await page.waitForFunction(() => document.getElementById('btn-stop').hidden && !document.getElementById('btn-preview').disabled && document.querySelector('.step-card[data-id="con"] .tag-insert-err'), null, { timeout: 5000 }).catch(() => {});
+  const live = await page.evaluate(() => window.smokeLive);
+  check(live.some((t) => /^con:insert 0\/\d+$/.test(t)) && live.some((t) => /^con:insert 4\/\d+$/.test(t)) && live.includes('con:lỗi 3'), `live insert chips / tag: ${live.join(' | ')}`);
+  const tag = '.step-card[data-id="con"] .tag-insert-err';
+  check(await page.getAttribute(tag, 'aria-label') === '3 bản ghi của bước này insert lỗi. Bấm để xem nhóm lỗi.', `insert-error tag: ${await page.getAttribute(tag, 'aria-label').catch(() => null)}`);
+  check(!(await page.$('.step-card[data-id="acc"] .tag-insert-err')), 'acc (no failure) has an insert-error tag');
+  await page.click(tag);
+  const row = await page.evaluate(() => ({ tab: document.querySelector('.tabs .tab-issues.active') !== null, current: document.activeElement?.matches('table.error-groups tr.current[data-node="con"]') }));
+  check(row.tab && row.current, `insert-error tag click: ${JSON.stringify(row)}`);
+
+  // E: ⚙ of the picklist Industry on acc shows three example values from /api/field-samples; new weights (only
+  // Healthcare) change them once the server answers. con's Title reads {{acc.Industry}}: it shows the last preview's.
+  await page.click('.step-card[data-id="acc"] .type');
+  const ind = '#inspector .field-card[data-field="fields.Industry"]';
+  const samplesText = (sel) => page.$eval(`${sel} .field-samples`, (e) => e.textContent).catch(() => null);
+  await page.click(`${ind} .actions button[title="Tùy chọn"]`);
+  await page.waitForFunction((sel) => /^Ví dụ: "[^"]+" · "[^"]+" · "[^"]+"$/.test(document.querySelector(`${sel} .field-samples`)?.textContent ?? ''), ind, { timeout: 3000 }).catch(() => {});
+  check(/^Ví dụ: "[^"]+" · "[^"]+" · "[^"]+"$/.test(await samplesText(ind)) && /seed 1/.test(await page.getAttribute(`${ind} .field-samples`, 'title')), `Industry examples: ${await samplesText(ind)}`);
+  await Promise.all([
+    page.waitForResponse((res) => res.url().endsWith('/api/field-samples'), { timeout: 3000 }).catch(() => null),
+    page.fill(`${ind} textarea[data-key="weights"]`, '0, 0, 0, 1'),
+  ]);
+  await page.waitForFunction((sel) => document.querySelector(`${sel} .field-samples`)?.textContent === 'Ví dụ: "Healthcare" · "Healthcare" · "Healthcare"', ind, { timeout: 3000 }).catch(() => {});
+  check(await samplesText(ind) === 'Ví dụ: "Healthcare" · "Healthcare" · "Healthcare"', `Industry examples after new weights: ${await samplesText(ind)}`);
+  await page.click('.step-card[data-id="con"] .type');
+  const conTitle = '#inspector .field-card[data-field="fields.Title"]';
+  if (await page.$(`${conTitle} .actions button[title="Tùy chọn"]`)) await page.click(`${conTitle} .actions button[title="Tùy chọn"]`); // still open since F1
+  check(/^Lần xem trước/.test(await samplesText(conTitle)), `a field reading {{acc.Industry}}: ${await samplesText(conTitle)}`);
+}
+
+/** The workflow the app saved automatically (what the checks read after an edit). */
+const savedWorkflow = (page) => page.evaluate(() => smokeSaved());
+const toastIs = (page, re) => page.waitForFunction((src) => new RegExp(src).test(document.getElementById('toast').textContent), re.source, { timeout: 3000 }).then(() => true, () => false);
+
+/** Flow 17: multi-select, group operations and copy / paste (design 0012 B), then the library (A). */
+async function flowLibrary() {
+  const page = await newPage('library');
+  // A mocked org `dev` (never the sf CLI), selected only for part F2.
+  await page.route('**/api/orgs', (r) => r.fulfill({ json: [{ alias: 'dev', username: 'dev@acme.com', isSandbox: true, isScratch: false, connectedStatus: 'Connected' }] }));
+  await page.route('**/api/orgs/dev/**', (r) => {
+    const m = /\/sobjects(?:\/([^/?]+))?(?:\?|$)/.exec(r.request().url());
+    if (m && !m[1]) return r.fulfill({ json: Object.keys(F2_DESCRIBES).map((name) => ({ name, label: name })) });
+    if (m && F2_DESCRIBES[m[1]]) return r.fulfill({ json: F2_DESCRIBES[m[1]] });
+    return r.fulfill({ status: 404, json: { error: 'smoke: org giả lập' } });
+  });
+  await page.goto(base);
+  await page.waitForSelector('.step-card[data-id="con"]');
+  await selectionSteps(page);
+  await librarySteps(page);
+  await requiredSteps(page);
+  await page.context().close();
+}
+
+/** Describes of the mocked org of 17 F2, shaped like mapDescribe's: Contact needs a Region__c the sample lacks. */
+const F2_DESCRIBES = {
+  Account: { sobject: 'Account', label: 'Account', nameField: 'Name', fields: [{ name: 'Name', type: 'text', options: {}, label: 'Name', required: true }] },
+  Contact: { sobject: 'Contact', label: 'Contact', nameField: 'Name', fields: [
+    { name: 'LastName', type: 'text', options: {}, label: 'Last Name', required: true },
+    { name: 'Region__c', type: 'picklist', options: { values: ['North', 'South'] }, label: 'Region', required: true },
+    { name: 'Email', type: 'email', options: {}, label: 'Email', required: false },
+  ] },
+};
+
+/** 17 F2: "Thiếu n field bắt buộc" on a Record from the org's describe (mocked). */
+async function requiredSteps(page) {
+  await page.click('#sample-items .palette-item:has-text("Account + Contact")');
+  await page.waitForSelector('.step-card[data-id="con"]');
+  await page.selectOption('#org-select', 'dev');
+  await page.click('.step-card[data-id="con"] .type');
+  const hint = '#inspector .required-hint:not([hidden])';
+  check(await page.waitForSelector(hint, { timeout: 3000 }).catch(() => null), 'no "Thiếu field bắt buộc" hint on con');
+  check((await page.textContent(`${hint} .hint-text`)) === 'Thiếu 1 field bắt buộc của Contact trong dev: Region__c.', `hint text: ${await page.textContent(hint)}`);
+  // Chọn…: the Import dialog lists the missing required field first, under its heading, checked.
+  await page.click(`${hint} button:has-text("Chọn…")`);
+  await page.waitForSelector('dialog[open] .list .list-group');
+  const dlg = await page.evaluate(() => {
+    const list = document.querySelector('dialog[open] .list');
+    const first = list.querySelector('.list-group');
+    const row = first.nextElementSibling;
+    return { head: first.textContent, row: row.textContent, checked: row.querySelector('input').checked };
+  });
+  check(dlg.head === 'Bắt buộc, chưa có (1)' && /Region__c/.test(dlg.row) && dlg.checked, `Import grouping: ${JSON.stringify(dlg)}`);
+  // The filter hides a heading whose rows are all filtered out.
+  await page.fill('dialog[open] .dialog-filter', 'email');
+  const heads = await page.$$eval('dialog[open] .list .list-group', (n) => n.map((x) => (x.hidden ? '-' : x.textContent)).join('|'));
+  check(heads === '-|Các field khác', `Import filter "email": headings ${heads}`);
+  await page.click('dialog[open] .actions button:has-text("Hủy")');
+  // Thêm 1 field: one undo step, the hint goes; Ctrl+Z brings both back.
+  await page.click(`${hint} button:has-text("Thêm 1 field")`);
+  check(await toastIs(page, /^Đã thêm 1 field: Region__c\.$/), `Thêm 1 field toast: ${await page.textContent('#toast')}`);
+  const fieldsOf = async () => (await savedWorkflow(page)).steps[0].slots.body[1].slots.body[0].config.fields.map((f) => `${f.name}:${f.type}`);
+  check((await fieldsOf()).at(-1) === 'Region__c:picklist', `fields after Thêm: ${await fieldsOf()}`);
+  const focused = await page.evaluate(() => (document.activeElement?.closest('.field-card') ? document.activeElement.value : document.activeElement?.tagName));
+  check(focused === 'Region__c', `focus after Thêm 1 field: ${focused}`);
+  check(await page.waitForSelector('#inspector .required-hint', { state: 'hidden', timeout: 3000 }).then(() => true, () => false), 'the hint stayed after adding the field');
+  await page.click('#btn-undo');
+  check(!(await fieldsOf()).includes('Region__c:picklist'), 'one ↶ did not remove the added field');
+  check(await page.waitForSelector(hint, { timeout: 3000 }).catch(() => null), 'the hint did not come back after ↶');
+  // Bỏ qua: hidden for this step, also after selecting it again.
+  await page.click(`${hint} button:has-text("Bỏ qua")`);
+  await page.click('.step-card[data-id="acc"] .type');
+  await page.click('.step-card[data-id="con"] .type');
+  await page.waitForSelector('#inspector .fields-section');
+  check(await page.isHidden('#inspector .required-hint'), '"Bỏ qua" did not keep the hint hidden for con');
+}
+
+/** 17 A: the workflow library, going on from the workflow B left. */
+async function librarySteps(page) {
+  const entries = () => page.evaluate(() => JSON.parse(localStorage.getItem('sfdg.library')).items.map((i) => i.name).sort().join(' | '));
+  const first = await page.evaluate(() => sessionStorage.getItem('sfdg.activeId'));
+  const firstJson = JSON.stringify(await savedWorkflow(page));
+  const stored = (id) => page.evaluate((i) => localStorage.getItem(`sfdg.wf.${i}`), id);
+  check(await entries() === 'Account + Contact', `one library entry at start: ${await entries()}`);
+  await page.click('.step-card[data-id="acc"] .type');
+  await page.keyboard.press('Control+c');
+  await page.click('#btn-library');
+  check((await page.getAttribute('#btn-library', 'aria-expanded')) === 'true' && (await page.textContent('.popup .popup-title')) === 'Thư viện', '▾ did not open the "Thư viện" popup');
+  await page.click('.popup .popup-item:has-text("Workflow mới")');
+  await page.waitForFunction(() => !document.querySelector('.step-card[data-id="acc"]'));
+  check(await entries() === 'Account + Contact | Workflow mới', `＋ Workflow mới: ${await entries()}`);
+  // B': the copied step pastes into the other workflow, its alias free there.
+  await page.keyboard.press('Control+v');
+  check(await toastIs(page, /^Đã dán 1 bước\.$/), `paste into another workflow: ${await page.textContent('#toast')}`);
+  check((await savedWorkflow(page))?.steps?.[0]?.config.alias === 'acc', 'the pasted step did not keep its alias in the new workflow');
+  // Ctrl+O, back to the first: its content, and no undo into it from the other workflow.
+  await page.keyboard.press('Control+o');
+  await page.click('.popup [role="menuitemradio"]:has-text("Account + Contact")');
+  await page.waitForSelector('.step-card[data-id="loopAcc"]');
+  check(JSON.stringify(await savedWorkflow(page)) === firstJson && (await page.inputValue('#wf-name')) === 'Account + Contact', 'switching back did not show the first workflow as it was');
+  await page.keyboard.press('Control+z');
+  check(await page.isVisible('.step-card[data-id="loopAcc"]') && JSON.stringify(await savedWorkflow(page)) === firstJson, 'Ctrl+Z after switching changed the workflow (undo was not reset)');
+  // A Mẫu on a workflow with steps: a new entry; the first one is untouched.
+  await page.click('#sample-items .palette-item:has-text("Lead theo xác suất")');
+  await page.waitForSelector('.step-card[data-id="lead"]');
+  check(await entries() === 'Account + Contact | Lead theo xác suất | Workflow mới', `Mẫu did not open as a new entry: ${await entries()}`);
+  check(await stored(first) === firstJson, 'the Mẫu overwrote the first workflow');
+  // Quản lý thư viện: delete one, "Hoàn tác" in the dialog brings it back.
+  await page.click('#btn-library');
+  await page.click('.popup .popup-item:has-text("Quản lý thư viện")');
+  const names = await page.$$eval('dialog[open] .lib-row .lib-name', (n) => n.map((x) => x.value));
+  await page.click(`dialog[open] .lib-row >> nth=${names.indexOf('Workflow mới')} >> button:text-is("Xóa")`);
+  check(await entries() === 'Account + Contact | Lead theo xác suất', `Xóa: ${await entries()}`);
+  await page.click('dialog[open] .lib-undo button:has-text("Hoàn tác")');
+  check(await entries() === 'Account + Contact | Lead theo xác suất | Workflow mới', `Hoàn tác of a delete: ${await entries()}`);
+  // Autosave paused (another tab changed the open entry): Mở → "Vẫn đổi" must switch (0012 review 2:
+  // the close event of the library dialog came late and answered the question with "Hủy").
+  await page.evaluate(() => {
+    const key = `sfdg.wf.${sessionStorage.getItem('sfdg.activeId')}`;
+    window.dispatchEvent(new StorageEvent('storage', { key, oldValue: null, newValue: '{"version":2,"steps":[]}', storageArea: localStorage }));
+  });
+  check(await page.waitForSelector('#btn-unsaved:not([hidden])', { timeout: 3000 }).catch(() => null), 'a storage event of the open entry did not pause autosave');
+  const namesP = await page.$$eval('dialog[open] .lib-row .lib-name', (n) => n.map((x) => x.value));
+  await page.click(`dialog[open] .lib-row >> nth=${namesP.indexOf('Account + Contact')} >> button:text-is("Mở")`);
+  await page.click('dialog[open] button:has-text("Vẫn đổi")');
+  check(await page.waitForSelector('.step-card[data-id="loopAcc"]', { timeout: 3000 }).catch(() => null), 'Quản lý → Mở → "Vẫn đổi" did not switch the workflow');
+  check(await page.isHidden('#btn-unsaved'), '"▲ Tab khác đã sửa" stayed after switching');
+  await page.click('#btn-library');
+  await page.click('.popup .popup-item:has-text("Quản lý thư viện")');
+  await page.waitForSelector('dialog[open] .lib-list');
+  // ≤ 720 px: Nhân bản / Tải JSON / Xóa are in the row's ⋯, a popup inside the (modal) dialog.
+  await page.setViewportSize({ width: 390, height: 800 });
+  const names390 = await page.$$eval('dialog[open] .lib-row .lib-name', (n) => n.map((x) => x.value));
+  await page.click(`dialog[open] .lib-row >> nth=${names390.indexOf('Workflow mới')} >> .lib-more`);
+  await page.click('dialog[open] .popup .popup-item:has-text("Xóa")', { timeout: 3000 });
+  check(await entries() === 'Account + Contact | Lead theo xác suất', `390 px, ⋯ → Xóa in the dialog: ${await entries()}`);
+  await page.click('dialog[open] button:has-text("Đóng")');
+  await page.setViewportSize({ width: 1440, height: 900 });
+}
+
+/** 17 B: the "Account + Contact" sample (loopAcc { acc, loopCon { con } }). */
+async function selectionSteps(page) {
+  const selectedCards = () => page.$$eval('#process .step-card[aria-selected="true"]', (n) => n.map((c) => c.dataset.id).join());
+  const bodyOf = async (id) => {
+    const find = (steps) => steps.flatMap((s) => [s, ...Object.values(s.slots ?? {}).flatMap(find)]);
+    return find((await savedWorkflow(page)).steps).find((s) => s.id === id)?.slots?.body ?? [];
+  };
+  await page.click('.step-card[data-id="acc"] .type');
+  await page.click('.step-card[data-id="loopCon"] .type', { modifiers: ['Shift'] });
+  check(await page.waitForSelector('#inspector h2:text-is("2 bước đã chọn")', { timeout: 3000 }).catch(() => null), 'Shift+click: the inspector does not say "2 bước đã chọn"');
+  check((await page.getAttribute('#process', 'aria-multiselectable')) === 'true', '#process has no aria-multiselectable');
+  check((await selectedCards()) === 'acc,loopCon', `Shift+click selected ${await selectedCards()}`);
+  await page.click('#inspector .multi-actions button:text-is("Bọc trong Lặp")');
+  await page.waitForFunction(() => document.querySelectorAll('#process .step.frame[data-type="loop"]').length === 3);
+  const wrapped = await bodyOf('loopAcc');
+  check(wrapped.length === 1 && wrapped[0].type === 'loop' && wrapped[0].slots.body.map((s) => s.id).join() === 'acc,loopCon', `Bọc trong Lặp of 2 steps: ${JSON.stringify(wrapped).slice(0, 200)}`);
+  await page.click('#btn-undo');
+  check((await bodyOf('loopAcc')).map((s) => s.id).join() === 'acc,loopCon', 'one ↶ did not undo the group wrap');
+  // Shift+↓ from acc, Ctrl+C, Ctrl+V: two copies after loopCon, renamed where the names are taken.
+  await page.click('.step-card[data-id="acc"] .type');
+  await page.keyboard.press('Shift+ArrowDown');
+  check((await selectedCards()) === 'acc,loopCon', `Shift+↓ selected ${await selectedCards()}`);
+  await page.keyboard.press('Control+c');
+  check(await toastIs(page, /^Đã sao chép 2 bước\.$/), `no copy toast (${await page.textContent('#toast')})`);
+  await page.keyboard.press('Control+v');
+  check(await toastIs(page, /^Đã dán 2 bước\. Đổi tên alias: acc → acc2, con → con2\.$/), `paste toast: ${await page.textContent('#toast')}`);
+  const pasted = (await bodyOf('loopAcc')).slice(2);
+  check(pasted.map((s) => (s.type === 'loop' ? s.slots.body[0] : s).config.alias).join() === 'acc2,con2', `pasted aliases ${JSON.stringify(pasted.map((s) => s.config.alias))}`);
+  check((await selectedCards()) === pasted.map((s) => s.id).join(), `the pasted steps are not selected (${await selectedCards()})`);
+  await page.keyboard.press('Control+/');
+  check((await bodyOf('loopAcc')).slice(2).every((s) => s.disabled), 'Ctrl+/ did not turn both pasted steps off');
+  // Narrow screen: no Shift / Ctrl, a select mode with a bar instead.
+  await page.setViewportSize({ width: 390, height: 800 });
+  await page.click('.step-card[data-id="acc"] .menu-btn');
+  await page.click('.popup .popup-item:has-text("Chọn nhiều bước")');
+  check(await page.waitForSelector('.select-bar:not([hidden])', { timeout: 3000 }).catch(() => null), '"Chọn nhiều bước" did not show the select bar');
+  await page.click('.step-card[data-id="con"] .type');
+  check(/^2 đã chọn/.test(await page.textContent('.select-bar .sb-count')), `select bar after a tap: ${await page.textContent('.select-bar')}`);
+  check(!(await page.evaluate(() => document.getElementById('inspector').classList.contains('open'))), 'the bottom sheet opened in select mode');
+  await page.click('.select-bar button:has-text("Xong")');
+  check(await page.evaluate(() => !document.body.classList.contains('select-mode') && document.querySelector('.select-bar').hidden), 'Xong did not leave the select mode');
+  check((await selectedCards()) === 'acc', `Xong did not keep only the primary step (${await selectedCards()})`);
+  await page.setViewportSize({ width: 1440, height: 900 });
+}
+
+/** 1 000 steps: 250 Lặp, each with a Record and a Rẽ nhánh holding a Record on its Đúng lane. */
+function bigWorkflow() {
+  const rec = (id, sobject) => ({ id, type: 'record', config: { sobject, alias: id, count: 1, fields: [{ name: 'Name', type: 'text', options: {} }] } });
+  const steps = [];
+  for (let i = 0; i < 250; i++) {
+    steps.push({ id: `l${i}`, type: 'loop', config: { count: 2, alias: 'loop' }, slots: { body: [
+      rec(`a${i}`, 'Account'),
+      { id: `b${i}`, type: 'branch', config: { kind: 'chance', probability: 0.5 }, slots: { true: [rec(`t${i}`, 'Opportunity')], false: [] } },
+    ] } });
+  }
+  return { version: 2, name: 'Sơ đồ 1 000 bước', steps };
+}
+
+/**
+ * 18. Minimap of the Sơ đồ view (design 0014 §5), own context (parallel): 1 000 steps saved before the first
+ * load. Shown with ≤ 16 paths; 75 % of the track brings that part of the diagram; a card the keys select is
+ * kept out from under it; screenshots light / dark; the button hides it, remembered after a reload; hidden
+ * with the sheet open at 800 px, no button at 390 px, hidden for a diagram that fits.
+ */
+async function flowMinimap() {
+  const page = await newPage('minimap');
+  await page.addInitScript((wf) => {
+    if (localStorage.getItem('smoke.seeded')) return;
+    localStorage.setItem('sfdg.workflow.v2', JSON.stringify(wf));
+    localStorage.setItem('sfdg.view', 'canvas');
+    localStorage.setItem('smoke.seeded', '1');
+  }, bigWorkflow());
+  await page.goto(base);
+  const shown = await page.waitForSelector('#dg-minimap.show path.mm-card', { timeout: 5000 }).catch(() => null);
+  check(shown, 'minimap not shown for a 1 000-step diagram');
+  const paths = await page.$$eval('#dg-minimap path', (n) => n.length);
+  check(paths > 0 && paths <= 16, `minimap has ${paths} paths (1–16 expected)`);
+  // 75 % of the overview track: the cards of that part of the diagram are made.
+  const tr = await page.$eval('.mm-track', (e) => { const r = e.getBoundingClientRect(); return { x: r.left + r.width * 0.75, y: r.top + r.height / 2 }; });
+  await page.mouse.click(tr.x, tr.y);
+  const near = await page.waitForFunction(() => {
+    const w = Number(document.querySelector('.dg-edges').getAttribute('width'));
+    return [...document.querySelectorAll('#canvas .dg-card[data-id]')].some((c) => Math.abs(parseFloat(c.style.left) - 0.75 * w) < 1500);
+  }, null, { timeout: 3000 }).then(() => true, () => false);
+  check(near, 'a click at 75 % of the minimap track did not bring the cards around 75 % of the diagram');
+  if (outDir) {
+    await page.screenshot({ path: path.join(outDir, 'smoke-1440-minimap.png') });
+    await page.emulateMedia({ colorScheme: 'dark' });
+    await page.screenshot({ path: path.join(outDir, 'smoke-1440-minimap-dark.png') });
+    await page.emulateMedia({ colorScheme: 'light' });
+  }
+  // A card the keys select is kept out from under the minimap: a step card's row (the body spine) is panned level with the
+  // minimap, then End selects the last step (smallest pan, at the right edge where the minimap is).
+  const mmBox = await page.$eval('#dg-minimap', (e) => e.getBoundingClientRect().toJSON());
+  const pick = await page.evaluate((mm) => {
+    const v = document.getElementById('canvas').getBoundingClientRect();
+    const c = [...document.querySelectorAll('#canvas .dg-card[data-id]:not(.dg-head):not([data-id="__start"])')].map((e) => [e.dataset.id, e.getBoundingClientRect()])
+      .find(([, r]) => r.left > v.left && r.right < mm.left - 20 && r.top > v.top && r.bottom < v.bottom);
+    return c ? { id: c[0], y: c[1].top + c[1].height / 2 } : null;
+  }, mmBox);
+  check(pick, 'no step card fully in view left of the minimap');
+  if (pick) {
+    await page.click(`#canvas .dg-card[data-id="${pick.id}"] .type`);
+    await page.mouse.move(mmBox.left - 300, mmBox.top - 200);
+    await page.mouse.wheel(0, -Math.round(mmBox.top + mmBox.height / 2 - pick.y));
+    await page.waitForFunction(({ id, y }) => Math.abs(document.querySelector(`#canvas .dg-card[data-id="${id}"]`).getBoundingClientRect().top - y) < 30, { id: pick.id, y: mmBox.top }, { timeout: 2000 }).catch(() => {});
+    await page.keyboard.press('End');
+    const end = await page.evaluate(() => {
+      const card = document.querySelector('#canvas .dg-card.selected');
+      const r = card?.getBoundingClientRect();
+      const m = document.getElementById('dg-minimap').getBoundingClientRect();
+      const v = document.getElementById('canvas').getBoundingClientRect();
+      return r && {
+        id: card.dataset.id, level: r.top < m.bottom && r.bottom > m.top,
+        under: r.left < m.right && r.right > m.left && r.top < m.bottom && r.bottom > m.top, inView: r.left >= v.left && r.right <= v.right && r.top >= v.top && r.bottom <= v.bottom,
+      };
+    });
+    check(end && end.id !== pick.id && end.level && !end.under && end.inView, `End: the selected card is under the minimap or off screen (${JSON.stringify(end)})`);
+  }
+  // The button switches it off, remembered after a reload.
+  await page.click('#btn-minimap');
+  check(!(await page.$('#dg-minimap.show')) && (await page.getAttribute('#btn-minimap', 'aria-pressed')) === 'false', 'the minimap button did not hide it');
+  await page.reload();
+  await page.waitForSelector('#canvas .dg-card');
+  const off = await page.evaluate(() => ({ shown: Boolean(document.querySelector('#dg-minimap.show')), pressed: document.getElementById('btn-minimap').getAttribute('aria-pressed'), key: localStorage.getItem('sfdg.minimap') }));
+  check(!off.shown && off.pressed === 'false' && off.key === '0', `minimap switched off is not remembered (${JSON.stringify(off)})`);
+  await page.click('#btn-minimap');
+  await page.waitForSelector('#dg-minimap.show', { timeout: 2000 }).catch(() => errors.push('the minimap button did not show it again'));
+  // 800 px: hidden while the sheet is open.
+  await page.setViewportSize({ width: 800, height: 900 });
+  await page.click('#canvas .dg-card[data-id] .type');
+  await page.waitForSelector('#inspector.open');
+  check(await page.$eval('#dg-minimap', (e) => getComputedStyle(e).visibility === 'hidden'), '800 px: the minimap shows over the open sheet');
+  // 390 px: no minimap and no button.
+  await page.setViewportSize({ width: 390, height: 844 });
+  const phone = await page.evaluate(() => ({ btn: document.getElementById('btn-minimap').getBoundingClientRect().width, map: getComputedStyle(document.getElementById('dg-minimap')).display }));
+  check(phone.btn === 0 && phone.map === 'none', `390 px: minimap button or map shown (${JSON.stringify(phone)})`);
+  // A diagram that fits the viewport: nothing to show.
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.setInputFiles('#file-input', { name: 'one.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify({ version: 2, name: 'một bước', steps: [{ id: 'x', type: 'record', config: { sobject: 'Account', alias: 'x', count: 1, fields: [] } }] })) });
+  await page.waitForSelector('#canvas .dg-card[data-id="x"]');
+  check(await page.waitForFunction(() => !document.querySelector('#dg-minimap.show'), null, { timeout: 2000 }).then(() => true, () => false), 'minimap shown for a one-step diagram');
+  await page.context().close();
+}
+
+/**
+ * Flow 19 (design 0013, flowVarsLoops): number options that take a variable, each-loop filter /
+ * shuffle / limit, a values loop, branch "So với" with a variable and the "Lần chạy" group.
+ */
+const VARS_LOOPS = (() => {
+  const text = (name, mode = 'lastName') => ({ name, type: 'text', options: { mode } });
+  const tpl = (name, template) => ({ name, type: 'template', options: { template } });
+  return {
+    version: 2,
+    name: 'Biến và vòng lặp',
+    steps: [
+      { id: 'accs', type: 'query', config: { mode: 'builder', sobject: 'Account', alias: 'accs', fields: ['Id', 'Name'], limit: 200 } },
+      { id: 'cons', type: 'query', config: { mode: 'builder', sobject: 'Contact', alias: 'cons', fields: ['Id', 'LastName', 'AccountId'], limit: 200 } },
+      { id: 'opp', type: 'record', config: { sobject: 'Opportunity', alias: 'opp', count: 1, fields: [text('Name', 'company'), { name: 'Amount', type: 'currency', options: {} }] } },
+      { id: 'lf', type: 'loop', config: { mode: 'fixed', count: 3, alias: 'k' }, slots: { body: [
+        { id: 'lead', type: 'record', config: { sobject: 'Lead', alias: 'lead', fields: [text('LastName'), text('Company', 'company'), tpl('Description', 'Lô {{run.seed}}')] } },
+      ] } },
+      { id: 'la', type: 'loop', config: { mode: 'each', from: 'accs', itemAlias: 'acc', alias: 'loop' }, slots: { body: [
+        { id: 'lc', type: 'loop', config: { mode: 'each', from: 'cons', itemAlias: 'con', alias: 'loop2' }, slots: { body: [
+          { id: 'task', type: 'record', config: { sobject: 'Task', alias: 'task', fields: [tpl('Subject', 'Gọi {{con.LastName}}')] } },
+        ] } },
+      ] } },
+      { id: 'br', type: 'branch', config: { kind: 'compare', left: 'opp.Amount', op: 'gt', right: '' }, slots: { true: [], false: [] } },
+      { id: 'lv', type: 'loop', config: { mode: 'fixed', count: 1, alias: 'v' }, slots: { body: [
+        { id: 'ld2', type: 'record', config: { sobject: 'Lead', alias: 'ld2', fields: [text('LastName'), text('Company', 'company')] } },
+      ] } },
+    ],
+  };
+})();
+
+async function flowVarsLoops() {
+  const page = await newPage('vars-loops');
+  await seedStorage(page, { workflow: VARS_LOOPS });
+  await page.goto(base);
+  await page.waitForSelector('.step-card[data-id="lv"]');
+  const saved = (id) => page.evaluate((x) => {
+    let hit = null;
+    const walk = (list) => { for (const s of list ?? []) { if (s.id === x) hit = s; for (const b of Object.values(s.slots ?? {})) walk(b); } };
+    walk(smokeSaved().steps);
+    return hit?.config;
+  }, id);
+  const sum = (id) => page.textContent(`.step-card[data-id="${id}"] .sum`);
+  /** The card of `id` reads `text` (cards re-render after the edit, in a frame). */
+  const sumIs = (id, text) => until(page, ([i, t]) => document.querySelector(`.step-card[data-id="${i}"] .sum`)?.textContent === t, [id, text]);
+  const opt = (key) => `#inspector .options [data-key="${key}"]`;
+  const row = (key) => `#inspector .options .form-row:has([data-key="${key}"])`;
+
+  // "Số lần lặp" → {x}: only Số variables (and org fields of unknown type), the explanation line,
+  // "Lần chạy" last; accs.$count fills the whole box, as a chip, and the card says "{{accs.$count}} lần".
+  await page.click('.step-card[data-id="lf"] .type');
+  await page.waitForSelector(opt('count'));
+  check(await page.$eval(opt('count'), (i) => i.type === 'text' && i.inputMode === 'numeric' && i.value === '3'), 'the count box is not a numeric text box holding 3');
+  await page.click(`${row('count')} .var-btn`);
+  await page.waitForSelector('.var-picker .vp-item');
+  const listed = await page.evaluate(() => ({
+    paths: [...document.querySelectorAll('.var-picker .vp-item')].map((r) => r.dataset.path),
+    groups: [...document.querySelectorAll('.var-picker .vp-group')].map((g) => g.getAttribute('aria-label')),
+    why: document.querySelector('.var-picker .vp-why')?.textContent,
+    hidden: document.querySelector('.var-picker .vp-hidden summary')?.textContent ?? '',
+  }));
+  // Steps below lf (acc, con, ld2…) are still listed as not usable here.
+  check(/^Không dùng được ở đây \(\d+\)$/.test(listed.hidden), `number picker "Không dùng được ở đây": ${listed.hidden}`);
+  check(listed.paths.includes('accs.$count') && listed.paths.includes('opp.Amount') && !listed.paths.includes('opp.Name') && !listed.paths.includes('run.now'),
+    `number picker rows: ${listed.paths.join(' ')}`);
+  check(listed.groups.at(-1) === 'run · Lần chạy' && listed.paths.includes('run.seed'), `"Lần chạy" is not the last group: ${listed.groups.join(' | ')}`);
+  check(listed.why === 'Chỉ hiện biến kiểu Số và field đọc từ org (chưa biết kiểu).', `number picker explanation: ${listed.why}`);
+  await page.click('.var-picker .vp-item[data-path="accs.$count"]');
+  check(await sumIs('lf', '{{accs.$count}} lần · {{k.index}}'), `count variable card: ${await sum('lf')}`);
+  check(await page.$eval(opt('count'), (i) => i.value) === '{{accs.$count}}', 'the count box does not hold {{accs.$count}}');
+  check(await page.$(`${row('count')} .var-chip[data-path="accs.$count"]`), 'no chip for {{accs.$count}}');
+  check((await saved('lf')).count === '{{accs.$count}}', `saved count: ${JSON.stringify(await saved('lf'))}`);
+  // 0012 H: the estimate of a Record in a loop counted by a variable is never exact.
+  check(/^≈ /.test(await page.textContent('.step-card[data-id="lead"] .stat.est').catch(() => '')), 'no ≈ estimate chip on the Record inside the variable-count loop');
+
+  // Preview without an org: 5 sample Accounts ⇒ 5 Leads; Alt+↓ in the number box (0014) opens the
+  // picker, whose run.seed sample is the preview's seed.
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('Control+Enter');
+  // The final chip (not the estimate nor the live one of the running preview), then the seed line.
+  const lfChip = '.step-card[data-id="lf"] .stat:not(.est):not(.live)';
+  check(await until(page, (s) => document.querySelector(s)?.textContent === '5 lần lặp', lfChip), `count-variable loop chip: ${await page.textContent(lfChip).catch(() => null)}`);
+  await until(page, () => /seed \d+/.test(document.getElementById('results-summary')?.textContent ?? ''));
+  const summary = await page.textContent('#results-summary');
+  const leads = await page.textContent('.step-card[data-id="lead"] .stat:not(.est):not(.live)').catch(() => null);
+  check(leads === '5 bản ghi', `Leads of {{accs.$count}} sample rows: ${leads}`);
+  const seed = /seed (\d+)/.exec(summary)?.[1];
+  await page.focus(opt('count'));
+  await page.keyboard.press('Alt+ArrowDown');
+  await page.waitForSelector('.var-picker .vp-item[data-path="run.seed"]');
+  const seedSample = await page.$eval('.var-picker .vp-item[data-path="run.seed"] .vp-sample', (s) => s.textContent);
+  check(seed && seedSample === seed, `run.seed sample ${seedSample} is not the preview's seed ${seed}`);
+  await page.keyboard.press('Escape');
+
+  // Lặp each inside Lặp acc: "Lọc" → condition fills AccountId = {{acc.Id}} with a toast; in
+  // "fixed" every filter box is hidden (chained showIf); one ↶ takes back the filter and the fill.
+  await page.click('.step-card[data-id="lc"] .type');
+  await page.waitForSelector(opt('filter'));
+  await page.focus(opt('filter'));
+  await page.selectOption(opt('filter'), 'compare');
+  await until(page, () => document.querySelector('#inspector [data-key="filterField"]')?.value === 'AccountId');
+  // Filled in place: "Lọc" keeps the focus (arrow keys fire change in Chrome).
+  check(await page.evaluate(() => document.activeElement?.dataset.key === 'filter'), `focus after the fill: ${await page.evaluate(() => document.activeElement?.outerHTML.slice(0, 80))}`);
+  const fill = await page.evaluate(() => [document.querySelector('#inspector [data-key="filterField"]').value, document.querySelector('#inspector [data-key="filterValue"]').value]);
+  check(fill.join(' ') === 'AccountId {{acc.Id}}', `parent–child fill: ${fill}`);
+  const toastText = await page.textContent('#toast');
+  check(toastText.includes('Đã điền điều kiện AccountId = {{acc.Id}} (bản ghi con của "acc"). Sửa nếu cần.'), `fill toast: ${toastText}`);
+  await page.selectOption(opt('mode'), 'fixed');
+  const hiddenRows = await page.evaluate(() => ['filter', 'filterField', 'filterOp', 'filterValue', 'order', 'limit'].filter((k) => !document.querySelector(`#inspector .options [data-key="${k}"]`).closest('.form-row').hidden));
+  check(!hiddenRows.length, `filter boxes shown in "fixed": ${hiddenRows}`);
+  await page.click('#btn-undo');
+  await page.click('#btn-undo');
+  const undone = await saved('lc');
+  check(undone.mode === 'each' && (undone.filter ?? 'none') === 'none' && !undone.filterField && !undone.filterValue, `one ↶ did not take back the filter and its fill: ${JSON.stringify(undone)}`);
+
+  // Xáo trộn + Tối đa 2: the card lists them, a preview loops 5 × 2 times.
+  await page.click('.step-card[data-id="lc"] .type');
+  await page.waitForSelector(opt('order'));
+  await page.selectOption(opt('order'), 'shuffle');
+  await page.fill(opt('limit'), '2');
+  check(await sumIs('lc', 'Mỗi bản ghi trong cons → con · xáo trộn · tối đa 2 · {{loop2.index}}'), `each extras card: ${await sum('lc')}`);
+  await page.keyboard.press('Control+Enter');
+  await until(page, () => document.querySelector('.step-card[data-id="lc"] .stat:not(.est):not(.live)')?.textContent === '10 lần lặp');
+  check(await page.textContent('.step-card[data-id="lc"] .stat:not(.est):not(.live)').catch(() => '') === '10 lần lặp', 'shuffle + limit 2 over 5 accounts is not "10 lần lặp"');
+
+  // "Mỗi giá trị trong danh sách" empty: red box and valuesEmpty under it; Hot / Warm / Cold fill the card.
+  await page.click('.step-card[data-id="lv"] .type');
+  await page.waitForSelector(opt('mode'));
+  await page.selectOption(opt('mode'), 'values');
+  await until(page, () => document.querySelector('#inspector textarea[data-key="values"]')?.classList.contains('invalid'));
+  const values = await page.evaluate(() => {
+    const t = document.querySelector('#inspector textarea[data-key="values"]');
+    return { invalid: t.classList.contains('invalid'), placeholder: t.placeholder, error: t.closest('.form-row').querySelector('.opt-error')?.textContent ?? '' };
+  });
+  check(values.invalid && values.placeholder === 'Hot\nWarm\nCold' && values.error.includes('Nhập ít nhất một giá trị, mỗi dòng một giá trị'), `empty values list: ${JSON.stringify(values)}`);
+  check(await sumIs('lv', 'Danh sách trống · nhập giá trị'), `empty values card: ${await sum('lv')}`);
+  // One value per line (split: 'lines'): a comma stays inside its value.
+  await page.fill('#inspector textarea[data-key="values"]', 'Công ty A, chi nhánh B\nHot');
+  check(JSON.stringify((await saved('lv')).values) === '["Công ty A, chi nhánh B","Hot"]', `values split: ${JSON.stringify((await saved('lv')).values)}`);
+  await page.fill('#inspector textarea[data-key="values"]', 'Hot\nWarm\nCold');
+  check(await sumIs('lv', '3 giá trị: Hot, Warm, Cold · {{v.value}}'), `values card: ${await sum('lv')}`);
+
+  // Rẽ nhánh "So với" → {x} → opp.Amount.
+  await page.click('.step-card[data-id="br"] .type');
+  await page.waitForSelector(opt('right'));
+  await page.click(`${row('right')} .var-btn`);
+  await page.waitForSelector('.var-picker .vp-item');
+  await page.keyboard.type('Amount');
+  await page.waitForSelector('.var-picker .vp-item.active[data-path="opp.Amount"]');
+  await page.keyboard.press('Enter');
+  check(await page.$eval(opt('right'), (i) => i.value) === '{{opp.Amount}}', 'branch right did not get {{opp.Amount}}');
+  check(await sumIs('br', 'opp.Amount > {{opp.Amount}}'), `branch card: ${await sum('br')}`);
+  await page.context().close();
+}
+
 /** Flow 15: the Sơ đồ view (design 0003 đợt B, + review fixes). Own contexts (wide, then phone). */
 async function flowCanvas() {
   const page = await newPage('canvas');
@@ -1373,10 +1953,8 @@ async function flowCanvas() {
     await route.fulfill({ json: meta });
   });
   await page.goto(base);
-  // After the cards: with a slow /api/meta, an edit typed before the sample is shown was
-  // overwritten by it, and no autosave was written (review 0013 S3).
-  await page.waitForSelector('#process .step-card[data-id="con"]');
   await page.fill('#wf-name', 'Sơ đồ'); // an edit writes the autosave the checks read
+  await page.waitForSelector('#process .step-card[data-id="con"]');
   // Enter on a focused ⋯ opens the step menu, not the inspector (review S5, Quy trình).
   await page.focus('#process .step-card[data-id="con"] .menu-btn');
   await page.keyboard.press('Enter');
@@ -1406,7 +1984,7 @@ async function flowCanvas() {
   }));
   check(sw.process === 0 && sw.hidden && sw.pressed === 'true' && sw.saved === 'canvas' && sw.tree === 'tree' && sw.tabStops.join() === 'con' && sw.posinset === '1' && /100%/.test(sw.zoomLabel), `switch state ${JSON.stringify(sw)}`);
   // Enter on a focused "+" opens its menu (review S5) → Record, added right after con.
-  const count = () => page.evaluate(() => (JSON.stringify(smokeStored()?.steps ?? []).match(/"type":"record"/g) ?? []).length);
+  const count = () => page.evaluate(() => (JSON.stringify(smokeSaved().steps).match(/"type":"record"/g) ?? []).length);
   const before = await count();
   await page.focus('#canvas button.dg-add[aria-label="Thêm bước sau \\"con\\""]');
   await page.keyboard.press('Enter');
@@ -1414,7 +1992,7 @@ async function flowCanvas() {
   await page.click('.popup [role="menuitem"][data-type="record"]');
   const added = await page.waitForFunction(() => {
     const id = document.querySelector('#canvas .step-card.selected')?.dataset.id;
-    const wf = smokeStored();
+    const wf = smokeSaved();
     const find = (list) => { for (const s of list) { for (const k of Object.keys(s.slots ?? {})) { const at = s.slots[k].findIndex((x) => x.id === id); if (at >= 0) return { prev: s.slots[k][at - 1]?.id, type: s.slots[k][at].type }; const deep = find(s.slots[k]); if (deep) return deep; } } return null; };
     return id && id !== 'con' && find(wf.steps);
   }, null, { timeout: 3000 }).then((x) => x.jsonValue()).catch(() => null);
@@ -1496,107 +2074,7 @@ async function flowCanvas() {
   });
   check(left, 'panning far away left no card on screen');
   await page.context().close();
-}
 
-/** Flow 15, phone part (own context, so it runs alongside the wide part). */
-/** 4 steps per group: Lặp → Record, Rẽ nhánh → Record; a Record turned off now and then, a few without sObject (errors). */
-function bigWorkflow(groups) {
-  const rec = (id, sobject, extra = {}) => ({ id, type: 'record', config: { sobject, alias: id, count: 1, fields: [] }, ...extra });
-  const steps = [];
-  for (let i = 0; i < groups; i++) {
-    steps.push({ id: `l${i}`, type: 'loop', config: { count: 2, alias: `loop${i}` }, slots: { body: [
-      rec(`a${i}`, 'Account', i % 37 === 5 ? { disabled: true } : {}),
-      { id: `b${i}`, type: 'branch', config: { kind: 'chance', probability: 0.5 }, slots: { true: [rec(`t${i}`, i % 50 === 7 ? '' : 'Contact')], false: [] } },
-    ] } });
-  }
-  return { version: 2, name: 'Sơ đồ lớn', steps };
-}
-
-/**
- * 15b. Minimap of the Sơ đồ view (design 0014 §5), own context. 480 steps: far wider than the viewport
- * (the window and the track are used); 1 000+ step sizes and path counts are unit tests
- * (test/minimap.test.js), so the smoke stays light (review 0014 N9).
- */
-async function flowMinimap() {
-  const page = await newPage('minimap');
-  await page.addInitScript((wf) => {
-    if (localStorage.getItem('smoke.mm')) return;
-    localStorage.setItem('sfdg.workflow.v2', JSON.stringify(wf));
-    localStorage.setItem('sfdg.view', 'canvas');
-    localStorage.setItem('smoke.mm', '1');
-  }, bigWorkflow(120));
-  await page.goto(base);
-  await page.waitForSelector('#canvas .step-card[data-id="a0"]');
-  await page.waitForSelector('#dg-minimap.shown path');
-  const mm = await page.evaluate(() => ({
-    paths: document.querySelectorAll('#dg-minimap path').length, track: !document.querySelector('#dg-minimap .mm-track').hidden,
-    hidden: document.getElementById('dg-minimap').getAttribute('aria-hidden'), pressed: document.getElementById('btn-minimap').getAttribute('aria-pressed'),
-  }));
-  check(mm.paths > 0 && mm.paths <= 16 && mm.track && mm.hidden === 'true' && mm.pressed === 'true', `480 steps: minimap ${JSON.stringify(mm)} (shown, ≤ 16 paths, track, aria-hidden)`);
-  // A card pushed under the minimap comes out from under it when ensureVisible shows it (↑ then ↓ back to it).
-  await page.click('#canvas .step-card[data-id="a0"] .type');
-  const box = (sel) => page.$eval(sel, (e) => { const r = e.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; });
-  const [card, map] = [await box('#canvas .step-card[data-id="a0"]'), await box('#dg-minimap')];
-  await page.mouse.move(card.x, card.y);
-  await page.mouse.wheel(card.x - map.x, card.y - map.y);
-  const pushed = await page.waitForFunction(() => {
-    const c = document.querySelector('#canvas .step-card[data-id="a0"]').getBoundingClientRect();
-    const m = document.getElementById('dg-minimap').getBoundingClientRect();
-    return c.left < m.right && c.right > m.left && c.top < m.bottom && c.bottom > m.top;
-  }, null, { timeout: 2000 }).then(() => true, () => false);
-  check(pushed, 'the wheel did not bring a0 under the minimap (the next check would prove nothing)');
-  await page.keyboard.press('ArrowUp');
-  await page.keyboard.press('ArrowDown');
-  const clear = await page.evaluate(() => {
-    const c = document.querySelector('#canvas .step-card.selected').getBoundingClientRect();
-    const m = document.getElementById('dg-minimap').getBoundingClientRect();
-    return { id: document.querySelector('#canvas .step-card.selected').dataset.id, overlap: c.left < m.right && c.right > m.left && c.top < m.bottom && c.bottom > m.top };
-  });
-  check(clear.id === 'a0' && !clear.overlap, `ensureVisible left the card under the minimap (${JSON.stringify(clear)})`);
-  if (outDir) {
-    await page.screenshot({ path: path.join(outDir, 'smoke-1440-minimap.png') });
-    await page.emulateMedia({ colorScheme: 'dark' });
-    await settle(page);
-    await page.screenshot({ path: path.join(outDir, 'smoke-1440-minimap-dark.png') });
-    await page.emulateMedia({ colorScheme: 'light' });
-  }
-  // A press at 75 % of the overview track: the cards around three quarters of the diagram are drawn.
-  const track = await page.$eval('#dg-minimap .mm-track', (e) => { const r = e.getBoundingClientRect(); return { x: r.x + r.width * 0.75, y: r.y + r.height / 2 }; });
-  await page.mouse.click(track.x, track.y);
-  const near = await page.$$eval('#canvas .step-card[data-id^="l"]', (n) => n.map((c) => Number(c.dataset.id.slice(1))).filter((i) => i > 0));
-  check(near.some((i) => Math.abs(i - 0.75 * 120) <= 8), `75 % of the track: loops drawn ${near.join(',')} (around 90 expected)`);
-  // A press on the map centres the viewport there (the cards under that point are drawn).
-  const mapAt = await page.$eval('#dg-minimap .mm-map', (e) => { const r = e.getBoundingClientRect(); return { x: r.x + 4, y: r.y + r.height / 2 }; });
-  const before = near.join();
-  await page.mouse.click(mapAt.x, mapAt.y);
-  const moved = await page.$$eval('#canvas .step-card[data-id^="l"]', (n) => n.map((c) => c.dataset.id.slice(1)).join(','));
-  check(moved !== before, 'a press on the minimap did not move the viewport');
-  // The toggle: off hides it, a reload keeps it off; on again.
-  await page.click('#btn-minimap');
-  check(!(await page.$('#dg-minimap.shown')) && (await page.getAttribute('#btn-minimap', 'aria-pressed')) === 'false', 'the minimap button did not hide it');
-  await page.reload();
-  await page.waitForSelector('#canvas .step-card[data-id="__start"]');
-  // One frame for the minimap to be shown if it were on (review N10: a check right after load proves nothing).
-  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
-  check(!(await page.$('#dg-minimap.shown')) && (await page.evaluate(() => localStorage.getItem('sfdg.minimap'))) === '0', 'the minimap came back after a reload while turned off');
-  await page.click('#btn-minimap');
-  await page.waitForSelector('#dg-minimap.shown');
-  // At 800 px the open sheet hides it.
-  await page.setViewportSize({ width: 800, height: 900 });
-  await page.click('#canvas .step-card[data-id="__start"] .type');
-  await page.waitForSelector('#inspector.open');
-  check(!(await page.$('#dg-minimap.shown')), '800px: the minimap stays over the open sheet');
-  await page.click('#inspector .sheet-close');
-  await page.waitForSelector('#dg-minimap.shown');
-  await page.setViewportSize({ width: 1440, height: 900 });
-  // A one-step diagram fits the viewport: no minimap.
-  await page.evaluate(() => smokeOpen({ version: 2, name: 'một bước', steps: [{ id: 'x', type: 'record', config: { sobject: 'Account', alias: 'x', fields: [] } }] }));
-  await page.waitForSelector('#canvas .step-card[data-id="x"]');
-  await page.waitForFunction(() => !document.querySelector('#dg-minimap.shown'), null, { timeout: 2000 }).catch(() => errors.push('a one-step diagram shows the minimap'));
-  await page.context().close();
-}
-
-async function flowCanvasPhone() {
   // Phone: the saved Sơ đồ is not applied; the ⋯ menu offers it and does not save it.
   const m = await newPage('canvas 390', { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
   await m.addInitScript(() => { if (!localStorage.getItem('smoke.view')) { localStorage.setItem('sfdg.view', 'canvas'); localStorage.setItem('smoke.view', '1'); } });
@@ -1606,11 +2084,10 @@ async function flowCanvasPhone() {
   await m.click('.popup [role="menuitemradio"]:has-text("Sơ đồ")');
   await m.waitForSelector('#canvas .step-card[data-id="__start"]');
   const phone = await m.evaluate(() => ({ overflow: document.documentElement.scrollWidth - innerWidth, zoomButtons: [...document.querySelectorAll('.dg-zoom button')].filter((b) => b.offsetWidth).map((b) => b.offsetWidth) }));
-  check(phone.overflow <= 0 && phone.zoomButtons.join() === '32', `390px Sơ đồ: overflow ${phone.overflow}px, zoom bar ${phone.zoomButtons} (only ⤢, 32 px; no minimap button, 0014)`);
-  check(await m.$eval('#dg-minimap', (e) => getComputedStyle(e).display === 'none'), '390px Sơ đồ: the minimap is drawn on a phone');
+  check(phone.overflow <= 0 && phone.zoomButtons.join() === '32', `390px Sơ đồ: overflow ${phone.overflow}px, zoom bar ${phone.zoomButtons} (only ⤢, 32 px)`);
   await m.tap('#canvas .step-card[data-id="__start"] .type');
   await m.waitForSelector('#inspector.open');
-  await settle(m);
+  await until(m, () => document.querySelector('#canvas .step-card.selected').getBoundingClientRect().bottom <= document.getElementById('inspector').getBoundingClientRect().top + 0.5);
   const sheet = await m.evaluate(() => ({ card: document.querySelector('#canvas .step-card.selected').getBoundingClientRect().bottom, sheet: document.getElementById('inspector').getBoundingClientRect().top, menu: document.querySelector('#canvas .step-card .menu-btn')?.offsetWidth }));
   check(sheet.card <= sheet.sheet + 0.5, `390px Sơ đồ: the selected card is under the sheet (${JSON.stringify(sheet)})`);
   if (outDir) await m.screenshot({ path: path.join(outDir, 'smoke-390-canvas.png') });
@@ -1636,507 +2113,407 @@ async function flowCanvasPhone() {
   await m.context().close();
 }
 
-// ---------- 16. insert history and delete (design 0011) ----------
+// ---------- 20. insert history, Bulk and delete (design 0011, its smoke flows 16a–16d) ----------
 
-const H1 = 'h20261028T103200Z-a1b2c3';
-const H2 = 'h20261028T091500Z-d4e5f6';
-const H3 = 'h20261027T080200Z-0a0b0c';
-const HIST_ORGS = [
-  { alias: 'dev-sb', username: 'me@example.com', isSandbox: true, isScratch: false, connectedStatus: 'Connected' },
-  { alias: 'dev-prod', username: 'admin@prod.example.com', isSandbox: false, isScratch: false, connectedStatus: 'Connected' },
-];
-const histRun = (id, { org, kind, inserted, status = 'done', startedAt }) => ({
-  id, status, startedAt, finishedAt: startedAt, org: { alias: org, username: HIST_ORGS.find((o) => o.alias === org).username, orgId: '00D000000000001AAA', kind },
-  workflowName: 'Account + Contact', seed: 42, total: inserted, inserted, failed: 0, notSent: 0, bySobject: { Account: 5, Contact: inserted - 5 },
-  steps: [{ nodeId: 'acc', alias: 'acc', sobject: 'Account', mode: 'collections', total: 5, inserted: 5, failed: 0 }, { nodeId: 'con', alias: 'con', sobject: 'Contact', mode: 'bulk', total: inserted - 5, inserted: inserted - 5, failed: 0 }],
-  bulkJobs: 0, stopped: null, deletion: { status: 'none', deleted: 0, gone: 0, failed: 0, remaining: inserted, lastAt: null },
-});
-const HIST_RUNS = [
-  histRun(H1, { org: 'dev-sb', kind: 'sandbox', inserted: 12005, startedAt: '2026-10-28T10:32:00.000Z' }),
-  histRun(H2, { org: 'dev-prod', kind: 'production', inserted: 8, startedAt: '2026-10-28T09:15:00.000Z' }),
-  histRun(H3, { org: 'dev-sb', kind: 'sandbox', inserted: 1200, status: 'interrupted', startedAt: '2026-10-27T08:02:00.000Z' }),
-];
+const HIST_HID = 'h20261028T103200Z-a1b2c3';
+const HIST_ORGS = [{ alias: 'dev-sb', username: 'me@example.com', isSandbox: true, isScratch: false, connectedStatus: 'Connected' }];
 
-/** Flow 16 (0011): Bulk in the Insert confirmation, Tải Id / Lịch sử links, "Xóa dữ liệu này…", production name, history dialog. */
-async function flowHistory() {
-  const page = await newPage('history', { shared: true });
-  const sent = { inserts: [], deletes: [], forgets: [] };
-  await page.addInitScript(() => { if (!localStorage.getItem('smoke.h')) { localStorage.setItem('sfdg.org', 'dev-sb'); localStorage.setItem('smoke.h', '1'); } });
-  // Everything that would touch an org is answered here; nothing reaches the server's (absent) sf CLI.
-  await page.route('**/api/**', (r) => {
-    const url = new URL(r.request().url());
-    const p = url.pathname;
-    const json = (body, status = 200) => r.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
-    const nd = (events) => r.fulfill({ status: 200, contentType: 'application/x-ndjson', body: events.map((e) => JSON.stringify(e)).join('\n') + '\n' });
-    if (p === '/api/orgs') return json(HIST_ORGS);
-    if (/^\/api\/orgs\/[^/]+\/limits$/.test(p)) return json({ api: { max: 15000, remaining: 30 }, bulkBatches: { max: 15000, remaining: 14980 } });
-    if (p.startsWith('/api/orgs/')) return json({ error: 'smoke: org giả lập' }, 404);
-    if (p === '/api/run') {
-      const body = r.request().postDataJSON();
-      const stats = { total: 12005, bySobject: { Account: 5, Contact: 12000 }, byStep: { loopAcc: { runs: 1, records: 12005, iterations: 5 }, acc: { runs: 5, records: 5 }, loopCon: { runs: 5, records: 12000, iterations: 12000 }, con: { runs: 12000, records: 12000 } }, durationMs: 1, previewRows: 200, truncated: true };
-      const base = { runId: 'rsmoke16', seed: body.seed ?? 42, now: body.now ?? 1761645120000, warnings: [], records: [], samples: {}, stats };
-      if (!body.target) return nd([{ type: 'start', runId: 'rsmoke16', seed: base.seed, now: base.now, warnings: [] }, { type: 'done', result: base }]);
-      sent.inserts.push(body);
-      const insert = { inserted: 12005, failed: 0, errorsTotal: 0, errors: [], errorGroups: [], errorGroupsOther: null, ids: {}, bySobject: { Account: { inserted: 5, failed: 0 }, Contact: { inserted: 12000, failed: 0 } }, notSent: 0, cancelled: false, stopped: null, total: 12005, historyId: H1, bulk: [] };
-      return nd([{ type: 'start', runId: 'rsmoke16', seed: base.seed, now: base.now, warnings: [] }, { type: 'plan', total: 12005, bySobject: stats.bySobject, apiCalls: 41, historyId: H1 }, { type: 'done', result: { ...base, insert } }]);
-    }
-    if (p === '/api/history') return json({ enabled: true, dir: '/home/me/.local/share/sf-data-generator/history', maxRuns: 100, runs: HIST_RUNS });
-    if (p === '/api/history/status') return json({ enabled: true, dir: '/home/me/.local/share/sf-data-generator/history', maxRuns: 100, full: false });
-    let m;
-    if ((m = /^\/api\/history\/([^/]+)\/delete$/.exec(p))) {
-      sent.deletes.push({ hid: m[1], body: r.request().postDataJSON() });
-      // The production delete leaves one failure on a step that is not in the workflow any more.
-      const failed = m[1] === H2 ? 1 : 0;
-      const errorGroups = failed ? [{ sobject: 'Contact', nodeId: 'removedStep', message: 'DELETE_FAILED: smoke', count: 1, refs: ['003000000000001AAA'] }] : [];
-      return nd([{ type: 'start', runId: 'rsmoked', historyId: m[1], total: 12005, bySobject: { Contact: 12000, Account: 5 } }, { type: 'done', result: { total: 12005, deleted: 12005 - failed, gone: 0, failed, errorGroups, errorGroupsOther: null, bySobject: {}, remaining: failed, cancelled: false, stopped: null, bulkAborted: null } }]);
-    }
-    if ((m = /^\/api\/history\/([^/]+)\/forget$/.exec(p))) {
-      sent.forgets.push(m[1]);
-      return json({ ok: true });
-    }
-    if ((m = /^\/api\/history\/([^/]+)$/.exec(p))) {
-      const run = HIST_RUNS.find((x) => x.id === m[1]);
-      return json({ ...run, workflowName: run.workflowName, remaining: { total: run.inserted, bySobject: { Contact: run.inserted - 5, Account: 5 }, bySteps: [{ nodeId: 'con', sobject: 'Contact', count: run.inserted - 5 }, { nodeId: 'acc', sobject: 'Account', count: 5 }] }, pendingBulkJobs: [], hasParents: false, errorGroups: [], bulkJobs: [] });
-    }
-    return r.continue();
+/**
+ * A page with org `dev-sb` selected and every org / history / run call answered by the route (never the
+ * server's sf CLI, never an org): /api/orgs, /api/orgs/<org>/limits (50 API calls left), other org calls 404,
+ * previews of "Account + Contact" answered with 5 Account + 12 000 Contact. Inserts are answered in the page
+ * (a fetch wrapper that holds the stream, flow 20a); any insert reaching the route is aborted and reported.
+ */
+async function historyPage(label, { orgs = HIST_ORGS, viewport } = {}) {
+  const page = await newPage(label, viewport ? { viewport } : {});
+  await page.addInitScript((org) => { if (!localStorage.getItem('smoke.org')) { localStorage.setItem('sfdg.org', org); localStorage.setItem('smoke.org', '1'); } }, orgs[0].alias);
+  await page.route('**/api/orgs', (r) => r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(orgs) }));
+  await page.route('**/api/orgs/**', (r) => (/\/limits$/.test(r.request().url())
+    ? r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ api: { max: 15000, remaining: 50 }, bulkBatches: { max: 15000, remaining: 14980 } }) })
+    : r.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ error: 'smoke: org giả lập' }) })));
+  await page.route('**/api/run', (r) => {
+    const body = r.request().postDataJSON();
+    if (body?.target) { errors.push(`[${label}] an insert reached the network`); return r.abort(); }
+    const result = {
+      runId: 'rprev', seed: 11, now: Date.parse('2026-10-28T10:30:00Z'), warnings: [], records: [], samples: {},
+      stats: { total: 12005, bySobject: { Account: 5, Contact: 12000 }, byStep: { loopAcc: { runs: 1, records: 12005 }, acc: { runs: 5, records: 5 }, loopCon: { runs: 5, records: 12000 }, con: { runs: 12000, records: 12000 } }, durationMs: 3, previewRows: 200, truncated: true },
+    };
+    return r.fulfill({ status: 200, contentType: 'application/x-ndjson', body: `${JSON.stringify({ type: 'start', runId: 'rprev', seed: 11, now: result.now, warnings: [] })}\n${JSON.stringify({ type: 'done', result })}\n` });
   });
-  await page.goto(base);
-  await page.waitForSelector('.step-card[data-id="con"]');
-  await page.waitForFunction(() => document.getElementById('org-select').value === 'dev-sb');
-
-  // 16a. Insert confirmation: Bulk checkbox on, the step line, calls change when unticked, the limit warning.
-  await page.click('#btn-insert');
-  await page.waitForSelector('dialog[open] .bulk-check input');
-  check(await page.isChecked('dialog[open] .bulk-check input'), '16a: Bulk checkbox not ticked by default');
-  check(/con \(Contact\) 12 000: 200 bản ghi đầu gửi thử bằng sObject Collections, phần còn lại 2 job Bulk\./.test(await page.textContent('dialog[open] .bulk-steps')), '16a: no Bulk step line');
-  const callsOn = await page.textContent('dialog[open] .insert-calls');
-  // 30 calls left: enough with Bulk (26), not without (61) — the warning follows the checkbox.
-  await page.waitForSelector('dialog[open] .insert-limits:not([hidden])', { timeout: 3000 }).catch(() => errors.push('16a: no "Org còn …" line'));
-  check(await page.isHidden('dialog[open] .limits-warn'), '16a: limit warning although Bulk fits the 30 calls left');
-  await page.click('dialog[open] .bulk-check input');
-  const callsOff = await page.textContent('dialog[open] .insert-calls');
-  const num = (t) => Number((/Khoảng ([\d ]+) lời gọi/.exec(t)?.[1] ?? '0').replace(/ /g, ''));
-  check(num(callsOff) > num(callsOn) && num(callsOn) > 0, `16a: calls did not grow when Bulk was unticked (${callsOn} → ${callsOff})`);
-  await page.waitForSelector('dialog[open] .limits-warn:not([hidden])', { timeout: 3000 }).catch(() => errors.push('16a: no API limit warning with 30 calls left and Bulk off'));
-  check(await page.isVisible('dialog[open] .insert-history'), '16a: no history line');
-  await page.click('dialog[open] [data-action="confirm-insert"]');
-  await page.waitForSelector('#results-summary [data-action="ids"]');
-  check(sent.inserts.length === 1 && sent.inserts[0].target.bulk === 'off', `16a: insert request target ${JSON.stringify(sent.inserts[0]?.target)}`);
-  check(await page.isVisible('#results-summary [data-action="history"]'), '16a: no Lịch sử link in the summary');
-  check((await page.textContent('#toast .toast-action').catch(() => '')) === 'Xóa dữ liệu này…', '16a: no "Xóa dữ liệu này…" on the toast');
-
-  // 16b. Delete from the toast: Hủy has focus, the count, the request carries the confirmation.
-  await page.click('#toast .toast-action');
-  await page.waitForSelector('dialog[open] [data-action="confirm-delete"]');
-  check(await page.evaluate(() => document.activeElement?.dataset.action) === 'cancel', '16b: focus is not on Hủy');
-  const delBtn = await page.$('dialog[open] [data-action="confirm-delete"]');
-  if (outDir) await page.screenshot({ path: path.join(outDir, 'smoke-1440-delete.png') });
-  // Review S5: the cascade warning is always there (the mock says no parent steps).
-  check(/có thể làm Salesforce tự xóa cả bản ghi con/.test(await page.textContent('#modal[open] .cascade-line').catch(() => '')), '16b: no cascade warning');
-  check((await delBtn.textContent()) === 'Xóa 12 005 bản ghi' && await delBtn.evaluate((b) => b.matches('.danger.solid') && !b.disabled), '16b: delete button text / style / state');
-  await delBtn.click();
-  await page.waitForFunction(() => /Đã xóa 12 005 bản ghi khỏi dev-sb/.test(document.getElementById('results-summary').textContent));
-  check(sent.deletes[0]?.hid === H1 && sent.deletes[0].body.confirm.username === 'me@example.com' && sent.deletes[0].body.confirm.count === 12005, `16b: delete request ${JSON.stringify(sent.deletes[0])}`);
-
-  // 16d (1440). History dialog: filtered on the selected org, interrupted run explained, forget asks first.
-  await page.click('#btn-history');
-  await page.waitForSelector('dialog.history[open] .history-row');
-  check(await page.isChecked('#history-filter'), '16d: org filter not on by default');
-  if (outDir) await page.screenshot({ path: path.join(outDir, 'smoke-1440-history.png') });
-  const shown = await page.$$eval('dialog.history .history-row', (rows) => rows.map((r) => r.dataset.hid));
-  check(shown.join() === [H1, H3].join(), `16d: filtered rows ${shown}`);
-  check(/Server dừng giữa lúc insert/.test(await page.getAttribute(`.history-row[data-hid="${H3}"] [title^="Server"]`, 'title').catch(() => '') ?? ''), '16d: no title on "Bị gián đoạn"');
-  await page.click(`.history-row[data-hid="${H3}"] .history-more`);
-  await page.click('.popup [role="menuitem"]:has-text("Quên lần insert này")');
-  await page.waitForSelector('#modal[open] [data-action="forget"]');
-  check(/Chỉ xóa ghi chép trên máy này, không xóa gì trong org/.test(await page.textContent('#modal[open]')), '16d: forget confirmation text');
-  await Promise.all([
-    page.waitForResponse((r) => /\/api\/history\/[^/]+\/forget$/.test(new URL(r.url()).pathname), { timeout: 5000 }).catch(() => {}),
-    page.click('#modal[open] [data-action="forget"]'),
-  ]);
-  await page.waitForFunction(() => !document.querySelector('#modal[open]'));
-  check(sent.forgets.join() === H3, `16d: forget request ${sent.forgets}`);
-
-  // 16c. Production: the delete button stays locked until the org name is typed.
-  await page.uncheck('#history-filter');
-  await page.click(`.history-row[data-hid="${H2}"] [data-action="delete"]`);
-  await page.waitForSelector('#modal[open] .typed-org');
-  const locked = () => page.$eval('#modal[open] [data-action="confirm-delete"]', (b) => b.disabled);
-  check(await locked(), '16c: production delete not locked before typing');
-  await page.fill('#modal[open] .typed-org', 'dev-pro');
-  check(await locked(), '16c: unlocked by a wrong name');
-  await page.fill('#modal[open] .typed-org', 'dev-prod');
-  check(!(await locked()), '16c: still locked after typing the alias');
-  await page.click('#modal[open] [data-action="confirm-delete"]');
-  await page.waitForFunction(() => /Đã xóa/.test(document.getElementById('results-summary').textContent) && document.getElementById('btn-stop').hidden);
-  check(sent.deletes[1]?.hid === H2 && sent.deletes[1].body.confirm.typedOrg === 'dev-prod', `16c: production request ${JSON.stringify(sent.deletes[1])}`);
-  // "Lỗi xóa" tab: a group of a step not in the workflow is not a button (review nit).
-  await page.waitForSelector('table.error-groups tbody tr');
-  check(await page.$eval('.tabs .tab-delete-errors.active', (b) => /Lỗi xóa \(1\)/.test(b.textContent)).catch(() => false), '16c: no active "Lỗi xóa (1)" tab');
-  check(!(await page.$('table.error-groups tr.clickable, table.error-groups tr[role="button"]')), '16c: an error row of a removed step is still a button');
-
-  // 16d (390). Full-screen dialog, no sideways overflow.
-  await page.setViewportSize({ width: 390, height: 844 });
-  await page.click('#btn-history');
-  await page.waitForSelector('dialog.history[open] .history-row');
-  const box = await page.evaluate(() => {
-    const d = document.querySelector('dialog.history').getBoundingClientRect();
-    return { w: d.width, h: d.height, sw: document.documentElement.scrollWidth, iw: innerWidth, ih: innerHeight, inner: document.querySelector('dialog.history').scrollWidth - document.querySelector('dialog.history').clientWidth };
-  });
-  check(Math.abs(box.w - box.iw) <= 1 && Math.abs(box.h - box.ih) <= 1 && box.sw === box.iw && box.inner <= 0, `16d 390px: history dialog not full screen or overflowing ${JSON.stringify(box)}`);
-  if (outDir) await page.screenshot({ path: path.join(outDir, 'smoke-390-history.png') });
-  // The context goes on with flowLayoutWide (flowHistoryWide), which closes it.
+  return page;
 }
 
-/**
- * Flow 17: variables and loops (design 0013), own context. A seeded workflow (no org: sample rows);
- * no fixed waits.
- */
-async function flowVarsLoops() {
-  const page = await newPage('0013');
-  const tpl = (name, template) => ({ name, type: 'template', options: { template } });
-  const wf = { version: 2, name: 'smoke 0013', steps: [
-    { id: 'q1', type: 'query', config: { sobject: 'Account', alias: 'accs', fields: ['Id', 'Name'] } },
-    { id: 'q2', type: 'query', config: { sobject: 'Contact', alias: 'cons', fields: ['Id', 'LastName', 'AccountId'] } },
-    { id: 'opp', type: 'record', config: { sobject: 'Opportunity', alias: 'opp', count: 1, fields: [{ name: 'Amount', type: 'currency', options: {} }] } },
-    { id: 'la', type: 'loop', config: { mode: 'each', from: 'accs', itemAlias: 'acc' }, slots: { body: [
-      { id: 'lc', type: 'loop', config: { mode: 'each', from: 'cons', itemAlias: 'con', alias: 'loop2' }, slots: { body: [
-        { id: 'task', type: 'record', config: { sobject: 'Task', alias: 'task', count: 1, fields: [tpl('Subject', '{{con.LastName}}')] } },
-      ] } },
-    ] } },
-    { id: 'lf', type: 'loop', config: { count: 1 }, slots: { body: [{ id: 'ld', type: 'record', config: { sobject: 'Lead', alias: 'ld', count: 1, fields: [tpl('LastName', 'x')] } }] } },
-    { id: 'br', type: 'branch', config: { kind: 'compare', left: 'opp.Amount', op: 'gt', right: '' }, slots: { true: [{ id: 'ev', type: 'record', config: { sobject: 'Event', alias: 'ev', count: 1, fields: [] } }], false: [] } },
-  ] };
-  await seedStorage(page, { workflow: wf });
-  await page.goto(base);
-  await page.waitForSelector('.step-card[data-id="lf"]');
-  const stored = () => page.evaluate(() => smokeStored());
-  const findIn = (steps, id) => {
-    for (const s of steps) {
-      if (s.id === id) return s;
-      for (const list of Object.values(s.slots ?? {})) { const f = findIn(list, id); if (f) return f; }
-    }
-    return null;
-  };
-  const cfg = async (id) => findIn((await stored()).steps, id)?.config ?? {};
-
-  // "Số lần lặp" = {x} → accs.$count: only number variables are listed, the card prints the variable.
-  await page.click('.step-card[data-id="lf"] .type');
-  const count = '#inspector input[data-key="count"]';
-  await page.waitForSelector(count);
-  check((await page.getAttribute(count, 'inputmode')) === 'numeric', '"Số lần lặp" is not a numeric text field');
-  await page.click('#inspector .form-row:has(input[data-key="count"]) .var-btn');
-  await page.waitForSelector('.var-picker .vp-item');
-  const listed = await page.$$eval('.var-picker .vp-item', (rows) => rows.map((r) => `${r.dataset.path}:${r.querySelector('.vp-type').textContent}`));
-  check(listed.length && listed.every((x) => /:(Số|Từ org|Currency)$/.test(x)), `number picker lists non-numbers: ${listed.join(', ')}`);
-  check(/Chỉ hiện biến kiểu Số/.test(await page.textContent('.var-picker')), 'number picker has no "Chỉ hiện biến kiểu Số" line');
-  await page.keyboard.type('accs.$c');
-  await page.keyboard.press('Enter');
-  await page.waitForFunction((s) => document.querySelector(s)?.value === '{{accs.$count}}', count, { timeout: 3000 }).catch(() => {});
-  check((await page.inputValue(count)) === '{{accs.$count}}', `count after the picker: ${await page.inputValue(count)}`);
-  check(await page.$('#inspector .form-row:has(input[data-key="count"]) .var-chip[data-path="accs.$count"]'), 'no chip under "Số lần lặp"');
-  await page.waitForFunction(() => /accs/.test(document.querySelector('.step-card[data-id="lf"] .sum')?.textContent), null, { timeout: 3000 }).catch(() => {});
-  check((await page.textContent('.step-card[data-id="lf"] .sum')) === '{{accs.$count}} lần · {{loop.index}}', `lf summary: ${await page.textContent('.step-card[data-id="lf"] .sum')}`);
-
-  // Lặp each over cons inside Lặp acc: turning the filter on fills AccountId = {{acc.Id}}; one ↶ undoes both.
-  await page.click('.step-card[data-id="lc"] .type');
-  await page.waitForSelector('#inspector select[data-key="filter"]');
-  await page.selectOption('#inspector select[data-key="filter"]', 'compare');
-  await page.waitForFunction(() => document.querySelector('#inspector input[data-key="filterValue"]')?.value === '{{acc.Id}}', null, { timeout: 3000 }).catch(() => {});
-  const fill = await page.evaluate(() => [document.querySelector('#inspector input[data-key="filterField"]').value, document.querySelector('#inspector input[data-key="filterValue"]').value]);
-  check(fill.join() === 'AccountId,{{acc.Id}}', `parent–child filter not filled: ${fill}`);
-  check(/Đã điền điều kiện AccountId = \{\{acc\.Id\}\} \(bản ghi con của "acc"\)/.test(await page.textContent('#toast')), 'no "Đã điền điều kiện" toast');
-  await page.click('#btn-undo');
-  const undone = await cfg('lc');
-  check((undone.filter ?? 'none') === 'none' && !undone.filterField && !undone.filterValue, `one ↶ did not undo the filter and its fill: ${JSON.stringify(undone)}`);
-
-  // Xáo trộn + Tối đa 2: 5 sample accounts × 2.
-  await page.click('.step-card[data-id="lc"] .type');
-  await page.waitForSelector('#inspector select[data-key="order"]');
-  await page.selectOption('#inspector select[data-key="order"]', 'shuffle');
-  await page.fill('#inspector input[data-key="limit"]', '2');
-  await page.waitForFunction(() => /tối đa 2/.test(document.querySelector('.step-card[data-id="lc"] .sum')?.textContent), null, { timeout: 3000 }).catch(() => {});
-  check((await page.textContent('.step-card[data-id="lc"] .sum')) === 'Mỗi bản ghi trong cons → con · xáo trộn · tối đa 2 · {{loop2.index}}', `lc summary: ${await page.textContent('.step-card[data-id="lc"] .sum')}`);
-  await page.keyboard.press('Control+Enter');
-  const chip = await page.waitForSelector('.step-card[data-id="lc"] .stat', { timeout: 5000 }).catch(() => null);
-  check(chip && (await chip.textContent()) === '10 lần lặp', `lc chip: ${chip && await chip.textContent()}`);
-  check(/Lead: 5/.test(await page.textContent('#results-summary')), `{{accs.$count}} loops did not make 5 Leads: ${await page.textContent('#results-summary')}`);
-  const seed = /seed (\d+)/.exec(await page.textContent('#results-summary'))?.[1];
-
-  // In fixed mode every filter option is hidden (chained showIf), even with filter = compare.
-  await page.click('.step-card[data-id="lc"] .type');
-  await page.selectOption('#inspector select[data-key="filter"]', 'compare');
-  await page.waitForFunction(() => document.querySelector('#inspector input[data-key="filterField"]')?.value === 'AccountId', null, { timeout: 3000 }).catch(() => {});
-  await page.selectOption('#inspector select[data-key="mode"]', 'fixed');
-  const hidden = await page.evaluate(() => ['filter', 'filterField', 'filterOp', 'filterValue', 'order', 'limit'].map((k) => document.querySelector(`#inspector [data-key="${k}"]`).closest('.form-row').hidden));
-  check(hidden.every(Boolean), `filter options shown in fixed mode: ${hidden}`);
-  await page.click('#btn-undo');
-
-  // {{run.seed}} in a template has the preview's seed as sample.
-  await page.click('.step-card[data-id="task"] .type');
-  const subj = '#inspector .field-card[data-field="fields.Subject"]';
-  await page.click(`${subj} .actions button[title="Tùy chọn"]`);
-  await page.click(`${subj} .var-btn`);
-  await page.waitForSelector('.var-picker .vp-item[data-path="run.seed"]');
-  const runSample = await page.textContent('.var-picker .vp-item[data-path="run.seed"] .vp-sample');
-  check(seed && runSample === seed, `run.seed sample "${runSample}" is not the preview seed ${seed}`);
-  await page.keyboard.press('Escape');
-
-  // Rẽ nhánh: {x} at "So với" inserts {{opp.Amount}}.
-  await page.click('.step-card[data-id="br"] .type');
-  await page.click('#inspector .form-row:has(input[data-key="right"]) .var-btn');
-  await page.waitForSelector('.var-picker .vp-item');
-  await page.keyboard.type('opp.Am');
-  await page.keyboard.press('Enter');
-  await page.waitForFunction(() => document.querySelector('#inspector input[data-key="right"]')?.value === '{{opp.Amount}}', null, { timeout: 3000 }).catch(() => {});
-  check((await page.inputValue('#inspector input[data-key="right"]')) === '{{opp.Amount}}', `branch right: ${await page.inputValue('#inspector input[data-key="right"]')}`);
-
-  // Lặp "Mỗi giá trị trong danh sách": empty → valuesEmpty on the field; Hot/Warm/Cold → the summary.
-  await page.click('#palette-items .palette-item[data-type="loop"]');
-  await page.waitForSelector('#inspector select[data-key="mode"]');
-  const newId = await page.$eval('.step-card.selected', (c) => c.dataset.id);
-  await page.selectOption('#inspector select[data-key="mode"]', 'values');
-  const values = '#inspector textarea[data-key="values"]';
-  check((await page.getAttribute(values, 'placeholder')) === 'Hot\nWarm\nCold', 'no Hot/Warm/Cold placeholder');
-  await page.waitForSelector(`${values}.invalid`, { timeout: 3000 }).catch(() => {});
-  check(await page.$(`${values}.invalid`), 'empty values list is not outlined');
-  check(/Nhập ít nhất một giá trị, mỗi dòng một giá trị/.test(await page.textContent('#inspector .form-row:has(textarea[data-key="values"]) .opt-error')), 'no valuesEmpty message under the list');
-  await page.fill(values, 'Hot\nWarm\nCold');
-  await page.waitForFunction((id) => /^3 giá trị/.test(document.querySelector(`.step-card[data-id="${id}"] .sum`)?.textContent), newId, { timeout: 3000 }).catch(() => {});
-  check((await page.textContent(`.step-card[data-id="${newId}"] .sum`)) === '3 giá trị: Hot, Warm, Cold · {{loop.value}}', `values summary: ${await page.textContent(`.step-card[data-id="${newId}"] .sum`)}`);
-  await page.context().close();
-}
-
-/**
- * Flow 18 (design 0012): estimate chips (H), source highlight (I), example values (E), several
- * selected steps with wrap / undo / copy / paste / off (B), the library (A) and the Record default
- * fields with the noNameField fix (G). Flow 18b (flowProductivityRun) runs alongside: live insert
- * chips and the insert-error tag (D, a page-side fake stream: nothing reaches an org), "Thêm … vào
- * SELECT" (F1), wrapping in a Lặp each (C) and the phone's "Chọn nhiều bước" toolbar.
- */
-async function flowProductivity() {
-  const page = await newPage('productivity');
-  const sel = () => page.$$eval('#process .step-card[aria-selected="true"]', (n) => n.map((x) => x.dataset.id));
-  const toastHas = (re) => page.waitForFunction((src) => new RegExp(src).test(document.getElementById('toast').textContent), re.source);
-  await page.goto(base);
-  await page.waitForSelector('.step-card[data-id="con"]');
-
-  // H: estimates before any run; the Start card totals them.
-  check(/^≈ \d+ bản ghi$/.test(await page.textContent('.step-card[data-id="con"] .stat.est')), `no "≈ n bản ghi" estimate on con (${await page.textContent('.step-card[data-id="con"] .stat')})`);
-  check(/≈ \d+ bản ghi · ≤ /.test(await page.textContent('.start-card .sum')), `Start card estimate: ${await page.textContent('.start-card .sum')}`);
-
-  // I: hovering the Lookup chip outlines the parent's card.
-  await page.click('.step-card[data-id="con"] .toggle');
-  await page.hover('.step[data-step="con"] .field-chip:has-text("→ acc")');
-  check(await page.isVisible('.step-card[data-id="acc"].is-ref-target'), 'hovering "AccountId → acc" did not outline acc');
-  await page.hover('.start-card');
-  check(!(await page.$('.is-ref-target')), 'the outline stayed after the pointer left the chip');
-
-  // E: three example values of a Picklist, renewed when its options change.
-  await page.click('.step-card[data-id="acc"] .type');
-  const ind = page.locator('#inspector .field-card[data-field="fields.Industry"]');
-  const first = page.waitForResponse((r) => r.url().endsWith('/api/field-samples'));
-  await ind.locator('button[title="Tùy chọn"]').click();
-  await first;
-  await page.waitForFunction(() => /^Ví dụ: ".+" · ".+" · ".+"$/.test(document.querySelector('#inspector .samples-row')?.textContent ?? ''));
-  const changed = page.waitForResponse((r) => r.url().endsWith('/api/field-samples') && (r.request().postData() ?? '').includes('Insurance'));
-  await ind.locator('[data-key="values"]').fill('Insurance');
-  await changed;
-  await page.waitForFunction(() => document.querySelector('#inspector .samples-row')?.textContent === 'Ví dụ: "Insurance" · "Insurance" · "Insurance"');
-
-  // B: Shift+click two cards → "2 bước đã chọn"; Bọc trong Lặp, one ↶ restores; copy / paste; off.
-  await page.click('.step-card[data-id="acc"] .type');
-  await page.click('.step-card[data-id="loopCon"] .type', { modifiers: ['Shift'] });
-  check(String(await sel()) === 'acc,loopCon' && (await page.getAttribute('#process', 'aria-multiselectable')) === 'true', `Shift+click selection: ${await sel()}`);
-  check((await page.textContent('#inspector h2')) === '2 bước đã chọn', 'the inspector does not say "2 bước đã chọn"');
-  await page.click('#inspector button:text-is("Bọc trong Lặp")');
-  await page.waitForFunction(() => smokeStored()?.steps[0].slots.body.length === 1);
-  await page.click('#btn-undo');
-  await page.waitForFunction(() => smokeStored()?.steps[0].slots.body.map((s) => s.id).join() === 'acc,loopCon');
-  await page.click('.step-card[data-id="acc"] .type');
-  await page.click('.step-card[data-id="loopCon"] .type', { modifiers: ['Shift'] });
-  await page.keyboard.press('Control+c');
-  await page.keyboard.press('Control+v');
-  await toastHas(/Đã dán 2 bước\. Đổi tên alias: acc → acc2/);
-  check(String(await page.$$eval('#process .step-card[aria-selected="true"] .alias', (n) => n.map((x) => x.textContent))) === 'acc2,loop', 'the pasted steps are not selected with their new alias');
-  await page.keyboard.press('Control+/');
-  await page.waitForFunction(() => smokeStored()?.steps[0].slots.body.filter((s) => s.disabled).length === 2);
-
-}
-
-/**
- * Flow 18c (design 0012 A, G and review B1 / S2): the library (new item, switch back with an
- * empty undo, a sample as a new item), Record default fields and the noNameField fix, and two tabs
- * on one workflow: the paused tab shows "Tạm dừng lưu", the choice waits while a run goes on, and
- * a new workflow made while paused is saved.
- */
-async function flowLibrary() {
-  const page = await newPage('library');
-  const toastHas = (re) => page.waitForFunction((src) => new RegExp(src).test(document.getElementById('toast').textContent), re.source);
-  const libItems = () => page.evaluate(() => JSON.parse(localStorage.getItem('sfdg.library')).items.map((i) => i.name));
-  await page.goto(base);
-  await page.waitForSelector('.step-card[data-id="con"]');
-  // A: a new workflow of the library; back to the first one (undo starts empty there).
-  const firstName = await page.inputValue('#wf-name');
-  await page.click('#btn-library');
-  await page.click('.popup-item:has-text("+ Workflow mới")');
-  await page.waitForSelector('#process .add-first');
-  check((await libItems()).length === 2, `"+ Workflow mới" did not add an item (${await libItems()})`);
-
-  // G: a Record for Task gets Subject; renamed to Name it warns, "Đổi thành Subject" fixes it.
-  await page.click('#palette-items .palette-item[data-type="record"]');
-  await page.fill('#inspector input[data-key="sobject"]', 'Task');
-  await page.waitForFunction(() => [...document.querySelectorAll('#inspector .field-card input[aria-label="Tên field"]')].map((i) => i.value).join() === 'Subject');
-  const nameInput = page.locator('#inspector .field-card input[aria-label="Tên field"]');
-  // Review 0012 S5: wait for the validation of exactly this workflow, then the fix (default timeout).
-  const validated = page.waitForResponse((r) => r.url().endsWith('/api/validate') && (r.request().postData() ?? '').includes('"name":"Name","type":"text","options":{"mode":"list"'));
-  await nameInput.fill('Name');
-  await nameInput.press('Tab');
-  await validated;
-  const fix = await page.waitForSelector('#inspector .fix-btn[data-fix="renameField"]');
-  check((await fix.textContent()) === 'Đổi thành Subject', 'no "Đổi thành Subject" fix on a Task with Name');
-  await fix.click();
-  await page.waitForFunction(() => !document.querySelector('#inspector .fix-btn[data-fix="renameField"]') && !document.querySelector('.step-card .badge.warn'));
-  await page.keyboard.press('Control+o');
-  await page.click(`.popup-item[role="menuitemradio"]:has-text("${firstName}")`);
-  await page.waitForSelector('.step-card[data-id="con"]');
-  await page.click('#btn-undo');
-  await toastHas(/Không còn gì để hoàn tác/);
-  // A: a sample while the workflow has steps opens as a new item; the others stay.
-  await page.click('#sample-items .palette-item:has-text("Contact cho Account có sẵn")');
-  await page.waitForSelector('.step-card[data-id="accs"]');
-  const names = await libItems();
-  check(names.length === 3 && names.includes(firstName), `Mẫu replaced a workflow of the library (${names})`);
-
-  // B1 / S2: another tab edits the open workflow → this tab pauses with a lasting indicator.
-  const other = await page.context().newPage();
-  trackPage('library tab 2', other);
-  await other.goto(base);
-  await other.waitForSelector('.step-card[data-id="accs"]');
-  await other.fill('#wf-name', 'Sửa ở tab 2');
-  await page.waitForSelector('#btn-unsaved:not([hidden])');
-  check((await page.textContent('#btn-unsaved')) === 'Tạm dừng lưu', `paused indicator: ${await page.textContent('#btn-unsaved')}`);
-  let release;
-  const held = new Promise((r) => { release = r; });
-  await page.route('**/api/run', async (r) => { await held; await r.abort().catch(() => {}); });
-  const runReq = page.waitForRequest('**/api/run');
-  await page.keyboard.press('Control+Enter');
-  await runReq;
-  await page.click('#btn-unsaved');
-  await page.click('#toast .toast-action:text-is("Dùng bản ở tab kia")');
-  await toastHas(/Đang chạy/);
-  check((await page.inputValue('#wf-name')) !== 'Sửa ở tab 2', '"Dùng bản ở tab kia" replaced the workflow during a run');
-  release();
-  await page.waitForFunction(() => !document.getElementById('btn-preview').disabled);
-  await page.unroute('**/api/run');
-  // A new workflow while paused: the pause ends and its edits are saved.
-  await page.click('#btn-library');
-  await page.click('.popup-item:has-text("+ Workflow mới")');
-  await page.waitForSelector('#btn-unsaved[hidden]', { state: 'attached' });
-  await page.fill('#wf-name', 'Sau khi tạm dừng');
-  await page.waitForFunction(() => smokeStored()?.name === 'Sau khi tạm dừng');
-  await page.context().close();
-}
-
-/** Flows 16 and 11/13-wide in one context (review 0012: its HTTP cache serves the second load). */
-async function flowHistoryWide() {
-  await flowHistory();
-  for (const { page } of pages.get('flowHistoryWide') ?? []) {
-    if (page.isClosed()) continue;
-    await page.evaluate(() => { localStorage.clear(); sessionStorage.clear(); });
-    await page.close();
-  }
-  await flowLayoutWide();
-}
-
-/** Flow 18b (design 0012, in parallel with 18): D, F1, C and the phone's "Chọn nhiều bước". */
-async function flowProductivityRun() {
-  const page = await newPage('productivity-run');
-  await mockOrgs(page, [{ alias: 'dev', username: 'u@x.com', isSandbox: true, isScratch: false, connectedStatus: 'Connected' }]);
-  await page.route('**/api/history/status', (r) => r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ enabled: true, full: false }) }));
-  // D: an insert's NDJSON comes from a stream the test writes (no timer, no org).
-  await page.addInitScript(() => {
+/** In the page: inserts answer a held NDJSON stream; Dừng / Dừng ngay (cancel) push the next events. */
+function holdInserts(page) {
+  return page.evaluate(() => {
     const real = window.fetch;
-    window.fetch = (url, opts) => {
-      if (!String(url).endsWith('/api/run') || !String(opts?.body ?? '').includes('"kind":"org"')) return real(url, opts);
-      let ctl;
-      const body = new ReadableStream({ start(c) { ctl = c; } });
-      window.smokeInsert = { push: (ev) => ctl.enqueue(new TextEncoder().encode(`${JSON.stringify(ev)}\n`)), close: () => ctl.close() };
-      return Promise.resolve(new Response(body, { status: 200, headers: { 'Content-Type': 'application/x-ndjson' } }));
+    const enc = new TextEncoder();
+    window.smokeCancels = [];
+    window.fetch = async (url, init) => {
+      const body = init?.body ? JSON.parse(init.body) : null;
+      if (url === '/api/run' && body?.target) {
+        window.smokeInsertBody = body;
+        let ctrl;
+        const stream = new ReadableStream({ start(c) { ctrl = c; } });
+        window.smokeSend = (ev) => ctrl.enqueue(enc.encode(`${JSON.stringify(ev)}\n`));
+        window.smokeClose = () => ctrl.close();
+        const by = (a, c) => ({ Account: { inserted: a, failed: 0, total: 5 }, Contact: { inserted: c, failed: 0, total: 12000 } });
+        window.smokeSend({ type: 'start', runId: 'rins', seed: body.seed, now: body.now, warnings: [] });
+        window.smokeSend({ type: 'plan', total: 12005, bySobject: { Account: 5, Contact: 12000 }, apiCalls: 26, historyId: 'h20261028T103200Z-a1b2c3', steps: [] });
+        window.smokeSend({ type: 'progress', phase: 'insert', inserted: 2205, failed: 0, total: 12005, bySobject: by(5, 2200), byStep: {}, bulk: { nodeId: 'con', sobject: 'Contact', jobId: '7504x00000AbCdE', job: 1, jobs: 2, processed: 2000, failed: 0, records: 10000, state: 'InProgress' } });
+        return new Response(stream, { status: 200, headers: { 'Content-Type': 'application/x-ndjson' } });
+      }
+      if (/^\/api\/runs\/[^/]+\/cancel$/.test(url)) {
+        window.smokeCancels.push(body);
+        queueMicrotask(() => {
+          if (!body?.force) {
+            window.smokeSend({ type: 'progress', phase: 'stopping', waitingBulk: { jobId: '7504x00000AbCdE', sobject: 'Contact', nodeId: 'con', processed: 6200, records: 10000 } });
+            return;
+          }
+          const result = {
+            runId: 'rins', seed: 11, now: Date.parse('2026-10-28T10:30:00Z'), warnings: [], records: [], samples: {},
+            stats: { total: 12005, bySobject: { Account: 5, Contact: 12000 }, byStep: {}, durationMs: 3, previewRows: 200, truncated: true },
+            insert: {
+              inserted: 6405, failed: 0, errorsTotal: 0, errors: [], errorGroups: [], errorGroupsOther: null, total: 12005, notSent: 5600, cancelled: true, stopped: null, ids: {},
+              bySobject: { Account: { inserted: 5, failed: 0 }, Contact: { inserted: 6400, failed: 0 } }, byStep: {}, historyId: 'h20261028T103200Z-a1b2c3',
+              bulkAborted: { jobId: '7504x00000AbCdE', sobject: 'Contact', nodeId: 'con', processed: 6200, records: 10000, idsKnown: true },
+            },
+          };
+          window.smokeSend({ type: 'done', result });
+          window.smokeClose();
+        });
+        return new Response('{"ok":true}', { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      return real(url, init);
     };
   });
-  const sel = () => page.$$eval('#process .step-card[aria-selected="true"]', (n) => n.map((x) => x.dataset.id));
+}
+
+/** GET /api/history/:hid of the insert of flow 20a (`total` Ids left; Contact 12 000 + Account 5). */
+const histEntry = (total) => ({
+  id: HIST_HID, status: 'cancelled', startedAt: '2026-10-28T10:32:00.000Z', finishedAt: '2026-10-28T10:33:00.000Z', workflowName: 'Account + Contact',
+  org: { alias: 'dev-sb', username: 'me@example.com', orgId: '00D000000000001', kind: 'sandbox' }, seed: 11, now: 1761647400000, total: 12005, inserted: total, failed: 0,
+  steps: [{ nodeId: 'acc', alias: 'acc', sobject: 'Account', mode: 'collections', total: 5, inserted: 5, failed: 0 }, { nodeId: 'con', alias: 'con', sobject: 'Contact', mode: 'bulk', total: 12000, inserted: total - 5, failed: 0 }],
+  bulkJobs: [], errorGroups: [], deletion: { status: 'none', deleted: 0, gone: 0, lastAt: null, errorGroups: [] }, pendingBulkJobs: [],
+  remaining: { total, bySobject: { Account: 5, Contact: total - 5 }, steps: [{ nodeId: 'acc', sobject: 'Account', remaining: 5 }, { nodeId: 'con', sobject: 'Contact', remaining: total - 5 }] },
+});
+
+/** 20a: the insert confirmation (Bulk, API calls, limits, history), Bulk progress, Dừng ngay, ⤓ Id. */
+async function flowHistory() {
+  const page = await historyPage('history');
   await page.goto(base);
+  await page.click('#sample-items .palette-item:has-text("Account + Contact")');
   await page.waitForSelector('.step-card[data-id="con"]');
-
-  // D: during an insert the Record card shows "insert n/total" and an error tag that opens its group.
-  await page.selectOption('#org-select', 'dev');
+  await page.waitForFunction(() => !document.getElementById('btn-insert').disabled);
   await page.click('#btn-insert');
-  await page.click('[data-action="confirm-insert"]');
-  await page.waitForFunction(() => window.smokeInsert);
-  const preview = await page.evaluate(async () => (await import('/js/store.js')).state.result);
-  const total = preview.stats.byStep.con.records;
-  const byStep = { acc: { inserted: 5, failed: 0 }, con: { inserted: 3, failed: 2 } };
-  await page.evaluate(({ t, byStep }) => {
-    smokeInsert.push({ type: 'start', runId: 'r-smoke' });
-    smokeInsert.push({ type: 'plan', total: t, bySobject: {}, steps: [] });
-    smokeInsert.push({ type: 'progress', phase: 'insert', inserted: 8, failed: 2, total: t, bySobject: {}, byStep });
-  }, { t: total + 5, byStep });
-  // Inserted only (review 0012 N4: 3 inserted, 2 failed ⇒ "insert 3/n" and "lỗi 2").
-  await page.waitForFunction((t) => document.querySelector('.step-card[data-id="con"] .stat.live')?.textContent === `insert 3/${t}`, total);
-  check((await page.textContent('.step-card[data-id="con"] .tag-insert-err')) === 'lỗi 2', 'no "lỗi 2" tag on con while inserting');
-  await page.evaluate(({ preview, byStep }) => {
-    const groups = [{ sobject: 'Contact', nodeId: 'con', message: 'REQUIRED_FIELD_MISSING', count: 2, refs: ['con#1', 'con#2'] }];
-    smokeInsert.push({ type: 'done', result: { ...preview, insert: { inserted: 8, failed: 2, errorsTotal: 2, errors: [], errorGroups: groups, ids: {}, bySobject: {}, byStep, notSent: 0, cancelled: false, stopped: null } } });
-    smokeInsert.close();
-  }, { preview, byStep });
-  await page.waitForSelector('.step-card[data-id="con"] .stat:not(.live)');
-  await page.click('.step-card[data-id="con"] .tag-insert-err');
-  await page.waitForSelector('.tabs .tab-issues.active');
-  check(await page.isVisible('table.error-groups tr.current[data-node="con"]'), 'the error tag did not highlight the step\'s error group');
-  await page.selectOption('#org-select', '');
-  await page.click('#sample-items .palette-item:has-text("Contact cho Account có sẵn")');
-  await page.waitForSelector('.step-card[data-id="accs"]');
-
-  // F1: {{acc.Industry}} from a Query that does not read Industry → one-click fix.
-  await page.click('.step-card[data-id="con"] .type');
-  const title = page.locator('#inspector .field-card[data-field="fields.Title"]');
-  await title.locator('button[title="Tùy chọn"]').click();
-  const validated = page.waitForResponse((r) => r.url().endsWith('/api/validate') && (r.request().postData() ?? '').includes('{{acc.Industry}}'));
-  await title.locator('[data-key="template"]').fill('{{acc.Industry}}');
-  await validated;
-  const add = await page.waitForSelector('#inspector .fix-btn[data-fix="addSelectField"]');
-  check((await add.textContent()) === 'Thêm Industry vào SELECT của "accs"', 'no "Thêm Industry vào SELECT" fix');
-  await add.click();
-  await page.waitForFunction(() => smokeStored()?.steps[0].config.fields.includes('Industry') && !document.querySelector('.step-card[data-id="con"] .badge:not(.warn)'));
-
-  // C: ⋯ → Bọc trong Lặp qua từng bản ghi: a Lặp each over accs around con; [Đổi] relinks the Lookup.
-  await page.click('.step-card[data-id="con"] .menu-btn');
-  await page.click('.popup [role="menuitem"]:has-text("Bọc trong Lặp qua từng bản ghi")');
-  await page.click('#toast .toast-action:text-is("Đổi")');
-  const each = await page.evaluate(() => {
-    const loop = smokeStored().steps[1].slots.body[1];
-    return { mode: loop.config.mode, from: loop.config.from, body: loop.slots.body.map((s) => s.id).join(), ref: loop.slots.body[0].config.fields.find((f) => f.name === 'AccountId').options.ref, item: loop.config.itemAlias };
+  await page.waitForSelector('dialog[open] .bulk-check');
+  // N8: the dialog opens at once; the history line comes with GET /api/history (Insert waits for it).
+  await page.waitForSelector('dialog[open] .history-line', { timeout: 3000 }).catch(() => {});
+  const dlg = () => page.textContent('dialog[open]');
+  check(await page.isChecked('dialog[open] .bulk-check input'), '20a: the Bulk checkbox is not checked by default');
+  check((await page.evaluate(() => document.activeElement?.textContent)) === 'Hủy', '20a: the insert confirmation does not focus Hủy');
+  let text = await dlg();
+  check(/con \(Contact\) 12 000: 200 bản ghi đầu gửi thử bằng sObject Collections, phần còn lại 2 job Bulk\./.test(text), `20a: no Bulk step line (${text})`);
+  check(/Khoảng 26 lời gọi API \(sObject Collections 2, Bulk khoảng 24\)/.test(text), `20a: API calls with Bulk (${text})`);
+  check(/Dùng Bulk API 2\.0 cho bước từ 10 000 bản ghi/.test(text) && /Lịch sử trên máy này/.test(text), `20a: Bulk label / history line (${text})`);
+  await page.waitForFunction(() => /Org còn 50\/15 000 lời gọi API/.test(document.querySelector('dialog[open] .insert-limits')?.textContent ?? ''), null, { timeout: 3000 }).catch(() => errors.push('20a: no org API limit line'));
+  check(!(await page.$('dialog[open] .limits-warn')), '20a: limits warning while the estimate fits');
+  await page.uncheck('dialog[open] .bulk-check input');
+  text = await dlg();
+  check(/Khoảng 61 lời gọi API \(200 bản ghi mỗi lời gọi\)/.test(text), `20a: API calls without Bulk (${text})`);
+  check(await page.isVisible('dialog[open] .limits-warn') && await page.$('dialog[open] .bulk-steps.off'), '20a: no limits warn-box (or Bulk lines not muted) once Bulk is off');
+  if (outDir) await page.screenshot({ path: path.join(outDir, 'smoke-1440-insert-bulk.png') });
+  await holdInserts(page);
+  await page.evaluate(() => {
+    window.smokeSummary = [];
+    new MutationObserver(() => window.smokeSummary.push(document.getElementById('results-summary').textContent)).observe(document.getElementById('results-summary'), { subtree: true, childList: true, characterData: true });
   });
-  check(each.mode === 'each' && each.from === 'accs' && each.body === 'con' && each.ref === each.item, `Bọc trong Lặp qua từng bản ghi: ${JSON.stringify(each)}`);
+  await page.click('dialog[open] .actions button.danger.solid');
+  await page.waitForFunction(() => window.smokeSummary.some((t) => /Bulk: Contact job 1\/2/.test(t)), null, { timeout: 3000 }).catch(() => errors.push('20a: no "Bulk: Contact job 1/2" in the progress summary'));
+  check((await page.evaluate(() => window.smokeInsertBody?.target?.bulk)) === 'off', '20a: the insert did not send target.bulk "off"');
+  await page.click('#btn-stop');
+  await page.waitForFunction(() => document.getElementById('btn-stop').textContent === 'Dừng ngay' && !document.getElementById('btn-stop').disabled, null, { timeout: 3000 }).catch(() => {});
+  const waiting = await page.evaluate(() => ({ summary: document.getElementById('results-summary').textContent, title: document.getElementById('btn-stop').title, label: document.getElementById('btn-stop').textContent }));
+  check(waiting.label === 'Dừng ngay' && /Đang chờ job Bulk Contact đang chạy xong \(6 200\/10 000\) rồi dừng…/.test(waiting.summary) && /Hủy job Bulk đang chạy/.test(waiting.title), `20a: waiting for the Bulk job (${JSON.stringify(waiting)})`);
+  await page.click('#btn-stop');
+  await page.waitForFunction(() => document.getElementById('btn-stop').hidden && !document.getElementById('btn-preview').disabled, null, { timeout: 3000 }).catch(() => errors.push('20a: the run did not end after Dừng ngay'));
+  check(JSON.stringify(await page.evaluate(() => window.smokeCancels)) === '[{},{"force":true}]', `20a: cancel requests ${JSON.stringify(await page.evaluate(() => window.smokeCancels))}`);
+  check(await toastIs(page, /Đã hủy job Bulk Contact\. Salesforce đã xử lý 6 200\/10 000 bản ghi của job; Id của chúng đã ghi vào Lịch sử\./), '20a: no Dừng ngay sentence in the toast');
+  check(await page.isVisible('#results-summary .ids-link'), '20a: no ⤓ Id link in the summary');
+  check(!/null|undefined/.test(await page.textContent('#results-summary')), `20a: the summary prints null (${await page.textContent('#results-summary')})`);
+  await page.route('**/api/history/*/ids.csv', (r) => r.fulfill({ status: 200, headers: { 'Content-Type': 'text/csv', 'Content-Disposition': 'attachment; filename="Account_Contact-20261028-1032-ids.csv"' }, body: 'sobject,id,ref,step,status\r\n' }));
+  const [dl] = await Promise.all([page.waitForEvent('download', { timeout: 3000 }).catch(() => null), page.click('#results-summary .ids-link')]);
+  check(dl?.suggestedFilename() === 'Account_Contact-20261028-1032-ids.csv', `20a: ⤓ Id download ${dl?.suggestedFilename()}`);
+  // 20b: "Xóa dữ liệu này…" on the toast ⇒ the delete confirmation (focus on Hủy, a solid red button naming the
+  // count); a 409 with a new count (pending Bulk jobs read) is shown and needs a second click (never retried).
+  check(await page.isVisible('#toast .toast-action:has-text("Xóa dữ liệu này…")'), '20a: no "Xóa dữ liệu này…" on the toast');
+  check(await page.isVisible('#results-summary .hist-link'), '20a: no Lịch sử link in the summary');
+  const deletes = [];
+  await page.route('**/api/history**', (r) => {
+    const url = new URL(r.request().url());
+    if (url.pathname.endsWith('/delete')) {
+      const body = r.request().postDataJSON();
+      deletes.push(body);
+      // Final review S3: the server wants the typed name although the dialog showed no field.
+      if (deletes.length === 1) return r.fulfill({ status: 400, contentType: 'application/json', body: JSON.stringify({ error: 'sf CLI không trả lời nên coi như production: gõ đúng tên org "dev-sb" trong hộp xác nhận để xóa.', needTypedOrg: true, kind: 'unknown' }) });
+      if (deletes.length === 2) return r.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ error: 'Số bản ghi cần xóa đã đổi thành 12105 vì vừa lấy được Id từ job Bulk. Xác nhận lại.', count: 12105, collected: 100 }) });
+      const result = { deleted: 12100, gone: 3, failed: 2, total: 12105, remaining: 2, cancelled: false, stopped: null, bulkAborted: null, collected: 0, skipped: [], pendingBulkJobs: [], bySobject: {}, errorGroups: [{ sobject: 'Contact', nodeId: 'con', message: 'DELETE_FAILED: x', count: 2, ids: ['003A', '003B'] }], errorGroupsOther: null };
+      return r.fulfill({ status: 200, contentType: 'application/x-ndjson', body: [{ type: 'start', runId: 'rdel', historyId: HIST_HID, total: 12105, bySobject: { Account: 5, Contact: 12100 } }, { type: 'done', result }].map((e) => `${JSON.stringify(e)}\n`).join('') });
+    }
+    if (url.pathname.endsWith(HIST_HID)) return r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(histEntry(deletes.length >= 2 ? 12105 : 12005)) });
+    return r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ enabled: true, dir: '/smoke/history', maxRuns: 100, runs: [], prune: [] }) });
+  });
+  await page.click('#toast .toast-action:has-text("Xóa dữ liệu này…")');
+  await page.waitForSelector('dialog[open] .delete-ok');
+  const conf = await page.evaluate(() => ({ focus: document.activeElement?.textContent, ok: document.querySelector('dialog[open] .delete-ok').textContent, solid: document.querySelector('dialog[open] .delete-ok').matches('.danger.solid'), text: document.querySelector('dialog[open]').textContent }));
+  check(conf.focus === 'Hủy' && conf.ok === 'Xóa 12 005 bản ghi' && conf.solid && /· sandbox/.test(conf.text) && /Contact 12 000, Account 5\. Xóa bản ghi con trước/.test(conf.text) && /Thùng rác/.test(conf.text), `20b: delete confirmation ${JSON.stringify(conf)}`);
+  await page.click('dialog[open] .delete-ok');
+  await page.waitForSelector('dialog[open] input.type-org', { timeout: 3000 }).catch(() => {});
+  check(deletes.length === 1 && /sf CLI không trả lời nên coi như production/.test(await page.textContent('dialog[open] .type-org-box').catch(() => '')) && await page.isDisabled('dialog[open] .delete-ok'), '20b: a 400 needTypedOrg did not show the name field (S3)');
+  await page.fill('dialog[open] input.type-org', 'dev-sb');
+  await page.click('dialog[open] .delete-ok');
+  await page.waitForFunction(() => document.querySelector('dialog[open] .delete-refused') && document.querySelector('dialog[open] .delete-ok')?.textContent === 'Xóa 12 105 bản ghi', null, { timeout: 3000 }).catch(() => {});
+  check(deletes.length === 2 && await page.isVisible('dialog[open] .delete-refused:has-text("đã đổi thành 12105")') && (await page.textContent('dialog[open] .delete-ok')) === 'Xóa 12 105 bản ghi', `20b: the 409 with a new count (${deletes.length} requests, ${await page.textContent('dialog[open] .delete-ok').catch(() => null)})`);
+  await page.click('dialog[open] .delete-ok');
+  await page.waitForFunction(() => !document.querySelector('dialog[open]') && document.getElementById('btn-stop').hidden && document.querySelector('.tabs .tab-delete-errors'), null, { timeout: 3000 }).catch(() => {});
+  check(JSON.stringify(deletes.map((d) => [d.confirm.username, d.confirm.count, d.confirm.typedOrg ?? null, d.bulk])) === JSON.stringify([['me@example.com', 12005, null, 'auto'], ['me@example.com', 12005, 'dev-sb', 'auto'], ['me@example.com', 12105, 'dev-sb', 'auto']]), `20b: delete requests ${JSON.stringify(deletes)}`);
+  check(!/null|undefined/.test(await page.textContent('#results-summary')), `20b: the summary prints null (${await page.textContent('#results-summary')})`);
+  check(/Lỗi xóa \(2\)/.test(await page.textContent('.tabs .tab-delete-errors').catch(() => '')) && /DELETE_FAILED/.test(await page.textContent('table.error-groups').catch(() => '')), '20b: no "Lỗi xóa (2)" tab with the group');
+  check(await toastIs(page, /Đã xóa 12 100 bản ghi; 2 bản ghi không xóa được/), '20b: no delete result toast');
+  // No history ⇒ no insert (review S7): Insert is locked with the reason and how to fix it, also said in a toast.
+  await page.route('**/api/history', (r) => r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ enabled: false, reason: 'EACCES: permission denied', dir: '/smoke/history', maxRuns: 100, runs: [], prune: [] }) }));
+  await page.click('#btn-orgs');
+  await page.waitForFunction(() => document.getElementById('btn-insert').disabled, null, { timeout: 3000 }).catch(() => {});
+  const off = await page.evaluate(() => ({ disabled: document.getElementById('btn-insert').disabled, title: document.getElementById('btn-insert').title }));
+  check(off.disabled && /Không ghi được Lịch sử vào \/smoke\/history: EACCES.*SFDG_DATA_DIR/.test(off.title), `20a: Insert with history off ${JSON.stringify(off)}`);
+  check(await toastIs(page, /nên không insert được/), '20a: no toast saying history is off');
+  await page.context().close();
+}
 
-  // B on a phone: ⋯ → Chọn nhiều bước, a tap adds a card, Xong leaves.
-  await page.setViewportSize({ width: 390, height: 800 });
+const PROD_ORGS = [{ alias: 'dev-prod', username: 'admin@prod.com', isSandbox: false, isScratch: false, connectedStatus: 'Connected' }];
+const PROD_HIDS = ['h20261028T103200Z-0000a1', 'h20261027T080200Z-0000b2', 'h20261026T080200Z-0000c3'];
+const prodRun = (id, extra) => ({
+  id, status: 'done', startedAt: '2026-10-28T10:32:00.000Z', finishedAt: '2026-10-28T10:33:00.000Z', workflowName: 'Lead', seed: 3, total: 30, inserted: 30, failed: 0, notSent: 0,
+  org: { alias: 'dev-prod', username: 'admin@prod.com', orgId: '00D000000000009', kind: 'production' }, bySobject: { Lead: 30 },
+  deletion: { status: 'none', deleted: 0, gone: 0, remaining: 30 }, ...extra,
+});
+
+/**
+ * 20c, 20d (design 0011 smoke 16c, 16d): a production org must be typed before the delete button enables and
+ * the request carries typedOrg; the history dialog filters by the selected org, an interrupted run has a title,
+ * ⋯ → Quên asks first; at 390 px the dialog is full screen without horizontal scroll.
+ */
+async function flowHistoryProd() {
+  const page = await historyPage('history-prod', { orgs: PROD_ORGS });
+  const calls = { deletes: [], forgets: [] };
+  await page.route('**/api/history**', (r) => {
+    const url = new URL(r.request().url());
+    if (url.pathname.endsWith('/delete')) {
+      calls.deletes.push(r.request().postDataJSON());
+      // The first request hangs (the org check): Esc in the confirmation must drop it (final review S1).
+      if (calls.deletes.length === 1) { calls.held = r; return undefined; }
+      const result = { deleted: 30, gone: 0, failed: 0, total: 30, remaining: 0, cancelled: false, stopped: null, collected: 0, skipped: [], pendingBulkJobs: [], bySobject: {}, errorGroups: [], errorGroupsOther: null };
+      return r.fulfill({ status: 200, contentType: 'application/x-ndjson', body: `${JSON.stringify({ type: 'start', runId: 'rdel2', historyId: PROD_HIDS[0], total: 30, bySobject: { Lead: 30 } })}\n${JSON.stringify({ type: 'done', result })}\n` });
+    }
+    if (url.pathname.endsWith('/forget')) {
+      calls.forgets.push(url.pathname);
+      return r.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true}' });
+    }
+    const hid = url.pathname.split('/')[3];
+    if (hid) {
+      return r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ...prodRun(hid), steps: [{ nodeId: 'lead', alias: 'lead', sobject: 'Lead', mode: 'collections', total: 30, inserted: 30, failed: 0 }], bulkJobs: [], errorGroups: [], pendingBulkJobs: [], lostBulkJobs: [{ jobId: '750LOST', sobject: 'Lead', message: 'Id của job 750LOST (Lead) không còn đọc được (smoke).' }], rejected: 2, rejectedMessage: '2 dòng trong file Id không thuộc bước nào (smoke).', deletion: { status: 'none', deleted: 0, gone: 0, lastAt: null, errorGroups: [] }, remaining: { total: 30, bySobject: { Lead: 30 }, steps: [{ nodeId: 'lead', sobject: 'Lead', remaining: 30 }] } }) });
+    }
+    const runs = [
+      prodRun(PROD_HIDS[0]),
+      prodRun(PROD_HIDS[1], { status: 'interrupted', inserted: 1200, total: 2000, deletion: { status: 'none', deleted: 0, gone: 0, remaining: 1200 } }),
+      prodRun(PROD_HIDS[2], { org: { alias: 'uat', username: 'u@uat.com', kind: 'sandbox' } }),
+      { id: 'h20261020T080200Z-0000d4', status: 'corrupt', orphan: true, hasIds: true, error: 'Thiếu file /smoke/history/h20261020T080200Z-0000d4.json: … Bấm "⤓ Id" để tải danh sách Id, … rồi bấm "Quên" để xóa file.' },
+    ].filter((x) => !calls.forgets.some((f) => f.includes(x.id)));
+    return r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ enabled: true, dir: '/smoke/history', maxRuns: 100, runs, prune: [] }) });
+  });
+  await page.goto(base);
+  await page.waitForSelector('.step-card');
+  // 20d at 1440 px: filter on by default (the uat run hidden), the interrupted run explains itself.
+  await page.click('#btn-history');
+  await page.waitForSelector('#history-dialog .hist-run');
+  const list = await page.evaluate(() => ({
+    filter: document.querySelector('#history-dialog .hist-filter input')?.checked, focus: document.activeElement?.matches('.hist-filter input'),
+    rows: [...document.querySelectorAll('#history-dialog .hist-run')].map((r) => r.dataset.hid),
+    title: document.querySelector('#history-dialog .hist-status [title]')?.title ?? '',
+  }));
+  check(list.filter && list.focus && list.rows.length === 3 && /Server dừng giữa lúc insert\. Đã ghi được 1 200 Id/.test(list.title), `20d: history dialog ${JSON.stringify(list)}`);
+  await page.uncheck('#history-dialog .hist-filter input');
+  check((await page.$$('#history-dialog .hist-run')).length === 4, '20d: unchecking the org filter does not show every run');
+  await page.check('#history-dialog .hist-filter input');
+  await page.click(`#history-dialog .hist-run[data-hid="${PROD_HIDS[0]}"] .hist-main`);
+  await page.waitForFunction((hid) => /lead · Lead 30/.test(document.querySelector(`#history-dialog .hist-run[data-hid="${hid}"] .hist-detail`)?.textContent ?? ''), PROD_HIDS[0], { timeout: 3000 }).catch(() => errors.push('20d: the run details did not open'));
+  const detail = await page.textContent(`#history-dialog .hist-run[data-hid="${PROD_HIDS[0]}"] .hist-detail`);
+  check(/750LOST \(Lead\) không còn đọc được/.test(detail) && /2 dòng trong file Id không thuộc bước nào/.test(detail) && !/undefined|null/.test(detail), `20d: details lack lostBulkJobs / rejected (${detail})`);
+  if (outDir) await page.screenshot({ path: path.join(outDir, 'smoke-1440-history.png') });
+  // ⋯ → Quên lần insert này asks first (a modal on top), then forgets.
+  await page.click(`#history-dialog .hist-run[data-hid="${PROD_HIDS[1]}"] .hist-more`);
+  await page.click('.popup .popup-item:has-text("Quên lần insert này")');
+  await page.waitForSelector('#modal[open] .forget-ok');
+  check(/Chỉ xóa ghi chép trên máy này, không xóa gì trong org/.test(await page.textContent('#modal[open]')) && /còn 1 200 bản ghi trong dev-prod/.test(await page.textContent('#modal[open]')) && !(await page.$('#modal[open] .forget-ok.danger')), '20d: the Quên confirmation');
+  await page.click('#modal[open] .forget-ok');
+  await page.waitForFunction((hid) => !document.querySelector(`#history-dialog .hist-run[data-hid="${hid}"]`), PROD_HIDS[1], { timeout: 3000 }).catch(() => {});
+  check(calls.forgets.length === 1 && (await page.$$('#history-dialog .hist-run')).length === 2, `20d: forget (${calls.forgets.length} requests)`);
+  // Final review S4: a corrupt entry (Id file without its .json) offers ⤓ Id and Quên.
+  const bad = '#history-dialog .hist-run.corrupt';
+  check(await page.isVisible(`${bad} button:has-text("Id")`) && /Quên/.test(await page.textContent(bad)), '20d: the corrupt entry has no ⤓ Id / sentence');
+  await page.click(`${bad} .hist-more`);
+  await page.click('.popup .popup-item:has-text("Quên lần insert này")');
+  await page.waitForSelector('#modal[open] .forget-ok');
+  check(/mục hỏng/.test(await page.textContent('#modal[open]')), '20d: the corrupt entry\'s Quên confirmation');
+  await page.click('#modal[open] .forget-ok');
+  await page.waitForFunction(() => !document.querySelector('#history-dialog .hist-run.corrupt'), null, { timeout: 3000 }).catch(() => {});
+  check(calls.forgets.length === 2 && (await page.$$('#history-dialog .hist-run')).length === 1, `20d: forget of the corrupt entry (${calls.forgets.length} requests)`);
+  // 20c: production ⇒ type the org name.
+  await page.click(`#history-dialog .hist-run[data-hid="${PROD_HIDS[0]}"] .hist-delete`);
+  await page.waitForSelector('#modal[open] .delete-ok');
+  check(await page.evaluate(() => document.activeElement?.textContent === 'Hủy' && document.querySelector('#modal[open] .delete-ok').disabled), '20c: the production delete is not locked (or Hủy not focused)');
+  check(/production/.test(await page.textContent('#modal[open] .type-org-box')), '20c: no production warn-box with the name field');
+  await page.fill('#modal[open] input.type-org', 'dev-pro');
+  check(await page.isDisabled('#modal[open] .delete-ok'), '20c: a wrong name unlocks the delete');
+  await page.fill('#modal[open] input.type-org', ' DEV-PROD ');
+  check(await page.isEnabled('#modal[open] .delete-ok'), '20c: the right name (any case, spaces) does not unlock the delete');
+  check(await page.evaluate(() => document.getElementById('modal').getAttribute('aria-labelledby') === 'delete-title' && document.querySelector('#modal input.type-org').getAttribute('aria-describedby') === 'type-org-help'), '20c: dialog / name field not labelled (N6)');
+  // Final review S1: Esc while "Đang gửi…" (the org check) drops the request: nothing is deleted.
+  const failed = page.waitForEvent('requestfailed', { predicate: (rq) => rq.url().endsWith('/delete'), timeout: 3000 }).catch(() => null);
+  await page.click('#modal[open] .delete-ok');
+  await page.waitForFunction(() => document.querySelector('#modal[open] .delete-ok')?.textContent === 'Đang gửi…', null, { timeout: 3000 }).catch(() => {});
   await page.keyboard.press('Escape');
-  await page.click('.step-card[data-id="accs"] .menu-btn');
-  await page.click('.popup-item:has-text("Chọn nhiều bước")');
-  await page.waitForSelector('.select-bar[role="toolbar"]');
-  await page.click('.step-card[data-id="loopCon"] .type');
-  check((await page.textContent('.select-bar .sb-count')) === '2 đã chọn', `select bar: ${await page.textContent('.select-bar .sb-count')}`);
-  check(!(await page.evaluate(() => document.getElementById('inspector').classList.contains('open'))), 'the sheet opened in "Chọn nhiều bước" mode');
-  await page.click('.select-bar .sb-done');
-  check(!(await page.$('.select-bar')) && String(await sel()) === 'loopCon', `Xong did not leave the mode (${await sel()})`);
+  check(Boolean(await failed) && !(await page.$('#modal[open]')), '20c: Esc during "Đang gửi…" did not drop the delete request');
+  check(await toastIs(page, /Đã hủy\. Chưa xóa bản ghi nào\./), '20c: no "Đã hủy" toast');
+  await calls.held?.abort().catch(() => {});
+  await page.click(`#history-dialog .hist-run[data-hid="${PROD_HIDS[0]}"] .hist-delete`);
+  await page.waitForSelector('#modal[open] .delete-ok');
+  await page.fill('#modal[open] input.type-org', ' DEV-PROD ');
+  await page.click('#modal[open] .delete-ok');
+  await page.waitForFunction(() => !document.querySelector('dialog[open]') && document.getElementById('btn-stop').hidden, null, { timeout: 3000 }).catch(() => {});
+  check(JSON.stringify(calls.deletes.map((d) => d.confirm)) === JSON.stringify([{ username: 'admin@prod.com', count: 30, typedOrg: 'DEV-PROD' }, { username: 'admin@prod.com', count: 30, typedOrg: 'DEV-PROD' }]), `20c: delete requests ${JSON.stringify(calls.deletes)}`);
+  check(await toastIs(page, /Đã xóa 30 bản ghi khỏi dev-prod \(vào Thùng rác\)\./), '20c: no delete toast');
+  // 20d at 390 px: full screen, no horizontal scroll; the button is the history icon.
+  await page.setViewportSize({ width: 390, height: 844 });
+  check(await page.evaluate(() => { const b = document.getElementById('btn-history'); return b.offsetWidth === 32 && b.getAttribute('aria-label') === 'Lịch sử insert'; }), '20d: the results header history button is not a 32 px icon button at 390 px');
+  await page.click('#btn-history');
+  await page.waitForSelector('#history-dialog .hist-run');
+  const narrow = await page.evaluate(() => {
+    const d = document.getElementById('history-dialog').getBoundingClientRect();
+    const el = document.getElementById('history-dialog');
+    return { w: Math.round(d.width), h: Math.round(d.height), iw: innerWidth, ih: innerHeight, page: document.documentElement.scrollWidth, dlg: el.scrollWidth - el.clientWidth };
+  });
+  check(narrow.w === narrow.iw && narrow.h === narrow.ih && narrow.page === narrow.iw && narrow.dlg <= 0, `20d: history dialog at 390 px ${JSON.stringify(narrow)}`);
+  if (outDir) {
+    await page.screenshot({ path: path.join(outDir, 'smoke-390-history.png') });
+    await page.emulateMedia({ colorScheme: 'dark' });
+    await page.screenshot({ path: path.join(outDir, 'smoke-390-history-dark.png') });
+  }
+  await page.keyboard.press('Escape');
+  await page.context().close();
+}
+
+/**
+ * Flow 21 (design 0015, flowSetVar): the Đặt biến step from the "+" menu to the results table,
+ * the variable picker group, the whole-variable rename and the setVarType quick fix.
+ */
+const SET_VAR = {
+  version: 2, name: 'Đặt biến',
+  steps: [
+    { id: 'acc', type: 'record', config: { sobject: 'Account', alias: 'acc', count: 2, fields: [{ name: 'Name', type: 'template', options: { template: 'A' } }] } },
+    { id: 'lp', type: 'loop', config: { count: 2, alias: 'loop' }, slots: { body: [{ id: 'con', type: 'record', config: { sobject: 'Contact', alias: 'con', fields: [{ name: 'LastName', type: 'text', options: { mode: 'lastName' } }] } }] } },
+  ],
+};
+
+async function flowSetVar() {
+  const page = await newPage('set-var');
+  await seedStorage(page, { workflow: SET_VAR });
+  await page.goto(base);
+  await page.waitForSelector('.step-card[data-id="acc"]');
+  const opt = (key) => `#inspector .options [data-key="${key}"]`;
+  const tplOf = () => page.evaluate(() => smokeSaved().steps.find((x) => x.id === 'acc').config.fields[0].options.template);
+
+  // "+" above acc → Đặt biến: selected, copper, the suggested name selected in the focused name box.
+  await page.click('.add-point[data-parent=""][data-index="0"] .add-btn');
+  await page.click('.popup .popup-item[data-type="set"]');
+  await page.waitForSelector('[data-type="set"] > .step-card.selected, [data-type="set"].step-card.selected');
+  const id = await page.$eval('.step-card.selected', (c) => c.dataset.id);
+  const focus = await page.evaluate(() => {
+    const el = document.activeElement;
+    return { key: el?.dataset.key, value: el?.value, sel: el ? el.value.slice(el.selectionStart, el.selectionEnd) : null };
+  });
+  check(focus.key === 'name' && focus.value === 'bien1' && focus.sel === 'bien1', `new Đặt biến: focus ${JSON.stringify(focus)}`);
+  const colours = await page.evaluate((x) => {
+    const c = getComputedStyle(document.querySelector(`.step-card[data-id="${x}"]`));
+    // (--c is set by [data-type] on the step around the card.)
+    const r = getComputedStyle(document.querySelector('.step-card[data-id="acc"]'));
+    return { set: c.getPropertyValue('--c').trim(), rec: r.getPropertyValue('--c').trim() };
+  }, id);
+  check(colours.set && colours.set !== colours.rec, `Đặt biến card colour ${JSON.stringify(colours)}`);
+  await page.keyboard.type('lo');
+  await page.fill(opt('value'), 'TEST-{{run.today}}');
+  check(await until(page, (x) => document.querySelector(`.step-card[data-id="${x}"] .sum`)?.textContent === '= TEST-{{run.today}}', id),
+    `Đặt biến card summary: ${await page.textContent(`.step-card[data-id="${id}"] .sum`)}`);
+
+  // acc.Name: "{{lo" opens the picker on the var group; Enter inserts {{var.lo}} (a copper chip).
+  await page.click('.step-card[data-id="acc"] .type');
+  const name = '#inspector .field-card[data-field="fields.Name"]';
+  await page.click(`${name} .actions button[title="Tùy chọn"]`);
+  const tpl = `${name} input[data-key="template"]`;
+  await page.waitForSelector(tpl);
+  await page.fill(tpl, '');
+  await page.focus(tpl);
+  await page.keyboard.type('{{lo');
+  await page.waitForSelector('.var-picker .vp-item');
+  const picker = await page.evaluate(() => ({
+    groups: [...document.querySelectorAll('.var-picker .vp-group')].map((g) => `${g.getAttribute('aria-label')}:${g.dataset.type}`),
+    active: document.querySelector('.var-picker .vp-item.active')?.dataset.path,
+  }));
+  check(picker.groups.includes('var · Biến:set') && picker.active === 'var.lo', `picker for "{{lo": ${JSON.stringify(picker)}`);
+  await page.keyboard.press('Enter');
+  check((await page.inputValue(tpl)) === '{{var.lo}}', `insert gave ${await page.inputValue(tpl)}`);
+  check(await page.waitForSelector(`${name} .var-chip[data-path="var.lo"][data-type="set"]`, { timeout: 2000 }).catch(() => null), 'no copper chip for var.lo');
+
+  // Preview: the chip on the Đặt biến card and the value in the Account table.
+  await page.keyboard.press('Control+Enter');
+  const chipSel = `.step-card[data-id="${id}"] .stat:not(.est):not(.live)`;
+  check(await until(page, (s) => /^đặt 1 lần · = "TEST-\d{4}-\d\d-\d\d"$/.test(document.querySelector(s)?.textContent ?? ''), chipSel),
+    `Đặt biến stat chip: ${await page.textContent(chipSel).catch(() => null)}`);
+  await page.waitForSelector('table.data tbody tr');
+  const cells = await page.$$eval('table.data tbody td', (tds) => tds.map((t) => t.textContent));
+  check(cells.some((t) => /^TEST-\d{4}-\d\d-\d\d$/.test(t)), `no TEST-<today> in the results table (${cells.slice(0, 6).join(' | ')})`);
+  check((await page.textContent('#issues').catch(() => '')).trim() === '' || !(await page.$('#issues .issue.error')), 'validation errors after the preview');
+
+  // Rename lo → ma: {{var.lo}} follows (one toast with Hoàn tác).
+  await page.click(`.step-card[data-id="${id}"] .type`);
+  await page.waitForSelector(opt('name'));
+  await page.fill(opt('name'), 'ma');
+  await page.press(opt('name'), 'Tab'); // leaving the box announces the rename
+  check(await until(page, () => smokeSaved().steps.find((x) => x.id === 'acc').config.fields[0].options.template === '{{var.ma}}'), `template after the rename: ${await tplOf()}`);
+  check(await until(page, () => /Đã đổi tên biến lo → ma ở 1 bước Đặt biến và 1 chỗ dùng\./.test(document.getElementById('toast')?.textContent ?? '')),
+    `rename toast: ${await page.textContent('#toast').catch(() => null)}`);
+
+  // A Chữ variable as "Số lần lặp": the quick fix "Đổi Kiểu thành Số" on the loop (the value 2 is a number).
+  await page.fill(opt('value'), '2');
+  await page.click('.step-card[data-id="lp"] .type');
+  await page.waitForSelector(opt('count'));
+  await page.fill(opt('count'), '{{var.ma}}');
+  const fix = '#inspector .quick-fix[data-fix="setVarType"]';
+  check(await page.waitForSelector(fix, { timeout: 4000 }).catch(() => null), 'no "Đổi Kiểu thành Số" quick fix on the loop count');
+  if (await page.$(fix)) {
+    check((await page.textContent(fix)) === 'Đổi Kiểu thành Số', `quick fix text: ${await page.textContent(fix)}`);
+    await page.click(fix);
+    check(await until(page, (x) => smokeSaved().steps.find((s) => s.id === x)?.config.valueType === 'number', id), 'the quick fix did not set Kiểu = Số');
+  }
+  if (outDir) await page.screenshot({ path: path.join(outDir, 'smoke-1440-set-var.png') });
+  await page.context().close();
 }
 
 (async () => {
   // A Playwright error outside a flow's promise (e.g. in an event handler) fails the run.
   process.on('uncaughtException', (e) => { console.error('SMOKE FAILED\n' + e); process.exit(1); });
   const t0 = Date.now();
+  noFixedWaits();
   let server;
   try {
     // Browser start and server start overlap.
@@ -2147,44 +2524,17 @@ async function flowProductivityRun() {
     check(orgs.status === 503 && /smoke:/.test((await orgs.json()).error), 'the smoke server is not using the sf CLI stub');
     // Independent flows, one context each, in parallel. A flow that throws (timed-out wait) is
     // reported and the others still finish.
-    // Longest first; at most 2 × CPUs run at once (review 0012: the flows are CPU-bound).
-    // Longest first (measured after design 0014): the queue order is the start order of the lanes.
-    let flows = { flowLayoutNarrow, flowHistoryWide, flowPicker, flowFiles, flowCanvas, flowVarsLoops, flowEditing, flowProductivityRun, flowEach, flowLibrary, flowDark, flowMinimap, flowProductivity, flowCanvasPhone };
+    let flows = { flowEditing, flowPicker, flowFiles, flowDark, flowLayoutWide, flowLayoutNarrow, flowEach, flowCanvas, flowProductivity, flowLibrary, flowMinimap, flowVarsLoops, flowHistory, flowHistoryProd, flowSetVar };
     // SMOKE_ONLY=flowCanvas,flowEach runs only those flows (while working on one area).
     const only = process.env.SMOKE_ONLY?.split(',').filter(Boolean);
-    // An unknown name (a typo) must not run nothing and report OK (review 0014 N9).
-    const unknown = (only ?? []).filter((n) => !(n in flows));
-    if (unknown.length) throw new Error(`SMOKE_ONLY: unknown flow ${unknown.join(', ')} (known: ${Object.keys(flows).join(', ')})`);
     if (only?.length) flows = Object.fromEntries(Object.entries(flows).filter(([n]) => only.includes(n)));
-    // A flow that throws leaves a full-page screenshot and the selector it waited for (in the
-    // smoke temp dir, kept when the run fails) so a timeout can be read after the fact.
-    const runFlow = async (name, f) => {
-      try {
-        await flowOf.run(name, f);
-      } catch (e) {
-        const dir = path.join(smokeTmp, 'failures');
-        fs.mkdirSync(dir, { recursive: true });
-        for (const { label, page } of pages.get(name) ?? []) {
-          if (page.isClosed()) continue;
-          const file = path.join(dir, `${name}${label ? `-${String(label).replace(/[^\w-]+/g, '_')}` : ''}-${artefacts.length}.png`);
-          await page.screenshot({ path: file, fullPage: true }).then(() => artefacts.push(file)).catch(() => {});
-        }
-        const info = path.join(dir, `${name}.txt`);
-        fs.writeFileSync(info, `pending selector: ${pendingSelector(e) ?? '?'}\n\n${e?.stack ?? e}\n`);
-        artefacts.push(info);
-        throw e;
-      }
-    };
-    const queue = Object.entries(flows);
-    const results = new Array(queue.length);
-    let next = 0;
-    const lanes = Math.max(2, Math.min(queue.length, 2 * os.cpus().length));
-    await Promise.all(Array.from({ length: lanes }, async () => {
-      while (next < queue.length) {
-        const i = next++;
-        results[i] = await runFlow(...queue[i]).then(() => ({ status: 'fulfilled' }), (reason) => ({ status: 'rejected', reason }));
-      }
+    // Each flow's own duration (they overlap): the longest is the smoke's critical path.
+    const took = {};
+    const results = await Promise.allSettled(Object.entries(flows).map(async ([name, f]) => {
+      const t = Date.now();
+      try { return await f(); } finally { took[name] = Date.now() - t; }
     }));
+    console.log(`flows: ${Object.entries(took).sort((a, b) => b[1] - a[1]).map(([n, ms]) => `${n} ${ms}`).join(', ')}`);
     results.forEach((r, i) => { if (r.status === 'rejected') errors.push(`${Object.keys(flows)[i]}: ${r.reason}`); });
   } catch (e) {
     errors.push(String(e));
@@ -2193,15 +2543,14 @@ async function flowProductivityRun() {
     server?.closeAllConnections();
     server?.close();
     await browser?.close();
-    // Kept when a flow left failure artefacts in it.
-    if (smokeTmp && !artefacts.length) fs.rmSync(smokeTmp, { recursive: true, force: true });
+    if (historyDir) fs.rmSync(historyDir, { recursive: true, force: true });
   }
   const ms = Date.now() - t0;
-  console.log(`duration=${ms}ms`);
-  // 20 s budget. The flows run in parallel and are CPU-bound (≈ 11–15 s on a 4-CPU machine since 0012
-  // added its flows); the budget stays to catch a flow that starts waiting on fixed timeouts again.
-  if (ms > BUDGET_MS) errors.push(`smoke test took ${ms} ms (limit ${BUDGET_MS / 1000} s, SMOKE_BUDGET_MS)`);
-  if (artefacts.length) console.error(`failure artefacts:\n${artefacts.join('\n')}`);
+  const budget = smokeBudgetMs();
+  console.log(`duration=${ms}ms (budget ${budget} ms)`);
+  // The flows run in parallel and are CPU-bound, so the budget scales with the CPUs; it is there to
+  // catch a flow that starts waiting on fixed timeouts (also refused statically, see noFixedWaits).
+  if (ms > budget) errors.push(`smoke test took ${ms} ms (budget ${budget} ms; SMOKE_BUDGET_MS overrides)`);
   if (errors.length) {
     console.error('SMOKE FAILED\n' + errors.join('\n'));
     process.exit(1);

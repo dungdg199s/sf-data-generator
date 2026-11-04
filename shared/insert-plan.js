@@ -1,74 +1,87 @@
-// Insert / delete plan (design 0011): which Record steps go through Bulk API 2.0 and how many API
-// calls a run costs. Pure, shared by the server (the `plan` event, the inserter) and the browser
-// (the Insert and delete confirmations), so the two never disagree.
+// Insert plan (design 0011 §1): which Record steps go through Bulk API 2.0 and how many API calls
+// an insert (or a delete of an insert) takes. Pure; used by the server for the `plan` event and by
+// the browser for the confirmation dialog, so both always agree.
 //
 // A Record step goes Bulk when all three hold:
-//   1. bulk !== 'off' (checkbox of the confirmation, `target.bulk`);
-//   2. its alias is not in `referenced` (no Lookup, also through a Chọn bản ghi, needs its Ids:
-//      Bulk returns successfulResults in no particular order, so Ids cannot be mapped back to refs);
-//   3. it makes at least `limits.bulkMinRecords` records in the run.
-// A Bulk step still sends its first records through sObject Collections (the probe) until one call
-// succeeds, then the rest in jobs of `limits.bulkJobRecords`.
+//   1. bulk !== 'off' (checkbox of the confirmation dialog, `target.bulk`);
+//   2. its alias is not in `referenced` (no Lookup, even through a Chọn bản ghi, needs its Ids:
+//      Bulk returns successfulResults in no particular order, so Ids cannot be mapped to refs);
+//   3. it creates at least `bulkMinRecords` records in this run.
+// Its first records still go through sObject Collections (the probe call, so configuration errors
+// are caught by the fail-fast rule with exact refs); the rest go in jobs of `bulkJobRecords`.
 
-export const BATCH_SIZE = 200; // sObject Collections, records (or Ids) per call
-export const BULK_PROBE = 200; // records sent by Collections before the first job
-/** Calls one Bulk job costs: create 1 + upload 1 + close 1 + about 7 polls + successful 1 + failed 1. */
-export const BULK_CALLS_PER_JOB = 12;
-export const DEFAULT_BULK_LIMITS = { bulkMinRecords: 10000, bulkJobRecords: 10000 };
-
-const limitsOf = (limits) => ({
-  min: limits?.bulkMinRecords ?? DEFAULT_BULK_LIMITS.bulkMinRecords,
-  job: limits?.bulkJobRecords ?? DEFAULT_BULK_LIMITS.bulkJobRecords,
+export const BULK_DEFAULTS = Object.freeze({
+  bulkMinRecords: 10000,
+  bulkJobRecords: 10000,
+  bulkJobTimeoutMs: 30 * 60 * 1000,
+  batchSize: 200, // sObject Collections records per call
+  callsPerJob: 12, // create 1 + upload 1 + close 1 + about 7 checks + successful 1 + failed 1
 });
 
-/** One sequence of `n` records (or Ids): its mode, probe size, jobs and API calls. */
-function planOne(n, eligible, { min, job }) {
-  if (eligible && n >= min) {
-    const probe = Math.min(BULK_PROBE, n);
-    const jobs = Math.ceil((n - probe) / job);
-    return { mode: 'bulk', probe, jobs, calls: { collections: 1, bulk: jobs * BULK_CALLS_PER_JOB } };
-  }
-  return { mode: 'collections', probe: 0, jobs: 0, calls: { collections: Math.ceil(n / BATCH_SIZE), bulk: 0 } };
+/** Jobs and calls of `n` records through the Bulk path (probe call + jobs). */
+function bulkCost(n, l) {
+  const probe = Math.min(l.batchSize, n);
+  const jobs = Math.ceil(Math.max(0, n - probe) / l.bulkJobRecords);
+  return { probe, jobs, calls: 1 + jobs * l.callsPerJob };
 }
 
 /**
- * @param steps       [{ nodeId, alias, sobject, records }] — Record steps with their record count in the run
- * @param referenced  Set (or array) of aliases a Lookup needs the Ids of (shared/scope.js poolUsage)
+ * @param steps       [{ nodeId, alias, sobject, records }] Record steps with their record counts
+ *                    (from the dry pass / preview stats), in insert order
+ * @param referenced  Set<alias> (or array) whose Ids a Lookup needs (poolUsage(...).referenced)
  * @param bulk        'auto' | 'off'
- * @param limits      { bulkMinRecords, bulkJobRecords } (LIMITS / meta.limits)
- * → { steps: [{ nodeId, alias, sobject, records, mode, probe, jobs }], apiCalls: { collections, bulk, total } }
- *   The probe call of a Bulk step counts as a Collections call.
+ * @param limits      overrides of BULK_DEFAULTS (meta.limits)
+ * → { steps: [{ nodeId, alias, sobject, records, mode: 'collections' | 'bulk', probe, jobs, apiCalls }],
+ *     apiCalls: { collections, bulk, total } }
  */
-export function planInsert({ steps, referenced, bulk = 'auto', limits } = {}) {
-  const ref = referenced instanceof Set ? referenced : new Set(referenced ?? []);
-  const l = limitsOf(limits);
+export function planInsert({ steps = [], referenced = new Set(), bulk = 'auto', limits = {} } = {}) {
+  const l = { ...BULK_DEFAULTS, ...pick(limits) };
+  const refs = referenced instanceof Set ? referenced : new Set(referenced ?? []);
   const apiCalls = { collections: 0, bulk: 0, total: 0 };
-  const out = (steps ?? []).map((s) => {
+  const out = steps.map((s) => {
     const n = Math.max(0, Number(s.records) || 0);
-    const p = planOne(n, bulk !== 'off' && !ref.has(s.alias), l);
-    apiCalls.collections += p.calls.collections;
-    apiCalls.bulk += p.calls.bulk;
-    return { nodeId: s.nodeId, alias: s.alias, sobject: s.sobject, records: n, mode: p.mode, probe: p.probe, jobs: p.jobs };
+    const bulkable = bulk !== 'off' && !refs.has(s.alias) && n >= l.bulkMinRecords;
+    if (!bulkable) {
+      const calls = Math.ceil(n / l.batchSize);
+      apiCalls.collections += calls;
+      return { nodeId: s.nodeId, alias: s.alias, sobject: s.sobject, records: n, mode: 'collections', probe: 0, jobs: 0, apiCalls: calls };
+    }
+    const { probe, jobs, calls } = bulkCost(n, l);
+    apiCalls.collections += 1;
+    apiCalls.bulk += calls - 1;
+    return { nodeId: s.nodeId, alias: s.alias, sobject: s.sobject, records: n, mode: 'bulk', probe, jobs, apiCalls: calls };
   });
   apiCalls.total = apiCalls.collections + apiCalls.bulk;
   return { steps: out, apiCalls };
 }
 
 /**
- * Delete plan: every sObject with at least bulkMinRecords Ids left may go Bulk (deleting needs no
- * Id mapping). `groups`: [{ sobject, count }] in delete order.
- * → { groups: [{ sobject, count, mode, probe, jobs }], apiCalls: { collections, bulk, total } }
+ * Delete plan of an insert (design 0011 §7): steps in reverse insert order; a step with at least
+ * `bulkMinRecords` Ids left (and bulk !== 'off') sends a probe of 200 through Collections, then
+ * Bulk `delete` jobs. `steps`: [{ nodeId, sobject, remaining }] in insert order.
+ * → { steps: [{ nodeId, sobject, remaining, mode, probe, jobs, apiCalls }], apiCalls: { collections, bulk, total } }
  */
-export function planDelete({ groups, bulk = 'auto', limits } = {}) {
-  const l = limitsOf(limits);
+export function planDelete({ steps = [], bulk = 'auto', limits = {} } = {}) {
+  const l = { ...BULK_DEFAULTS, ...pick(limits) };
   const apiCalls = { collections: 0, bulk: 0, total: 0 };
-  const out = (groups ?? []).map((g) => {
-    const n = Math.max(0, Number(g.count) || 0);
-    const p = planOne(n, bulk !== 'off', l);
-    apiCalls.collections += p.calls.collections;
-    apiCalls.bulk += p.calls.bulk;
-    return { ...g, count: n, mode: p.mode, probe: p.probe, jobs: p.jobs };
+  const out = [...steps].reverse().filter((s) => (Number(s.remaining) || 0) > 0).map((s) => {
+    const n = Number(s.remaining);
+    if (bulk === 'off' || n < l.bulkMinRecords) {
+      const calls = Math.ceil(n / l.batchSize);
+      apiCalls.collections += calls;
+      return { nodeId: s.nodeId, sobject: s.sobject, remaining: n, mode: 'collections', probe: 0, jobs: 0, apiCalls: calls };
+    }
+    const { probe, jobs, calls } = bulkCost(n, l);
+    apiCalls.collections += 1;
+    apiCalls.bulk += calls - 1;
+    return { nodeId: s.nodeId, sobject: s.sobject, remaining: n, mode: 'bulk', probe, jobs, apiCalls: calls };
   });
   apiCalls.total = apiCalls.collections + apiCalls.bulk;
-  return { groups: out, apiCalls };
+  return { steps: out, apiCalls };
+}
+
+function pick(limits) {
+  const out = {};
+  for (const k of Object.keys(BULK_DEFAULTS)) if (Number.isFinite(limits?.[k]) && limits[k] > 0) out[k] = limits[k];
+  return out;
 }

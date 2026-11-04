@@ -6,12 +6,15 @@
 //   <pool>.$count   → number of records in the pool (Query rows, design 0006)
 //   <pick>.Field    → field of the record a Chọn bản ghi step picked (the same object as in the pool)
 //   <loopAlias>.index / .index0 / .count → loop variables (default loop alias is "loop");
-//                     .value in a Lặp "Mỗi giá trị trong danh sách" (design 0013)
-//   run.seed / run.now / run.today → the run (design 0013), after every name above
+//                     .value in a Lặp "Mỗi giá trị trong danh sách" (design 0013 D)
+//   var.<name>      → a variable of Đặt biến (design 0015), after loop variables and aliases
+//                     (validation refuses either called `var` once a Đặt biến exists)
+//   run.seed / run.now / run.today → the run (design 0013 G), after every name the user gave
 // Which references are valid where is decided by shared/scope.js (analyzeScope) at validation time.
 
 import { TEMPLATE_TOKEN_SOURCE, stripPath } from '../../shared/scope.js';
 import { keyOf } from '../../shared/soql.js';
+import { VAR_NAMESPACE } from './nodes.js';
 
 /** Source of the template token regex `{{path}}` (single declaration in shared/scope.js). */
 export const TEMPLATE_TOKEN = TEMPLATE_TOKEN_SOURCE;
@@ -36,8 +39,8 @@ export function resolvePath(path, scope, record, self = {}) {
     if (rec?.existing) return getPath(rec.fields, rest, { ignoreCase: true });
     base = rec?.fields;
   } else if (rest[0] === '$count' && scope.all && head in scope.all) return scope.all[head].length;
-  // Workflow-wide variables (design 0013) come after every name the user gave.
-  else if (scope.run && head === 'run') base = scope.run;
+  else if (head === VAR_NAMESPACE && scope.var) base = scope.var;
+  else if (head === 'run' && scope.run) base = scope.run;
   else return undefined;
   return getPath(base, rest);
 }
