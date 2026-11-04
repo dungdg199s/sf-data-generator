@@ -24,7 +24,7 @@ import { selectedIds, extendBy } from './selection.js';
 import * as ops from './ops.js';
 import { openSheet } from './inspector.js';
 import { openAddMenu, openStepMenu } from './menus.js';
-import { minimapModel, minimapPaths, minimapPoint, trackPoint, clampCenter } from './minimap.js';
+import { minimapModel, minimapPaths, minimapPoint, trackPoint, clampCenter, clearOfOverlays } from './minimap.js';
 
 const SVG = 'http://www.w3.org/2000/svg';
 const ZOOM_MIN = 0.1;
@@ -580,13 +580,12 @@ function showRect(r, { center = false } = {}) {
     next = { x, y };
   }
   if (sh > H) next.y = M - r.y * zoom; // taller than what is visible: show its top
-  // Under the zoom bar or the minimap: move the card left of it, or (no room on the left) below the
-  // zoom bar / above the minimap.
-  for (const bar of bars) {
-    if (!under(bar, next)) continue;
-    if (bar.left - M - sw >= M) next.x = bar.left - M - sw - r.x * zoom;
-    else if (bar.top > H / 2) next.y = bar.top - M - sh - r.y * zoom;
-    else next.y = bar.bottom + M - r.y * zoom;
+  // Under the zoom bar or the minimap: the nearest place left of / below / above them that is clear
+  // of both (moving clear of one never lands under the other, review 0014 N6).
+  if (covered(next)) {
+    const { sx, sy } = at(next);
+    const p = clearOfOverlays({ x: sx, y: sy, w: sw, h: sh }, bars, { W, H, M });
+    next = { x: next.x + p.x - sx, y: next.y + p.y - sy };
   }
   pan = { x: Math.round(next.x), y: Math.round(next.y) };
   applyNow();
@@ -908,8 +907,8 @@ function initMinimap() {
   };
   svg.addEventListener('pointerdown', onMapDown);
   mm.track.addEventListener('pointerdown', onTrackDown);
-  // The wheel does nothing here: a slip must not throw the diagram far away.
-  el.addEventListener('wheel', (e) => e.preventDefault(), { passive: false });
+  // The wheel does nothing over the minimap by construction: it is a sibling of #canvas (whose wheel
+  // listener pans and zooms), not inside it, and nothing around it scrolls (review 0014 N7).
   PHONE.addEventListener('change', () => updateMinimap());
   // The bottom sheet opens and closes (≤ 900 px): hidden while it is open.
   new MutationObserver(() => updateMinimap()).observe(document.body, { attributes: true, attributeFilter: ['class'] });

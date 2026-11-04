@@ -112,3 +112,23 @@ test('pointer helpers: minimap px → world, track → centre, a dragged centre 
   assert.deepEqual(clampCenter(win, view, { x: 0, y: 0 }), { x: 1500, y: 300 });
   assert.deepEqual(clampCenter(win, view, { x: 99999, y: 99999 }), { x: 5140, y: 2100 });
 });
+
+test('clearOfOverlays: out from under the minimap without landing under the zoom bar (review 0014 N6)', async () => {
+  const { clearOfOverlays } = await import('../client/js/minimap.js');
+  const view = { W: 600, H: 230, M: 8 };
+  const zoomBar = { left: 380, top: 8, right: 592, bottom: 40 };
+  const minimap = { left: 80, top: 120, right: 592, bottom: 222 };
+  // No room left of the minimap; just above it (y 36) the card would sit under the zoom bar, which is
+  // what the old one-pass rule did; below the zoom bar it is under the minimap. Clear of both: left
+  // of the zoom bar, above the minimap.
+  const card = { x: 300, y: 140, w: 160, h: 76 };
+  const p = clearOfOverlays(card, [zoomBar, minimap], view);
+  const under = (b) => p.x < b.right && p.x + card.w > b.left - 8 && p.y < b.bottom + 8 && p.y + card.h > b.top - 8;
+  assert.ok(!under(zoomBar) && !under(minimap), JSON.stringify(p));
+  assert.deepEqual(p, { x: 380 - 8 - 160, y: 120 - 8 - 76 });
+  // Already clear: unchanged. Nowhere clear: unchanged.
+  assert.deepEqual(clearOfOverlays({ x: 10, y: 20, w: 160, h: 76 }, [zoomBar, minimap], view), { x: 10, y: 20 });
+  assert.deepEqual(clearOfOverlays(card, [{ left: 0, top: 0, right: 600, bottom: 230 }], view), { x: 300, y: 140 });
+  // Only the minimap: the smallest move wins (here up above it rather than far to the left).
+  assert.deepEqual(clearOfOverlays({ x: 450, y: 150, w: 100, h: 50 }, [{ left: 400, top: 130, right: 592, bottom: 222 }], view), { x: 450, y: 72 });
+});

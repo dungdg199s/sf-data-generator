@@ -129,3 +129,27 @@ export function minimapPaths(lay, { errors = new Set(), selected = new Set(), sc
   const rank = { 'mm-frame': 0, 'mm-card': 1, 'mm-off': 2, 'mm-sel': 3, 'mm-err': 4 };
   return [...groups.values()].sort((a, b) => rank[a.cls] - rank[b.cls]).map((g) => ({ cls: g.cls, type: g.type, d: g.parts.join('') }));
 }
+
+/**
+ * Where a card (screen px `{ x, y, w, h }`) goes so no overlay covers it (the zoom bar at the top
+ * right, the minimap at the bottom right; `{ left, top, right, bottom }`), keeping `M` px around
+ * them, inside a `W` × `H` viewport. Candidates: x unchanged or left of an overlay, y unchanged,
+ * below a top overlay or above a bottom one; the clear candidate with the smallest move wins
+ * (none clear: the card stays where it is). Review 0014 N6: moving clear of the minimap must not
+ * land under the zoom bar.
+ */
+export function clearOfOverlays(c, bars, { W, H, M = 0 }) {
+  const hit = (x, y) => bars.some((b) => x < b.right && x + c.w > b.left - M && y < b.bottom + M && y + c.h > b.top - M);
+  if (!hit(c.x, c.y)) return { x: c.x, y: c.y };
+  const xs = [c.x, ...bars.map((b) => b.left - M - c.w)].filter((x) => x >= M || x === c.x);
+  const ys = [c.y, ...bars.map((b) => (b.top > H / 2 ? b.top - M - c.h : b.bottom + M))].filter((y) => (y >= 0 && y + c.h <= H) || y === c.y);
+  let best = null;
+  for (const x of xs) {
+    for (const y of ys) {
+      if (hit(x, y) || x + c.w > W) continue;
+      const d = Math.abs(x - c.x) + Math.abs(y - c.y);
+      if (!best || d < best.d) best = { x, y, d };
+    }
+  }
+  return best ? { x: best.x, y: best.y } : { x: c.x, y: c.y };
+}
