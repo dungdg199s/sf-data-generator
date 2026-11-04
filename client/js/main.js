@@ -382,6 +382,17 @@ function updateInsertButton() {
   btn.title = state.org ? `Sinh dữ liệu và insert vào ${state.org}` : 'Chọn org trước';
 }
 
+/**
+ * Alt+↑ / Alt+↓ move steps only from the views (a card, the tree, the canvas) or with nothing focused:
+ * on a button of the inspector, the results panel, the picker or the sheet head, Alt+↓ is that
+ * control's key (the {x} button opens the variable picker, review 0014 B1).
+ */
+function movesSteps(target) {
+  if (!target || target === document.body || target === document.documentElement) return true;
+  if (target.closest('#inspector, #results, .var-picker, .sheet-head, .popup, dialog')) return false;
+  return Boolean(target.closest('#process, #canvas'));
+}
+
 function wireShortcuts() {
   window.addEventListener('keydown', (e) => {
     if (e.defaultPrevented || document.querySelector('dialog[open]') || e.target.closest('.popup')) return;
@@ -427,7 +438,7 @@ function wireShortcuts() {
     } else if (mod && (e.key === '/' || e.code === 'Slash')) {
       e.preventDefault();
       if (sel) ops.toggleSelection();
-    } else if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+    } else if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown') && movesSteps(e.target)) {
       e.preventDefault();
       if (sel) ops.moveSelectionBy(e.key === 'ArrowUp' ? -1 : 1);
     } else if (!mod && !e.altKey && e.key === '/') {

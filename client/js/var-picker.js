@@ -69,6 +69,12 @@ export function attachVarPicker(input, opts) {
     'aria-label': 'Chèn biến',
     onmousedown: (e) => e.preventDefault(), // keep the caret/selection of the input
     onclick: () => (open?.input === input && !open.auto ? closePicker() : openPicker(input, { focusSearch: true })),
+    // Alt+↓ / Ctrl+Space on the button too (review 0014 B1): open on the search box, never move a step.
+    onkeydown: (e) => {
+      if (!isPickerKey(e)) return;
+      e.preventDefault();
+      if (open?.input !== input || open.auto) openPicker(input, { focusSearch: true });
+    },
   }, '{x}');
   const wrap = h('div', { class: 'var-input' }, input, btn);
 
