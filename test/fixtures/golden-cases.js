@@ -156,6 +156,20 @@ export const GOLDEN_CASES = [
     ]),
     queryResults: { q: rows([0, 1, 5, 20, null, 'x'].map((e, i) => ({ Id: `001${String(i).padStart(15, '0')}`, Name: `Org ${i}`, Employees: e }))) },
   },
+  {
+    // Added after the main merge: two weighted picks on one pool with different weight fields
+    // (their prefix sums were shared before the fix; every case above kept its hash).
+    name: 'two weighted picks on one pool, different weight fields (fix after merge)',
+    workflow: wf([
+      query('q', 'accs', { fields: ['Id', 'Name', 'A', 'B'] }),
+      loop('l', { count: 20 }, [
+        pick('pa', 'byA', 'accs', { mode: 'weighted', weightField: 'A' }),
+        pick('pb', 'byB', 'accs', { mode: 'weighted', weightField: 'B' }),
+        record('con', 'Contact', 'con', [lookup('AccountId', 'byA'), lookup('Other__c', 'byB'), { name: 'Title', type: 'template', options: { template: '{{byA.Name}} / {{byB.Name}}' } }]),
+      ]),
+    ]),
+    queryResults: { q: rows([[9, 0], [1, 1], [0, 9]].map(([a, b], i) => ({ Id: `001${String(i).padStart(15, '0')}`, Name: `Org ${i}`, A: a, B: b }))) },
+  },
 ];
 
 export const GOLDEN_SEEDS = [42, 7];

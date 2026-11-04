@@ -1176,6 +1176,22 @@ test('pick weighted chooses by a numeric field; all-zero weights fall back to un
   refs.forEach((n, i) => assert.ok(n >= 1 && n <= i + 1, `pick ${i} chose acc#${n}`));
 });
 
+test('two weighted picks on one pool keep their own weight fields; an overflowing total is uniform with a warning (fix after merge)', () => {
+  const data = qRows([{ A: 1000, B: 0 }, { A: 0, B: 1000 }]);
+  for (const order of [['pa', 'pb'], ['pb', 'pa']]) {
+    const picks = { pa: pick('pa', 'byA', 'accs', { mode: 'weighted', weightField: 'A' }), pb: pick('pb', 'byB', 'accs', { mode: 'weighted', weightField: 'B' }) };
+    const r = run0013(wf([
+      query('q', 'accs', { fields: ['Id', 'Name', 'A', 'B'] }),
+      loop('l', { count: 50 }, [...order.map((k) => picks[k]), record('c', 'Contact', 'con', [text('X', '{{byA.Name}}'), text('Y', '{{byB.Name}}')])]),
+    ]), { queryResults: { q: data } });
+    assert.deepEqual([...new Set(bySo(r, 'Contact').map((c) => `${c.fields.X}|${c.fields.Y}`))], ['Org 0|Org 1'], order.join(','));
+  }
+  const huge = qRows([{ W: 1e308 }, { W: 1e308 }, { W: 1 }]);
+  const r = run0013(wf([query('q', 'accs', { fields: ['Id', 'Name', 'W'] }), loop('l', { count: 300 }, [pick('p', 'acc', 'accs', { mode: 'weighted', weightField: 'W' }), record('c', 'Contact', 'con', [text('A', '{{acc.Name}}')])])]), { queryResults: { q: huge } });
+  assert.equal(new Set(bySo(r, 'Contact').map((c) => c.fields.A)).size, 3);
+  assert.deepEqual(r.warnings.filter((x) => x.code === 'pickWeightInfinite').map((x) => [x.nodeId, x.field]), [['p', 'weightField']]);
+});
+
 test('samples include the first record of every Record step', () => {
   const w = wf([
     record('a', 'Account', 'acc', [text('Name', 'P{{this.$n}}')], { count: 2 }),

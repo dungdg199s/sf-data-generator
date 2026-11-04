@@ -209,7 +209,9 @@ chỉ thấy các field ở phía trên.
   `{{…}}` như template; so sánh như Rẽ nhánh. `random` = `rng.pick`; `unique` = không lặp lại trong lần chạy; `sequential`
   = lần lượt, quay vòng, không dùng `rng` (con trỏ riêng theo giá trị lọc); `weighted` (0013 E) = có hoàn lại, **luôn rút
   đúng một số**, xác suất tỉ lệ với giá trị số của `weightField` (trống, âm, chữ → 0; mọi trọng số 0 → chọn đều và một cảnh
-  báo `pickWeightZero` gắn `weightField` cuối lần chạy). Bản ghi được chọn (chính object trong pool) thành
+  báo `pickWeightZero` gắn `weightField` cuối lần chạy; tổng trọng số tràn số (vô hạn) → cũng chọn đều, cảnh báo
+  `pickWeightInfinite`). Mỗi bước có tổng cộng dồn riêng theo `weightField`, nên hai bước theo trọng số khác nhau trên
+  cùng một pool không ảnh hưởng nhau. Bản ghi được chọn (chính object trong pool) thành
   bản ghi hiện tại của `alias` và được thêm vào pool `alias`. Không có gì để chọn: `onEmpty: skip` bỏ qua phần còn lại của
   lượt hiện tại (lên tới thân Lặp gần nhất: sang lần lặp sau; ở gốc: dừng lần chạy) và cuối lần chạy có **một** cảnh báo
   ghi số lần bỏ qua; `error` báo lỗi gắn bước.
@@ -338,6 +340,7 @@ Tham chiếu hỏng là **lỗi** (chặn Xem trước và Insert, HTTP 422 khi 
 | `numberVarEmpty`, `numberVarClamped` | cảnh báo (khi chạy) | Biến số trống/âm/không phải số (lặp 0 lần), hoặc lớn hơn 100 000 (dùng 100 000); một cảnh báo mỗi bước + ô, có số lần (0013) |
 | `eachFilterEmpty` | cảnh báo (khi chạy) | Lọc của Lặp `each` không khớp bản ghi nào ở mọi lần chạy qua; gắn `filterValue` (0013) |
 | `pickWeightZero` | cảnh báo (khi chạy) | Chọn bản ghi `weighted`: mọi trọng số 0 ở một số lần chọn nên đã chọn đều; gắn `weightField` (0013) |
+| `pickWeightInfinite` | cảnh báo (khi chạy) | Chọn bản ghi `weighted`: tổng trọng số quá lớn (tràn số) nên đã chọn đều; gắn `weightField` |
 | `setVarName`, `setVarNotNumber`, `setVarTooLong` | lỗi | (0015) Tên biến trống/sai; giá trị Số hoặc Cộng thêm không phải số và không có `{{`; giá trị dài quá 10 000 ký tự. Gắn `name` / `value` |
 | `varReserved` | lỗi | (0015) Alias, `itemAlias` hay biến lặp tên `var` khi workflow có bước Đặt biến |
 | `varUnset` | lỗi | (0015) `value` của bước Đặt biến đọc chính biến nó gán (`{{var.s}}-x`) mà không có lần gán nào thấy được phía trên (các bước khác cùng tên, nếu có, đều chạy sau). Gắn `value` |

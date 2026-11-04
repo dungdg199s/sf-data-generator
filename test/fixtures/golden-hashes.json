@@ -118,5 +118,15 @@
     "records": "2692a1197fce0189d5536488c3e6aeaff8efc7c83fe8df06fedc46327d6652fa",
     "count": 115,
     "byStep": "a063dbb64ff13ddaa79b22144d2660fb6ee497de0e581f001baf67fe24057804"
+  },
+  "two weighted picks on one pool, different weight fields (fix after merge) @42": {
+    "records": "f493abebe6097320433ae777e18418f5aad70a2943f528bb9b15ba708aa9c90e",
+    "count": 20,
+    "byStep": "5c87d1eb5fd5a63d1196c3632cc883641c689ae961e53d34570c1d2ec7a6e92e"
+  },
+  "two weighted picks on one pool, different weight fields (fix after merge) @7": {
+    "records": "d28647c1a2b14fe8b46a645e4915e06b457bcb168aa2daf8b190334b8f04b88b",
+    "count": 20,
+    "byStep": "5c87d1eb5fd5a63d1196c3632cc883641c689ae961e53d34570c1d2ec7a6e92e"
   }
 }
