@@ -44,11 +44,26 @@ test('jsforce write APIs (.bulk2, .destroy(, .sobject(…).create() appear only 
   assert.deepEqual(where(files, /\.(update|upsert)\(\s*target/), []);
 });
 
+// Calls of the client's write methods: any receiver ending in `client` (client, sfClient,
+// opts.client, this.client), `.` or `?.`, spaces allowed; `.bulkJob(` on any receiver at all.
+const CLIENT_CREATE = /\w*client\s*(?:\?\.|\.)\s*create\s*\(/i;
+const CLIENT_DESTROY = /\w*client\s*(?:\?\.|\.)\s*destroy\s*\(/i;
+const ANY_BULK_JOB = /(?:\?\.|\.)\s*bulkJob\s*\(/;
+
+test('the write-call patterns match optional chaining, any *client receiver and any .bulkJob( (fix after merge)', () => {
+  for (const t of ['client.create(t, s, r)', 'client?.create(t)', 'sfClient.create(', 'opts.client?.create (', 'this.client\n  .create(', 'myClient . create(']) assert.ok(CLIENT_CREATE.test(t), t);
+  for (const t of ['client.destroy(', 'deps.sfClient?.destroy(', 'client ?. destroy(']) assert.ok(CLIENT_DESTROY.test(t), t);
+  for (const t of ['client.bulkJob(', 'conn?.bulkJob(', 'x.y.bulkJob (', 'api .bulkJob(']) assert.ok(ANY_BULK_JOB.test(t), t);
+  for (const t of ['clientCreate(', 'client.created', 'res.destroy()', 'bulkJob(target, { object })', 'client.bulkJobs']) {
+    assert.ok(!CLIENT_CREATE.test(t) && !CLIENT_DESTROY.test(t) && !ANY_BULK_JOB.test(t), t);
+  }
+});
+
 test('the client write methods are called only from server/sf/insert.js and server/sf/delete.js', async () => {
   const files = await sources(['server', 'shared', 'client']);
-  assert.deepEqual(where(files, /\b\w*client\s*\.\s*create\(/i), ['server/sf/insert.js']);
-  assert.deepEqual(where(files, /\b\w*client\s*\.\s*destroy\(/i), ['server/sf/delete.js']);
-  assert.deepEqual(where(files, /\b\w*client\s*\.\s*bulkJob\(/i), ['server/sf/delete.js', 'server/sf/insert.js']);
+  assert.deepEqual(where(files, CLIENT_CREATE), ['server/sf/insert.js']);
+  assert.deepEqual(where(files, CLIENT_DESTROY), ['server/sf/delete.js']);
+  assert.deepEqual(where(files, ANY_BULK_JOB), ['server/sf/delete.js', 'server/sf/insert.js']);
   // The routes reach them only through those modules.
   const index = code(files.find((f) => f.file === 'server/index.js').text);
   assert.ok(!/sfClient\.(create|destroy|bulkJob)\b/.test(index));
