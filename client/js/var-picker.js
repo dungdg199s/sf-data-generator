@@ -70,6 +70,13 @@ export function attachVarPicker(input, opts) {
     'aria-label': 'Chèn biến',
     onmousedown: (e) => e.preventDefault(), // keep the caret/selection of the input
     onclick: () => (open?.input === input && !open.auto ? closePicker() : openPicker(input, { focusSearch: true })),
+    // The field's picker keys work on the button too (Alt+↓ / Ctrl+Space), never as step shortcuts.
+    onkeydown: (e) => {
+      if (!isPickerOpenKey(e)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (open?.input !== input) openPicker(input, { focusSearch: true });
+    },
   }, '{x}');
   const wrap = h('div', { class: 'var-input' }, input, btn);
 
