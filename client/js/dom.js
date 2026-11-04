@@ -46,11 +46,14 @@ export function ico(name) {
 /**
  * A row that scrolls sideways (design 0014 §4): marks it `data-scroll-x` and keeps
  * `data-overflow="start" | "end" | "both"` on it (removed when nothing is hidden), so CSS fades the
- * edge that still hides items. Updated on scroll (once a frame), resize and content changes. A
- * mostly vertical wheel turn scrolls the row sideways while it can move that way.
+ * edge that still hides items. Updated on scroll (once a frame), resize and content changes. Focus
+ * moving onto an item scrolls it out of the faded edges (the browser's own focus scroll ignores
+ * scroll-padding, review 0014 S1). With `wheel` (default) a mostly vertical wheel turn scrolls the
+ * row sideways while it can move that way; the sticky results tab row opts out (S5: the wheel there
+ * scrolls the table; Shift+wheel and Tab still reach every tab).
  * → a function that stops watching (rows that are rebuilt, like the results tabs).
  */
-export function watchOverflow(el) {
+export function watchOverflow(el, { wheel = true } = {}) {
   el.setAttribute('data-scroll-x', '');
   let frame = 0;
   // Only while the row is a sideways scroller (the results summary wraps on wide screens).
@@ -70,8 +73,17 @@ export function watchOverflow(el) {
     e.preventDefault();
     el.scrollLeft = next;
   };
+  const onFocus = (e) => {
+    if (e.target === el || !scrolls()) return;
+    // The item itself: the direct child of the row holding the focused element.
+    let item = e.target;
+    while (item.parentElement && item.parentElement !== el) item = item.parentElement;
+    revealInRow(el, item);
+    requestAnimationFrame(() => { if (item.isConnected && item.contains(document.activeElement)) revealInRow(el, item); }); // after the browser's own focus scroll
+  };
   el.addEventListener('scroll', schedule, { passive: true });
-  el.addEventListener('wheel', onWheel, { passive: false });
+  el.addEventListener('focusin', onFocus);
+  if (wheel) el.addEventListener('wheel', onWheel, { passive: false });
   const resize = new ResizeObserver(schedule);
   resize.observe(el);
   const content = new MutationObserver(schedule);
@@ -82,6 +94,7 @@ export function watchOverflow(el) {
     content.disconnect();
     cancelAnimationFrame(frame);
     el.removeEventListener('scroll', schedule);
+    el.removeEventListener('focusin', onFocus);
     el.removeEventListener('wheel', onWheel);
   };
 }

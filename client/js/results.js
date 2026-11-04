@@ -96,7 +96,7 @@ function initResize() {
   handle.addEventListener('dblclick', () => {
     writeRatio(null);
     layoutResults();
-    keepSelected(selectedFullyVisible());
+    keepSelected(selectedVisible());
   });
   window.addEventListener('resize', () => layoutResults());
   layoutResults();
@@ -126,14 +126,17 @@ export function layoutResults(override = null) {
   handle.setAttribute('aria-valuetext', aria.text);
 }
 
-/** The selected card of Quy trình is fully in view (Sơ đồ keeps it with its own ResizeObserver). */
-function selectedFullyVisible() {
+/**
+ * The selected card of Quy trình is at least partly in view (Sơ đồ keeps it with its own
+ * ResizeObserver): after the resize it is revealed whole, never pushed out (review 0014 S4).
+ */
+function selectedVisible() {
   const view = document.getElementById('process');
   const card = view && !view.hidden ? view.querySelector('.step-card.selected') : null;
   if (!card) return false;
   const v = view.getBoundingClientRect();
   const c = card.getBoundingClientRect();
-  return c.top >= v.top - 0.5 && c.bottom <= v.bottom + 0.5;
+  return c.bottom > v.top + 0.5 && c.top < v.bottom - 0.5;
 }
 function keepSelected(was) {
   const sel = state.selection;
@@ -144,7 +147,7 @@ function onResizeDown(e) {
   if (e.button !== 0 || handle.hidden) return;
   e.preventDefault();
   handle.setPointerCapture(e.pointerId);
-  dragging = { startY: e.clientY, startH: panel.getBoundingClientRect().height, want: null, frame: 0, selVisible: selectedFullyVisible() };
+  dragging = { startY: e.clientY, startH: panel.getBoundingClientRect().height, want: null, frame: 0, selVisible: selectedVisible() };
   document.body.classList.add('resizing');
   handle.classList.add('dragging');
   handle.addEventListener('pointermove', onResizeMove);
@@ -188,6 +191,7 @@ function onResizeUp(e) {
 }
 
 function onResizeKey(e) {
+  if (e.altKey || e.ctrlKey || e.metaKey) return; // Ctrl+Z, Alt+↓ … are not the handle's (review N1)
   const total = space();
   const res = resultsKey(e.key, e.shiftKey, panel.getBoundingClientRect().height, total);
   if (!res) return;
@@ -197,7 +201,7 @@ function onResizeKey(e) {
     toggle.focus();
     return;
   }
-  const was = selectedFullyVisible();
+  const was = selectedVisible();
   writeRatio(resultsRatio(res.height, total));
   layoutResults();
   keepSelected(was);
@@ -416,7 +420,7 @@ function render() {
   const prevLeft = body.querySelector('.tabs')?.scrollLeft ?? 0;
   body.replaceChildren(tabs, content);
   unwatchTabs?.();
-  unwatchTabs = watchOverflow(tabs);
+  unwatchTabs = watchOverflow(tabs, { wheel: false }); // vertical wheel over the sticky tabs scrolls the table (review 0014 S5)
   tabs.scrollLeft = prevLeft;
   const active = tabs.querySelector('.active');
   if (active) revealInRow(tabs, active);
