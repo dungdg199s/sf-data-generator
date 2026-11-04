@@ -396,7 +396,6 @@ export async function confirmDelete(hid) {
     }
     const c = planDelete({ steps, bulk, limits: state.meta?.limits }).apiCalls;
     const canBulk = steps.some((st) => st.remaining >= minBulk);
-    const cascade = new Set((entry.steps ?? []).map((st) => st.sobject)).size > 1;
     const pending = entry.pendingBulkJobs ?? [];
     const okName = !mustType || names.includes(typed.trim().toLowerCase());
     const btn = h('button', {
@@ -440,7 +439,8 @@ export async function confirmDelete(hid) {
       ...pendingLines(bulkJobsOf(entry)).map((t) => h('p', { class: 'hint pending-jobs' }, t)),
       rejectedText(entry) ? h('p', { class: 'hint' }, rejectedText(entry)) : null,
       h('p', { class: 'hint' }, 'Chỉ xóa đúng các Id app đã ghi lúc insert, kể cả bản ghi đã bị sửa sau đó. Bản ghi đã bị xóa trước đó được bỏ qua.'),
-      cascade ? h('p', { class: 'hint' }, 'Xóa bản ghi cha có thể làm Salesforce tự xóa bản ghi con của nó (ví dụ Contact, Opportunity của Account), kể cả bản ghi con không do app tạo.') : null,
+      // Always shown (also for one sObject): a deleted record may cascade to children the app did not make.
+      h('p', { class: 'hint cascade-note' }, 'Xóa một bản ghi có thể làm Salesforce tự xóa các bản ghi con của nó (ví dụ Contact, Opportunity của Account), kể cả bản ghi con không do app tạo.'),
       h('p', { class: 'hint' }, 'Bản ghi bị xóa vào Thùng rác của org (khôi phục được trong 15 ngày nếu Thùng rác chưa đầy).'),
       canBulk
         ? h('label', { class: 'check-line bulk-check' },
@@ -469,6 +469,8 @@ export async function confirmDelete(hid) {
     try {
       await hooks.startDelete({
         hid, body, org: name, total: count, bySobject: entry.remaining?.bySobject ?? {}, signal: ctrl.signal,
+        // What the error rows may point at: the steps of the insert (rows link only in that workflow).
+        source: { workflowName: entry.workflowName ?? '', steps: (entry.steps ?? []).map((st) => ({ nodeId: st.nodeId, sobject: st.sobject })) },
         onResponse: () => {
           // The delete runs: the results panel shows it (both dialogs out of the way).
           if (mine()) {

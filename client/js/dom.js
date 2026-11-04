@@ -45,9 +45,11 @@ export function ico(name) {
  * it has hidden items on that side (CSS fades that edge), and removes it when nothing overflows.
  * Recomputed once per frame on scroll, resize and content changes. A vertical wheel over an
  * overflowing row scrolls it sideways, and only while it can still move that way (then the page
- * gets the wheel back). → a function that stops watching.
+ * gets the wheel back); `{ wheel: false }` leaves the wheel alone. A child that gets focus is
+ * scrolled clear of the faded edges (now and after one frame, once a scroll into view settled).
+ * → a function that stops watching.
  */
-export function watchOverflow(el) {
+export function watchOverflow(el, { wheel = true } = {}) {
   let frame = 0;
   const update = () => {
     frame = 0;
@@ -68,8 +70,22 @@ export function watchOverflow(el) {
     e.preventDefault();
     el.scrollLeft += delta;
   };
+  const clearFade = (child) => {
+    if (!child.isConnected || !el.contains(child)) return;
+    const fade = parseFloat(getComputedStyle(el).scrollPaddingLeft) || 0;
+    const box = el.getBoundingClientRect();
+    const r = child.getBoundingClientRect();
+    if (r.left < box.left + fade) el.scrollLeft -= box.left + fade - r.left;
+    else if (r.right > box.right - fade) el.scrollLeft += r.right - (box.right - fade);
+  };
+  const onFocus = (e) => {
+    if (e.target === el) return;
+    clearFade(e.target);
+    requestAnimationFrame(() => clearFade(e.target));
+  };
   el.addEventListener('scroll', schedule, { passive: true });
-  el.addEventListener('wheel', onWheel, { passive: false });
+  if (wheel) el.addEventListener('wheel', onWheel, { passive: false });
+  el.addEventListener('focusin', onFocus);
   const resize = new ResizeObserver(schedule);
   resize.observe(el);
   const mutation = new MutationObserver(schedule);
@@ -79,6 +95,7 @@ export function watchOverflow(el) {
     cancelAnimationFrame(frame);
     el.removeEventListener('scroll', schedule);
     el.removeEventListener('wheel', onWheel);
+    el.removeEventListener('focusin', onFocus);
     resize.disconnect();
     mutation.disconnect();
   };

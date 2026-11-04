@@ -881,7 +881,7 @@ const deleteOffer = (hid, inserted) => (hid && inserted > 0 ? { label: 'Xóa d�
  * progress, Dừng (Dừng ngay while a Bulk job is processed), summary, toast, "Lỗi xóa" tab. Called by
  * the delete confirmation (history.js): a refusal before the stream starts is thrown back to it.
  */
-async function deleteRun({ hid, body, org, total, bySobject, onResponse, signal }) {
+async function deleteRun({ hid, body, org, total, bySobject, onResponse, signal, source = null }) {
   if (running) throw new Error('Đang chạy. Bấm "Dừng" hoặc chờ lần chạy xong rồi mới xóa.');
   // Children first: the chips follow the delete order (reverse insert order).
   const order = Object.keys(bySobject ?? {}).reverse();
@@ -931,7 +931,7 @@ async function deleteRun({ hid, body, org, total, bySobject, onResponse, signal 
         }
       },
     });
-    state.deleteResult = { result, org, hid };
+    state.deleteResult = { result, org, hid, source };
     emit('run', 'result');
     const msg = deleteEndMessage(result, { org, total });
     if (result.stopped || result.cancelled || result.failed || msg.extra) showRunning(msg.text);
