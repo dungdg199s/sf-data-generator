@@ -73,7 +73,7 @@ test('saved ratio: parse, round to 3 decimals, invalid values are ignored', () =
 });
 
 test('resultsAria: percentages of the height below the top bar and a spoken text', () => {
-  assert.deepEqual(resultsAria({ height: 312, min: 160, max: 611, total: 851 }), { min: 19, max: 72, now: 37, text: 'Cao 312 px (37 % màn hình)' });
+  assert.deepEqual(resultsAria({ height: 312, min: 160, max: 611, total: 851 }), { min: 19, max: 72, now: 37, text: 'Cao 312 px (37 % của vùng dưới thanh trên)' });
 });
 
 test('snapSheet: slow releases go to the nearest snap, closing only under half the middle snap', () => {
@@ -95,6 +95,14 @@ test('snapSheet: a flick (> 0.5 px/ms) goes to the next snap that way', () => {
   assert.equal(snapSheet({ ...s, height: 740, velocity: -0.8 }), 'mid'); // from full, down
   assert.equal(snapSheet({ ...s, height: 480, velocity: -0.8 }), 'closed'); // from mid, down: closes
   assert.equal(snapSheet({ ...s, height: 520, velocity: 0.5 }), 'mid'); // exactly 0.5 is not a flick
+});
+
+test('snapSheet: a flick down from the tall snap stops at the middle one unless released under half of it (fix after merge)', () => {
+  const s = { mid: 506, full: 755 };
+  assert.equal(snapSheet({ ...s, height: 480, velocity: -0.8, from: 'full' }), 'mid');
+  assert.equal(snapSheet({ ...s, height: 300, velocity: -0.8, from: 'full' }), 'mid');
+  assert.equal(snapSheet({ ...s, height: 252, velocity: -0.8, from: 'full' }), 'closed');
+  assert.equal(snapSheet({ ...s, height: 480, velocity: -0.8, from: 'mid' }), 'closed');
 });
 
 test('sheetSnaps: 390 × 844 → 506 / 755 px; 844 × 390 → 190 / 301 px', () => {

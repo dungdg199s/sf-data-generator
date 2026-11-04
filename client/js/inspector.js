@@ -148,12 +148,22 @@ const snaps = () => sheetSnaps({ viewport: window.innerHeight, topbar: document.
  * sheet's edge. --sheet-now: the height the toast sits on.
  */
 let sheetNow = '';
+const BEHIND_SHEET = ['.palette', '.view-wrap', '#results', '#issues'];
+function setBehindSheetInert(on) {
+  for (const sel of BEHIND_SHEET) {
+    const el = document.querySelector(sel);
+    if (el && el.inert !== on) el.inert = on;
+  }
+}
 function setSheetFull(full, { reveal: show = true } = {}) {
   full = full && root.classList.contains('open');
   const was = sheetFull;
   sheetFull = full;
   root.classList.toggle('full', full);
   root.querySelector('.sheet-grip')?.setAttribute('aria-expanded', String(full));
+  // The tall snap covers everything under the top bar: Tab must not reach what is behind it. Cleared
+  // at the middle snap and when closing, before focus goes back to the card.
+  setBehindSheetInert(full && narrow());
   if (!narrow()) return;
   // Written only when it changes: a custom property on <body> restyles the whole page (every inspector render comes here).
   const sn = snaps();
@@ -209,7 +219,7 @@ function wireSheetDrag() {
     root.classList.remove('dragging');
     root.style.removeProperty('height');
     const sn = snaps();
-    const to = cancelled ? (sheetFull ? 'full' : 'mid') : snapSheet({ height: d.height, velocity: dragVelocity(d.samples), mid: sn.mid, full: sn.full });
+    const to = cancelled ? (sheetFull ? 'full' : 'mid') : snapSheet({ height: d.height, velocity: dragVelocity(d.samples), mid: sn.mid, full: sn.full, from: d.from });
     if (to === 'closed') {
       closeSheet();
       document.querySelector('.view-wrap .step-card.selected')?.focus({ preventScroll: true });
@@ -220,7 +230,9 @@ function wireSheetDrag() {
     if (!narrow() || !root.classList.contains('open') || e.button !== 0) return;
     if (!e.target.closest('.sheet-head') || e.target.closest('.sheet-close')) return;
     e.preventDefault(); // no text selection, native drag or focus change on the way
-    drag = { id: e.pointerId, y: e.clientY, h: root.offsetHeight, height: root.offsetHeight, max: snaps().full, moving: false, samples: [{ t: e.timeStamp, y: e.clientY }] };
+    // …but a mouse press puts focus on the grip, as a click on it would (keys then work on it).
+    if (e.pointerType === 'mouse') root.querySelector('.sheet-grip')?.focus({ preventScroll: true });
+    drag = { id: e.pointerId, y: e.clientY, h: root.offsetHeight, height: root.offsetHeight, max: snaps().full, moving: false, from: sheetFull ? 'full' : 'mid', samples: [{ t: e.timeStamp, y: e.clientY }] };
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up);
     window.addEventListener('pointercancel', up);
