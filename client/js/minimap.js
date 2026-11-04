@@ -115,3 +115,40 @@ export function minimapPaths(lay, { errors = new Set(), selected = null, startId
 
 /** Number of <path> elements the groups need (frames + cards per type, plus off / err / sel). */
 export const pathCount = (p) => Object.keys(p.frames).length + Object.keys(p.cards).length + 3;
+
+/**
+ * Where a card goes so that nothing floating over the Sơ đồ (the zoom bar, the minimap) covers it
+ * (viewport px). box: the card's screen rectangle { x, y, w, h }; overlays: [{ left, top, right,
+ * bottom }]; W × H: the visible viewport; M: the margin kept around it. Tries the card where it is,
+ * then left of / below / above each overlay it touches (two moves deep, so "left of the zoom bar"
+ * can be followed by "above the minimap"), and keeps the nearest position inside the viewport and
+ * clear of every overlay. None: the first move (as before). → { x, y }
+ */
+export function clearOfOverlays({ box, overlays = [], W, H, M = 0 }) {
+  const { w, h } = box;
+  const covers = (p, o) => p.x < o.right + M && p.x + w > o.left - M && p.y < o.bottom + M && p.y + h > o.top - M;
+  const inside = (p) => p.x >= M - 0.5 && p.x + w <= W - M + 0.5 && (h > H - 2 * M || (p.y >= M - 0.5 && p.y + h <= H - M + 0.5));
+  const clear = (p) => !overlays.some((o) => covers(p, o));
+  const start = { x: box.x, y: box.y };
+  if (clear(start)) return start;
+  const moves = (p) => overlays.filter((o) => covers(p, o)).flatMap((o) => [
+    { x: o.left - M - w, y: p.y },
+    { x: p.x, y: o.bottom + M },
+    { x: p.x, y: o.top - M - h },
+  ]);
+  const dist = (p) => Math.hypot(p.x - start.x, p.y - start.y);
+  let best = null;
+  let level = [start];
+  for (let depth = 0; depth < 2 && level.length; depth++) {
+    const next = [];
+    for (const p of level) {
+      for (const q of moves(p)) {
+        if (inside(q) && clear(q)) {
+          if (!best || dist(q) < dist(best)) best = q;
+        } else next.push(q);
+      }
+    }
+    level = next;
+  }
+  return best ?? moves(start)[0] ?? start;
+}

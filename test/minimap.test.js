@@ -119,3 +119,26 @@ test('map and track points map back to the world', () => {
   assert.equal(trackToWorld(BOX.w * 0.75, BOX.w, lay.width), lay.width * 0.75);
   assert.equal(trackToWorld(-10, BOX.w, lay.width), 0);
 });
+
+import { clearOfOverlays } from '../client/js/minimap.js';
+
+test('clearOfOverlays keeps a card clear of the zoom bar and the minimap together (fix after merge)', () => {
+  const W = 1000;
+  const H = 600;
+  const M = 16;
+  const bar = { left: 840, top: 10, right: 990, bottom: 50 };
+  const map = { left: 700, top: 470, right: 990, bottom: 590 };
+  const covers = (p, w, h, o) => p.x < o.right + M && p.x + w > o.left - M && p.y < o.bottom + M && p.y + h > o.top - M;
+  // Free: unchanged.
+  assert.deepEqual(clearOfOverlays({ box: { x: 100, y: 100, w: 210, h: 76 }, overlays: [bar, map], W, H, M }), { x: 100, y: 100 });
+  // Under the minimap at the bottom right: moved, and clear of both.
+  for (const box of [{ x: 760, y: 500, w: 210, h: 76 }, { x: 800, y: 20, w: 210, h: 76 }, { x: 720, y: 380, w: 210, h: 120 }]) {
+    const p = clearOfOverlays({ box, overlays: [bar, map], W, H, M });
+    assert.ok(!covers(p, box.w, box.h, bar) && !covers(p, box.w, box.h, map), JSON.stringify([box, p]));
+    assert.ok(p.x >= M && p.x + box.w <= W - M && p.y >= M && p.y + box.h <= H - M, JSON.stringify([box, p]));
+  }
+  // The old one-pass rule moved a card from under the bar straight down, still inside the minimap's band when the window is short.
+  const short = { bar: { left: 760, top: 10, right: 990, bottom: 50 }, map: { left: 500, top: 140, right: 990, bottom: 230 } };
+  const p = clearOfOverlays({ box: { x: 780, y: 20, w: 210, h: 76 }, overlays: [short.bar, short.map], W, H: 240, M });
+  assert.ok(!covers(p, 210, 76, short.bar) && !covers(p, 210, 76, short.map), JSON.stringify(p));
+});
