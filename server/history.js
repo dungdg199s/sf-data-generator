@@ -16,8 +16,8 @@
 // deleted (or empty) ones first, never a running one. Time is the server's Date.now (injectable):
 // determinism only applies to generators and the executor.
 
-import { mkdir, writeFile, rename, readFile, readdir, stat, unlink, chmod, open, link } from 'node:fs/promises';
-import { readFileSync, unlinkSync } from 'node:fs';
+import { mkdir, writeFile, rename, readFile, readdir, stat, lstat, unlink, chmod, open, link } from 'node:fs/promises';
+import { readFileSync, unlinkSync, constants as FS } from 'node:fs';
 import { parseCsv } from './sf/bulk-csv.js';
 import { randomBytes } from 'node:crypto';
 import os from 'node:os';
@@ -60,10 +60,40 @@ function cell(v) {
   return /[",]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
+const POSIX = process.platform !== 'win32';
+/** The uid history files must belong to (POSIX only; a test passes `uid` to createHistory). */
+const PROCESS_UID = POSIX && typeof process.getuid === 'function' ? process.getuid() : null;
+
+/**
+ * A history path must be a plain file (or the directory) of this user: never a symlink (a link
+ * planted in the directory would send Ids or reads elsewhere), never another user's. Throws with a
+ * sentence saying how to fix it; `st` from lstat.
+ */
+function assertOwn(st, f, { dir = false, owner = PROCESS_UID } = {}) {
+  const kind = dir ? 'thư mục' : 'file';
+  if (st.isSymbolicLink()) throw Object.assign(new Error(`${kind} Lịch sử ${f} là symlink nên không được dùng. Xóa nó (hoặc đặt SFDG_DATA_DIR khác) rồi thử lại.`), { code: 'EUNSAFE' });
+  if (dir ? !st.isDirectory() : !st.isFile()) throw Object.assign(new Error(`${f} không phải ${kind} thường nên Lịch sử không dùng được. Xóa nó (hoặc đặt SFDG_DATA_DIR khác) rồi thử lại.`), { code: 'EUNSAFE' });
+  if (owner !== null && st.uid !== owner) throw Object.assign(new Error(`${kind} Lịch sử ${f} thuộc người dùng khác (uid ${st.uid}). Chạy server bằng đúng người dùng đó, hoặc đặt SFDG_DATA_DIR khác.`), { code: 'EUNSAFE' });
+}
+
+/** lstat + assertOwn; a missing path is fine (→ false), else → true. */
+async function checkOwn(f, opts) {
+  let st;
+  try {
+    st = await lstat(f);
+  } catch (e) {
+    if (e.code === 'ENOENT') return false;
+    throw e;
+  }
+  assertOwn(st, f, opts);
+  return true;
+}
+
 /** Rows of a history CSV (header skipped), read with a real RFC 4180 parser (quoted line breaks stay in their cell). */
-async function* lines(file) {
+async function* lines(file, owner = PROCESS_UID) {
   let text;
   try {
+    if (!(await checkOwn(file, { owner }))) return;
     text = await readFile(file, 'utf8');
   } catch (e) {
     if (e.code === 'ENOENT') return;
@@ -75,9 +105,12 @@ async function* lines(file) {
 }
 
 /** Writes (or appends) and flushes to disk before resolving (review of 0011, N5). */
-async function writeSynced(f, text, flag) {
-  const fh = await open(f, flag, FILE_MODE);
+const FLAGS = { a: FS.O_WRONLY | FS.O_CREAT | FS.O_APPEND, wx: FS.O_WRONLY | FS.O_CREAT | FS.O_EXCL };
+async function writeSynced(f, text, flag, owner = PROCESS_UID) {
+  // O_NOFOLLOW: a symlink in place of a history file is refused by the kernel itself.
+  const fh = await open(f, POSIX && FS.O_NOFOLLOW ? FLAGS[flag] | FS.O_NOFOLLOW : flag, FILE_MODE);
   try {
+    assertOwn(await fh.stat(), f, { owner });
     await fh.writeFile(text);
     await fh.datasync();
   } finally {
@@ -114,7 +147,8 @@ const stamp = (ms) => new Date(ms).toISOString().replace(/[-:]/g, '').replace(/\
  * @param random    () → 6 hex characters
  * @param maxRuns / maxBytes  pruning limits
  */
-export function createHistory({ dir = defaultDataDir(), clock = () => Date.now(), random = () => randomBytes(3).toString('hex'), maxRuns = 100, maxBytes = 256 * 1024 * 1024, linkFn = link } = {}) {
+export function createHistory({ dir = defaultDataDir(), clock = () => Date.now(), random = () => randomBytes(3).toString('hex'), maxRuns = 100, maxBytes = 256 * 1024 * 1024, linkFn = link, uid } = {}) {
+  const owner = uid === undefined ? PROCESS_UID : uid; // the uid every history path must belong to
   const root = path.join(dir, 'history');
   const state = { enabled: false, reason: null, locked: false, ready: null };
   const chains = new Map(); // hid → Promise (serialized writes)
@@ -141,7 +175,7 @@ export function createHistory({ dir = defaultDataDir(), clock = () => Date.now()
 
   async function writeJson(hid, data) {
     const tmp = `${file(hid, '.json')}.tmp-${random()}`;
-    await writeSynced(tmp, `${JSON.stringify(data, null, 1)}\n`, 'wx');
+    await writeSynced(tmp, `${JSON.stringify(data, null, 1)}\n`, 'wx', owner);
     await rename(tmp, file(hid, '.json'));
     await syncDir();
   }
@@ -162,6 +196,7 @@ export function createHistory({ dir = defaultDataDir(), clock = () => Date.now()
 
   async function readJson(hid) {
     try {
+      if (!(await checkOwn(file(hid, '.json'), { owner }))) return null;
       return JSON.parse(await readFile(file(hid, '.json'), 'utf8'));
     } catch (e) {
       if (e.code === 'ENOENT' || e instanceof SyntaxError) return null;
@@ -171,13 +206,15 @@ export function createHistory({ dir = defaultDataDir(), clock = () => Date.now()
 
   async function countLines(f) {
     let n = 0;
-    for await (const _ of lines(f)) n++; // eslint-disable-line no-unused-vars
+    for await (const _ of lines(f, owner)) n++; // eslint-disable-line no-unused-vars
     return n;
   }
 
   async function init() {
     try {
       await mkdir(root, { recursive: true, mode: DIR_MODE });
+      // No symlink, and this user's own directory, before anything is written into it.
+      if (POSIX) await checkOwn(root, { dir: true, owner });
       if (process.platform !== 'win32') await chmod(root, DIR_MODE);
       const probe = path.join(root, `.probe-${random()}`);
       await writeFile(probe, '', { mode: FILE_MODE });
@@ -233,7 +270,19 @@ export function createHistory({ dir = defaultDataDir(), clock = () => Date.now()
       const data = await readJson(hid).catch(() => null);
       if (data?.status !== 'running') continue;
       data.status = 'interrupted';
-      data.inserted = await countLines(file(hid, '.ids.csv'));
+      // The Id file is the truth: the total and each step's count (the live counts were never written).
+      const perStep = new Map();
+      let total = 0;
+      try {
+        for await (const r of lines(file(hid, '.ids.csv'), owner)) {
+          total++;
+          perStep.set(r[1], (perStep.get(r[1]) ?? 0) + 1);
+        }
+      } catch {
+        total = await countLines(file(hid, '.ids.csv')).catch(() => 0);
+      }
+      data.inserted = total;
+      if (Array.isArray(data.steps)) data.steps = data.steps.map((st) => ({ ...st, inserted: perStep.get(String(st.nodeId)) ?? 0 }));
       await writeJson(hid, data).catch(() => {});
     }
   }
@@ -264,14 +313,14 @@ export function createHistory({ dir = defaultDataDir(), clock = () => Date.now()
         // the pid written at once. A crash between create and write leaves an empty lock, which
         // lockHolder treats as stale after LOCK_FRESH_MS.
         try {
-          await writeSynced(lock, String(process.pid), 'wx');
+          await writeSynced(lock, String(process.pid), 'wx', owner);
           return taken();
         } catch (e) {
           if (e.code !== 'EEXIST') throw new Error(`Không tạo được file khóa ${lock} (${e.code ?? e.message}): thư mục Lịch sử phải ghi được. Kiểm tra quyền ghi thư mục hoặc đặt SFDG_DATA_DIR tới một thư mục trên ổ máy này`);
         }
       } else {
         const tmp = path.join(root, `.lock.${process.pid}.${random()}`);
-        await writeSynced(tmp, String(process.pid), 'wx');
+        await writeSynced(tmp, String(process.pid), 'wx', owner);
         let retry = false;
         try {
           await linkFn(tmp, lock);
@@ -472,7 +521,7 @@ export function createHistory({ dir = defaultDataDir(), clock = () => Date.now()
         warnings: [],
         deletion: { status: 'none', deleted: 0, gone: 0, lastAt: null, errorGroups: [] },
       };
-      await writeSynced(file(hid, '.ids.csv'), IDS_HEADER, 'wx');
+      await writeSynced(file(hid, '.ids.csv'), IDS_HEADER, 'wx', owner);
       await writeJson(hid, data);
       live.set(hid, 0);
       return hid;
@@ -489,7 +538,7 @@ export function createHistory({ dir = defaultDataDir(), clock = () => Date.now()
       }
       return serial(hid, async () => {
         await mustExist(hid);
-        await writeSynced(file(hid, '.ids.csv'), text, 'a');
+        await writeSynced(file(hid, '.ids.csv'), text, 'a', owner);
         if (live.has(hid)) live.set(hid, live.get(hid) + rows.length);
       });
     },
@@ -507,7 +556,7 @@ export function createHistory({ dir = defaultDataDir(), clock = () => Date.now()
         await mustExist(hid);
         const f = file(hid, '.deleted.csv');
         const fresh = await stat(f).then(() => false, () => true);
-        await writeSynced(f, `${fresh ? DELETED_HEADER : ''}${text}`, 'a');
+        await writeSynced(f, `${fresh ? DELETED_HEADER : ''}${text}`, 'a', owner);
       });
     },
 
@@ -539,13 +588,13 @@ export function createHistory({ dir = defaultDataDir(), clock = () => Date.now()
 
     /** Every Id row: { sobject, nodeId, ref, id }, in insert order. */
     async* ids(hid) {
-      for await (const [sobject, nodeId, ref, id] of lines(file(hid, '.ids.csv'))) yield { sobject, nodeId, ref, id };
+      for await (const [sobject, nodeId, ref, id] of lines(file(hid, '.ids.csv'), owner)) yield { sobject, nodeId, ref, id };
     },
 
     /** id → 'deleted' | 'gone' */
     async deletedMap(hid) {
       const map = new Map();
-      for await (const [id, outcome] of lines(file(hid, '.deleted.csv'))) map.set(id, outcome);
+      for await (const [id, outcome] of lines(file(hid, '.deleted.csv'), owner)) map.set(id, outcome);
       return map;
     },
 

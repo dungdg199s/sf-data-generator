@@ -307,3 +307,44 @@ test('review N7: without hard links the lock is an exclusive create with the pid
   assert.deepEqual([st2.enabled, st2.locked], [false, true]);
   assert.match(st2.reason, new RegExp(`pid ${process.ppid}`));
 });
+
+test('an interrupted entry recounts each step from its Id file (fix after merge)', async () => {
+  const dir = await tmp();
+  const h1 = createHistory({ dir, random: hex });
+  const hid = await h1.create({ org: ORG, workflow: null, seed: 1, now: 1, steps: [{ nodeId: 'a', alias: 'acc', sobject: 'Account', records: 5 }, { nodeId: 'c', alias: 'con', sobject: 'Contact', records: 4 }], total: 9 });
+  await h1.appendIds(hid, [1, 2, 3].map((i) => ({ sobject: 'Account', nodeId: 'a', ref: `acc#${i}`, id: `001${i}` })));
+  await h1.appendIds(hid, [{ sobject: 'Contact', nodeId: 'c', ref: 'con#1', id: '0031' }]);
+  const h2 = createHistory({ dir, random: hex }); // a new server: the entry was left running
+  await h2.status({ retry: true });
+  const d = await h2.read(hid);
+  assert.equal(d.status, 'interrupted');
+  assert.equal(d.inserted, 4);
+  assert.deepEqual(d.steps.map((s) => [s.nodeId, s.inserted]), [['a', 3], ['c', 1]]);
+});
+
+test('history refuses a symlinked directory or Id file and another user\'s directory (fix after merge)', { skip: process.platform === 'win32' }, async () => {
+  const { symlink, unlink } = await import('node:fs/promises');
+  // The history directory is a symlink.
+  const dir = await tmp();
+  const real = await tmp();
+  await symlink(real, path.join(dir, 'history'));
+  const st = await createHistory({ dir }).status();
+  assert.equal(st.enabled, false);
+  assert.match(st.reason, /symlink/);
+  // Owned by another uid.
+  const other = await createHistory({ dir: await tmp(), uid: (process.getuid?.() ?? 0) + 1 }).status();
+  assert.equal(other.enabled, false);
+  assert.match(other.reason, /người dùng khác/);
+  // An Id file replaced by a symlink: appends and reads are refused, nothing is written through it.
+  const d2 = await tmp();
+  const h = createHistory({ dir: d2, random: hex });
+  const hid = await h.create({ org: ORG, workflow: null, seed: 1, now: 1, steps: [], total: 0 });
+  const ids = path.join(d2, 'history', `${hid}.ids.csv`);
+  const target = path.join(real, 'elsewhere.csv');
+  await writeFile(target, 'sobject,step,ref,id\n');
+  await unlink(ids);
+  await symlink(target, ids);
+  await assert.rejects(h.appendIds(hid, [{ sobject: 'Account', nodeId: 'a', ref: 'acc#1', id: '001A' }]));
+  assert.equal(await readFile(target, 'utf8'), 'sobject,step,ref,id\n');
+  await assert.rejects(h.remaining(hid), /symlink/);
+});

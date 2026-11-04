@@ -187,7 +187,9 @@ dữ liệu: server chỉ xóa Id chính nó đã ghi, không bao giờ nhận d
 
 - **Thư mục:** `SFDG_DATA_DIR` nếu có; không thì Linux `$XDG_DATA_HOME/sf-data-generator` (mặc định
   `~/.local/share/sf-data-generator`), macOS `~/Library/Application Support/sf-data-generator`, Windows
-  `%APPDATA%\sf-data-generator`; Lịch sử ở `<thư mục>/history/` (quyền `0700`, file `0600`).
+  `%APPDATA%\sf-data-generator`; Lịch sử ở `<thư mục>/history/` (quyền `0700`, file `0600`). Thư mục `history` và mọi
+  file trong đó phải là của chính người dùng chạy server và không được là symlink (macOS/Linux; file mở với `O_NOFOLLOW`);
+  không thì Lịch sử tắt (Insert bị khóa) hoặc lần đọc/ghi đó bị từ chối, kèm câu nói cách sửa.
 - **File:** `<hid>.json` (thông tin lần chạy, ghi lại toàn bộ qua file tạm + `fsync` + rename), `<hid>.ids.csv`
   (`sobject,step,ref,id`, chỉ nối thêm, `fsync` sau mỗi lần nối), `<hid>.deleted.csv` (`id,outcome`, `deleted` | `gone`). `hid` =
   `h<yyyyMMdd>T<HHmmss>Z-<6 hex>`; `hid` sai định dạng ⇒ 404 (không path traversal). File CSV được đọc bằng parser RFC 4180 thật
@@ -215,7 +217,8 @@ dữ liệu: server chỉ xóa Id chính nó đã ghi, không bao giờ nhận d
 - **Không bao giờ lưu credential:** chỉ `alias`, `username`, `orgId`, `instanceUrl`, `kind` (`sandbox` | `scratch` |
   `production` | `unknown`, theo `sf org list`); không token, không header, không dòng Query.
 - **Trạng thái:** `running` | `done` | `cancelled` | `stopped` | `error` | `interrupted` (server tắt giữa lúc insert: lần dùng
-  Lịch sử đầu tiên sau khi khởi động đổi `running` thành `interrupted` và đếm lại Id từ file).
+  Lịch sử đầu tiên sau khi khởi động đổi `running` thành `interrupted` và đếm lại Id từ file: tổng và số đã insert của từng
+  bước).
 - **Giới hạn:** `LIMITS.historyMaxRuns` = 100 lần, `LIMITS.historyMaxBytes` = 256 MB; khi tạo mục mới, dọn **mọi** mục không còn
   bản ghi trong org (đã xóa hết, không insert được gì) trước bất kỳ mục nào còn bản ghi (job Bulk chưa lấy Id cũng tính là còn),
   cũ nhất trước trong mỗi nhóm; không bao giờ dọn mục đang chạy. Sắp phải dọn một mục còn bản ghi ⇒ sự kiện `plan` có
