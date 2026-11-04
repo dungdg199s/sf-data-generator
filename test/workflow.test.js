@@ -1514,3 +1514,25 @@ test('a source made after a skipping Chọn bản ghi in a loop body is "maybe" 
   // Inside a Rẽ nhánh after the pick too.
   assert.deepEqual(maybe(make([skipPick(), branch('b', { kind: 'chance', probability: 1 }, [record('a', 'Account', 'acc', [])], [record('a2', 'Account', 'acc', [])])])).map((x) => x[0]), ['t']);
 });
+
+test('filterField / weightField a Record pool does not make warn unknownPoolField; a turned-off step does not hide {{run.*}} (fix after merge)', () => {
+  const W = wf([
+    record('a', 'Account', 'acc', [{ name: 'Industry', type: 'text', options: {} }, { name: 'NumberOfEmployees', type: 'number', options: {} }], { count: 3 }),
+    loop('o', { count: 2 }, [pick('p', 'pp', 'acc', { mode: 'weighted', weightField: 'AnnualRevenue' }), record('c', 'Contact', 'con', [{ name: 'AccountId', type: 'lookup', options: { mode: 'current', ref: 'pp' } }])]),
+    loop('e', { mode: 'each', from: 'acc', itemAlias: 'x', filter: 'compare', filterField: 'Industy', filterOp: 'eq', filterValue: 'A' }, [record('d', 'Task', 't', [])]),
+    loop('ok', { mode: 'each', from: 'acc', itemAlias: 'y', filter: 'compare', filterField: 'industry', filterValue: 'A' }, [pick('q', 'qq', 'acc', { mode: 'weighted', weightField: 'NumberOfEmployees' }), record('f', 'Task', 't2', [])]),
+  ]);
+  assert.deepEqual(warningsOf(W).filter((i) => i.code === 'unknownPoolField').map((i) => [i.nodeId, i.field, i.message]), [
+    ['p', 'weightField', 'Field "AnnualRevenue" không có trong bước Record "acc" nên mọi bản ghi có trọng số 0 (sẽ chọn đều). Thêm field "AnnualRevenue" vào bước "acc" hoặc chọn một field của nó.'],
+    ['e', 'filterField', 'Field "Industy" không có trong bước Record "acc" nên giá trị của nó luôn trống khi lọc. Thêm field "Industy" vào bước "acc" hoặc chọn một field của nó.'],
+  ]);
+  // Query pools are not checked (their fields come from the org).
+  const Q = wf([query('qq', 'accs', { fields: ['Id'] }), loop('o', { count: 1 }, [pick('p', 'pp', 'accs', { mode: 'weighted', weightField: 'W' })])]);
+  assert.deepEqual(warningsOf(Q).filter((i) => i.code === 'unknownPoolField'), []);
+  // A turned-off step aliased "run" does not shadow the run variables.
+  const R = wf([record('a', 'Lead', 'ld', [text('D', '{{run.seed}}')]), { ...record('b', 'Account', 'run', []), disabled: true }]);
+  assert.deepEqual(errorsOf(R), []);
+  assert.equal(runWorkflow(R, { seed: 7, now: NOW }).records[0].fields.D, '7');
+  // Turned on, it does (the existing rule).
+  assert.ok(errorsOf(wf([record('a', 'Lead', 'ld', [text('D', '{{run.seed}}')]), record('b', 'Account', 'run', [])])).length > 0);
+});

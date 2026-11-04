@@ -256,6 +256,7 @@ export function prepareWorkflow(wf) {
       validateQuery(step, c, { err, warn, scope, inLoop: insideLoop.has(step.id) });
     }
     if (step.type === 'pick') validatePick(step, c, { err });
+    if (step.type === 'pick' || (step.type === 'loop' && c.mode === 'each')) checkPoolFields(step, c, { warn, scope });
     if (step.type === 'set') validateSet(step, c, { err, warn, varTypes });
     if (step.type === 'loop') {
       const mode = c.mode ?? 'fixed';
@@ -479,6 +480,25 @@ function validateSet(step, c, { err, warn, varTypes }) {
   else if (first.type !== type) {
     warn(`Biến ${VAR_NAMESPACE}.${name} được đặt kiểu ${SET_TYPES[first.type]} ở bước khác; ở đây là ${SET_TYPES[type]}. Chọn cùng một kiểu cho mọi bước Đặt biến "${name}", nếu không ô dùng biến có thể nhận chữ thay vì số.`, step.id, mode === 'add' ? 'mode' : 'valueType', { code: 'setVarType' });
   }
+}
+
+/**
+ * `filterField` / `weightField` of a Chọn bản ghi or a Lặp `each` over a pool made by a Record step:
+ * a field that step does not generate is always empty there (warning `unknownPoolField`). Query
+ * pools are not checked here (their fields come from the org).
+ */
+function checkPoolFields(step, c, { warn, scope }) {
+  const own = step.type === 'pick' ? scope.sources[step.id] : Object.values(scope.sources).find((x) => x.nodeId === step.id && x.current === 'item');
+  const root = own?.root ? scope.sources[own.root] : null;
+  if (root?.nodeType !== 'record' || root.open) return;
+  const fields = new Set((root.members ?? []).filter((m) => !m.builtin).map((m) => m.key.toLowerCase()));
+  const check = (key, role) => {
+    const f = String(c[key] ?? '').trim();
+    if (!f || !isFieldPath(f) || fields.has(f.toLowerCase())) return;
+    warn(`Field "${f}" không có trong bước Record "${root.name}" nên ${role}. Thêm field "${f}" vào bước "${root.name}" hoặc chọn một field của nó.`, step.id, key, { code: 'unknownPoolField' });
+  };
+  if (step.type === 'pick' && c.mode === 'weighted') check('weightField', 'mọi bản ghi có trọng số 0 (sẽ chọn đều)');
+  if ((c.filter ?? 'none') === 'compare') check('filterField', 'giá trị của nó luôn trống khi lọc');
 }
 
 /** The filter of a Chọn bản ghi and of a Lặp `each` (design 0013 C): same keys, same messages. */

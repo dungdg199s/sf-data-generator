@@ -673,8 +673,11 @@ export function analyzeScope(wf, catalog) {
       for (let i = r.vars.length - 1; i >= 0; i--) if (r.vars[i].name === name) return r.vars[i];
       return null;
     };
-    /** A user-given name hides the run variables of the same name (design 0013 G). */
-    const shadowsGlobal = (name) => Boolean(varByName(name)) || (byName.get(name) ?? []).some((x) => !x.global && x.kind !== 'vars');
+    /**
+     * A user-given name hides the run variables of the same name (design 0013 G); not a turned-off
+     * step's (it never runs, so the run variable is what the executor reads).
+     */
+    const shadowsGlobal = (name) => Boolean(varByName(name)) || (byName.get(name) ?? []).some((x) => !x.global && x.kind !== 'vars' && !x.disabled);
     /** { certainty, why? } when visible, else { reason }. */
     const state = (sid) => {
       const s = sources[sid];
@@ -853,7 +856,7 @@ function resolveRef({ step, here, o, path, sources, byName, byVar, namespaces, l
     return resolveValue({ step, here, o, sources, byVar, base, fail, ns: name, rest });
   }
   const candidates = byName.get(name) ?? [];
-  const src = visibleVar ?? candidates.find((s) => s.kind !== 'vars') ?? candidates.find((s) => s.global)
+  const src = visibleVar ?? candidates.find((s) => s.kind !== 'vars' && !s.disabled) ?? candidates.find((s) => s.global) ?? candidates.find((s) => s.kind !== 'vars')
     ?? candidates.find((s) => !s.disabled) ?? candidates[0];
   if (!src) {
     // `loop.index` with no loop of that name: a loop variable shape. Point at the enclosing loop,

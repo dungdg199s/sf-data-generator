@@ -222,6 +222,7 @@ chỉ thấy các field ở phía trên.
 - Biến của lần chạy (0013 G): `run.seed`, `run.now` (`new Date(now).toISOString()`), `run.today` (10 ký tự đầu của `now`,
   UTC). Cùng `seed` + `now` ở xem trước, insert và tải về ⇒ cùng giá trị. Tên người dùng đặt (biến lặp, alias) tên `run` thắng;
   khi đó lỗi của `{{run.seed}}`/`now`/`today` có thêm `Alias "run" che biến Lần chạy; đổi alias để dùng {{run.seed}}.`
+  Bước đang tắt (`disabled`) không che: nó không chạy, nên `{{run.seed}}` vẫn là seed (như executor).
 - `set` ([0015](design/0015-buoc-dat-bien.md)): gán `scope.var[name]` (một object chung cho cả lần chạy, không prototype;
   thân vòng lặp dùng chung nên giá trị gán trong vòng lặp còn sau vòng lặp). `text`: `value` thay `{{…}}` như template (dài hơn
   10 000 ký tự ⇒ lỗi gắn `value`); `number`: đúng một token ⇒ giá trị của biến, không thì chuỗi đã thay, qua `toNumber`; không ra
@@ -342,6 +343,7 @@ Tham chiếu hỏng là **lỗi** (chặn Xem trước và Insert, HTTP 422 khi 
 | `numberVarEmpty`, `numberVarClamped` | cảnh báo (khi chạy) | Biến số trống/âm/không phải số (lặp 0 lần), hoặc lớn hơn 100 000 (dùng 100 000); một cảnh báo mỗi bước + ô, có số lần (0013) |
 | `eachFilterEmpty` | cảnh báo (khi chạy) | Lọc của Lặp `each` không khớp bản ghi nào ở mọi lần chạy qua; gắn `filterValue` (0013) |
 | `pickWeightZero` | cảnh báo (khi chạy) | Chọn bản ghi `weighted`: mọi trọng số 0 ở một số lần chọn nên đã chọn đều; gắn `weightField` (0013) |
+| `unknownPoolField` | cảnh báo | `filterField` / `weightField` của Chọn bản ghi hay Lặp `each` qua pool do bước Record tạo không phải field của bước đó (luôn trống); gắn đúng ô. Pool Query không kiểm tra ở đây |
 | `pickWeightInfinite` | cảnh báo (khi chạy) | Chọn bản ghi `weighted`: tổng trọng số quá lớn (tràn số) nên đã chọn đều; gắn `weightField` |
 | `setVarName`, `setVarNotNumber`, `setVarTooLong` | lỗi | (0015) Tên biến trống/sai; giá trị Số hoặc Cộng thêm không phải số và không có `{{`; giá trị dài quá 10 000 ký tự. Gắn `name` / `value` |
 | `varReserved` | lỗi | (0015) Alias, `itemAlias` hay biến lặp tên `var` khi workflow có bước Đặt biến |
