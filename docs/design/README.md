@@ -52,13 +52,13 @@ Các mục "Câu hỏi mở" / "Việc tiếp theo" / "Chưa làm" của 0001–
 
 | Mục | Chuyển sang | Ghi chú (nguồn) |
 | --- | --- | --- |
-| Bulk API 2.0 | [0011](0011-thao-tac-du-lieu-org.md) | 0001, 0004, 0007 |
-| Nâng `maxRecordsHard` quá 200 000 | [0011](0011-thao-tac-du-lieu-org.md) | 0004 câu 6, 0007: chờ Bulk API |
-| Tải toàn bộ Id đã insert | [0011](0011-thao-tac-du-lieu-org.md) | 0004 câu 7: làm cùng tính năng xóa |
-| Xóa dữ liệu vừa insert | [0011](0011-thao-tac-du-lieu-org.md) | 0001, 0004, 0006 "Các node khác", 0007 |
-| Chạy tiếp lần chạy đã dừng | [0011](0011-thao-tac-du-lieu-org.md) | 0004 |
-| Update / Upsert / Delete bản ghi có sẵn | [0011](0011-thao-tac-du-lieu-org.md) | 0006 "Các node khác" và "Chưa làm" |
-| Gửi song song nhiều lô, worker thread | [0011](0011-thao-tac-du-lieu-org.md) | 0004; thứ tự sinh và kết quả vẫn phải tất định |
+| Bulk API 2.0 | [0011](0011-thao-tac-du-lieu-org.md) — **Đã làm** | 0001, 0004, 0007 |
+| Nâng `maxRecordsHard` quá 200 000 | [0011](0011-thao-tac-du-lieu-org.md) → **Không làm** (giữ 200 000) | 0004 câu 6, 0007: chờ Bulk API |
+| Tải toàn bộ Id đã insert | [0011](0011-thao-tac-du-lieu-org.md) — **Đã làm** | 0004 câu 7: làm cùng tính năng xóa |
+| Xóa dữ liệu vừa insert | [0011](0011-thao-tac-du-lieu-org.md) — **Đã làm** | 0001, 0004, 0006 "Các node khác", 0007 |
+| Chạy tiếp lần chạy đã dừng | [0011](0011-thao-tac-du-lieu-org.md) → **Không làm** (xóa rồi chạy lại) | 0004 |
+| Update / Upsert / Delete bản ghi có sẵn | [0011](0011-thao-tac-du-lieu-org.md) → **Hoãn** (cần design lưu giá trị cũ; xóa bản ghi đã insert thì đã làm) | 0006 "Các node khác" và "Chưa làm" |
+| Gửi song song nhiều lô, worker thread | [0011](0011-thao-tac-du-lieu-org.md) → **Không làm** | 0004; thứ tự sinh và kết quả vẫn phải tất định |
 | Thư viện workflow (nhiều workflow có tên) | [0012](0012-nang-suat-soan-thao.md) — **Đã làm** | 0001; cũng là điều kiện của sub-workflow (0006) |
 | Chọn nhiều bước (Shift+bấm), copy/paste bước | [0012](0012-nang-suat-soan-thao.md) — **Đã làm** | 0003 "Việc tiếp theo" |
 | "Bọc trong Lặp qua từng bản ghi" (menu ⋯) | [0012](0012-nang-suat-soan-thao.md) — **Đã làm** | 0010 |
@@ -74,7 +74,6 @@ Các mục "Câu hỏi mở" / "Việc tiếp theo" / "Chưa làm" của 0001–
 | `minIterations` thông minh hơn | [0013](0013-mo-rong-bien-va-lap.md) — **Đã làm** | 0010 |
 | Mẫu (`samples`) theo mọi bước | [0013](0013-mo-rong-bien-va-lap.md) — **Đã làm** | 0005: hiện chỉ có cho Chọn bản ghi |
 | Biến trong `pick.filterValue` | [0013](0013-mo-rong-bien-va-lap.md) — **Đã có** | Đã có từ 0006 (`vars: 'template'`); 0013 không đổi gì; chỉ mục `eq` dùng chung cho Chọn bản ghi để sau |
-| Option phạm vi pool (chỉ bản ghi của lượt hiện tại) | [0013](0013-mo-rong-bien-va-lap.md) → **Hoãn** (dòng dưới) | 0010 |
 | Icon SVG cho các ký tự còn lại (`⋯ ▸ ▾ ⠿ ↶ ↷ ⟳ ⤓`) | [0014](0014-hoan-thien-giao-dien.md) — **Đã làm** | 0008, 0009; cả các nút của 0011 / 0012 (có test chặn ký tự quay lại) |
 | Kéo đổi chiều cao panel kết quả; bottom sheet hai nấc | [0014](0014-hoan-thien-giao-dien.md) — **Đã làm** | 0009 |
 | Dấu hiệu "còn mục" ở palette ngang | [0014](0014-hoan-thien-giao-dien.md) — **Đã làm** | 0009; cả tóm tắt kết quả (điện thoại) và hàng tab |
