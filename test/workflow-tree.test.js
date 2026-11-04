@@ -491,6 +491,18 @@ test('pasteSteps keeps free aliases, renames taken ones (inner references follow
   assert.equal(collectIds(same).size, 6);
 });
 
+test('pasteSteps: a name the copy references but does not define is not given to a pasted step (fix after merge)', () => {
+  const rec = (id, alias, fields = []) => ({ id, type: 'record', config: { sobject: 'Account', alias, count: 1, fields: [{ name: 'Name', type: 'text', options: {} }, ...fields] } });
+  const wf = { version: 2, steps: [rec('acc', 'acc')] };
+  // Copied from a workflow with acc and acc2: con → acc2 is not part of the copy.
+  const clip = [rec('x', 'acc'), rec('c', 'con', [{ name: 'AccountId', type: 'lookup', options: { ref: 'acc2', mode: 'random' } }])];
+  const res = pasteSteps(wf, { parentId: null, index: 1 }, clip, { catalog, slotKeys });
+  assert.deepEqual(res.renamed, [{ from: 'acc', to: 'acc3' }]);
+  assert.deepEqual(res.missing, ['acc2']);
+  assert.equal(wf.steps[1].config.alias, 'acc3');
+  assert.equal(wf.steps[2].config.fields[1].options.ref, 'acc2', 'still the missing name, not the pasted step');
+});
+
 test('pasteSteps renames a loop variable that would shadow an enclosing loop; its body follows', () => {
   const catalog = scopeCatalog();
   const tpl = (t) => ({ name: 'T', type: 'template', options: { template: t } });
